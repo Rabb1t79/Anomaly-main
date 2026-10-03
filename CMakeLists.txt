@@ -1164,6 +1164,11 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteTeleport/manifest.json
         PACKAGE_NAME NteTeleport
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteTeleport")
+    anomaly_add_plugin(anomaly_builtin_nte_vehicle
+        SOURCES plugins/NteVehicle/plugin.cpp
+        MANIFEST plugins/NteVehicle/manifest.json
+        PACKAGE_NAME NteVehicle
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteVehicle")
     anomaly_add_plugin(anomaly_builtin_nte_movement_hold TEST_PLUGIN
         SOURCES plugins/NteMovementHold/plugin.cpp
         MANIFEST plugins/NteMovementHold/manifest.json
