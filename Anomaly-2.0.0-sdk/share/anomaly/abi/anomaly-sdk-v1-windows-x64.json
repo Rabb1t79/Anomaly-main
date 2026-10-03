@@ -1,0 +1,1863 @@
+{
+  "schema_version": 1,
+  "target": {
+    "os": "windows",
+    "architecture": "x86_64",
+    "calling_convention": "cdecl",
+    "pointer_size": 8,
+    "size_t_size": 8
+  },
+  "constants": {
+    "ANOMALY_SDK_VERSION_MAJOR": 1,
+    "ANOMALY_SDK_VERSION_MINOR": 0,
+    "ANOMALY_SDK_VERSION_PATCH": 0,
+    "ANOMALY_SDK_VERSION_STRING": "1.0.0",
+    "ANOMALY_PLUGIN_API_V1_MAJOR": 1,
+    "ANOMALY_PLUGIN_API_V1_MINOR": 0,
+    "ANOMALY_PLUGIN_V1_ENTRY_NAME": "AnomalyPluginEntryV1",
+    "ANOMALY_CORE_SERVICE_V1_VERSION": 1,
+    "ANOMALY_PLUGIN_STATE_SERVICE_V1_VERSION": 1,
+    "ANOMALY_CONFIG_SERVICE_V1_VERSION": 1,
+    "ANOMALY_STORAGE_SERVICE_V1_VERSION": 1,
+    "ANOMALY_JSON_SERVICE_V1_VERSION": 1,
+    "ANOMALY_RUNTIME_INFO_SERVICE_V1_VERSION": 1,
+    "ANOMALY_DIAGNOSTICS_SERVICE_V1_VERSION": 1,
+    "ANOMALY_SCHEDULER_SERVICE_V1_VERSION": 1,
+    "ANOMALY_IPC_SERVICE_V1_VERSION": 1,
+    "ANOMALY_WEBSOCKET_SERVICE_V1_VERSION": 1,
+    "ANOMALY_IPC_SCHEMA_HASH_V1_SIZE": 32,
+    "ANOMALY_COMMANDS_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NOTIFICATIONS_SERVICE_V1_VERSION": 1,
+    "ANOMALY_SIGNATURE_SERVICE_V1_VERSION": 1,
+    "ANOMALY_HOOK_SERVICE_V1_VERSION": 1,
+    "ANOMALY_PATCH_SERVICE_V1_VERSION": 1,
+    "ANOMALY_UI_SERVICE_V1_VERSION": 1,
+    "ANOMALY_WINDOW_SERVICE_V1_VERSION": 1,
+    "ANOMALY_FONT_SERVICE_V1_VERSION": 1,
+    "ANOMALY_TEXTURE_SERVICE_V1_VERSION": 1,
+    "ANOMALY_INPUT_SERVICE_V1_VERSION": 1,
+    "ANOMALY_LOCALIZATION_SERVICE_V1_VERSION": 1,
+    "ANOMALY_UE5_BUILD_SERVICE_V1_VERSION": 1,
+    "ANOMALY_UE5_AHUD_SERVICE_V1_VERSION": 1,
+    "ANOMALY_UE5_FRAMEWORK_SERVICE_V1_VERSION": 1,
+    "ANOMALY_UE5_NAMES_SERVICE_V1_VERSION": 1,
+    "ANOMALY_UE5_OBJECTS_SERVICE_V1_VERSION": 1,
+    "ANOMALY_UE5_WORLD_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_BUILD_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_SESSION_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_PLAYER_TELEPORT_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_MAP_LANDMARKS_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_MAP_LANDMARK_V1_ID_MAX_BYTES": 128,
+    "ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES": 2048,
+    "ANOMALY_NTE_NAVIGATION_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_ENTITIES_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_METRICS_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_ENTITY_PAGE_V1_MAX_CAPACITY": 256,
+    "ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY": 128,
+    "ANOMALY_NTE_COMBATANT_V1_DEAD": 1,
+    "ANOMALY_NTE_DAMAGE_V1_CLIENT_PRESENTED": 1,
+    "ANOMALY_NTE_DAMAGE_V1_CRITICAL": 2,
+    "ANOMALY_NTE_DAMAGE_V1_HEAD_HIT": 4,
+    "ANOMALY_NTE_DAMAGE_V1_WEAK_UNBALANCE": 8,
+    "ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT": 16,
+    "ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID": 32,
+    "ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL": 1,
+    "ANOMALY_NTE_COMBAT_EVENT_V1_HEAD_HIT": 2,
+    "ANOMALY_NTE_COMBAT_EVENT_V1_WEAK_UNBALANCE": 4,
+    "ANOMALY_NTE_COMBAT_EVENT_V1_DISPLAY_VALID": 8,
+    "ANOMALY_NTE_COMBAT_EVENT_V1_NAME_VALID": 16,
+    "ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL_VALID": 64,
+    "ANOMALY_NTE_COMBAT_STATISTICS_V1_PARTIAL": 1,
+    "ANOMALY_NTE_COMBAT_STATISTICS_V1_OVERFLOW": 2,
+    "ANOMALY_NTE_SKILL_V1_ACTIVE": 1,
+    "ANOMALY_NTE_SKILL_V1_INPUT_PRESSED": 2,
+    "ANOMALY_NTE_SKILL_V1_PENDING_REMOVE": 4,
+    "ANOMALY_NTE_SKILL_V1_REMOVE_AFTER_ACTIVATION": 8,
+    "ANOMALY_NTE_SKILL_V1_COOLDOWN_VALID": 16,
+    "ANOMALY_NTE_METRICS_V1_VALID": 1,
+    "ANOMALY_NTE_PICKUP_V1_NONE": 0,
+    "ANOMALY_NTE_PICKUP_V1_VALID": 1,
+    "ANOMALY_NTE_PICKUP_V1_CHECKING_FLAG": 2,
+    "ANOMALY_NTE_PICKUP_V1_HAS_UNCONFIRMED": 4
+  },
+  "enums": {
+    "AnomalyStatusCodeV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_STATUS_V1_OK": 0,
+        "ANOMALY_STATUS_V1_INVALID_ARGUMENT": 1,
+        "ANOMALY_STATUS_V1_UNAVAILABLE": 2,
+        "ANOMALY_STATUS_V1_NOT_FOUND": 3,
+        "ANOMALY_STATUS_V1_BUFFER_TOO_SMALL": 4,
+        "ANOMALY_STATUS_V1_FAILED": 5,
+        "ANOMALY_STATUS_V1_TIMEOUT": 6,
+        "ANOMALY_STATUS_V1_PERMISSION_DENIED": 7,
+        "ANOMALY_STATUS_V1_CONFLICT": 8,
+        "ANOMALY_STATUS_V1_CANCELLED": 9
+      }
+    },
+    "AnomalyFeatureStateV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_FEATURE_V1_UNAVAILABLE": 0,
+        "ANOMALY_FEATURE_V1_AVAILABLE": 1
+      }
+    },
+    "AnomalyJsonKindV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_JSON_V1_NULL": 0,
+        "ANOMALY_JSON_V1_BOOLEAN": 1,
+        "ANOMALY_JSON_V1_NUMBER": 2,
+        "ANOMALY_JSON_V1_STRING": 3,
+        "ANOMALY_JSON_V1_ARRAY": 4,
+        "ANOMALY_JSON_V1_OBJECT": 5
+      }
+    },
+    "AnomalyUe5AhudFrameFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_UE5_AHUD_FRAME_V1_NONE": 0
+      }
+    },
+    "AnomalyNteSessionStateV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_SESSION_V1_UNKNOWN": 0,
+        "ANOMALY_NTE_SESSION_V1_LOADING": 1,
+        "ANOMALY_NTE_SESSION_V1_WORLD_READY": 2
+      }
+    },
+    "AnomalyNteSessionEventKindV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_SESSION_EVENT_V1_NONE": 0,
+        "ANOMALY_NTE_SESSION_EVENT_V1_WORLD_READY": 1,
+        "ANOMALY_NTE_SESSION_EVENT_V1_WORLD_CHANGED": 2,
+        "ANOMALY_NTE_SESSION_EVENT_V1_WORLD_UNAVAILABLE": 3
+      }
+    },
+    "AnomalyNteMapLandmarkFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_MAP_LANDMARK_V1_VALID": 1,
+        "ANOMALY_NTE_MAP_LANDMARK_V1_DESTINATION_OVERRIDDEN": 2
+      }
+    },
+    "AnomalyNteMapLandmarkTransferModeV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_MAP_LANDMARK_TRANSFER_V1_NORMAL": 0,
+        "ANOMALY_NTE_MAP_LANDMARK_TRANSFER_V1_SELLING_INDULGENCES": 1
+      }
+    },
+    "AnomalyNteEscMenuButtonFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_ESC_MENU_BUTTON_V1_NONE": 0
+      }
+    },
+    "AnomalyNteEscMenuButtonResultV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_ESC_MENU_BUTTON_RESULT_V1_NONE": 0,
+        "ANOMALY_NTE_ESC_MENU_BUTTON_RESULT_V1_EXPAND_ANOMALY": 1
+      }
+    },
+    "AnomalyNteEscMenuButtonIconFormatV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_ESC_MENU_BUTTON_ICON_V1_NONE": 0,
+        "ANOMALY_NTE_ESC_MENU_BUTTON_ICON_V1_PNG": 1
+      }
+    },
+    "AnomalyEspBoxFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_ESP_BOX_V1_NONE": 0,
+        "ANOMALY_ESP_BOX_V1_OUTLINE": 1
+      }
+    },
+    "AnomalyNtePickupStateV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_PICKUP_V1_IDLE": 0,
+        "ANOMALY_NTE_PICKUP_V1_QUEUED": 1,
+        "ANOMALY_NTE_PICKUP_V1_CHECKING": 2,
+        "ANOMALY_NTE_PICKUP_V1_COMPLETE": 3
+      }
+    },
+    "AnomalyNteEntityFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_ENTITY_V1_NONE": 0,
+        "ANOMALY_NTE_ENTITY_V1_STATIC": 1,
+        "ANOMALY_NTE_ENTITY_V1_STATIONARY": 2,
+        "ANOMALY_NTE_ENTITY_V1_MOVABLE": 4,
+        "ANOMALY_NTE_ENTITY_V1_LOCAL_PLAYER": 8
+      }
+    },
+    "AnomalyNteCombatDirectionV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_COMBAT_DIRECTION_V1_ANY": 0,
+        "ANOMALY_NTE_COMBAT_DIRECTION_V1_AS_ATTACKER": 1,
+        "ANOMALY_NTE_COMBAT_DIRECTION_V1_AS_VICTIM": 2
+      }
+    },
+    "AnomalyNotificationSeverityV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NOTIFICATION_V1_INFO": 0,
+        "ANOMALY_NOTIFICATION_V1_WARNING": 1,
+        "ANOMALY_NOTIFICATION_V1_ERROR": 2
+      }
+    },
+    "AnomalyHookKindV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_HOOK_V1_FUNCTION": 1,
+        "ANOMALY_HOOK_V1_IAT": 2,
+        "ANOMALY_HOOK_V1_EXPORT": 3,
+        "ANOMALY_HOOK_V1_VTABLE": 4
+      }
+    },
+    "AnomalyUiFrameStateV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_UI_FRAME_V1_NONE": 0,
+        "ANOMALY_UI_FRAME_V1_ITEM_HOVERED": 1,
+        "ANOMALY_UI_FRAME_V1_WINDOW_FOCUSED": 2,
+        "ANOMALY_UI_FRAME_V1_ITEM_ACTIVE": 4,
+        "ANOMALY_UI_FRAME_V1_WANT_CAPTURE_MOUSE": 8,
+        "ANOMALY_UI_FRAME_V1_WANT_CAPTURE_KEYBOARD": 16,
+        "ANOMALY_UI_FRAME_V1_WANT_TEXT_INPUT": 32
+      }
+    },
+    "AnomalyUiTextInputFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_UI_TEXT_INPUT_V1_NONE": 0,
+        "ANOMALY_UI_TEXT_INPUT_V1_DIGITS": 1
+      }
+    },
+    "AnomalyUiTabBarFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_UI_TAB_BAR_V1_NONE": 0,
+        "ANOMALY_UI_TAB_BAR_V1_REORDERABLE": 1,
+        "ANOMALY_UI_TAB_BAR_V1_AUTO_SELECT_NEW_TABS": 2,
+        "ANOMALY_UI_TAB_BAR_V1_NO_TAB_LIST_SCROLLING_BUTTONS": 4,
+        "ANOMALY_UI_TAB_BAR_V1_NO_TOOLTIP": 8,
+        "ANOMALY_UI_TAB_BAR_V1_FITTING_POLICY_RESIZE_DOWN": 16,
+        "ANOMALY_UI_TAB_BAR_V1_FITTING_POLICY_SCROLL": 32
+      }
+    },
+    "AnomalyUiTabItemFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_UI_TAB_ITEM_V1_NONE": 0,
+        "ANOMALY_UI_TAB_ITEM_V1_UNSAVED_DOCUMENT": 1,
+        "ANOMALY_UI_TAB_ITEM_V1_SET_SELECTED": 2,
+        "ANOMALY_UI_TAB_ITEM_V1_NO_CLOSE_WITH_MIDDLE_MOUSE_BUTTON": 4,
+        "ANOMALY_UI_TAB_ITEM_V1_NO_PUSH_ID": 8,
+        "ANOMALY_UI_TAB_ITEM_V1_NO_TOOLTIP": 16
+      }
+    },
+    "AnomalyWindowFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_WINDOW_V1_NONE": 0,
+        "ANOMALY_WINDOW_V1_NO_SAVED_SETTINGS": 1,
+        "ANOMALY_WINDOW_V1_NO_COLLAPSE": 2
+      }
+    },
+    "AnomalyGlyphRangeV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_GLYPH_RANGE_V1_DEFAULT": 0,
+        "ANOMALY_GLYPH_RANGE_V1_LATIN": 1,
+        "ANOMALY_GLYPH_RANGE_V1_CYRILLIC": 2,
+        "ANOMALY_GLYPH_RANGE_V1_JAPANESE": 3,
+        "ANOMALY_GLYPH_RANGE_V1_CHINESE_FULL": 4
+      }
+    },
+    "AnomalyFontStateFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_FONT_STATE_V1_NONE": 0,
+        "ANOMALY_FONT_STATE_V1_QUEUED": 1,
+        "ANOMALY_FONT_STATE_V1_READY": 2,
+        "ANOMALY_FONT_STATE_V1_FAILED": 4,
+        "ANOMALY_FONT_STATE_V1_STALE_DEVICE": 8
+      }
+    },
+    "AnomalyTextureFormatV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_TEXTURE_FORMAT_V1_AUTO": 0,
+        "ANOMALY_TEXTURE_FORMAT_V1_RGBA8": 1
+      }
+    },
+    "AnomalyTextureStateFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_TEXTURE_STATE_V1_NONE": 0,
+        "ANOMALY_TEXTURE_STATE_V1_QUEUED": 1,
+        "ANOMALY_TEXTURE_STATE_V1_READY": 2,
+        "ANOMALY_TEXTURE_STATE_V1_FAILED": 4,
+        "ANOMALY_TEXTURE_STATE_V1_STALE_DEVICE": 8
+      }
+    },
+    "AnomalyInputModifiersV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_INPUT_MODIFIER_V1_NONE": 0,
+        "ANOMALY_INPUT_MODIFIER_V1_SHIFT": 1,
+        "ANOMALY_INPUT_MODIFIER_V1_CONTROL": 2,
+        "ANOMALY_INPUT_MODIFIER_V1_ALT": 4,
+        "ANOMALY_INPUT_MODIFIER_V1_SUPER": 8
+      }
+    },
+    "AnomalyInputCaptureFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_INPUT_CAPTURE_V1_NONE": 0,
+        "ANOMALY_INPUT_CAPTURE_V1_MOUSE": 1,
+        "ANOMALY_INPUT_CAPTURE_V1_KEYBOARD": 2,
+        "ANOMALY_INPUT_CAPTURE_V1_TEXT": 4
+      }
+    },
+    "AnomalyHotkeyFlagsV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_HOTKEY_V1_NONE": 0,
+        "ANOMALY_HOTKEY_V1_ALLOW_EXTRA_MODIFIERS": 1,
+        "ANOMALY_HOTKEY_V1_ALLOW_WHILE_UI_CAPTURED": 2,
+        "ANOMALY_HOTKEY_V1_ONLY_WHILE_UI_CAPTURED": 4
+      }
+    },
+    "AnomalyCoreLogLevelV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_CORE_LOG_LEVEL_V1_TRACE": 0,
+        "ANOMALY_CORE_LOG_LEVEL_V1_INFO": 1,
+        "ANOMALY_CORE_LOG_LEVEL_V1_WARNING": 2,
+        "ANOMALY_CORE_LOG_LEVEL_V1_ERROR": 3
+      }
+    },
+    "AnomalyIpcModeV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_IPC_MODE_V1_SYNC_REQUEST": 1,
+        "ANOMALY_IPC_MODE_V1_ASYNC_REQUEST": 2,
+        "ANOMALY_IPC_MODE_V1_EVENT": 4
+      }
+    },
+    "AnomalyIpcAffinityV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_IPC_AFFINITY_V1_CALLER": 0,
+        "ANOMALY_IPC_AFFINITY_V1_WORKER": 1,
+        "ANOMALY_IPC_AFFINITY_V1_LIFECYCLE": 2,
+        "ANOMALY_IPC_AFFINITY_V1_GAME": 3,
+        "ANOMALY_IPC_AFFINITY_V1_RENDER": 4
+      }
+    },
+    "AnomalyIpcReentrancyV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_IPC_REENTRANCY_V1_REJECT": 0,
+        "ANOMALY_IPC_REENTRANCY_V1_ALLOW": 1
+      }
+    },
+    "AnomalyIpcErrorV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_IPC_ERROR_V1_NONE": 0,
+        "ANOMALY_IPC_ERROR_V1_PROVIDER_MISSING": 1,
+        "ANOMALY_IPC_ERROR_V1_VERSION_MISMATCH": 2,
+        "ANOMALY_IPC_ERROR_V1_SCHEMA_MISMATCH": 3,
+        "ANOMALY_IPC_ERROR_V1_MODE_UNAVAILABLE": 4,
+        "ANOMALY_IPC_ERROR_V1_TIMEOUT": 5,
+        "ANOMALY_IPC_ERROR_V1_REENTRANT_CYCLE": 6,
+        "ANOMALY_IPC_ERROR_V1_QUEUE_FULL": 7,
+        "ANOMALY_IPC_ERROR_V1_STALE_GENERATION": 8,
+        "ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED": 9
+      }
+    }
+  },
+  "structs": {
+    "AnomalyStringViewV1": {
+      "size": 16,
+      "alignment": 8,
+      "offsets": {
+        "data": 0,
+        "size": 8
+      }
+    },
+    "AnomalyByteSpanV1": {
+      "size": 16,
+      "alignment": 8,
+      "offsets": {
+        "data": 0,
+        "size": 8
+      }
+    },
+    "AnomalyMutableByteSpanV1": {
+      "size": 16,
+      "alignment": 8,
+      "offsets": {
+        "data": 0,
+        "size": 8
+      }
+    },
+    "AnomalyStatusV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "code": 0,
+        "reserved": 4,
+        "message": 8
+      }
+    },
+    "AnomalyAllocatorV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "reserved": 4,
+        "user": 8,
+        "allocate": 16,
+        "reallocate": 24,
+        "release": 32
+      }
+    },
+    "AnomalyGenerationHandleV1": {
+      "size": 16,
+      "alignment": 8,
+      "offsets": {
+        "id": 0,
+        "generation": 8
+      }
+    },
+    "AnomalyHostApiV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "api_major": 4,
+        "api_minor": 6,
+        "host_context": 8,
+        "allocator": 16,
+        "query_service": 56
+      }
+    },
+    "AnomalyPluginDescriptorV1": {
+      "size": 120,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "api_major": 4,
+        "api_minor": 6,
+        "id": 8,
+        "name": 24,
+        "author": 40,
+        "version": 56,
+        "on_load": 72,
+        "on_start": 80,
+        "on_stop": 88,
+        "on_unload": 96,
+        "on_update": 104,
+        "on_draw": 112
+      }
+    },
+    "AnomalyCoreServiceV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "log": 16,
+        "read_memory": 24,
+        "write_memory": 32,
+        "plugin_directory": 40
+      }
+    },
+    "AnomalyPluginStateServiceV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "directory": 16
+      }
+    },
+    "AnomalyRuntimeInfoV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "runtime_version_major": 4,
+        "runtime_version_minor": 8,
+        "runtime_version_patch": 12,
+        "process_id": 16,
+        "thread_id": 20,
+        "uptime_milliseconds": 24,
+        "plugin_generation": 32
+      }
+    },
+    "AnomalyConfigServiceV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "register_schema": 16,
+        "unregister_schema": 24,
+        "read": 32,
+        "write_atomic": 40,
+        "migrate": 48
+      }
+    },
+    "AnomalyStorageServiceV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "read": 16,
+        "write_atomic": 24,
+        "remove": 32
+      }
+    },
+    "AnomalyNteCombatEventKindV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE": 1,
+        "ANOMALY_NTE_COMBAT_EVENT_V1_HEAL": 2,
+        "ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD": 3,
+        "ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE": 4
+      }
+    },
+    "AnomalyJsonServiceV1": {
+      "size": 112,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "parse": 16,
+        "release": 24,
+        "kind": 32,
+        "boolean_value": 40,
+        "number_value": 48,
+        "string_value": 56,
+        "array_size": 64,
+        "array_item": 72,
+        "object_size": 80,
+        "object_key_at": 88,
+        "object_find": 96,
+        "serialize": 104
+      }
+    },
+    "AnomalyRuntimeInfoServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "snapshot": 16,
+        "runtime_version_utf8": 24
+      }
+    },
+    "AnomalyDiagnosticsServiceV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "register_self_test": 16,
+        "unregister_self_test": 24,
+        "run_self_test": 32,
+        "snapshot_json": 40
+      }
+    },
+    "AnomalySchedulerServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "schedule": 16,
+        "cancel": 24
+      }
+    },
+    "AnomalyWebSocketServerInfoV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "port": 4,
+        "reserved": 6,
+        "connected_clients": 8,
+        "published_messages": 16,
+        "dropped_messages": 24
+      }
+    },
+    "AnomalyWebSocketServiceV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "publish_text": 16,
+        "server_info": 24,
+        "set_port": 32
+      }
+    },
+    "AnomalyIpcSchemaHashV1": {
+      "size": 32,
+      "alignment": 1,
+      "offsets": {
+        "bytes": 0
+      }
+    },
+    "AnomalyIpcEndpointDescriptorV1": {
+      "size": 160,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "endpoint_id": 8,
+        "major_version": 24,
+        "minor_version": 28,
+        "request_schema": 32,
+        "response_schema": 64,
+        "event_schema": 96,
+        "modes": 128,
+        "affinity": 132,
+        "timeout_milliseconds": 136,
+        "reentrancy": 140,
+        "maximum_request_bytes": 144,
+        "maximum_response_bytes": 148,
+        "maximum_event_bytes": 152,
+        "maximum_queue_depth": 156
+      }
+    },
+    "AnomalyIpcEndpointSelectorV1": {
+      "size": 128,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "endpoint_id": 8,
+        "major_version": 24,
+        "minimum_minor_version": 28,
+        "request_schema": 32,
+        "response_schema": 64,
+        "event_schema": 96
+      }
+    },
+    "AnomalyIpcRequestContextV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "reserved": 4,
+        "request_id": 8,
+        "caller_plugin_id": 16
+      }
+    },
+    "AnomalyIpcServiceV1": {
+      "size": 80,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "register_endpoint": 16,
+        "unregister_endpoint": 24,
+        "invoke": 32,
+        "invoke_async": 40,
+        "cancel": 48,
+        "subscribe": 56,
+        "unsubscribe": 64,
+        "publish": 72
+      }
+    },
+    "AnomalyCommandsServiceV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "register_command": 16,
+        "unregister_command": 24,
+        "invoke": 32
+      }
+    },
+    "AnomalyNotificationsServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "post": 16,
+        "dismiss": 24
+      }
+    },
+    "AnomalyHookRequestV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "kind": 4,
+        "target": 8,
+        "detour": 16,
+        "label": 24
+      }
+    },
+    "AnomalySignatureServiceV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "resolve": 16
+      }
+    },
+    "AnomalyHookServiceV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "create": 16,
+        "release": 24,
+        "begin_callback": 32,
+        "end_callback": 40
+      }
+    },
+    "AnomalyPatchServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "apply": 16,
+        "release": 24
+      }
+    },
+    "AnomalyEspCameraV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "position": 8,
+        "rotation": 32,
+        "horizontal_fov_degrees": 56,
+        "reserved": 60
+      }
+    },
+    "AnomalyEspEntityBoundsV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "center": 8,
+        "extent": 32
+      }
+    },
+    "AnomalyEspBoxStyleV1": {
+      "size": 24,
+      "alignment": 4,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "color_rgba": 8,
+        "outline_color_rgba": 12,
+        "thickness": 16,
+        "outline_thickness": 20
+      }
+    },
+    "AnomalyUiServiceV1": {
+      "size": 336,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "set_next_window_size": 16,
+        "begin_window": 24,
+        "end_window": 32,
+        "text": 40,
+        "button": 48,
+        "draw_entity_bbox": 56,
+        "checkbox": 64,
+        "slider_float": 72,
+        "color_edit4": 80,
+        "draw_entity_box3d": 88,
+        "draw_entity_label": 96,
+        "separator": 104,
+        "begin_child": 112,
+        "end_child": 120,
+        "begin_table": 128,
+        "table_next_row": 136,
+        "table_next_column": 144,
+        "end_table": 152,
+        "begin_menu": 160,
+        "end_menu": 168,
+        "open_popup": 176,
+        "begin_popup_modal": 184,
+        "end_popup": 192,
+        "close_current_popup": 200,
+        "filter_match": 208,
+        "frame_state": 216,
+        "set_next_window_size_constraints": 224,
+        "get_window_size": 232,
+        "input_uint32": 240,
+        "input_double": 248,
+        "developer_mode_enabled": 256,
+        "input_text": 264,
+        "button_enabled": 272,
+        "same_line": 280,
+        "set_cursor_pos_x": 288,
+        "text_link": 296,
+        "begin_tab_bar": 304,
+        "begin_tab_item": 312,
+        "end_tab_item": 320,
+        "end_tab_bar": 328
+      }
+    },
+    "AnomalyWindowSpecV1": {
+      "size": 72,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "id": 8,
+        "title": 24,
+        "initial_width": 40,
+        "initial_height": 44,
+        "minimum_width": 48,
+        "minimum_height": 52,
+        "maximum_width": 56,
+        "maximum_height": 60,
+        "default_open": 64,
+        "reserved": 68
+      }
+    },
+    "AnomalyWindowStateV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "width": 8,
+        "height": 12,
+        "ui_generation": 16,
+        "open": 24,
+        "reserved": 28
+      }
+    },
+    "AnomalyFontRequestV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "relative_path": 8,
+        "size_pixels": 24,
+        "glyph_range": 28,
+        "reserved": 32
+      }
+    },
+    "AnomalyFontStateV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "effective_size_pixels": 8,
+        "scale": 12,
+        "device_generation": 16,
+        "ready": 24,
+        "reserved": 28
+      }
+    },
+    "AnomalyTextureRequestV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "relative_path": 8,
+        "encoded_bytes": 24,
+        "format": 40,
+        "width": 44,
+        "height": 48,
+        "reserved": 52
+      }
+    },
+    "AnomalyTextureStateV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "width": 8,
+        "height": 12,
+        "device_generation": 16,
+        "byte_size": 24
+      }
+    },
+    "AnomalyInputSnapshotV1": {
+      "size": 80,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "modifiers": 4,
+        "sequence": 8,
+        "timestamp_milliseconds": 16,
+        "mouse_x": 24,
+        "mouse_y": 28,
+        "mouse_wheel": 32,
+        "capture_flags": 36,
+        "keys": 40,
+        "mouse_buttons": 72,
+        "reserved": 73
+      }
+    },
+    "AnomalyHotkeySpecV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "modifiers": 4,
+        "virtual_key": 8,
+        "flags": 12,
+        "id": 16
+      }
+    },
+    "AnomalyWindowServiceV1": {
+      "size": 72,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "register_window": 16,
+        "release_window": 24,
+        "set_open": 32,
+        "toggle": 40,
+        "state": 48,
+        "begin": 56,
+        "end": 64
+      }
+    },
+    "AnomalyFontServiceV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "request": 16,
+        "release": 24,
+        "state": 32,
+        "push": 40,
+        "pop": 48
+      }
+    },
+    "AnomalyTextureServiceV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "request": 16,
+        "release": 24,
+        "state": 32,
+        "draw": 40
+      }
+    },
+    "AnomalyInputServiceV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "snapshot": 16,
+        "was_pressed": 24,
+        "register_hotkey": 32,
+        "release_hotkey": 40,
+        "capture_state": 48
+      }
+    },
+    "AnomalyLocalizationServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "locale": 16,
+        "translate": 24
+      }
+    },
+    "AnomalyUe5BuildServiceV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "build_id": 16,
+        "profile_hash": 24,
+        "feature_state": 32
+      }
+    },
+    "AnomalyUe5AhudFrameV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "user": 8,
+        "viewport_width": 16,
+        "viewport_height": 20,
+        "project": 24,
+        "measure_text": 32,
+        "draw_text": 40,
+        "draw_line": 48,
+        "draw_rect": 56
+      }
+    },
+    "AnomalyUe5AhudServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "subscribe": 16,
+        "unsubscribe": 24
+      }
+    },
+    "AnomalyUe5FrameworkServiceV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "game_thread_id": 16,
+        "tick_sequence": 24,
+        "is_game_thread": 32
+      }
+    },
+    "AnomalyUe5NamesServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "resolve_utf8": 16,
+        "resolve_ftext_utf8": 24
+      }
+    },
+    "AnomalyUe5ObjectSnapshotV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "reserved": 4,
+        "handle": 8,
+        "name_id": 24,
+        "flags": 28
+      }
+    },
+    "AnomalyUe5ObjectsServiceV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "generation": 16,
+        "count": 24,
+        "snapshot_at": 32,
+        "snapshot_by_handle": 40,
+        "find_exact": 48
+      }
+    },
+    "AnomalyUe5WorldSnapshotV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "reserved": 4,
+        "handle": 8,
+        "change_sequence": 24,
+        "name_id": 32,
+        "flags": 36
+      }
+    },
+    "AnomalyUe5WorldServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "current": 16,
+        "snapshot": 24
+      }
+    },
+    "AnomalyUe5StreamingSourceOverrideV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "position": 8,
+        "rotation": 32,
+        "duration_milliseconds": 56,
+        "reserved": 60
+      }
+    },
+    "AnomalyUe5StreamingSourceServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "set_override": 16,
+        "clear_override": 24
+      }
+    },
+    "AnomalyNteBuildServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "build_id": 16,
+        "feature_state": 24
+      }
+    },
+    "AnomalyNteSessionSnapshotV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "state": 4,
+        "sequence": 8,
+        "world": 16
+      }
+    },
+    "AnomalyNteSessionEventV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "kind": 4,
+        "sequence": 8,
+        "tick_sequence": 16,
+        "previous_world": 24,
+        "world": 40
+      }
+    },
+    "AnomalyNteSessionServiceV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "snapshot": 16,
+        "next_event": 24,
+        "latest_event_sequence": 32
+      }
+    },
+    "AnomalyNtePlayerSnapshotV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "handle": 8,
+        "sequence": 24,
+        "position": 32
+      }
+    },
+    "AnomalyNtePlayerEspSnapshotV1": {
+      "size": 136,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "handle": 8,
+        "sequence": 24,
+        "bounds_center": 32,
+        "bounds_extent": 56,
+        "camera_position": 80,
+        "camera_rotation": 104,
+        "horizontal_fov_degrees": 128,
+        "reserved": 132
+      }
+    },
+    "AnomalyNteCameraSnapshotV1": {
+      "size": 104,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "world": 8,
+        "player": 24,
+        "sequence": 40,
+        "position": 48,
+        "rotation": 72,
+        "horizontal_fov_degrees": 96,
+        "reserved": 100
+      }
+    },
+    "AnomalyNtePlayerHoldSnapshotV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "gravity_scale": 8,
+        "velocity": 16,
+        "movement_mode": 40,
+        "reserved": 44
+      }
+    },
+    "AnomalyNtePlayerServiceV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "snapshot": 16,
+        "esp_snapshot": 24,
+        "camera_snapshot": 32,
+        "hold_engage": 40,
+        "hold_release": 48,
+        "hold_snapshot": 56
+      }
+    },
+    "AnomalyNtePlayerTeleportRequestV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "world": 8,
+        "player": 24,
+        "position": 40
+      }
+    },
+    "AnomalyNtePlayerTeleportServiceV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "preload": 24,
+        "cancel_preload": 32,
+        "teleport": 16
+      }
+    },
+    "AnomalyNtePlayerTeleportPreloadRequestV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "position": 8,
+        "duration_milliseconds": 32,
+        "reserved": 36
+      }
+    },
+    "AnomalyNteMapLandmarkSnapshotV1": {
+      "size": 2256,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "sequence": 8,
+        "point_type": 16,
+        "floor": 20,
+        "world_position": 24,
+        "destination": 48,
+        "teleport_id": 72,
+        "world": 201
+      }
+    },
+    "AnomalyNteMapLandmarkTeleportRequestV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "mode": 4,
+        "sequence": 8,
+        "index": 16,
+        "flags": 20
+      }
+    },
+    "AnomalyNteMapLandmarksServiceV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "sequence": 16,
+        "count": 24,
+        "snapshot_at": 32,
+        "teleport": 40
+      }
+    },
+    "AnomalyNteNavigationServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "move_to_location": 16,
+        "stop_movement": 24
+      }
+    },
+    "AnomalyNtePickupRequestV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "radius": 8,
+        "maximum_items": 16,
+        "reserved": 20
+      }
+    },
+    "AnomalyNtePickupSnapshotV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "sequence": 8,
+        "state": 16,
+        "status": 20,
+        "nearby": 24,
+        "triggered": 28,
+        "confirmed": 32,
+        "checking": 36,
+        "unconfirmed": 40,
+        "skipped": 44
+      }
+    },
+    "AnomalyNtePickupServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "request_nearby": 16,
+        "snapshot": 24
+      }
+    },
+    "AnomalyNteEntityFrameV1": {
+      "size": 88,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "generation": 8,
+        "sequence": 16,
+        "entity_count": 24,
+        "reserved": 28,
+        "camera_position": 32,
+        "camera_rotation": 56,
+        "horizontal_fov_degrees": 80,
+        "reserved2": 84
+      }
+    },
+    "AnomalyNteEntitySnapshotV1": {
+      "size": 96,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "handle": 8,
+        "entity_id": 24,
+        "class_id": 32,
+        "entity_name_id": 40,
+        "class_name_id": 44,
+        "bounds_center": 48,
+        "bounds_extent": 72
+      }
+    },
+    "AnomalyNteEntityPageRequestV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "generation": 8,
+        "offset": 16,
+        "capacity": 20,
+        "class_id": 24,
+        "class_name_id": 32,
+        "entity_name_id": 36,
+        "required_flags": 40,
+        "excluded_flags": 44
+      }
+    },
+    "AnomalyNteEntityPageResultV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "generation": 8,
+        "sequence": 16,
+        "total_matches": 24,
+        "returned": 28,
+        "next_offset": 32,
+        "reserved": 36
+      }
+    },
+    "AnomalyNteEntityComponentBoundsV1": {
+      "size": 80,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "entity": 8,
+        "sequence": 24,
+        "bounds_center": 32,
+        "bounds_extent": 56
+      }
+    },
+    "AnomalyNteEntityBoolPropertyV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "entity": 8,
+        "sequence": 24,
+        "value": 32,
+        "reserved": 36
+      }
+    },
+    "AnomalyNteEntitiesServiceV1": {
+      "size": 80,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "frame": 16,
+        "snapshot_at": 24,
+        "class_name_utf8": 32,
+        "entity_name_utf8": 40,
+        "page": 48,
+        "component_bounds": 56,
+        "bool_property": 64,
+        "fname_property_utf8": 72
+      }
+    },
+    "AnomalyNteActorsServiceV1": {
+      "size": 80,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "frame": 16,
+        "snapshot_at": 24,
+        "class_name_utf8": 32,
+        "entity_name_utf8": 40,
+        "page": 48,
+        "component_bounds": 56,
+        "bool_property": 64,
+        "fname_property_utf8": 72
+      }
+    },
+    "AnomalyNteCombatantSnapshotV1": {
+      "size": 88,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "sequence": 8,
+        "world": 16,
+        "character": 32,
+        "target": 48,
+        "hp": 64,
+        "max_hp": 72,
+        "shield": 80
+      }
+    },
+    "AnomalyNteDamageEventV1": {
+      "size": 144,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "sequence": 8,
+        "tick_sequence": 16,
+        "world": 24,
+        "attacker": 40,
+        "victim": 56,
+        "source_id": 72,
+        "display_damage": 80,
+        "basic_damage": 88,
+        "final_damage": 96,
+        "hit_location": 104,
+        "damage_type": 128,
+        "display_type": 132,
+        "reaction_type": 136,
+        "reaction_display_type": 140
+      }
+    },
+    "AnomalyNteCombatEventV1": {
+      "size": 136,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "kind": 4,
+        "flags": 8,
+        "sequence": 16,
+        "tick_sequence": 24,
+        "world": 32,
+        "source": 48,
+        "target": 64,
+        "name_id": 80,
+        "value": 88,
+        "basic_value": 96,
+        "final_value": 104,
+        "duration_seconds": 112,
+        "stack_count": 116,
+        "damage_type": 120,
+        "display_type": 124,
+        "reaction_type": 128,
+        "reaction_display_type": 132
+      }
+    },
+    "AnomalyNteCombatStatisticsRequestV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "world": 8,
+        "character": 24,
+        "source_id": 40,
+        "direction": 48,
+        "reserved": 52
+      }
+    },
+    "AnomalyNteCombatStatisticsV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "through_sequence": 8,
+        "hit_count": 16,
+        "critical_count": 24,
+        "head_hit_count": 32,
+        "display_damage_total": 40,
+        "basic_damage_total": 48,
+        "final_damage_total": 56
+      }
+    },
+    "AnomalyNteCombatServiceV1": {
+      "size": 96,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "current_combatant": 16,
+        "latest_damage_sequence": 24,
+        "next_damage_event": 32,
+        "statistics": 40,
+        "source_name_utf8": 48,
+        "participant_path_utf8": 56,
+        "latest_event_sequence": 64,
+        "next_event": 72,
+        "event_name_utf8": 80,
+        "participant_display_name_utf8": 88
+      }
+    },
+    "AnomalyNteSkillFrameV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "generation": 8,
+        "sequence": 16,
+        "character": 24,
+        "skill_count": 40,
+        "reserved": 44
+      }
+    },
+    "AnomalyNteSkillSnapshotV1": {
+      "size": 80,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "handle": 8,
+        "character": 24,
+        "ability_class": 40,
+        "sequence": 56,
+        "level": 64,
+        "input_id": 68,
+        "cooldown_remaining_seconds": 72,
+        "cooldown_duration_seconds": 76
+      }
+    },
+    "AnomalyNteSkillPageRequestV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "generation": 8,
+        "offset": 16,
+        "capacity": 20
+      }
+    },
+    "AnomalyNteSkillPageResultV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "generation": 8,
+        "sequence": 16,
+        "total_skills": 24,
+        "returned": 28,
+        "next_offset": 32,
+        "reserved": 36
+      }
+    },
+    "AnomalyNteSkillsServiceV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "frame": 16,
+        "snapshot_at": 24,
+        "page": 32,
+        "ability_path_utf8": 40,
+        "snapshot_by_handle": 48,
+        "ability_display_name_utf8": 56
+      }
+    },
+    "AnomalyNteSkillInvocationRequestV1": {
+      "size": 56,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "world": 8,
+        "character": 24,
+        "skill": 40
+      }
+    },
+    "AnomalyNteSkillInvocationResultV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "tick_sequence": 8,
+        "accepted": 16,
+        "reserved": 20
+      }
+    },
+    "AnomalyNteSkillInvocationServiceV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "activate": 16
+      }
+    },
+    "AnomalyNteSnapshotMetricsV1": {
+      "size": 104,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "tick_sequence": 8,
+        "session_event_sequence": 16,
+        "snapshot_tick_count": 24,
+        "latest_snapshot_cost_micros": 32,
+        "total_snapshot_cost_micros": 40,
+        "max_snapshot_cost_micros": 48,
+        "player_refresh_count": 56,
+        "player_cache_hit_count": 64,
+        "entity_refresh_count": 72,
+        "entity_cache_hit_count": 80,
+        "entity_page_request_count": 88,
+        "entity_page_cache_hit_count": 96
+      }
+    },
+    "AnomalyNteMetricsServiceV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "snapshot": 16
+      }
+    },
+    "AnomalyNteEscMenuButtonSpecV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "id": 8,
+        "label": 24,
+        "icon_format": 40,
+        "reserved": 44,
+        "icon_bytes": 48
+      }
+    },
+    "AnomalyNteEscMenuButtonServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "register_button": 16,
+        "unregister_button": 24
+      }
+    }
+  },
+  "services": [
+    { "id": "anomaly.core", "version": 1, "table": "AnomalyCoreServiceV1" },
+    { "id": "anomaly.plugin-state", "version": 1, "table": "AnomalyPluginStateServiceV1" },
+    { "id": "anomaly.config", "version": 1, "table": "AnomalyConfigServiceV1" },
+    { "id": "anomaly.storage", "version": 1, "table": "AnomalyStorageServiceV1" },
+    { "id": "anomaly.json", "version": 1, "table": "AnomalyJsonServiceV1" },
+    { "id": "anomaly.runtime-info", "version": 1, "table": "AnomalyRuntimeInfoServiceV1" },
+    { "id": "anomaly.diagnostics", "version": 1, "table": "AnomalyDiagnosticsServiceV1" },
+    { "id": "anomaly.scheduler", "version": 1, "table": "AnomalySchedulerServiceV1" },
+    { "id": "anomaly.ipc", "version": 1, "table": "AnomalyIpcServiceV1" },
+    { "id": "anomaly.websocket", "version": 1, "table": "AnomalyWebSocketServiceV1" },
+    { "id": "anomaly.commands", "version": 1, "table": "AnomalyCommandsServiceV1" },
+    { "id": "anomaly.notifications", "version": 1, "table": "AnomalyNotificationsServiceV1" },
+    { "id": "anomaly.interop.signature", "version": 1, "table": "AnomalySignatureServiceV1" },
+    { "id": "anomaly.interop.hook", "version": 1, "table": "AnomalyHookServiceV1" },
+    { "id": "anomaly.interop.patch", "version": 1, "table": "AnomalyPatchServiceV1" },
+    { "id": "anomaly.ui", "version": 1, "table": "AnomalyUiServiceV1" },
+    { "id": "anomaly.window", "version": 1, "table": "AnomalyWindowServiceV1" },
+    { "id": "anomaly.font", "version": 1, "table": "AnomalyFontServiceV1" },
+    { "id": "anomaly.texture", "version": 1, "table": "AnomalyTextureServiceV1" },
+    { "id": "anomaly.input", "version": 1, "table": "AnomalyInputServiceV1" },
+    { "id": "anomaly.localization", "version": 1, "table": "AnomalyLocalizationServiceV1" },
+    { "id": "anomaly.ue5.build", "version": 1, "table": "AnomalyUe5BuildServiceV1" },
+    { "id": "anomaly.ue5.ahud", "version": 1, "table": "AnomalyUe5AhudServiceV1" },
+    { "id": "anomaly.ue5.framework", "version": 1, "table": "AnomalyUe5FrameworkServiceV1" },
+    { "id": "anomaly.ue5.names", "version": 1, "table": "AnomalyUe5NamesServiceV1" },
+    { "id": "anomaly.ue5.objects", "version": 1, "table": "AnomalyUe5ObjectsServiceV1" },
+    { "id": "anomaly.ue5.world", "version": 1, "table": "AnomalyUe5WorldServiceV1" },
+    { "id": "anomaly.ue5.streaming-source", "version": 1, "table": "AnomalyUe5StreamingSourceServiceV1" },
+    { "id": "anomaly.nte.build", "version": 1, "table": "AnomalyNteBuildServiceV1" },
+    { "id": "anomaly.nte.session", "version": 1, "table": "AnomalyNteSessionServiceV1" },
+    { "id": "anomaly.nte.player", "version": 1, "table": "AnomalyNtePlayerServiceV1" },
+    { "id": "anomaly.nte.player-teleport", "version": 1, "table": "AnomalyNtePlayerTeleportServiceV1" },
+    { "id": "anomaly.nte.player-hold", "version": 1, "table": "AnomalyNtePlayerHoldServiceV1" },
+    { "id": "anomaly.nte.map-landmarks", "version": 1, "table": "AnomalyNteMapLandmarksServiceV1" },
+    { "id": "anomaly.nte.navigation", "version": 1, "table": "AnomalyNteNavigationServiceV1" },
+    { "id": "anomaly.nte.pickup", "version": 1, "table": "AnomalyNtePickupServiceV1" },
+    { "id": "anomaly.nte.entities", "version": 1, "table": "AnomalyNteEntitiesServiceV1" },
+    { "id": "anomaly.nte.actors", "version": 1, "table": "AnomalyNteActorsServiceV1" },
+    { "id": "anomaly.nte.combat", "version": 1, "table": "AnomalyNteCombatServiceV1" },
+    { "id": "anomaly.nte.skills", "version": 1, "table": "AnomalyNteSkillsServiceV1" },
+    { "id": "anomaly.nte.skill-invocation", "version": 1, "table": "AnomalyNteSkillInvocationServiceV1" },
+    { "id": "anomaly.nte.metrics", "version": 1, "table": "AnomalyNteMetricsServiceV1" },
+    { "id": "anomaly.nte.esc-menu-button", "version": 1, "table": "AnomalyNteEscMenuButtonServiceV1" }
+  ]
+}
