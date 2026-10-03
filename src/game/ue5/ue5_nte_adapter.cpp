@@ -1614,8 +1614,13 @@ struct Ue5NteAdapter::State {
                 "ufunction.returnValueOffset", "ffield.name", "ffield.class",
                 "ffieldClass.name", "fproperty.arrayDim", "fproperty.elementSize",
                 "fproperty.offsetInternal", "fproperty.propertyLinkNext",
-                "fobjectProperty.propertyClass", "fstructProperty.struct"}) &&
-            true;
+                "fobjectProperty.propertyClass", "fstructProperty.struct",
+                "vehicle.movementComponent", "vehicle.maxEngineTorque"}) &&
+            FeatureDeclaresDependency(profile, "nte.vehicle", "nte.player") &&
+            FeatureDeclaresDependency(profile, "nte.vehicle", "ue5.names") &&
+            FeatureDeclaresDependency(profile, "nte.vehicle", "ue5.objects") &&
+            FeatureDeclaresDependency(profile, "nte.vehicle", kUe5ProcessEventFeature) &&
+            FeatureDeclaresLayoutValidator(profile, "nte.vehicle", "nte-vehicle-layout-v1");
     }
 
     [[nodiscard]] bool NteCombatProfileAvailable() const noexcept {
