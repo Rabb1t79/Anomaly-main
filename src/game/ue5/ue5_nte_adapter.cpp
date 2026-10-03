@@ -13173,29 +13173,29 @@ private:
     static AnomalyStatusV1 ANOMALY_CALL VehicleSnapshotThunk(
         void* user, AnomalyNteVehicleSnapshotV1* snapshot) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSnapshot(lease.User(), snapshot) : StoppedStatus();
+        return lease ? State::VehicleSnapshot(snapshot) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetTopSpeedRatioThunk(
         void* user, float ratio) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSetTopSpeedRatio(lease.User(), ratio) : StoppedStatus();
+        return lease ? State::VehicleSetTopSpeedRatio(ratio) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetWheelFrictionThunk(
         void* user, std::uint32_t enabled) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSetWheelFriction(lease.User(), enabled != 0) : StoppedStatus();
+        return lease ? State::VehicleSetWheelFriction(enabled != 0) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleResetThunk(void* user) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleReset(lease.User()) : StoppedStatus();
+        return lease ? State::VehicleReset() : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSummonThunk(void* user) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSummon(lease.User()) : StoppedStatus();
+        return lease ? State::VehicleSummon() : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
