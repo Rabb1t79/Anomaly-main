@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "locale": "zh-CN",
+  "messages": {
+    "plugin.name": "寻路",
+    "plugin.description": "通过宿主 ABI 启动或终止原生 NTE 寻路。",
+    "window.title": "寻路",
+    "action.move": "开始寻路",
+    "action.stop": "终止寻路",
+    "status.move_queued": "寻路：等待执行",
+    "status.stop_queued": "寻路：等待终止",
+    "status.idle": "寻路：空闲",
+    "status.result": "寻路：{0}",
+    "status.result_detail": "寻路：{0} - {1}"
+  }
+}

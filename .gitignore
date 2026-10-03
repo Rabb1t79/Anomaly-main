@@ -1,0 +1,15 @@
+/.build/
+/build/
+/build-*/
+/out/
+*.log
+snapshot-*.json
+/data/
+/runtime/
+/output/
+/imgui.ini
+/.local/
+/plugins/*/build/
+/.dsh-inbox/
+__pycache__/
+*.pyc

@@ -1,0 +1,2022 @@
+#include "anomaly/nte_profile_runtime.hpp"
+
+#include "anomaly/nte_navigation_input_policy.hpp"
+#include "anomaly/nte_ui_buttons.hpp"
+#include "anomaly/ue5_actor_process_event_hook.hpp"
+#include "anomaly/ue5_damage_function_hook.hpp"
+#include "anomaly/ue5_object_lookup.hpp"
+#include "anomaly/ue5_outbound_bit_count_probe.hpp"
+#include "anomaly/ue5_process_event.hpp"
+#include "anomaly/ue5_process_event_hook.hpp"
+#include "anomaly/ue5_reflection_query.hpp"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstring>
+#include <cstdint>
+#include <fstream>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <new>
+#include <set>
+#include <sstream>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace anomaly {
+namespace {
+
+inline constexpr std::string_view kOutgoingTransformMetadataFeature =
+    "ue5.network.outgoing-transform-metadata";
+inline constexpr std::string_view kAhudFeature = "ue5.ahud";
+inline constexpr std::string_view kOutboundPreHandlerDispatchSymbol =
+    "ue5.PacketHandler.OutboundDispatchPreHandler";
+inline constexpr std::string_view kOutgoingTransformSymbol =
+    "ue5.PacketHandler.OutgoingTransform";
+inline constexpr std::string_view kOutgoingTransformAbiValidator =
+    "ue5-outgoing-transform-abi-v1";
+inline constexpr std::string_view kEscMenuButtonFeature =
+    "nte.esc-menu-button";
+inline constexpr std::string_view kEscMenuHooksValidator = "nte-esc-menu-hooks-v1";
+inline constexpr std::string_view kAddMenuPageSymbol =
+    "nte.HTUI_MenuExtension.AddMenuPage";
+inline constexpr std::string_view kExecAddMenuPageSymbol =
+    "nte.HTUI_MenuExtension.execAddMenuPage";
+inline constexpr std::string_view kHandleButtonClickedSymbol =
+    "nte.CommonButtonBase.HandleButtonClicked";
+inline constexpr std::string_view kButtonClickedSymbol =
+    "nte.CommonButtonBase.BP_OnClicked";
+inline constexpr std::string_view kNavigationFeature = "nte.navigation";
+inline constexpr std::string_view kNavigationInputSymbol =
+    "nte.ClientIgnoreGameAndUiInput";
+inline constexpr std::string_view kNavigationLayoutValidator =
+    "nte-navigation-layout-v1";
+inline constexpr std::string_view kNavigationInputAbiValidator =
+    "nte-navigation-input-abi-v1";
+inline constexpr std::string_view kPickupFeature = "nte.pickup";
+inline constexpr std::string_view kPickupLayoutValidator = "nte-pickup-layout-v1";
+inline constexpr std::string_view kCombatFeature = "nte.combat";
+inline constexpr std::string_view kDamageEventSymbol =
+    "nte.HTAbilityCharacter.BroadcastCharacterOnDamaged";
+inline constexpr std::string_view kSkillsFeature = "nte.skills";
+inline constexpr std::string_view kSkillInvocationFeature = "nte.skill-invocation";
+inline constexpr std::string_view kCombatReflectionValidator =
+    "nte-combat-reflection-v1";
+inline constexpr std::string_view kSkillsLayoutValidator = "nte-skills-layout-v1";
+inline constexpr std::string_view kSkillInvocationValidator =
+    "nte-skill-invocation-v1";
+
+template <std::size_t Size>
+bool MatchesBytes(
+    const SymbolMemory& memory,
+    const std::uintptr_t address,
+    const std::array<std::uint8_t, Size>& expected) noexcept {
+    std::array<std::uint8_t, Size> observed{};
+    return memory.Read(address, observed.data(), observed.size()) && observed == expected;
+}
+
+bool FeatureRequires(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const std::string_view symbol) {
+    const auto found = profile.features.find(std::string(feature));
+    return found != profile.features.end() &&
+        std::find(found->second.begin(), found->second.end(), std::string(symbol)) !=
+            found->second.end();
+}
+
+bool HasMatchingUnwindEntry(
+    const ue5mem::ModuleInfo& module,
+    const ResolvedSymbol& symbol) noexcept {
+    DWORD64 image_base{};
+    const auto* const unwind = RtlLookupFunctionEntry(
+        static_cast<DWORD64>(symbol.address), &image_base, nullptr);
+    return unwind != nullptr && image_base == static_cast<DWORD64>(module.base) &&
+        unwind->BeginAddress == symbol.rva;
+}
+
+bool ProfileLayoutValue(
+    const BuildProfile& profile,
+    const std::string_view key,
+    std::uint64_t* const value) {
+    if (value == nullptr) return false;
+    const auto found = profile.layout.find(key);
+    if (found == profile.layout.end() || found->second < 0) return false;
+    *value = static_cast<std::uint64_t>(found->second);
+    return true;
+}
+
+std::shared_ptr<NteNavigationInputPolicy> CreateNavigationInputPolicy(
+    const BuildProfile& profile) {
+    std::uint64_t get_player_character{};
+    std::uint64_t set_ignore_move{};
+    std::uint64_t set_limit_input{};
+    if (!ProfileLayoutValue(
+            profile, "controller.getPlayerCharacterVtableOffset",
+            &get_player_character) ||
+        !ProfileLayoutValue(
+            profile, "character.setCustomIgnoreMoveInputVtableOffset",
+            &set_ignore_move) ||
+        !ProfileLayoutValue(
+            profile, "character.setCustomLimitInputVtableOffset",
+            &set_limit_input) ||
+        get_player_character > (std::numeric_limits<std::uint32_t>::max)() ||
+        set_ignore_move > (std::numeric_limits<std::uint32_t>::max)() ||
+        set_limit_input > (std::numeric_limits<std::uint32_t>::max)()) {
+        return {};
+    }
+    try {
+        return std::make_shared<NteNavigationInputPolicy>(
+            CreateMinHookBackend(),
+            static_cast<std::uint32_t>(get_player_character),
+            static_cast<std::uint32_t>(set_ignore_move),
+            static_cast<std::uint32_t>(set_limit_input));
+    } catch (...) {
+        return {};
+    }
+}
+
+FeatureValidationResult ValidateBoundedLayoutKeys(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const std::initializer_list<std::string_view> keys) {
+    constexpr std::uint64_t kMaximumLayoutValue = 64ULL * 1024ULL * 1024ULL;
+    for (const std::string_view key : keys) {
+        std::uint64_t value{};
+        if (!ProfileLayoutValue(profile, key, &value)) {
+            return {false, "profile layout is missing " + std::string(key)};
+        }
+        if (value > kMaximumLayoutValue) {
+            return {false, std::string(feature) + " layout exceeds the supported bound"};
+        }
+    }
+    return {true, {}};
+}
+
+FeatureValidationResult ValidateCombatReflectionLayout(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot&,
+    const SymbolMemory&) {
+    if (feature != kCombatFeature) {
+        return {false, "combat validator attached to an unexpected feature"};
+    }
+    const auto required = ValidateBoundedLayoutKeys(profile, feature, {
+        "object.internalIndex", "object.class", "object.outer",
+        "uclass.classDefaultObject",
+        "ustruct.superStruct", "ustruct.propertyLink", "ufunction.numParms",
+        "ufunction.parmsSize", "ufunction.returnValueOffset", "ffield.class",
+        "ffield.name", "ffieldClass.name", "fproperty.arrayDim",
+        "fproperty.elementSize", "fproperty.offsetInternal",
+        "fproperty.propertyLinkNext", "fstructProperty.struct",
+        "fobjectProperty.propertyClass",
+        "fboolProperty.fieldSize", "fboolProperty.byteOffset",
+        "fboolProperty.byteMask", "fboolProperty.fieldMask",
+        "damageEvent.size", "damageEvent.damage", "damageEvent.damageGEDef",
+        "damageEvent.damageTags", "controller.playerState", "playerState.roleName",
+        "abilityCharacter.characterConfigId",
+        "abilitySpawnActor.triggerAbilityHandle",
+        "abilitySpawnActor.savedTriggerSkillCDO", "gameplayEffectSpec.size",
+        "gameplayEffectSpec.def", "gameplayEffectSpec.duration",
+        "gameplayEffectSpec.stackCount", "activeGameplayEffect.size",
+        "activeGameplayEffect.spec", "activeGameplayEffect.replicationId",
+        "activeGameplayEffect.replicationKey", "abilitySystem.activeGameplayEffects",
+        "activeGameplayEffects.size", "activeGameplayEffects.arrayReplicationKey",
+        "activeGameplayEffects.items", "buffs.maxCount",
+        "weakObject.index", "weakObject.serial",
+        "damageTextInfo.displayDamage", "damageTextInfo.damageType",
+        "damageTextInfo.critical", "damageTextInfo.headHit",
+        "damageTextInfo.weakUnbalance", "damageTextInfo.attacker",
+        "damageTextInfo.victim", "damageTextInfo.combatStatistics",
+        "damageTextInfo.basicDamage", "damageTextInfo.finalDamage",
+        "damageTextInfo.displayType", "damageTextInfo.reactionType",
+        "damageTextInfo.reactionDisplayType",
+        "gameplayEffect.uiData", "gameplayEffectUIData.description",
+        "buff.specDef",
+        "buff.duration", "buff.stackCount", "ftext.textData",
+        "ftextData.textSource", "fstring.data", "fstring.count",
+        "fstring.capacity", "abilityCharacter.abilitySystemComponent",
+        "gameData.abilityDataAsset",
+        "abilityData.skillDamageDataTable", "skillDamage.gaName",
+        "gameData.characterDataTable", "gameData.gameplayAbilityTipsDataTable",
+        "gameData.gameplayEffectTipsDataTable", "gameplayAbilityTips.name",
+        "gameplayAbilityTips.gameplayAbility", "gameplayEffectTips.name",
+        "gameplayEffectTips.geParamName",
+        "monsterData.textName", "dataTable.rowMap", "dataTable.rowMapData",
+        "dataTable.rowMapNum", "dataTable.rowMapNumFree", "dataTable.rowMapMax",
+        "dataTable.rowMapElementStride", "dataTable.rowMapRowOffset",
+        "dataTable.rowMapInlineFlags", "dataTable.rowMapFlagsData",
+        "dataTable.rowMapFlagsNum", "dataTable.rowMapFlagsMax"});
+    if (!required.valid) return required;
+
+    const auto value = [&profile](const std::string_view key) {
+        return static_cast<std::uint64_t>(profile.layout.at(std::string(key)));
+    };
+    const std::uint64_t event_size = value("damageEvent.size");
+    if (event_size == 0 || event_size > 4096U ||
+        value("damageEvent.damage") + sizeof(float) > event_size ||
+        value("damageEvent.damageGEDef") + 8U > event_size ||
+        value("damageEvent.damageTags") + 0x20U > event_size ||
+        value("weakObject.index") + 4U > 8U || value("weakObject.serial") + 4U > 8U) {
+        return {false, "combat structure layout is internally inconsistent"};
+    }
+    const std::uint64_t effect_spec_size = value("gameplayEffectSpec.size");
+    const std::uint64_t active_effect_size = value("activeGameplayEffect.size");
+    const std::uint64_t active_effects_size = value("activeGameplayEffects.size");
+    if (effect_spec_size == 0 || effect_spec_size > 4096U ||
+        value("gameplayEffectSpec.def") + sizeof(std::uintptr_t) > effect_spec_size ||
+        value("gameplayEffectSpec.duration") + sizeof(float) > effect_spec_size ||
+        value("gameplayEffectSpec.stackCount") + sizeof(std::int32_t) > effect_spec_size ||
+        active_effect_size == 0 || active_effect_size > 4096U ||
+        value("activeGameplayEffect.spec") + effect_spec_size > active_effect_size ||
+        value("activeGameplayEffect.replicationId") + sizeof(std::int32_t) > active_effect_size ||
+        value("activeGameplayEffect.replicationKey") + sizeof(std::int32_t) > active_effect_size ||
+        active_effects_size == 0 || active_effects_size > 4096U ||
+        value("activeGameplayEffects.arrayReplicationKey") + sizeof(std::int32_t) > active_effects_size ||
+        value("activeGameplayEffects.items") + 16U > active_effects_size ||
+        value("abilitySystem.activeGameplayEffects") + active_effects_size > 0x2588U ||
+        value("buffs.maxCount") == 0 || value("buffs.maxCount") > 4096U ||
+        value("abilitySpawnActor.triggerAbilityHandle") + sizeof(std::int32_t) > 0x4A0U ||
+        value("abilitySpawnActor.savedTriggerSkillCDO") + sizeof(std::uintptr_t) > 0x4A0U) {
+        return {false, "combat callback layout is internally inconsistent"};
+    }
+    constexpr std::uint64_t kDamageTextInfoSize = 72U;
+    if (value("damageTextInfo.combatStatistics") + 8U > kDamageTextInfoSize ||
+        value("damageTextInfo.basicDamage") + sizeof(std::int32_t) > kDamageTextInfoSize ||
+        value("damageTextInfo.finalDamage") + sizeof(std::int32_t) > kDamageTextInfoSize) {
+        return {false, "damage text layout is internally inconsistent"};
+    }
+    const auto field_fits = [&value](const std::string_view key,
+                                     const std::uint64_t structure_size,
+                                     const std::uint64_t field_size) {
+        return value(key) <= structure_size && field_size <= structure_size - value(key);
+    };
+    if (!field_fits("gameData.abilityDataAsset", 0x23C0U, 8U) ||
+        !field_fits("abilityData.skillDamageDataTable", 0xD58U, 8U) ||
+        !field_fits("skillDamage.gaName", 0x78U, 8U) ||
+        !field_fits("gameData.characterDataTable", 0x23C0U, 8U) ||
+        !field_fits("gameData.gameplayAbilityTipsDataTable", 0x23C0U, 8U) ||
+        !field_fits("gameData.gameplayEffectTipsDataTable", 0x23C0U, 8U) ||
+        !field_fits("abilityCharacter.abilitySystemComponent", 0x1440U, 8U) ||
+        !field_fits("abilityCharacter.characterConfigId", 0x1D80U, 8U) ||
+        !field_fits("playerState.roleName", 0x470U, 16U) ||
+        !field_fits("gameplayAbilityTips.name", 0xB8U, 16U) ||
+        !field_fits("gameplayAbilityTips.gameplayAbility", 0xB8U, 0x28U) ||
+        !field_fits("gameplayEffectTips.name", 0x88U, 16U) ||
+        !field_fits("gameplayEffectTips.geParamName", 0x88U, 8U) ||
+        !field_fits("monsterData.textName", 0x118U, 16U)) {
+        return {false, "combat display-name table layout is internally inconsistent"};
+    }
+    if (value("dataTable.rowMap") + 0x50U > 0x23C0U ||
+        value("dataTable.rowMapData") + sizeof(std::uintptr_t) > 0x50U ||
+        value("dataTable.rowMapNum") + sizeof(std::int32_t) > 0x50U ||
+        value("dataTable.rowMapNumFree") + sizeof(std::int32_t) > 0x50U ||
+        value("dataTable.rowMapMax") + sizeof(std::int32_t) > 0x50U ||
+        value("dataTable.rowMapElementStride") < 16U ||
+        value("dataTable.rowMapElementStride") > 128U ||
+        value("dataTable.rowMapRowOffset") + sizeof(std::uintptr_t) >
+            value("dataTable.rowMapElementStride") ||
+        value("dataTable.rowMapInlineFlags") + sizeof(std::uint32_t) > 0x50U ||
+        value("dataTable.rowMapFlagsData") + sizeof(std::uintptr_t) > 0x50U ||
+        value("dataTable.rowMapFlagsNum") + sizeof(std::int32_t) > 0x50U ||
+        value("dataTable.rowMapFlagsMax") + sizeof(std::int32_t) > 0x50U) {
+        return {false, "data table sparse-map layout is internally inconsistent"};
+    }
+    return {true, {}};
+}
+
+FeatureValidationResult ValidateSkillsLayout(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot&,
+    const SymbolMemory&) {
+    if (feature != kSkillsFeature && feature != kSkillInvocationFeature) {
+        return {false, "skills validator attached to an unexpected feature"};
+    }
+    const auto required = ValidateBoundedLayoutKeys(profile, feature, {
+        "object.internalIndex", "object.class", "object.outer",
+        "ustruct.superStruct", "ustruct.propertyLink", "ufunction.numParms",
+        "ufunction.parmsSize", "ufunction.returnValueOffset", "ffield.class",
+        "ffield.name", "ffieldClass.name", "fproperty.arrayDim",
+        "fproperty.elementSize", "fproperty.offsetInternal",
+        "fproperty.propertyLinkNext", "fstructProperty.struct",
+        "fobjectProperty.propertyClass", "farrayProperty.inner",
+        "fclassProperty.metaClass",
+        "fboolProperty.fieldSize", "fboolProperty.byteOffset",
+        "fboolProperty.byteMask", "fboolProperty.fieldMask", "tarray.data",
+        "tarray.num", "tarray.max", "abilitySystem.activatableAbilities",
+        "abilitySpecContainer.items", "abilitySpec.stride", "abilitySpec.handle",
+        "abilitySpec.ability", "abilitySpec.level", "abilitySpec.inputId",
+        "abilitySpec.activeCount", "abilitySpec.stateBits",
+        "ability.cooldownGameplayEffectClass", "skills.maxCount"});
+    if (!required.valid) return required;
+
+    const auto value = [&profile](const std::string_view key) {
+        return static_cast<std::uint64_t>(profile.layout.at(std::string(key)));
+    };
+    const std::uint64_t stride = value("abilitySpec.stride");
+    if (stride < 42U || stride > 4096U || value("skills.maxCount") == 0 ||
+        value("skills.maxCount") > 4096U ||
+        value("abilitySpec.handle") + 4U > stride ||
+        value("abilitySpec.ability") + sizeof(std::uintptr_t) > stride ||
+        value("abilitySpec.level") + 4U > stride ||
+        value("abilitySpec.inputId") + 4U > stride ||
+        value("abilitySpec.activeCount") >= stride ||
+        value("abilitySpec.stateBits") >= stride ||
+        value("ability.cooldownGameplayEffectClass") + sizeof(std::uintptr_t) > 4096U) {
+        return {false, "ability spec layout is internally inconsistent"};
+    }
+    return {true, {}};
+}
+
+bool ResolveRel32Target(
+    const SymbolMemory& memory,
+    const std::uintptr_t instruction,
+    const std::size_t displacement_offset,
+    const std::size_t instruction_size,
+    std::uintptr_t* const target) noexcept {
+    std::int32_t displacement{};
+    if (target == nullptr || displacement_offset + sizeof(displacement) > instruction_size ||
+        !memory.Read(
+            instruction + displacement_offset, &displacement, sizeof(displacement))) {
+        return false;
+    }
+    const auto next = static_cast<std::intptr_t>(instruction + instruction_size);
+    const auto resolved = next + static_cast<std::intptr_t>(displacement);
+    if (resolved <= 0) return false;
+    *target = static_cast<std::uintptr_t>(resolved);
+    return true;
+}
+
+FeatureValidationResult ValidateNavigationLayout(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot&,
+    const SymbolMemory&) {
+    if (feature != kNavigationFeature ||
+        !FeatureRequires(profile, feature, kNavigationInputSymbol)) {
+        return {false, "profile does not declare the NTE navigation topology"};
+    }
+    static constexpr std::array<std::string_view, 25> kRequiredLayout{
+        "object.class",
+        "object.nameOffset",
+        "object.outer",
+        "uclass.classDefaultObject",
+        "ustruct.superStruct",
+        "ustruct.propertyLink",
+        "ufunction.numParms",
+        "ufunction.parmsSize",
+        "ufunction.returnValueOffset",
+        "ffield.class",
+        "ffield.name",
+        "ffieldClass.name",
+        "fproperty.arrayDim",
+        "fproperty.elementSize",
+        "fproperty.offsetInternal",
+        "fproperty.propertyLinkNext",
+        "fstructProperty.struct",
+        "fboolProperty.fieldSize",
+        "fboolProperty.byteOffset",
+        "fboolProperty.byteMask",
+        "fboolProperty.fieldMask",
+        "controller.controlRotation",
+        "controller.getPlayerCharacterVtableOffset",
+        "character.setCustomIgnoreMoveInputVtableOffset",
+        "character.setCustomLimitInputVtableOffset"};
+    for (const std::string_view key : kRequiredLayout) {
+        std::uint64_t value{};
+        if (!ProfileLayoutValue(profile, key, &value)) {
+            return {false, "navigation layout is incomplete"};
+        }
+        if (value > 64U * 1024U * 1024U) {
+            return {false, "navigation layout exceeds the supported bound"};
+        }
+    }
+    return {true, {}};
+}
+
+FeatureValidationResult ValidateUiButtonsLayout(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot&,
+    const SymbolMemory&) {
+    if (feature != kNteUiButtonsFeature) {
+        return {false, "UI button layout validator used by another feature"};
+    }
+    std::string error;
+    if (!ValidateNteUiButtonsLayout(profile, error)) return {false, std::move(error)};
+    return {true, {}};
+}
+
+FeatureValidationResult ValidatePickupLayout(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot&,
+    const SymbolMemory&) {
+    if (feature != kPickupFeature) {
+        return {false, "pickup layout validator used by another feature"};
+    }
+    static constexpr std::array<std::string_view, 45> kRequiredLayout{
+        "world.gameInstance",
+        "gameInstance.localPlayers",
+        "localPlayer.controller",
+        "controller.pawn",
+        "actor.rootComponent",
+        "sceneComponent.location",
+        "object.internalIndex",
+        "object.class",
+        "object.nameOffset",
+        "object.outer",
+        "ustruct.superStruct",
+        "ustruct.children",
+        "ustruct.propertyLink",
+        "ufield.next",
+        "ufunction.flags",
+        "ufunction.nativeFlag",
+        "ufunction.numParms",
+        "ufunction.parmsSize",
+        "ffield.name",
+        "fproperty.arrayDim",
+        "fproperty.elementSize",
+        "fproperty.offsetInternal",
+        "fproperty.propertyLinkNext",
+        "fboolProperty.fieldSize",
+        "fboolProperty.byteOffset",
+        "fboolProperty.byteMask",
+        "fboolProperty.fieldMask",
+        "pickup.actor.interactFinish",
+        "pickup.trigger.numParms",
+        "pickup.trigger.parmsSize",
+        "pickup.trigger.actor",
+        "pickup.trigger.index",
+        "pickup.trigger.onlyClientSide",
+        "pickup.canTry.numParms",
+        "pickup.canTry.parmsSize",
+        "pickup.canTry.controller",
+        "pickup.canTry.index",
+        "pickup.canTry.returnValue",
+        "pickup.entries.numParms",
+        "pickup.entries.parmsSize",
+        "pickup.entries.controller",
+        "pickup.entries.array",
+        "pickup.entries.maximumChoices",
+        "pickup.interactEntryStride",
+        "pickup.interactEntryIndex"};
+    for (const std::string_view key : kRequiredLayout) {
+        std::uint64_t value{};
+        if (!ProfileLayoutValue(profile, key, &value)) {
+            return {false, "pickup layout is incomplete"};
+        }
+        if (value > 64U * 1024U * 1024U) {
+            return {false, "pickup layout exceeds the supported bound"};
+        }
+    }
+    std::uint64_t native_flag{};
+    std::uint64_t entry_stride{};
+    std::uint64_t entry_index{};
+    std::uint64_t trigger_actor{};
+    std::uint64_t trigger_index{};
+    std::uint64_t trigger_client{};
+    std::uint64_t trigger_num_parms{};
+    std::uint64_t trigger_parms_size{};
+    std::uint64_t can_controller{};
+    std::uint64_t can_index{};
+    std::uint64_t can_result{};
+    std::uint64_t can_num_parms{};
+    std::uint64_t can_parms_size{};
+    std::uint64_t entries_num_parms{};
+    std::uint64_t entries_parms_size{};
+    std::uint64_t entries_controller{};
+    std::uint64_t entries_array{};
+    std::uint64_t maximum_choices{};
+    if (!ProfileLayoutValue(profile, "ufunction.nativeFlag", &native_flag) ||
+        !ProfileLayoutValue(profile, "pickup.interactEntryStride", &entry_stride) ||
+        !ProfileLayoutValue(profile, "pickup.interactEntryIndex", &entry_index) ||
+        !ProfileLayoutValue(profile, "pickup.trigger.numParms", &trigger_num_parms) ||
+        !ProfileLayoutValue(profile, "pickup.trigger.parmsSize", &trigger_parms_size) ||
+        !ProfileLayoutValue(profile, "pickup.trigger.actor", &trigger_actor) ||
+        !ProfileLayoutValue(profile, "pickup.trigger.index", &trigger_index) ||
+        !ProfileLayoutValue(profile, "pickup.trigger.onlyClientSide", &trigger_client) ||
+        !ProfileLayoutValue(profile, "pickup.canTry.numParms", &can_num_parms) ||
+        !ProfileLayoutValue(profile, "pickup.canTry.parmsSize", &can_parms_size) ||
+        !ProfileLayoutValue(profile, "pickup.canTry.controller", &can_controller) ||
+        !ProfileLayoutValue(profile, "pickup.canTry.index", &can_index) ||
+        !ProfileLayoutValue(profile, "pickup.canTry.returnValue", &can_result) ||
+        !ProfileLayoutValue(profile, "pickup.entries.numParms", &entries_num_parms) ||
+        !ProfileLayoutValue(profile, "pickup.entries.parmsSize", &entries_parms_size) ||
+        !ProfileLayoutValue(profile, "pickup.entries.controller", &entries_controller) ||
+        !ProfileLayoutValue(profile, "pickup.entries.array", &entries_array) ||
+        !ProfileLayoutValue(profile, "pickup.entries.maximumChoices", &maximum_choices) ||
+        native_flag == 0 || native_flag > (std::numeric_limits<std::uint32_t>::max)() ||
+        trigger_num_parms == 0 ||
+        trigger_num_parms > (std::numeric_limits<std::uint8_t>::max)() ||
+        trigger_parms_size == 0 || trigger_parms_size > 4096 ||
+        can_num_parms == 0 ||
+        can_num_parms > (std::numeric_limits<std::uint8_t>::max)() ||
+        can_parms_size == 0 || can_parms_size > 4096 ||
+        entries_num_parms == 0 ||
+        entries_num_parms > (std::numeric_limits<std::uint8_t>::max)() ||
+        entries_parms_size == 0 || entries_parms_size > 4096 ||
+        maximum_choices == 0 || maximum_choices > 128 ||
+        entry_stride < sizeof(std::int32_t) || entry_stride > 4096 ||
+        entry_index + sizeof(std::int32_t) > entry_stride ||
+        trigger_actor + sizeof(std::uintptr_t) > trigger_parms_size ||
+        trigger_index + sizeof(std::int32_t) > trigger_parms_size ||
+        trigger_client >= trigger_parms_size ||
+        can_controller + sizeof(std::uintptr_t) > can_parms_size ||
+        can_index + sizeof(std::int32_t) > can_parms_size ||
+        can_result >= can_parms_size ||
+        entries_controller + sizeof(std::uintptr_t) > entries_parms_size ||
+        entries_array + 16 > entries_parms_size) {
+        return {false, "pickup reflected ABI layout is invalid"};
+    }
+    return {true, {}};
+}
+
+FeatureValidationResult ValidateNavigationInputAbi(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot& snapshot,
+    const SymbolMemory& memory) {
+    if (feature != kNavigationFeature ||
+        !FeatureRequires(profile, feature, kNavigationInputSymbol)) {
+        return {false, "profile does not declare the NTE navigation input target"};
+    }
+    const auto* const target = snapshot.FindSymbol(kNavigationInputSymbol);
+    if (target == nullptr || !target->Available()) {
+        return {false, "navigation input target is unavailable"};
+    }
+    const auto module = memory.FindModule(target->module);
+    if (!module || !HasMatchingUnwindEntry(*module, *target)) {
+        return {false, "navigation input target has no matching unwind entry"};
+    }
+
+    constexpr auto kPrologue = std::to_array<std::uint8_t>({
+        0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C,
+        0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57,
+        0x48, 0x83, 0xEC, 0x20});
+    constexpr auto kPatchedPrologueSuffix = std::to_array<std::uint8_t>({
+        0x18, 0x57, 0x48, 0x83, 0xEC, 0x20});
+    constexpr auto kGetPlayerCharacterCall = std::to_array<std::uint8_t>({
+        0x48, 0x8B, 0x03, 0x48, 0x8B, 0xCB, 0xFF, 0x90,
+        0x98, 0x14, 0x00, 0x00, 0x48, 0x8B, 0xD8});
+    constexpr auto kIgnoreMoveCall = std::to_array<std::uint8_t>({
+        0x4C, 0x8B, 0x10, 0x44, 0x0F, 0xB6, 0xCE, 0x41,
+        0xB0, 0x01, 0x40, 0x0F, 0xB6, 0xD7, 0x48, 0x8B,
+        0xC8, 0x41, 0xFF, 0x92, 0xD0, 0x0F, 0x00, 0x00});
+    constexpr auto kLimitInputCall = std::to_array<std::uint8_t>({
+        0x48, 0x8B, 0x03, 0x44, 0x0F, 0xB6, 0xCE, 0x41,
+        0xB0, 0x01, 0x40, 0x0F, 0xB6, 0xD7, 0x48, 0x8B,
+        0xCB, 0xFF, 0x90, 0x08, 0x10, 0x00, 0x00});
+    if ((!MatchesBytes(memory, target->address, kPrologue) &&
+         !MatchesBytes(memory, target->address + 0x0EU, kPatchedPrologueSuffix)) ||
+        !MatchesBytes(memory, target->address + 0x2EU, kGetPlayerCharacterCall) ||
+        !MatchesBytes(memory, target->address + 0x47U, kIgnoreMoveCall) ||
+        !MatchesBytes(memory, target->address + 0x5FU, kLimitInputCall)) {
+        return {false, "navigation input ABI instruction contract changed"};
+    }
+
+    std::uint32_t get_player_character{};
+    std::uint32_t set_ignore_move{};
+    std::uint32_t set_limit_input{};
+    std::uint64_t declared_get_player_character{};
+    std::uint64_t declared_set_ignore_move{};
+    std::uint64_t declared_set_limit_input{};
+    if (!memory.Read(
+            target->address + 0x36U,
+            &get_player_character, sizeof(get_player_character)) ||
+        !memory.Read(
+            target->address + 0x5BU,
+            &set_ignore_move, sizeof(set_ignore_move)) ||
+        !memory.Read(
+            target->address + 0x72U,
+            &set_limit_input, sizeof(set_limit_input)) ||
+        !ProfileLayoutValue(
+            profile, "controller.getPlayerCharacterVtableOffset",
+            &declared_get_player_character) ||
+        !ProfileLayoutValue(
+            profile, "character.setCustomIgnoreMoveInputVtableOffset",
+            &declared_set_ignore_move) ||
+        !ProfileLayoutValue(
+            profile, "character.setCustomLimitInputVtableOffset",
+            &declared_set_limit_input) ||
+        get_player_character != declared_get_player_character ||
+        set_ignore_move != declared_set_ignore_move ||
+        set_limit_input != declared_set_limit_input) {
+        return {false, "navigation input vtable offsets changed"};
+    }
+    return {true, {}};
+}
+
+FeatureValidationResult ValidateOutgoingTransformAbi(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot& snapshot,
+    const SymbolMemory& memory) {
+    if (feature != kOutgoingTransformMetadataFeature ||
+        !FeatureRequires(profile, feature, kOutboundPreHandlerDispatchSymbol) ||
+        !FeatureRequires(profile, feature, kOutgoingTransformSymbol)) {
+        return {false, "profile does not declare the required outbound transform topology"};
+    }
+    const auto* const dispatch = snapshot.FindSymbol(kOutboundPreHandlerDispatchSymbol);
+    const auto* const transform = snapshot.FindSymbol(kOutgoingTransformSymbol);
+    if (dispatch == nullptr || transform == nullptr || !dispatch->Available() ||
+        !transform->Available()) {
+        return {false, "outbound transform symbols are unavailable"};
+    }
+
+    const auto module = memory.FindModule(transform->module);
+    if (!module) return {false, "profile module is unavailable"};
+    if (!HasMatchingUnwindEntry(*module, *dispatch) ||
+        !HasMatchingUnwindEntry(*module, *transform)) {
+        return {false, "outgoing transform topology has no matching unwind entry"};
+    }
+
+    constexpr std::array<std::uint8_t, 13> kDispatchArgumentMoves{
+        0x4C, 0x8B, 0xF9, 0x4C, 0x8B, 0xE2, 0x48,
+        0x8B, 0x89, 0x40, 0x01, 0x00, 0x00};
+    constexpr std::array<std::uint8_t, 27> kDispatchOutputMapping{
+        0x40, 0x38, 0x7D, 0xAC, 0x75, 0x0E, 0x4C,
+        0x8B, 0x65, 0xA0, 0x44, 0x8B, 0x45, 0xA8,
+        0x4C, 0x89, 0x65, 0x80, 0xEB, 0x03, 0x44,
+        0x8B, 0xC7, 0x41, 0x8D, 0x40, 0x07};
+    constexpr std::array<std::uint8_t, 41> kTransformSretPrologue{
+        0x40, 0x53, 0x55, 0x57, 0x41, 0x55, 0x41,
+        0x57, 0x48, 0x83, 0xEC, 0x50, 0x33, 0xDB,
+        0x4D, 0x63, 0xF9, 0xF6, 0x41, 0x02, 0x01,
+        0x4D, 0x8B, 0xE8, 0x48, 0x8B, 0xEA, 0x48,
+        0x89, 0x1A, 0x48, 0x8B, 0xF9, 0x89, 0x5A,
+        0x08, 0x88, 0x5A, 0x0C, 0x0F, 0x85};
+    constexpr std::array<std::uint8_t, 17> kTransformFirstTwoStackArguments{
+        0x44, 0x0F, 0xB6, 0xAC, 0x24, 0xA8, 0x00, 0x00, 0x00,
+        0x4C, 0x8B, 0xA4, 0x24, 0xA0, 0x00, 0x00, 0x00};
+    constexpr std::array<std::uint8_t, 23> kTransformThirdStackArgument{
+        0x45, 0x84, 0xED, 0x74, 0x14, 0x48, 0x8B, 0x94, 0x24, 0xB0,
+        0x00, 0x00, 0x00, 0x4C, 0x8D, 0x47, 0x40, 0x4D, 0x8B, 0xCC,
+        0xFF, 0x50, 0x38};
+    constexpr auto kTransformNormalResultReturn = std::to_array<std::uint8_t>({
+        0x48, 0x8B, 0x87, 0xD0, 0x00, 0x00, 0x00, 0x48, 0x89, 0x44,
+        0x24, 0x30, 0x8B, 0x87, 0xE0, 0x00, 0x00, 0x00, 0x89,
+        0x44, 0x24, 0x38, 0x48, 0x8B, 0xC5, 0xC6, 0x44, 0x24, 0x3C,
+        0x00, 0x0F, 0x10, 0x44, 0x24, 0x30, 0x0F, 0x11, 0x45, 0x00,
+        0x48, 0x83, 0xC4, 0x50, 0x41, 0x5F, 0x41, 0x5D, 0x5F, 0x5D,
+        0x5B, 0xC3});
+    static_assert(kTransformNormalResultReturn.size() == 51U);
+    constexpr std::array<std::uint8_t, 46> kTransformErrorResultReturn{
+        0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00, 0x48,
+        0x8B, 0xC5, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00,
+        0xC6, 0x44, 0x24, 0x3C, 0x01, 0x0F, 0x10, 0x44, 0x24, 0x30,
+        0x0F, 0x11, 0x45, 0x00, 0x48, 0x83, 0xC4, 0x50, 0x41, 0x5F,
+        0x41, 0x5D, 0x5F, 0x5D, 0x5B, 0xC3};
+    constexpr std::array<std::uint8_t, 37> kTransformFastPathResultReturn{
+        0x4C, 0x89, 0x6C, 0x24, 0x30, 0x48, 0x8B, 0xC5, 0x44, 0x89,
+        0x7C, 0x24, 0x38, 0x88, 0x5C, 0x24, 0x3C, 0x0F, 0x10, 0x44,
+        0x24, 0x30, 0x0F, 0x11, 0x02, 0x48, 0x83, 0xC4, 0x50, 0x41,
+        0x5F, 0x41, 0x5D, 0x5F, 0x5D, 0x5B, 0xC3};
+    if (!MatchesBytes(memory, dispatch->address + 0x2BU, kDispatchArgumentMoves) ||
+        !MatchesBytes(memory, dispatch->address + 0xA8U, kDispatchOutputMapping) ||
+        !MatchesBytes(memory, transform->address, kTransformSretPrologue) ||
+        !MatchesBytes(memory, transform->address + 0xA0U, kTransformFirstTwoStackArguments) ||
+        !MatchesBytes(memory, transform->address + 0xF4U, kTransformThirdStackArgument) ||
+        !MatchesBytes(memory, transform->address + 0x3FFU, kTransformNormalResultReturn) ||
+        !MatchesBytes(memory, transform->address + 0x432U, kTransformErrorResultReturn) ||
+        !MatchesBytes(memory, transform->address + 0x460U, kTransformFastPathResultReturn)) {
+        return {false, "outbound transform ABI instruction contract changed"};
+    }
+
+    std::array<std::uint8_t, 5> call{};
+    if (!memory.Read(dispatch->address + 0x6CU, call.data(), call.size()) || call[0] != 0xE8U) {
+        return {false, "outbound dispatcher no longer calls the transform directly"};
+    }
+    std::int32_t displacement{};
+    std::memcpy(&displacement, call.data() + 1U, sizeof(displacement));
+    const auto target = static_cast<std::intptr_t>(dispatch->address + 0x71U) +
+        static_cast<std::intptr_t>(displacement);
+    if (target <= 0 || static_cast<std::uintptr_t>(target) != transform->address) {
+        return {false, "outbound dispatcher call target changed"};
+    }
+    return {true, {}};
+}
+
+FeatureValidationResult ValidateEscMenuHooks(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot& snapshot,
+    const SymbolMemory& memory) {
+    if (feature != kEscMenuButtonFeature ||
+        !FeatureRequires(profile, feature, kAddMenuPageSymbol) ||
+        !FeatureRequires(profile, feature, kExecAddMenuPageSymbol) ||
+        !FeatureRequires(profile, feature, kHandleButtonClickedSymbol) ||
+        !FeatureRequires(profile, feature, kButtonClickedSymbol)) {
+        return {false, "profile does not declare the ESC menu hook topology"};
+    }
+    const auto* const add_menu_page = snapshot.FindSymbol(kAddMenuPageSymbol);
+    const auto* const exec_add_menu_page = snapshot.FindSymbol(kExecAddMenuPageSymbol);
+    const auto* const handle_button_clicked =
+        snapshot.FindSymbol(kHandleButtonClickedSymbol);
+    const auto* const button_clicked = snapshot.FindSymbol(kButtonClickedSymbol);
+    if (add_menu_page == nullptr || exec_add_menu_page == nullptr ||
+        handle_button_clicked == nullptr || button_clicked == nullptr ||
+        !add_menu_page->Available() || !exec_add_menu_page->Available() ||
+        !handle_button_clicked->Available() || !button_clicked->Available()) {
+        return {false, "ESC menu hook symbols are unavailable"};
+    }
+    const auto module = memory.FindModule(add_menu_page->module);
+    if (!module || exec_add_menu_page->module != add_menu_page->module ||
+        handle_button_clicked->module != add_menu_page->module ||
+        button_clicked->module != add_menu_page->module) {
+        return {false, "ESC menu hook symbols do not share the profile module"};
+    }
+    if (!HasMatchingUnwindEntry(*module, *add_menu_page) ||
+        !HasMatchingUnwindEntry(*module, *exec_add_menu_page) ||
+        !HasMatchingUnwindEntry(*module, *handle_button_clicked) ||
+        !HasMatchingUnwindEntry(*module, *button_clicked)) {
+        return {false, "ESC menu hook topology has no matching unwind entry"};
+    }
+
+    // These bytes begin after MinHook's entry patch, so deferred feature
+    // validation remains valid while the bridge owns the two detours.
+    constexpr std::array<std::uint8_t, 5> kAddMenuPageArguments{
+        0x8B, 0xEA, 0x48, 0x8B, 0xF9};
+    if (!MatchesBytes(memory, add_menu_page->address + 0x0EU, kAddMenuPageArguments)) {
+        return {false, "AddMenuPage argument contract changed"};
+    }
+    constexpr std::array<std::uint8_t, 8> kHandleClickVirtualDispatch{
+        0x48, 0x8B, 0x03, 0x48, 0x8B, 0xCB, 0xFF, 0x90};
+    std::uint32_t handle_click_vtable_offset{};
+    std::uint64_t declared_vtable_offset{};
+    if (!MatchesBytes(
+            memory, handle_button_clicked->address + 0x7FU,
+            kHandleClickVirtualDispatch) ||
+        !memory.Read(
+            handle_button_clicked->address + 0x87U,
+            &handle_click_vtable_offset, sizeof(handle_click_vtable_offset)) ||
+        !ProfileLayoutValue(
+            profile, "escMenu.buttonClickedVtableOffset", &declared_vtable_offset) ||
+        declared_vtable_offset != handle_click_vtable_offset) {
+        return {false, "HandleButtonClicked virtual dispatch contract changed"};
+    }
+
+    constexpr std::array<std::uint8_t, 25> kAddMenuPageExecDispatch{
+        0x48, 0x8B, 0x43, 0x20, 0x48, 0x8B, 0xCE, 0x8B, 0x54,
+        0x24, 0x38, 0x48, 0x85, 0xC0, 0x40, 0x0F, 0x95, 0xC7,
+        0x48, 0x03, 0xF8, 0x48, 0x89, 0x7B, 0x20};
+    std::uint8_t call_opcode{};
+    std::uintptr_t add_menu_page_call_target{};
+    if (!MatchesBytes(
+            memory, exec_add_menu_page->address + 0x55U,
+            kAddMenuPageExecDispatch) ||
+        !memory.Read(
+            exec_add_menu_page->address + 0x6EU,
+            &call_opcode, sizeof(call_opcode)) ||
+        call_opcode != 0xE8U ||
+        !ResolveRel32Target(
+            memory, exec_add_menu_page->address + 0x6EU, 1U, 5U,
+            &add_menu_page_call_target) ||
+        add_menu_page_call_target != add_menu_page->address) {
+        return {false, "AddMenuPage Exec wrapper no longer calls the hook target"};
+    }
+
+    constexpr std::array<std::uint8_t, 10> kButtonClickedOverrideCheck{
+        0xF6, 0x81, 0x68, 0x04, 0x00, 0x00, 0x02, 0x48, 0x8B, 0xD9};
+    constexpr std::array<std::uint8_t, 19> kButtonClickedScriptDispatch{
+        0x4C, 0x8B, 0x0B, 0x45, 0x33, 0xC0, 0x48, 0x8B, 0xD0, 0x48,
+        0x8B, 0xCB, 0x41, 0xFF, 0x91, 0x60, 0x02, 0x00, 0x00};
+    if (!MatchesBytes(
+            memory, button_clicked->address + 0x06U,
+            kButtonClickedOverrideCheck) ||
+        !MatchesBytes(
+            memory, button_clicked->address + 0x22U,
+            kButtonClickedScriptDispatch)) {
+        return {false, "BP_OnClicked wrapper contract changed"};
+    }
+    return {true, {}};
+}
+
+FeatureLayoutValidatorRegistry NteFeatureLayoutValidators(
+    const bool preserve_hooked_process_event_abi,
+    const bool preserve_hooked_actor_process_event_abi) {
+    FeatureLayoutValidatorRegistry validators = Ue5FeatureLayoutValidators();
+    validators.Register(
+        std::string(kOutgoingTransformAbiValidator), ValidateOutgoingTransformAbi);
+    validators.Register(std::string(kEscMenuHooksValidator), ValidateEscMenuHooks);
+    validators.Register(
+        std::string(kNavigationLayoutValidator), ValidateNavigationLayout);
+    validators.Register(
+        std::string(kNavigationInputAbiValidator), ValidateNavigationInputAbi);
+    validators.Register(std::string(kPickupLayoutValidator), ValidatePickupLayout);
+    validators.Register(
+        std::string(kNteUiButtonsLayoutValidator), ValidateUiButtonsLayout);
+    validators.Register(
+        std::string(kCombatReflectionValidator), ValidateCombatReflectionLayout);
+    validators.Register(std::string(kSkillsLayoutValidator), ValidateSkillsLayout);
+    validators.Register(std::string(kSkillInvocationValidator), ValidateSkillsLayout);
+    if (preserve_hooked_process_event_abi) {
+        validators.Register(
+            std::string(kUe5ProcessEventAbiValidator), [](
+                const BuildProfile&,
+                const std::string_view feature,
+                const ProfileResolutionSnapshot& snapshot,
+                const SymbolMemory&) {
+                if (feature != kUe5ProcessEventFeature) {
+                    return FeatureValidationResult{
+                        false,
+                        "startup ProcessEvent ABI evidence used by another feature"};
+                }
+                const auto* const process_event =
+                    snapshot.FindSymbol(kUe5ProcessEventSymbol);
+                if (process_event == nullptr || !process_event->Available()) {
+                    return FeatureValidationResult{
+                        false, "ue5.ProcessEvent is unavailable"};
+                }
+                // Runtime owns the entry bytes after installing its detour. The
+                // unhooked ABI was validated before the adapter was constructed.
+                return FeatureValidationResult{true, {}};
+            });
+    }
+    if (preserve_hooked_actor_process_event_abi) {
+        validators.Register(
+            std::string(kUe5ActorProcessEventAbiValidator), [](
+                const BuildProfile&,
+                const std::string_view feature,
+                const ProfileResolutionSnapshot& snapshot,
+                const SymbolMemory&) {
+                if (feature != kUe5ActorProcessEventFeature) {
+                    return FeatureValidationResult{
+                        false,
+                        "startup AActor ProcessEvent ABI evidence used by another feature"};
+                }
+                const auto* const actor_process_event =
+                    snapshot.FindSymbol(kUe5ActorProcessEventSymbol);
+                if (actor_process_event == nullptr ||
+                    !actor_process_event->Available()) {
+                    return FeatureValidationResult{
+                        false, "ue5.AActorProcessEvent is unavailable"};
+                }
+                // Runtime owns the entry bytes after installing its detour. The
+                // unhooked ABI was validated before the adapter was constructed.
+                return FeatureValidationResult{true, {}};
+            });
+    }
+    return validators;
+}
+
+void AppendOutgoingTransformProbeSnapshot(
+    std::string& json,
+    const Ue5OutboundBitCountProbe* const probe) {
+    if (probe == nullptr) {
+        json += "{\"started\":false}";
+        return;
+    }
+    const auto snapshot = probe->Snapshot();
+    json += "{\"started\":" + std::string(snapshot.started ? "true" : "false");
+    json += ",\"callCount\":" + std::to_string(snapshot.call_count);
+    json += ",\"successfulResultCount\":" + std::to_string(snapshot.successful_result_count);
+    json += ",\"errorResultCount\":" + std::to_string(snapshot.error_result_count);
+    json += ",\"inputNonzeroBitCountCallCount\":" +
+        std::to_string(snapshot.input_nonzero_bit_count_call_count);
+    json += ",\"outputNonzeroBitCountCallCount\":" +
+        std::to_string(snapshot.output_nonzero_bit_count_call_count);
+    json += ",\"nullInputDataCount\":" + std::to_string(snapshot.null_input_data_count);
+    json += ",\"nullOutputDataCount\":" + std::to_string(snapshot.null_output_data_count);
+    json += ",\"sameDataPointerResultCount\":" +
+        std::to_string(snapshot.same_data_pointer_result_count);
+    json += ",\"invalidInputArgumentCount\":" +
+        std::to_string(snapshot.invalid_input_argument_count);
+    json += ",\"invalidOutputResultCount\":" +
+        std::to_string(snapshot.invalid_output_result_count);
+    json += ",\"resultPointerMismatchCount\":" +
+        std::to_string(snapshot.result_pointer_mismatch_count);
+    json += ",\"unexpectedErrorValueCount\":" +
+        std::to_string(snapshot.unexpected_error_value_count);
+    json += ",\"aggregateOverflowCount\":" +
+        std::to_string(snapshot.aggregate_overflow_count);
+    json += ",\"maximumInputBitCount\":" +
+        std::to_string(snapshot.maximum_input_bit_count);
+    json += ",\"maximumOutputBitCount\":" +
+        std::to_string(snapshot.maximum_output_bit_count);
+    json += ",\"inputCeilByteTotal\":" +
+        std::to_string(snapshot.input_ceil_byte_total);
+    json += ",\"outputCeilByteTotal\":" +
+        std::to_string(snapshot.output_ceil_byte_total);
+    json += '}';
+}
+
+std::filesystem::path ModulePath(HMODULE module) {
+    if (module == nullptr) module = GetModuleHandleW(nullptr);
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        module, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) return {};
+    buffer.resize(length);
+    return buffer;
+}
+
+std::string Quote(std::string_view value) {
+    std::string result{"\""};
+    for (const char character : value) {
+        switch (character) {
+        case '\\': result += "\\\\"; break;
+        case '"': result += "\\\""; break;
+        case '\n': result += "\\n"; break;
+        case '\r': result += "\\r"; break;
+        case '\t': result += "\\t"; break;
+        default: result.push_back(character); break;
+        }
+    }
+    result.push_back('"');
+    return result;
+}
+
+void AppendStringArray(std::string& json, const std::vector<std::string>& values) {
+    json.push_back('[');
+    bool first = true;
+    for (const auto& value : values) {
+        if (!first) json.push_back(',');
+        first = false;
+        json += Quote(value);
+    }
+    json.push_back(']');
+}
+
+void AppendStringArray(
+    std::string& json,
+    const std::set<std::string, std::less<>>& values) {
+    json.push_back('[');
+    bool first = true;
+    for (const auto& value : values) {
+        if (!first) json.push_back(',');
+        first = false;
+        json += Quote(value);
+    }
+    json.push_back(']');
+}
+
+void AppendFeatureStringLists(
+    std::string& json,
+    const std::map<std::string, std::vector<std::string>, std::less<>>& lists) {
+    json.push_back('{');
+    bool first = true;
+    for (const auto& [id, values] : lists) {
+        if (!first) json.push_back(',');
+        first = false;
+        json += Quote(id);
+        json.push_back(':');
+        AppendStringArray(json, values);
+    }
+    json.push_back('}');
+}
+
+std::string HexAddress(std::uintptr_t address) {
+    if (address == 0) return {};
+    std::ostringstream stream;
+    stream << "0x" << std::hex << std::uppercase << address;
+    return stream.str();
+}
+
+std::string_view ResolutionStateName(ProfileResolutionState state) noexcept {
+    switch (state) {
+    case ProfileResolutionState::NoProfile: return "no-profile";
+    case ProfileResolutionState::ProfileLoaded: return "profile-loaded";
+    case ProfileResolutionState::Degraded: return "degraded";
+    case ProfileResolutionState::Ready: return "ready";
+    }
+    return "unknown";
+}
+
+std::string_view SymbolStateName(SymbolResolutionState state) noexcept {
+    switch (state) {
+    case SymbolResolutionState::Unavailable: return "unavailable";
+    case SymbolResolutionState::Resolved: return "resolved";
+    case SymbolResolutionState::ModuleMissing: return "module-missing";
+    case SymbolResolutionState::SectionMissing: return "section-missing";
+    case SymbolResolutionState::PatternInvalid: return "pattern-invalid";
+    case SymbolResolutionState::NotFound: return "not-found";
+    case SymbolResolutionState::Ambiguous: return "ambiguous";
+    case SymbolResolutionState::AddressResolutionFailed: return "address-resolution-failed";
+    case SymbolResolutionState::ValidationFailed: return "validation-failed";
+    }
+    return "unknown";
+}
+
+struct RetainedNteProfileGeneration final {
+    std::unique_ptr<GameTickHook> tick_hook;
+    std::unique_ptr<Ue5ProcessEventHook> process_event_hook;
+    std::unique_ptr<Ue5ActorProcessEventHook> actor_process_event_hook;
+    std::unique_ptr<Ue5DamageFunctionHook> damage_function_hook;
+    std::unique_ptr<Ue5OutboundBitCountProbe> outgoing_transform_probe;
+    std::shared_ptr<Ue5NteAdapter> adapter;
+    RetainedNteProfileGeneration* next{};
+};
+
+struct NteProfileQuarantineRegistry final {
+    std::mutex mutex;
+    std::atomic_bool quarantined{};
+    RetainedNteProfileGeneration* generations{};
+};
+
+NteProfileQuarantineRegistry* ProcessNteProfileQuarantine() noexcept {
+    // Deliberately process-lived: a permanently blocked game callback makes
+    // destruction of its hook generation invalid even during static teardown.
+    static auto* registry = new (std::nothrow) NteProfileQuarantineRegistry;
+    return registry;
+}
+
+bool NteProfileGenerationQuarantined() noexcept {
+    const auto* registry = ProcessNteProfileQuarantine();
+    // If the fence cannot be allocated, conservatively prevent another exact
+    // profile generation from being activated in the same process.
+    return registry == nullptr ||
+        registry->quarantined.load(std::memory_order_acquire);
+}
+
+class TickEvidenceObserverGate final {
+public:
+    using Observer = std::function<void(std::uint32_t, double)>;
+
+    explicit TickEvidenceObserverGate(Observer observer)
+        : observer_(std::move(observer)) {}
+
+    void Observe(std::uint32_t thread_id, double duration_micros) noexcept {
+        {
+            std::scoped_lock lock(mutex_);
+            if (!open_) return;
+            ++active_;
+        }
+        try {
+            observer_(thread_id, duration_micros);
+        } catch (...) {
+        }
+        {
+            std::scoped_lock lock(mutex_);
+            --active_;
+        }
+        condition_.notify_all();
+    }
+
+    // Close is the observer-side stop linearization point. Any detour which
+    // reaches the callback after this call returns is ignored, while callers
+    // already inside Observe remain counted until the observer returns.
+    void Close() noexcept {
+        std::scoped_lock lock(mutex_);
+        open_ = false;
+    }
+
+    bool Drain(std::chrono::milliseconds timeout) noexcept {
+        const auto bounded_timeout =
+            (std::max)(timeout, std::chrono::milliseconds::zero());
+        std::unique_lock lock(mutex_);
+        const auto drained = [this] { return active_ == 0; };
+        if (bounded_timeout == std::chrono::milliseconds::max()) {
+            condition_.wait(lock, drained);
+            return true;
+        }
+        return condition_.wait_for(lock, bounded_timeout, drained);
+    }
+
+private:
+    Observer observer_;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    bool open_{true};
+    std::size_t active_{};
+};
+
+void RetainNteProfileGeneration(
+    std::unique_ptr<GameTickHook> tick_hook,
+    std::unique_ptr<Ue5ProcessEventHook> process_event_hook,
+    std::unique_ptr<Ue5ActorProcessEventHook> actor_process_event_hook,
+    std::unique_ptr<Ue5DamageFunctionHook> damage_function_hook,
+    std::unique_ptr<Ue5OutboundBitCountProbe> outgoing_transform_probe,
+    std::shared_ptr<Ue5NteAdapter> adapter) noexcept {
+    auto* registry = ProcessNteProfileQuarantine();
+    if (registry == nullptr) {
+        // The hook generation itself is intentionally leaked. Adapter State
+        // has shared ownership and zero-budget hook destruction preserves any
+        // still-running callback without extending the stop call.
+        static_cast<void>(tick_hook.release());
+        static_cast<void>(process_event_hook.release());
+        static_cast<void>(actor_process_event_hook.release());
+        static_cast<void>(damage_function_hook.release());
+        static_cast<void>(outgoing_transform_probe.release());
+        return;
+    }
+    registry->quarantined.store(true, std::memory_order_release);
+    auto* generation = new (std::nothrow) RetainedNteProfileGeneration{
+        std::move(tick_hook), std::move(process_event_hook),
+        std::move(actor_process_event_hook),
+        std::move(damage_function_hook), std::move(outgoing_transform_probe),
+        std::move(adapter), nullptr};
+    if (generation == nullptr) {
+        // Both hook types and Ue5NteAdapter independently preserve their live
+        // state when a zero-budget drain still reports in-flight.
+        static_cast<void>(tick_hook.release());
+        static_cast<void>(process_event_hook.release());
+        static_cast<void>(actor_process_event_hook.release());
+        static_cast<void>(damage_function_hook.release());
+        static_cast<void>(outgoing_transform_probe.release());
+        return;
+    }
+    std::scoped_lock lock(registry->mutex);
+    generation->next = registry->generations;
+    registry->generations = generation;
+}
+
+}  // namespace
+
+class NteProfileRuntime::Impl final {
+public:
+    explicit Impl(NteProfileRuntimeOptions options)
+        : options_(std::move(options)),
+          memory_(std::make_shared<LiveSymbolMemory>(options_.memory_services)) {
+        options_.runtime_root = std::filesystem::absolute(options_.runtime_root);
+        if (!options_.profile_directory.is_absolute()) {
+            options_.profile_directory = options_.runtime_root / options_.profile_directory;
+        }
+        if (!options_.local_profile_directory.is_absolute()) {
+            options_.local_profile_directory = options_.runtime_root / options_.local_profile_directory;
+        }
+        if (!options_.managed_profile_directory.is_absolute()) {
+            options_.managed_profile_directory = options_.runtime_root / options_.managed_profile_directory;
+        }
+    }
+
+    bool Start(std::stop_token stop_token) {
+        std::scoped_lock lock(mutex_);
+        if (started_ || stopping_) return false;
+        diagnostics_.clear();
+        catalog_ = {};
+        profile_.reset();
+        resolution_.reset();
+        adapter_.reset();
+        tick_evidence_gate_.reset();
+        tick_hook_.reset();
+        process_event_hook_.reset();
+        actor_process_event_hook_.reset();
+        damage_function_hook_.reset();
+        outgoing_transform_probe_.reset();
+        tick_hook_ready_ = false;
+        ahud_hook_ready_ = false;
+        quarantined_ = false;
+        module_path_ = ModulePath(options_.game_module);
+        std::vector<BuildProfileCatalogLayer> layers;
+        if (options_.profile_overrides_enabled) {
+            layers.push_back({
+                options_.local_profile_directory / options_.game_id,
+                "local-override", 300, true});
+            layers.push_back({
+                options_.managed_profile_directory / options_.game_id,
+                "repository", 200, true});
+        } else {
+            diagnostics_.push_back("Profile overrides suspended by Runtime recovery policy");
+        }
+        layers.push_back({
+            options_.profile_directory / options_.game_id, "bundled", 100, false});
+        BuildProfileCatalog catalog;
+        catalog_ = catalog.ScanLayered(layers);
+        for (const auto& diagnostic : catalog_.diagnostics) {
+            diagnostics_.push_back(
+                diagnostic.source.string() + diagnostic.path + ": " + diagnostic.message);
+        }
+        std::optional<BuildProfile> selected;
+        for (const BuildProfile& source : catalog_.profiles) {
+            if (source.game != options_.game_id) continue;
+            diagnostics_.push_back(
+                "profile recipe selected source=" + source.source.string());
+            selected = source;
+            break;
+        }
+
+        BuildFingerprint adapter_context;
+        adapter_context.game = options_.game_id;
+        adapter_context.module = module_path_.filename().wstring();
+        adapter_context.canonical_path_tail = adapter_context.module;
+        diagnostics_.push_back(
+            "runtime PE fingerprint disabled; active Profile signatures are authoritative");
+
+        if (selected && !WaitForProfileSections(*selected, stop_token)) {
+            return false;
+        }
+
+        SymbolResolver resolver(
+            memory_, {}, {}, NteFeatureLayoutValidators(false, false));
+        ProfileResolutionSnapshot resolved =
+            resolver.Resolve(adapter_context, selected ? &*selected : nullptr);
+        if (!selected) {
+            resolution_ = std::make_shared<ProfileResolutionSnapshot>(std::move(resolved));
+            diagnostics_.push_back("no active profile recipe for game " + options_.game_id);
+        } else {
+            profile_ = std::move(*selected);
+            resolution_ = std::make_shared<ProfileResolutionSnapshot>(std::move(resolved));
+        }
+        if (profile_ && NteProfileGenerationQuarantined()) {
+            diagnostics_.push_back(
+                "profile generation not activated: prior hook generation is quarantined");
+            quarantined_ = true;
+            started_ = true;
+            return true;
+        }
+        BuildProfile discovery_profile;
+        discovery_profile.game = options_.game_id;
+        const BuildProfile& adapter_profile = profile_ ? *profile_ : discovery_profile;
+        Ue5NteAdapter::ProcessEventInvoker process_event_invoker;
+        if (profile_) {
+            process_event_invoker =
+                CreateUe5ProcessEventInvoker(*profile_, *resolution_, *memory_);
+        }
+        adapter_ = std::make_shared<Ue5NteAdapter>(
+            std::move(adapter_context), adapter_profile, *resolution_, memory_,
+            ProcessAdapterServices(),
+            options_.snapshot_sampling,
+            NteFeatureLayoutValidators(
+                resolution_->FeatureAvailable(kUe5ProcessEventFeature),
+                resolution_->FeatureAvailable(kUe5ActorProcessEventFeature)),
+            process_event_invoker,
+            profile_ ? CreateUe5ObjectLookup(*profile_, *resolution_, *memory_)
+                      : Ue5NteAdapter::ObjectLookup{},
+             profile_ ? CreateNavigationInputPolicy(*profile_)
+                      : std::shared_ptr<NteNavigationInputPolicy>{});
+        try {
+            damage_function_hook_ = std::make_unique<Ue5DamageFunctionHook>(
+                [weak = std::weak_ptr<Ue5NteAdapter>(adapter_)](
+                    const std::uintptr_t damage_event,
+                    const std::uintptr_t victim,
+                    const std::uintptr_t attacker,
+                    const std::uintptr_t damage_causer) {
+                    const auto adapter = weak.lock();
+                    if (adapter) {
+                        adapter->OnDamageEvent(
+                            damage_event, victim, attacker, damage_causer);
+                    }
+                },
+                [weak = std::weak_ptr<Ue5NteAdapter>(adapter_)](
+                    const std::uintptr_t function,
+                    const std::uintptr_t receiver,
+                    const std::uintptr_t stack) {
+                    const auto adapter = weak.lock();
+                    if (adapter) {
+                        adapter->OnCombatExecFunction(receiver, function, stack);
+                    }
+                });
+        } catch (...) {
+            diagnostics_.push_back("damage native hook allocation failed");
+        }
+        bool hook_ready{};
+        const auto* const damage_event_target =
+            resolution_->FindSymbol(kDamageEventSymbol);
+        const void* const event_target =
+            damage_event_target != nullptr && damage_event_target->Available()
+            ? reinterpret_cast<void*>(damage_event_target->address)
+            : nullptr;
+        const auto damage_hook = damage_function_hook_.get();
+        const auto* tick = resolution_->FindSymbol("ue5.GameTick");
+        if (tick != nullptr && tick->Available() &&
+            resolution_->FeatureAvailable("ue5.framework")) {
+            if (options_.tick_evidence_observer) {
+                tick_evidence_gate_ = std::make_shared<TickEvidenceObserverGate>(
+                    options_.tick_evidence_observer);
+            }
+            tick_hook_ = std::make_unique<GameTickHook>(
+                [weak = std::weak_ptr<Ue5NteAdapter>(adapter_),
+                  evidence = tick_evidence_gate_, damage_hook,
+                  event_target](double delta) {
+                    const auto started_at = std::chrono::steady_clock::now();
+                    // Keep the adapter generation alive through evidence
+                    // observation. This also protects the service tables if
+                    // process-quarantine bookkeeping allocation ever fails.
+                    const auto adapter = weak.lock();
+                    if (adapter) {
+                        adapter->OnGameTick(delta);
+                        if (damage_hook != nullptr && !damage_hook->Attempted() &&
+                            event_target != nullptr && adapter->CombatFeatureAvailable()) {
+                            const auto exec_targets = adapter->CombatExecFunctionTargets();
+                            if (exec_targets.discovery_complete) {
+                                Ue5DamageFunctionTargets targets;
+                                targets.character_on_damaged = const_cast<void*>(event_target);
+                                targets.combat_exec_function_count = exec_targets.count;
+                                for (std::size_t index{}; index < exec_targets.count; ++index) {
+                                    targets.combat_exec_functions[index] = {
+                                        reinterpret_cast<void*>(
+                                            exec_targets.entries[index].function),
+                                        reinterpret_cast<void*>(
+                                            exec_targets.entries[index].target)};
+                                }
+                                static_cast<void>(damage_hook->Start(targets));
+                            }
+                        }
+                    }
+                    if (evidence) {
+                        const double duration_micros =
+                            std::chrono::duration<double, std::micro>(
+                                std::chrono::steady_clock::now() - started_at).count();
+                        evidence->Observe(GetCurrentThreadId(), duration_micros);
+                    }
+                });
+            hook_ready = tick_hook_->Start(reinterpret_cast<void*>(tick->address));
+            if (!hook_ready) diagnostics_.push_back("game tick hook activation failed");
+        }
+        bool ahud_hook_ready{};
+        bool process_event_hook_ready{};
+        const auto* const process_event =
+            resolution_->FindSymbol(kUe5ProcessEventSymbol);
+        // ProcessEvent is a shared framework ingress. It is activated once by
+        // the runtime and fanned out to all SDK subscribers.
+        const bool needs_process_event = profile_ &&
+            profile_->features.contains(std::string(kUe5ProcessEventFeature));
+        if (needs_process_event) {
+            if (!hook_ready) {
+                diagnostics_.push_back(
+                    "optional ProcessEvent capabilities unavailable: game tick hook failed");
+            } else if (!resolution_->FeatureAvailable(kUe5ProcessEventFeature) ||
+                process_event == nullptr || !process_event->Available()) {
+                diagnostics_.push_back(
+                    "optional ProcessEvent capabilities unavailable: gate failed");
+            } else {
+                try {
+                    process_event_hook_ = std::make_unique<Ue5ProcessEventHook>(
+                        [weak = std::weak_ptr<Ue5NteAdapter>(adapter_)](
+                            const std::uintptr_t object,
+                            const std::uintptr_t function,
+                            void* const parameters,
+                            const Ue5ProcessEventInvoker& original) {
+                            const auto adapter = weak.lock();
+                            if (adapter) {
+                                adapter->OnProcessEvent(
+                                    object, function, parameters, original);
+                            }
+                        },
+                        [weak = std::weak_ptr<Ue5NteAdapter>(adapter_)](
+                            const std::uintptr_t object,
+                            const std::uintptr_t function,
+                            void* const parameters) {
+                            const auto adapter = weak.lock();
+                            if (adapter) {
+                                adapter->OnProcessEventPre(object, function, parameters);
+                            }
+                        });
+                    process_event_hook_ready = process_event_hook_->Start(
+                        reinterpret_cast<void*>(process_event->address));
+                    if (!process_event_hook_ready) {
+                        diagnostics_.push_back(
+                            "ProcessEvent hook activation failed");
+                    }
+                } catch (...) {
+                    process_event_hook_.reset();
+                    diagnostics_.push_back("ProcessEvent hook allocation failed");
+                }
+            }
+        }
+        const auto* const actor_process_event =
+            resolution_->FindSymbol(kUe5ActorProcessEventSymbol);
+        const bool needs_actor_process_event = profile_ &&
+            profile_->features.contains(std::string(kUe5ActorProcessEventFeature));
+        if (needs_actor_process_event) {
+            if (!hook_ready) {
+                diagnostics_.push_back(
+                    "optional AActor ProcessEvent capabilities unavailable: game tick hook failed");
+            } else if (!resolution_->FeatureAvailable(kUe5ActorProcessEventFeature) ||
+                actor_process_event == nullptr || !actor_process_event->Available()) {
+                diagnostics_.push_back(
+                    "optional AActor ProcessEvent capabilities unavailable: gate failed");
+            } else {
+                try {
+                    actor_process_event_hook_ =
+                        std::make_unique<Ue5ActorProcessEventHook>(
+                            [weak = std::weak_ptr<Ue5NteAdapter>(adapter_),
+                              invoker = process_event_invoker](
+                                const std::uintptr_t object,
+                                const std::uintptr_t function,
+                                void* const parameters) {
+                                const auto adapter = weak.lock();
+                                if (adapter) {
+                                    adapter->OnProcessEvent(
+                                        object, function, parameters, invoker);
+                                }
+                            });
+                    ahud_hook_ready = actor_process_event_hook_->Start(
+                        reinterpret_cast<void*>(actor_process_event->address));
+                    if (!ahud_hook_ready) {
+                        diagnostics_.push_back(
+                            "Actor ProcessEvent hook activation failed");
+                    }
+                } catch (...) {
+                    actor_process_event_hook_.reset();
+                    diagnostics_.push_back("Actor ProcessEvent hook allocation failed");
+                }
+            }
+            if (ahud_hook_ready && !resolution_->FeatureAvailable(kAhudFeature)) {
+                diagnostics_.push_back(
+                    "optional AHUD service pending: reflection gate not ready");
+            }
+        }
+        if (!adapter_->Start(hook_ready, ahud_hook_ready, process_event_hook_ready)) {
+            diagnostics_.push_back("adapter service publication failed");
+            if (tick_evidence_gate_) tick_evidence_gate_->Close();
+            const bool process_event_hook_stopped =
+                !process_event_hook_ ||
+                process_event_hook_->Stop();
+            const bool actor_process_event_hook_stopped =
+                !actor_process_event_hook_ ||
+                actor_process_event_hook_->Stop();
+            const bool tick_hook_stopped =
+                !tick_hook_ || tick_hook_->Stop();
+            const bool damage_function_hook_stopped =
+                !damage_function_hook_ || damage_function_hook_->Stop();
+            if (process_event_hook_stopped) process_event_hook_.reset();
+            if (actor_process_event_hook_stopped) actor_process_event_hook_.reset();
+            if (tick_hook_stopped) tick_hook_.reset();
+            if (damage_function_hook_stopped) damage_function_hook_.reset();
+            tick_evidence_gate_.reset();
+            if (!process_event_hook_stopped || !actor_process_event_hook_stopped ||
+                !tick_hook_stopped || !damage_function_hook_stopped) {
+                RetainNteProfileGeneration(
+                    std::move(tick_hook_), std::move(process_event_hook_),
+                    std::move(actor_process_event_hook_),
+                    std::move(damage_function_hook_), {},
+                    std::move(adapter_));
+                quarantined_ = true;
+                diagnostics_.push_back(
+                    "adapter startup rollback quarantined a hook generation");
+                started_ = true;
+                return true;
+            } else {
+                adapter_.reset();
+            }
+        } else {
+            tick_hook_ready_ = hook_ready;
+            ahud_hook_ready_ = ahud_hook_ready;
+            if (damage_hook != nullptr && event_target == nullptr) {
+                diagnostics_.push_back(
+                    "character damage event hook target unavailable");
+            }
+        }
+        const bool player_service_published = adapter_ &&
+            ProcessAdapterServices().Query(
+                ANOMALY_NTE_PLAYER_SERVICE_V1_ID,
+                ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION,
+                false) != nullptr;
+        if (adapter_ && !resolution_->FeatureAvailable("nte.player")) {
+            diagnostics_.push_back(
+                "service anomaly.nte.player initially unavailable: nte.player feature unavailable");
+        } else if (adapter_ && !hook_ready) {
+            diagnostics_.push_back(
+                "service anomaly.nte.player initially unavailable: game tick hook unavailable");
+        } else if (adapter_ && !player_service_published) {
+            diagnostics_.push_back(
+                "service anomaly.nte.player initially unavailable: service registry rejected publication");
+        }
+        if (profile_ && profile_->features.contains(
+                std::string(kOutgoingTransformMetadataFeature))) {
+            const auto* const target = resolution_->FindSymbol(kOutgoingTransformSymbol);
+            if (!resolution_->FeatureAvailable(kOutgoingTransformMetadataFeature) ||
+                target == nullptr || !target->Available()) {
+                diagnostics_.push_back(
+                    "optional outgoing transform metadata capability unavailable: exact ABI gate failed");
+            } else {
+                try {
+                    auto probe = std::make_unique<Ue5OutboundBitCountProbe>(
+                        CreateMinHookBackend());
+                    if (!probe->Start(reinterpret_cast<void*>(target->address))) {
+                        diagnostics_.push_back("outgoing transform metadata probe activation failed");
+                    } else {
+                        outgoing_transform_probe_ = std::move(probe);
+                    }
+                } catch (...) {
+                    diagnostics_.push_back("outgoing transform metadata probe allocation failed");
+                }
+            }
+        }
+        started_ = true;
+        return true;
+    }
+
+    bool Stop(std::chrono::milliseconds timeout) noexcept {
+        std::unique_lock lock(mutex_);
+        if (!started_) return !stopping_;
+        auto tick_hook = std::move(tick_hook_);
+        auto process_event_hook = std::move(process_event_hook_);
+        auto actor_process_event_hook = std::move(actor_process_event_hook_);
+        auto damage_function_hook = std::move(damage_function_hook_);
+        auto outgoing_transform_probe = std::move(outgoing_transform_probe_);
+        auto adapter = std::move(adapter_);
+        auto tick_evidence_gate = std::move(tick_evidence_gate_);
+        // Close while holding the Runtime state mutex so Started()==false is
+        // only observable after the smoke observer has been fenced.
+        if (tick_evidence_gate) tick_evidence_gate->Close();
+        tick_hook_ready_ = false;
+        ahud_hook_ready_ = false;
+        started_ = false;
+        stopping_ = true;
+        lock.unlock();
+
+        const auto bounded_timeout =
+            (std::max)(timeout, std::chrono::milliseconds::zero());
+        const auto started_at = std::chrono::steady_clock::now();
+        const auto remaining = [&]() noexcept {
+            if (bounded_timeout == std::chrono::milliseconds::max()) {
+                return std::chrono::milliseconds::max();
+            }
+            const auto elapsed = std::chrono::steady_clock::now() - started_at;
+            if (elapsed >= bounded_timeout) return std::chrono::milliseconds::zero();
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                bounded_timeout - elapsed);
+        };
+
+        // An observer samples the adapter service registry. Drain observers
+        // which crossed the close boundary before revoking those services;
+        // late detours are rejected by the closed gate. If the deadline is
+        // exceeded the entire generation is quarantined with its services
+        // still valid for the in-flight observer.
+        const bool outgoing_transform_probe_drained = outgoing_transform_probe == nullptr ||
+            outgoing_transform_probe->Stop(remaining());
+        const bool evidence_drained = tick_evidence_gate == nullptr ||
+            tick_evidence_gate->Drain(remaining());
+        bool adapter_drained = adapter == nullptr;
+        if (evidence_drained && adapter != nullptr) {
+            // Revoke services and detach the inner callback before waiting on
+            // the external detour. A racing detour then observes
+            // Started()==false and cannot create a new adapter invocation.
+            adapter_drained = adapter->Stop(std::chrono::milliseconds::zero());
+        }
+        const bool tick_hook_drained = tick_hook == nullptr || tick_hook->Stop(remaining());
+        const bool process_event_hook_drained = process_event_hook == nullptr ||
+            process_event_hook->Stop(remaining());
+        const bool actor_process_event_hook_drained =
+            actor_process_event_hook == nullptr ||
+            actor_process_event_hook->Stop(remaining());
+        const bool damage_function_hook_drained = damage_function_hook == nullptr ||
+            damage_function_hook->Stop(remaining());
+        if (evidence_drained && !adapter_drained && adapter != nullptr) {
+            adapter_drained = adapter->Stop(remaining());
+        }
+        const bool drained = outgoing_transform_probe_drained && evidence_drained &&
+            tick_hook_drained && process_event_hook_drained &&
+            actor_process_event_hook_drained &&
+            damage_function_hook_drained && adapter_drained;
+        if (!drained) {
+            RetainNteProfileGeneration(
+                std::move(tick_hook), std::move(process_event_hook),
+                std::move(actor_process_event_hook),
+                std::move(damage_function_hook),
+                std::move(outgoing_transform_probe), std::move(adapter));
+        }
+
+        lock.lock();
+        stopping_ = false;
+        quarantined_ = !drained;
+        if (!drained) {
+            diagnostics_.push_back(
+                "profile stop deadline exceeded: hook generation quarantined");
+        }
+        return drained;
+    }
+
+    bool Started() const noexcept {
+        std::scoped_lock lock(mutex_);
+        return started_;
+    }
+
+    std::optional<BuildFingerprint> Fingerprint() const {
+        std::scoped_lock lock(mutex_);
+        return std::nullopt;
+    }
+
+    std::shared_ptr<const ProfileResolutionSnapshot> Resolution() const {
+        std::scoped_lock lock(mutex_);
+        return CurrentResolutionLocked();
+    }
+
+    std::shared_ptr<Ue5NteAdapter> Adapter() const {
+        std::scoped_lock lock(mutex_);
+        return adapter_;
+    }
+
+    NteProfileEvidenceSnapshot Evidence() const {
+        std::scoped_lock lock(mutex_);
+        NteProfileEvidenceSnapshot snapshot;
+        snapshot.profile = profile_;
+        if (const auto resolution = CurrentResolutionLocked()) {
+            snapshot.resolution = *resolution;
+        }
+        snapshot.tick_hook_ready = tick_hook_ready_;
+        snapshot.ahud_hook_ready = ahud_hook_ready_;
+        if (adapter_) {
+            snapshot.game_thread_id = adapter_->GameThreadId();
+            snapshot.tick_sequence = adapter_->TickSequence();
+            snapshot.rejected_thread_ticks = adapter_->RejectedThreadTicks();
+            snapshot.ahud_binding_ready = adapter_->AhudBindingReady();
+            snapshot.ahud_frame_count = adapter_->AhudFrameCount();
+            snapshot.ahud_process_event_call_count =
+                adapter_->AhudProcessEventCallCount();
+        }
+        return snapshot;
+    }
+
+    std::vector<HookRecordView> Hooks() const {
+        std::scoped_lock lock(mutex_);
+        std::vector<HookRecordView> hooks;
+        if (tick_hook_) hooks = tick_hook_->Snapshot();
+        if (process_event_hook_) {
+            auto process_event_hooks = process_event_hook_->Snapshot();
+            hooks.insert(
+                hooks.end(),
+                std::make_move_iterator(process_event_hooks.begin()),
+                std::make_move_iterator(process_event_hooks.end()));
+        }
+        if (actor_process_event_hook_) {
+            auto actor_process_event_hooks = actor_process_event_hook_->Snapshot();
+            hooks.insert(
+                hooks.end(),
+                std::make_move_iterator(actor_process_event_hooks.begin()),
+                std::make_move_iterator(actor_process_event_hooks.end()));
+        }
+        if (damage_function_hook_) {
+            auto damage_hooks = damage_function_hook_->Snapshot();
+            hooks.insert(
+                hooks.end(),
+                std::make_move_iterator(damage_hooks.begin()),
+                std::make_move_iterator(damage_hooks.end()));
+        }
+        return hooks;
+    }
+
+    std::string ExecuteReflectionQuery(const std::string_view request) const {
+        std::optional<BuildProfile> profile;
+        std::shared_ptr<const ProfileResolutionSnapshot> resolution;
+        std::shared_ptr<const SymbolMemory> memory;
+        std::shared_ptr<Ue5NteAdapter> adapter;
+        {
+            std::scoped_lock lock(mutex_);
+            if (!started_ || stopping_ || !profile_) {
+                return "{\"ok\":false,\"error\":\"UE reflection queries are unavailable\"}";
+            }
+            profile = profile_;
+            resolution = CurrentResolutionLocked();
+            memory = memory_;
+            adapter = adapter_;
+        }
+        const auto first_non_space = request.find_first_not_of(" \t\r\n");
+        if (first_non_space == std::string_view::npos) {
+            return "{\"ok\":false,\"error\":\"empty UE query\"}";
+        }
+        const auto trimmed = request.substr(first_non_space);
+        const auto split = trimmed.find_first_of(" \t\r\n");
+        const auto command = trimmed.substr(0, split);
+        const auto arguments = split == std::string_view::npos
+            ? std::string_view{} : trimmed.substr(split + 1);
+        if ((command == "combat" || command == "buffs") && adapter != nullptr) {
+            if (!arguments.empty()) {
+                return "{\"ok\":false,\"error\":\"usage: ue combat|buffs\"}";
+            }
+            return adapter->CombatEventsJson(command == "buffs");
+        }
+        if (!resolution || !memory) {
+            return "{\"ok\":false,\"error\":\"UE reflection queries are unavailable\"}";
+        }
+        return ExecuteUe5ReflectionQuery(
+            {*profile, *resolution, *memory}, request);
+    }
+
+    std::string DiagnosticsJson() const {
+        std::scoped_lock lock(mutex_);
+        const auto resolution = CurrentResolutionLocked();
+        const ProfileResolutionState state = resolution
+            ? resolution->state
+            : ProfileResolutionState::NoProfile;
+        std::string json = "{\"ok\":true,\"state\":" +
+            Quote(ResolutionStateName(state));
+        json += ",\"buildId\":" +
+            Quote(resolution ? resolution->build_id : std::string{});
+        json += ",\"modulePath\":" + Quote(module_path_.string());
+        json += ",\"fingerprintAvailable\":" +
+            std::string{"false"};
+        json += ",\"profileHash\":" + Quote(
+            resolution ? resolution->profile_hash : std::string{});
+        json += ",\"profileChannel\":" + Quote(profile_ ? profile_->source_channel : std::string{});
+        json += ",\"profileSource\":" + Quote(profile_ ? profile_->source.string() : std::string{});
+        json += ",\"adapterStarted\":" +
+            std::string(adapter_ && adapter_->Started() ? "true" : "false");
+        json += ",\"profileQuarantined\":" +
+            std::string(quarantined_ ? "true" : "false");
+        json += ",\"tickHookReady\":" +
+            std::string(tick_hook_ready_ ? "true" : "false");
+        json += ",\"gameThreadId\":" +
+            std::to_string(adapter_ ? adapter_->GameThreadId() : 0U);
+        json += ",\"tickSequence\":" +
+            std::to_string(adapter_ ? adapter_->TickSequence() : 0U);
+        json += ",\"rejectedThreadTicks\":" +
+            std::to_string(adapter_ ? adapter_->RejectedThreadTicks() : 0U);
+        json += ",\"ahudHookReady\":" +
+            std::string(ahud_hook_ready_ ? "true" : "false");
+        json += ",\"ahudBindingReady\":" +
+            std::string(
+                adapter_ && adapter_->AhudBindingReady() ? "true" : "false");
+        json += ",\"ahudFrameCount\":" +
+            std::to_string(adapter_ ? adapter_->AhudFrameCount() : 0U);
+        json += ",\"ahudProcessEventCallCount\":" +
+            std::to_string(
+                adapter_ ? adapter_->AhudProcessEventCallCount() : 0U);
+        const NteCombatDiagnosticsSnapshot combat_diagnostics = adapter_
+            ? adapter_->CombatDiagnostics()
+            : NteCombatDiagnosticsSnapshot{};
+        json += ",\"damageCapture\":{\"eventLayoutReady\":" +
+            std::string(combat_diagnostics.damage_event_layout_ready
+                ? "true"
+                : "false");
+        json += ",\"nativeHookAttempted\":" + std::string(
+            damage_function_hook_ && damage_function_hook_->Attempted()
+                ? "true"
+                : "false");
+        json += ",\"nativeHookReady\":" + std::string(
+            damage_function_hook_ && damage_function_hook_->Started()
+                ? "true"
+                : "false");
+        json += ",\"processEventBindingMask\":" +
+            std::to_string(combat_diagnostics.process_event_binding_mask);
+        json += ",\"damageFloatiesCalls\":" +
+            std::to_string(combat_diagnostics.damage_floaties_call_count);
+        json += ",\"monsterDamageCalls\":" +
+            std::to_string(combat_diagnostics.monster_damage_call_count);
+        json += ",\"playerDamageQueueCalls\":" +
+            std::to_string(combat_diagnostics.player_damage_queue_call_count);
+        json += ",\"damageWidgetCalls\":" +
+            std::to_string(combat_diagnostics.damage_widget_call_count);
+        json += ",\"buffCalls\":" +
+            std::to_string(combat_diagnostics.buff_call_count);
+        json += ",\"critQueryCalls\":" +
+            std::to_string(combat_diagnostics.crit_query_call_count);
+        json += ",\"critQueryMode\":\"synchronous-reflection\"";
+        json += ",\"critQuerySuccesses\":" +
+            std::to_string(combat_diagnostics.crit_query_success_count);
+        json += ",\"critTrueCount\":" +
+            std::to_string(combat_diagnostics.crit_true_count);
+        json += ",\"nativeCalls\":" +
+            std::to_string(combat_diagnostics.native_call_count);
+        json += ",\"capturedEvents\":" +
+            std::to_string(combat_diagnostics.captured_event_count);
+        json += ",\"dropped\":" +
+            std::to_string(combat_diagnostics.dropped_count);
+        json += ",\"attackerResolutionFailures\":" +
+            std::to_string(combat_diagnostics.attacker_resolution_failure_count);
+        json += ",\"victimResolutionFailures\":" +
+            std::to_string(combat_diagnostics.victim_resolution_failure_count);
+        json += ",\"sourceResolutionFailures\":" +
+            std::to_string(combat_diagnostics.source_resolution_failure_count);
+        json += ",\"savedTriggerSkillMappings\":" +
+            std::to_string(combat_diagnostics.saved_trigger_skill_mapping_count);
+        json += ",\"triggerAbilityHandleMappings\":" +
+            std::to_string(combat_diagnostics.trigger_ability_handle_mapping_count);
+        json += ",\"damageSourceMappingFailures\":" +
+            std::to_string(combat_diagnostics.damage_source_mapping_failure_count);
+        json += ",\"delayedDamageNameCompletions\":" +
+            std::to_string(combat_diagnostics.delayed_damage_name_completion_count);
+        json += ",\"combatAvailable\":" +
+            std::string(combat_diagnostics.combat_available ? "true" : "false");
+        json += ",\"combatPartial\":" +
+            std::string(combat_diagnostics.combat_partial ? "true" : "false");
+        json += ",\"combatSampleSequence\":" +
+            std::to_string(combat_diagnostics.combat_sample_sequence);
+        json += ",\"worldPointer\":" +
+            std::to_string(combat_diagnostics.world_pointer);
+        json += ",\"playerPawn\":" +
+            std::to_string(combat_diagnostics.player_pawn);
+        json += ",\"combatCharacterId\":" +
+            std::to_string(combat_diagnostics.combat_character_id);
+        json += ",\"combatCharacterGeneration\":" +
+            std::to_string(combat_diagnostics.combat_character_generation);
+        json += ",\"combatRefreshFailure\":" +
+            std::to_string(combat_diagnostics.combat_refresh_failure);
+        json += ",\"reflectionFaults\":" +
+            std::to_string(combat_diagnostics.reflection_fault_count);
+        json += ",\"lastReflectionFaultFunction\":" +
+            std::to_string(combat_diagnostics.last_reflection_fault_function);
+        json += ",\"lastReflectionFaultCode\":" +
+            std::to_string(combat_diagnostics.last_reflection_fault_code) + "}";
+        const bool player_service_published = adapter_ &&
+            ProcessAdapterServices().Query(
+                ANOMALY_NTE_PLAYER_SERVICE_V1_ID,
+                ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION,
+                false) != nullptr;
+        json += ",\"ntePlayerPublished\":" +
+            std::string(player_service_published ? "true" : "false");
+        json += ",\"ntePlayerRefreshMode\":" + Quote(
+            player_service_published
+                ? "game-tick"
+                : std::string{});
+        json += ",\"playerSnapshotTickInterval\":" +
+            std::to_string(options_.snapshot_sampling.player_tick_interval);
+        json += ",\"entitySnapshotTickInterval\":" +
+            std::to_string(options_.snapshot_sampling.entity_tick_interval);
+        json += ",\"combatSnapshotTickInterval\":" +
+            std::to_string(options_.snapshot_sampling.combat_tick_interval);
+        json += ",\"skillSnapshotTickInterval\":" +
+            std::to_string(options_.snapshot_sampling.skill_tick_interval);
+        json += ",\"actorSnapshotTickInterval\":" +
+            std::to_string(options_.snapshot_sampling.actor_tick_interval);
+        json += ",\"outgoingTransformMetadataProbe\":";
+        AppendOutgoingTransformProbeSnapshot(json, outgoing_transform_probe_.get());
+        json += ",\"optionalFeatures\":";
+        if (profile_) {
+            AppendStringArray(json, profile_->optional_features);
+        } else {
+            json += "[]";
+        }
+        json += ",\"featureLayoutValidators\":";
+        if (profile_) {
+            AppendFeatureStringLists(json, profile_->feature_layout_validators);
+        } else {
+            json += "{}";
+        }
+        json += ",\"featureDependencies\":";
+        if (profile_) {
+            AppendFeatureStringLists(json, profile_->feature_dependencies);
+        } else {
+            json += "{}";
+        }
+        json += ",\"symbols\":[";
+        bool first = true;
+        if (resolution) {
+            for (const auto& [id, symbol] : resolution->symbols) {
+                if (!first) json.push_back(',');
+                first = false;
+                const std::string candidate_address = HexAddress(symbol.address);
+                json += "{\"id\":" + Quote(id) + ",\"state\":" +
+                    Quote(SymbolStateName(symbol.state)) + ",\"available\":" +
+                    (symbol.Available() ? std::string("true") : std::string("false")) +
+                    ",\"rva\":" + std::to_string(symbol.rva) +
+                    ",\"address\":" + Quote(
+                        symbol.Available() ? candidate_address : std::string{}) +
+                    ",\"candidateAddress\":" + Quote(
+                        symbol.Available() ? std::string{} : candidate_address) +
+                    ",\"diagnostics\":[";
+                bool first_diagnostic = true;
+                for (const auto& diagnostic : symbol.diagnostics) {
+                    if (!first_diagnostic) json.push_back(',');
+                    first_diagnostic = false;
+                    json += Quote(diagnostic);
+                }
+                json += "]}";
+            }
+        }
+        json += "],\"features\":[";
+        first = true;
+        if (resolution) {
+            for (const auto& [id, feature] : resolution->features) {
+                if (!first) json.push_back(',');
+                first = false;
+                json += "{\"id\":" + Quote(id) + ",\"available\":" +
+                    (feature.available ? std::string("true") : std::string("false"));
+                json += ",\"missingSymbols\":";
+                AppendStringArray(json, feature.missing_symbols);
+                json += ",\"unavailableDependencies\":";
+                AppendStringArray(json, feature.unavailable_dependencies);
+                json += ",\"validationDiagnostics\":";
+                AppendStringArray(json, feature.validation_diagnostics);
+                json += "}";
+            }
+        }
+        json += "],\"diagnostics\":[";
+        first = true;
+        for (const auto& diagnostic : diagnostics_) {
+            if (!first) json.push_back(',');
+            first = false;
+            json += Quote(diagnostic);
+        }
+        json += "]}";
+        return json;
+    }
+
+private:
+    [[nodiscard]] std::vector<std::string> MissingProfileSections(
+        const BuildProfile& profile) const {
+        std::map<std::wstring, std::set<std::string, std::less<>>, std::less<>> required;
+        for (const auto& [id, symbol] : profile.symbols) {
+            static_cast<void>(id);
+            required[symbol.module].insert(symbol.section);
+        }
+
+        std::vector<std::string> missing;
+        for (const auto& [module_name, section_names] : required) {
+            const auto module = memory_->FindModule(module_name);
+            const std::string module_text = std::filesystem::path(module_name).string();
+            if (!module) {
+                missing.push_back(module_text + ": module unavailable");
+                continue;
+            }
+            const auto sections = memory_->Sections(*module);
+            for (const auto& section_name : section_names) {
+                const bool available = std::ranges::any_of(
+                    sections, [&](const auto& section) { return section.name == section_name; });
+                if (!available) missing.push_back(module_text + ":" + section_name);
+            }
+        }
+        return missing;
+    }
+
+    [[nodiscard]] bool WaitForProfileSections(
+        const BuildProfile& profile,
+        std::stop_token stop_token) {
+        const auto started_at = std::chrono::steady_clock::now();
+        const auto timeout = (std::max)(
+            options_.section_readiness_timeout, std::chrono::milliseconds::zero());
+        const auto poll_interval = (std::max)(
+            options_.section_readiness_poll_interval, std::chrono::milliseconds(1));
+        bool waited{};
+        for (;;) {
+            const auto missing = MissingProfileSections(profile);
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started_at);
+            if (missing.empty()) {
+                if (waited) {
+                    diagnostics_.push_back(
+                        "profile sections became ready after " +
+                        std::to_string(elapsed.count()) + " ms");
+                }
+                return true;
+            }
+            if (stop_token.stop_requested()) {
+                diagnostics_.push_back(
+                    "profile section readiness cancelled after " +
+                    std::to_string(elapsed.count()) + " ms");
+                return false;
+            }
+            if (elapsed >= timeout) {
+                std::string diagnostic =
+                    "profile section readiness timeout after " +
+                    std::to_string(elapsed.count()) + " ms; missing=";
+                for (std::size_t index{}; index < missing.size(); ++index) {
+                    if (index != 0) diagnostic += ',';
+                    diagnostic += missing[index];
+                }
+                diagnostics_.push_back(std::move(diagnostic));
+                return true;
+            }
+            waited = true;
+            std::this_thread::sleep_for((std::min)(poll_interval, timeout - elapsed));
+        }
+    }
+
+    std::shared_ptr<const ProfileResolutionSnapshot> CurrentResolutionLocked() const {
+        if (adapter_) {
+            return std::make_shared<ProfileResolutionSnapshot>(adapter_->Resolution());
+        }
+        return resolution_;
+    }
+
+    NteProfileRuntimeOptions options_;
+    std::shared_ptr<const SymbolMemory> memory_;
+    mutable std::mutex mutex_;
+    bool started_{};
+    bool stopping_{};
+    bool quarantined_{};
+    bool tick_hook_ready_{};
+    bool ahud_hook_ready_{};
+    std::filesystem::path module_path_;
+    BuildProfileCatalogSnapshot catalog_;
+    std::optional<BuildProfile> profile_;
+    std::shared_ptr<ProfileResolutionSnapshot> resolution_;
+    std::shared_ptr<Ue5NteAdapter> adapter_;
+    std::shared_ptr<TickEvidenceObserverGate> tick_evidence_gate_;
+    std::unique_ptr<GameTickHook> tick_hook_;
+    std::unique_ptr<Ue5ProcessEventHook> process_event_hook_;
+    std::unique_ptr<Ue5ActorProcessEventHook> actor_process_event_hook_;
+    std::unique_ptr<Ue5DamageFunctionHook> damage_function_hook_;
+    std::unique_ptr<Ue5OutboundBitCountProbe> outgoing_transform_probe_;
+    std::vector<std::string> diagnostics_;
+};
+
+NteProfileRuntime::NteProfileRuntime(NteProfileRuntimeOptions options)
+    : impl_(std::make_unique<Impl>(std::move(options))) {}
+NteProfileRuntime::~NteProfileRuntime() {
+    static_cast<void>(Stop(std::chrono::milliseconds::zero()));
+}
+bool NteProfileRuntime::Start(std::stop_token stop_token) noexcept {
+    try {
+        return impl_->Start(stop_token);
+    } catch (...) {
+        return false;
+    }
+}
+bool NteProfileRuntime::Stop(std::chrono::milliseconds timeout) noexcept {
+    return impl_->Stop(timeout);
+}
+bool NteProfileRuntime::Started() const noexcept { return impl_->Started(); }
+std::optional<BuildFingerprint> NteProfileRuntime::Fingerprint() const { return impl_->Fingerprint(); }
+std::shared_ptr<const ProfileResolutionSnapshot> NteProfileRuntime::Resolution() const {
+    return impl_->Resolution();
+}
+std::shared_ptr<Ue5NteAdapter> NteProfileRuntime::Adapter() const { return impl_->Adapter(); }
+NteProfileEvidenceSnapshot NteProfileRuntime::Evidence() const { return impl_->Evidence(); }
+std::string NteProfileRuntime::DiagnosticsJson() const { return impl_->DiagnosticsJson(); }
+std::vector<HookRecordView> NteProfileRuntime::Hooks() const { return impl_->Hooks(); }
+std::string NteProfileRuntime::ExecuteReflectionQuery(const std::string_view request) const {
+    return impl_->ExecuteReflectionQuery(request);
+}
+
+}  // namespace anomaly

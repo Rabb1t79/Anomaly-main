@@ -1,0 +1,11193 @@
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <mmsystem.h>   // MCI: music playback through the system codecs (see MusicPlayer)
+#include <shobjidl.h>
+#include <combaseapi.h>
+#include <objbase.h>
+#include <shlwapi.h>
+#include <wrl/client.h>
+#include <filesystem>
+#include <fstream>
+using Microsoft::WRL::ComPtr;
+#include "anomaly/sdk/cpp.hpp"
+#include "anomaly/sdk/services/core.h"
+#include "anomaly/sdk/services/interop.h"
+#include "anomaly/sdk/services/platform.h"
+#include "anomaly/sdk/services/ue5.h"
+#include "anomaly/sdk/services/ui.h"
+#include "anomaly/sdk/services/ui_resources.h"
+#include <nlohmann/json.hpp>
+#include "better_pose_profile.hpp"
+#include "accessory_dynamics.hpp"
+#include "secondary_rules.hpp"
+#include "pose_history.hpp"
+#include "orbit_camera.hpp"
+#include "pose_mirror.hpp"
+#include "morph_catalog.hpp"
+#include "mmd_morph_map.hpp"
+#include "joint_limits.hpp"
+#include "pose_document.hpp"
+#include "retarget/motion_builder.hpp"
+#include "../common/localization.hpp"
+
+#include <atomic>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <mutex>
+#include <optional>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using namespace better_pose_profile;
+
+constexpr std::string_view kPoseSettingsSchemaId =
+    "anomaly.builtin.character-pose.settings";
+constexpr std::uint32_t kPoseSettingsSchemaVersion = 1;
+constexpr std::size_t kMaximumPoseSettingsBytes = 1U << 20;
+// UObject::ClassPrivate. Only used by the read-only mesh scan, where a wrong
+// value cannot corrupt anything: it just matches nothing and the scan reports
+// zero candidates.
+constexpr std::uint32_t kObjectClassOffset = 0x10;
+// UObject::NamePrivate (an FName: comparison index + number).
+constexpr std::uint32_t kObjectNameOffset = 0x18;
+// UObject::OuterPrivate. A component's outer is its owning actor, which is how
+// the scan narrows the whole world down to the local player's own components.
+constexpr std::uint32_t kObjectOuterOffset = 0x20;
+// USceneComponent::AttachParent. This is read-only: it identifies the scene
+// component an accessory is attached to; it is not a leader/master-pose
+// binding and must never be written by this plugin.
+constexpr std::uint32_t kMeshAttachParentOffset = 0xD8;
+// Extra components are only bone-driven when their bones can be matched to the
+// body skeleton this closely (mean position error, cm). Measured on a real
+// character: name mapping 6/222 and positional error ~9.9 cm even while both
+// meshes were in sync, i.e. those components do not share the body's component
+// space at all -- so the threshold is set where only a genuine match passes and
+// everything else is refused instead of scribbled on.
+constexpr double kExtraMeshMatchCm = 2.0;
+// Bind-pose counterpart: two bones that correspond sit within a few millimetres of
+// each other when both skeletons are in bind pose, so anything beyond a centimetre
+// is not a correspondence.
+constexpr double kExtraMeshBindCm = 1.0;
+// Motion documents carry every sampled frame, so they are far larger than a
+// pose settings file (the 79 s test track is ~2.3 MB).
+constexpr std::size_t kMaximumMotionBytes = 256U << 20;
+constexpr std::string_view kPoseExportPath = "pose-export.json";
+constexpr std::string_view kPoseProfileDirectory = "character-pose/profiles/";
+constexpr std::string_view kPoseSettingsSchema = R"json(
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bones"],
+  "properties": {
+    "rootOffset": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"type": "number"}
+    },
+    "musicVolume": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "bones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "pitch", "yaw", "roll"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "pitch": {"type": "number", "minimum": -180.0, "maximum": 180.0},
+          "yaw": {"type": "number", "minimum": -180.0, "maximum": 180.0},
+          "roll": {"type": "number", "minimum": -180.0, "maximum": 180.0}
+        }
+      }
+    }
+  }
+}
+)json";
+
+// Music volume, in percent. The panel and the saved settings publish a request; the game
+// tick applies it to the MCI device (MCI is not shared between threads, see StepMusic).
+// These live up here because the settings document is read and written above the player.
+std::atomic_int g_music_volume{100};
+std::atomic_int g_music_request_volume{100};
+std::atomic_bool g_music_request_volume_pending{false};
+
+struct RuntimeState {
+  std::uintptr_t g_world_address{};
+  // Restoration ownership survives a transient frame with no resolved pawn.
+  std::uintptr_t bound_character{};
+  std::uintptr_t bound_mesh{};
+  std::uintptr_t character{};
+  std::uintptr_t mesh{};
+  std::uintptr_t anim_instance{};
+  std::uint32_t animation_mode{};
+  std::uint8_t animation_flags{};
+  std::uint32_t bone_space_count{};
+  std::uintptr_t bone_space_data{};
+  std::uint32_t component_space_count{};
+  std::uintptr_t component_space_data{};
+  std::uint32_t local_space_count{};
+  std::uintptr_t local_space_data{};
+  float rate_scale{1.0F};
+  float root_motion_scale{1.0F};
+
+  bool saved_rate{};
+  float original_rate_scale{1.0F};
+  bool saved_root_motion{};
+  float original_root_motion_scale{1.0F};
+  bool saved_pause{};
+  std::uint8_t original_animation_flags{};
+  bool saved_forced_lod{};
+  bool forced_lod_applied{};
+  std::int32_t original_forced_lod{};
+  bool saved_animation_mode{};
+  bool animation_mode_applied{};
+  std::uint8_t original_animation_mode{};
+  bool saved_multi_threaded_update{};
+  std::uint8_t original_multi_threaded_update_flags{};
+  std::uintptr_t multi_threaded_update_instance{};
+
+  bool saved_pose{};
+  std::uint32_t pose_bone_index{};
+  std::array<double, 3> original_translation{};
+  std::array<double, 3> original_component_translation{};
+  std::uintptr_t pose_mesh{};
+  std::uintptr_t pose_data{};
+  std::uint32_t pose_count{};
+  std::uintptr_t pose_component_data{};
+  std::uint32_t pose_component_count{};
+  std::vector<std::uint32_t> pose_descendants{};
+};
+
+struct ObjectRegistry {
+  std::uintptr_t items{};
+  std::uint32_t count{};
+  std::uint32_t max_count{};
+  std::uint32_t max_chunks{};
+  std::uint32_t num_chunks{};
+};
+
+struct RenderSnapshot {
+  bool active{};
+  std::uintptr_t character{};
+  std::uintptr_t mesh{};
+  std::uintptr_t anim_instance{};
+  std::uint32_t animation_mode{};
+  std::uint32_t bone_space_count{};
+  std::uintptr_t bone_space_data{};
+  std::uint32_t component_space_count{};
+  std::uintptr_t component_space_data{};
+  float rate_scale{1.0F};
+  float root_motion_scale{1.0F};
+  bool pose_available{};
+  std::vector<std::string> bone_names;
+  std::array<char, 256> status{};
+  std::array<char, 256> reflection_status{};
+  std::array<char, 256> pose_status{};
+  std::uint32_t pose_bone_index{};
+  std::array<double, 3> component_translation_readback{};
+  std::array<double, 3> bone_translation_readback{};
+};
+
+// The camera track of a VMD (MMD camera keys), sampled on demand. A VMD's camera section lives
+// beside the bone tracks but is independent of them: a dance motion and its camera are usually two
+// files, so this is loaded separately and played against the motion's own frame.
+//
+// MMD's camera semantics: `position` is the look-at target, `rotation` is Euler in radians, the
+// camera itself sits `distance` back along its view axis, and `view_angle` is the FOV in degrees.
+struct CameraKey {
+  double frame = 0.0;
+  double distance = 0.0;
+  double position[3] = {0.0, 0.0, 0.0};
+  double rotation[3] = {0.0, 0.0, 0.0};
+  double view_angle = 0.0;
+};
+
+struct CameraTrack {
+  std::string file;
+  std::vector<CameraKey> keys;   // ascending frame order
+  double first_frame = 0.0;
+  double last_frame = 0.0;
+
+  bool Load(const std::vector<std::uint8_t> &bytes, const std::string &name,
+            std::string *error) {
+    keys.clear();
+    file.clear();
+    const better_pose::mmd2bip::VmdDocument document = better_pose::mmd2bip::ParseVmd(bytes);
+    if (!document.ok) {
+      if (error != nullptr) {
+        // The size tells a missing optional tail apart from a broken mandatory section.
+        char detail[64]{};
+        std::snprintf(detail, sizeof(detail), " (%zu bytes)", document.file_size);
+        *error = document.error + detail;
+      }
+      return false;
+    }
+    if (document.camera.empty()) {
+      if (error != nullptr)
+        *error = "this VMD has no camera keys (bone-only file)";
+      return false;
+    }
+    keys.reserve(document.camera.size());
+    for (const better_pose::mmd2bip::VmdCameraKey &source : document.camera) {
+      CameraKey key;
+      key.frame = static_cast<double>(source.frame);
+      key.distance = source.distance;
+      key.view_angle = static_cast<double>(source.view_angle);
+      for (int axis = 0; axis < 3; ++axis) {
+        key.position[axis] = source.position[axis];
+        key.rotation[axis] = source.rotation[axis];
+      }
+      keys.push_back(key);
+    }
+    std::sort(keys.begin(), keys.end(),
+              [](const CameraKey &a, const CameraKey &b) { return a.frame < b.frame; });
+    first_frame = keys.front().frame;
+    last_frame = keys.back().frame;
+    file = name;
+    return true;
+  }
+
+  // Linear between keys, held at the ends. MMD's per-key Bezier easing is not applied yet: for a
+  // file keyed every frame (the usual export) it makes no difference.
+  bool Sample(const double frame, double out_position[3], double out_rotation[3],
+              double *out_distance, double *out_fov) const {
+    if (keys.empty())
+      return false;
+    if (frame <= keys.front().frame) {
+      Copy(keys.front(), out_position, out_rotation, out_distance, out_fov);
+      return true;
+    }
+    if (frame >= keys.back().frame) {
+      Copy(keys.back(), out_position, out_rotation, out_distance, out_fov);
+      return true;
+    }
+    std::size_t low = 0;
+    std::size_t high = keys.size() - 1;
+    while (high - low > 1) {
+      const std::size_t middle = (low + high) / 2;
+      if (keys[middle].frame <= frame)
+        low = middle;
+      else
+        high = middle;
+    }
+    const CameraKey &a = keys[low];
+    const CameraKey &b = keys[high];
+    const double span = b.frame - a.frame;
+    const double blend = span > 1e-9 ? (frame - a.frame) / span : 0.0;
+    for (int axis = 0; axis < 3; ++axis) {
+      out_position[axis] = a.position[axis] + (b.position[axis] - a.position[axis]) * blend;
+      out_rotation[axis] = a.rotation[axis] + (b.rotation[axis] - a.rotation[axis]) * blend;
+    }
+    *out_distance = a.distance + (b.distance - a.distance) * blend;
+    *out_fov = a.view_angle + (b.view_angle - a.view_angle) * blend;
+    return true;
+  }
+
+ private:
+  static void Copy(const CameraKey &key, double out_position[3], double out_rotation[3],
+                   double *out_distance, double *out_fov) {
+    for (int axis = 0; axis < 3; ++axis) {
+      out_position[axis] = key.position[axis];
+      out_rotation[axis] = key.rotation[axis];
+    }
+    *out_distance = key.distance;
+    *out_fov = key.view_angle;
+  }
+};
+
+struct Context final {
+  const AnomalyHostApiV1 *host{};
+  anomaly::plugins::Localizer localizer;
+  const AnomalyCoreServiceV1 *core{};
+  const AnomalySignatureServiceV1 *signature{};
+  const AnomalyUe5NamesServiceV1 *names{};
+  const AnomalyUe5ObjectsServiceV1 *objects{};
+  const AnomalyUiServiceV1 *ui{};
+  const AnomalyHookServiceV1 *hook{};
+  const AnomalyConfigServiceV1 *config{};
+  const AnomalyStorageServiceV1 *storage{};
+  const AnomalySchedulerServiceV1 *scheduler{};
+  // Optional: the skeleton overlay draws through the host AHUD and picks joints
+  // with the host input snapshot. Either may be missing; the rest of the plugin
+  // does not depend on them.
+  const AnomalyUe5AhudServiceV1 *ahud{};
+  const AnomalyInputServiceV1 *input{};
+  AnomalyGenerationHandleV1 ahud_subscription{};
+
+  // Skeleton overlay. The AHUD callback (game thread, after the frame's pose is
+  // final) reads the mesh's component-space pose, projects every joint, draws
+  // it and publishes the screen positions; Draw (render thread) picks the joint
+  // under a click from those. overlay_mutex guards the published overlay_screen_*.
+  std::atomic_bool skeleton_overlay_enabled{};
+  // Hide hair, clothing and ornament bones from the overlay (drawing and picking).
+  std::atomic_bool overlay_body_only{true};
+  // Joint marker radius in canvas pixels; the pick radius follows it.
+  std::atomic<float> overlay_joint_radius{7.0F};
+  std::atomic_bool overlay_show_face{};
+  std::atomic<std::uint32_t> overlay_hidden_count{};
+  std::mutex overlay_mutex;
+  std::vector<std::array<float, 2>> overlay_screen_joints;
+  std::vector<std::uint8_t> overlay_screen_valid;
+  std::vector<std::uint32_t> overlay_screen_weight;  // descendants, for stacked picks
+  std::vector<std::array<double, 3>> overlay_joint_world;  // for focusing the pose camera
+  bool overlay_component_world_valid{};
+  std::vector<std::array<double, 3>> overlay_frame_world;  // game thread scratch
+  float overlay_viewport_width{};
+  float overlay_viewport_height{};
+  // Game thread only. The UFunction object is resolved once: looking it up by
+  // path every frame walks the object registry under a lock.
+  std::uintptr_t overlay_component_transform_function{};
+  std::uint32_t overlay_resolve_cooldown{};
+  bool overlay_published{};
+  std::vector<std::uint8_t> overlay_raw_pose;
+  std::vector<std::array<float, 2>> overlay_frame_joints;
+  std::vector<std::uint8_t> overlay_frame_valid;
+  std::vector<std::uint32_t> overlay_frame_weight;
+  // Game thread: the body-only mask, rebuilt when the mesh or its names change.
+  std::vector<std::uint8_t> overlay_hidden;
+  std::uintptr_t overlay_hidden_mesh{};
+  std::size_t overlay_hidden_names{};
+  bool overlay_hidden_parents{};
+  bool overlay_hidden_face{};
+  std::uint32_t overlay_hidden_total{};
+  // Written by Draw, read by the AHUD callback to highlight the joint under the cursor.
+  std::atomic<std::uint32_t> overlay_hover_index{
+      (std::numeric_limits<std::uint32_t>::max)()};
+  // Draw only runs while the window is open; a hover older than this is stale.
+  std::atomic<std::uint64_t> overlay_hover_tick{};
+  // Joint drag. Draw (render thread) owns the mouse and publishes which joint
+  // is being dragged and where the cursor is, in AHUD canvas pixels; the AHUD
+  // callback (game thread) turns that into a rotation of the joint's parent.
+  std::atomic<std::uint32_t> overlay_drag_joint{
+      (std::numeric_limits<std::uint32_t>::max)()};
+  std::atomic<std::uint32_t> overlay_drag_generation{};
+  // Cursor movement since the press, so the grab offset inside the pick radius is kept.
+  std::atomic<float> overlay_drag_delta_x{};
+  std::atomic<float> overlay_drag_delta_y{};
+  // Mouse-only modifiers (the keyboard reaches the game: Alt summons its
+  // cursor, Ctrl toggles walking). Wheel notches accumulated during a left
+  // drag push the joint toward (+) or away from the camera; a right-button
+  // drag twists the bone about its own axis instead of swinging it.
+  std::atomic<std::int32_t> overlay_drag_wheel{};
+  std::atomic_bool overlay_drag_twist{};
+  std::atomic_bool overlay_drag_cancel{};
+  // Game thread only: the pose captured when the current drag began. Every
+  // frame solves from this start, so a pose write landing a frame late cannot
+  // make the drag overshoot.
+  struct OverlayDrag {
+    bool valid{};
+    std::uint32_t generation{};
+    std::uint32_t pivot{};
+    std::array<double, 3> pivot_world{};
+    std::array<double, 3> joint_offset{};    // joint - pivot, world
+    std::array<double, 4> parent_world{};    // pivot's parent world rotation
+    std::array<double, 4> start_offset{};    // pivot's offset quaternion
+    std::array<double, 3> start_angles{};
+    std::array<float, 2> start_screen{};     // grabbed joint on screen
+    std::array<float, 2> pivot_screen{};     // pivot on screen at the press
+    std::array<double, 3> axis{};            // view ray through the pivot, world
+    double angle{};                          // unwrapped cursor angle since the press
+    double last_raw{};                       // cursor angle last frame, wrapped
+    bool angle_ready{};
+    // Two-bone IK (dragging an end joint with a hinge above it). `pivot` is
+    // then the middle bone (elbow/knee) and `root` the upper bone
+    // (shoulder/hip); the end joint is placed on the cursor, on the view plane
+    // at the depth it had at the press.
+    bool ik{};
+    std::uint32_t root{};
+    std::array<double, 3> root_world{};
+    std::array<double, 3> mid_world{};
+    std::array<double, 3> end_world{};
+    std::array<double, 4> root_parent_world{};
+    std::array<double, 4> root_start_offset{};
+    std::array<double, 3> root_start_angles{};
+    std::array<double, 4> mid_parent_start{};  // world rotation of the root bone at the press
+    std::array<double, 3> plane_right{};       // world direction of +1 screen pixel in x
+    std::array<double, 3> plane_down{};        // world direction of +1 screen pixel in y
+    std::array<double, 3> toward_camera{};     // unit, world: -view ray at the end joint
+    // Twist: turns `pivot` about its own bone axis (pivot -> joint).
+    bool twist{};
+    // One-bone depth: wheel swings the joint toward the camera about the axis
+    // perpendicular to both the bone and the view ray, through the pivot.
+    std::array<double, 3> depth_axis{};
+    // Joint limits (hinge pivot): the drag's rotation is projected onto the
+    // bone's own hinge axis (world, at the press) and the bend is clamped.
+    // `hinge_base` is the offset with the bend removed, so the new offset is
+    // hinge_base * bend(new); `hinge_sign` makes positive = bending.
+    bool hinge{};
+    bool limb_hinge{};  // IK drag: clamp the elbow/knee bend to its range
+    std::array<double, 3> hinge_axis_world{};
+    std::array<double, 4> hinge_base{};       // offset with the bend removed
+    std::array<double, 4> hinge_rest_base{};  // the bone's base (rest) rotation
+    double hinge_start_bend{};                // degrees, bending direction
+    int hinge_limit_axis{2};
+    double hinge_sign{1.0};
+    double hinge_minimum{};
+    double hinge_maximum{};
+  } overlay_drag;
+  // Two-bone IK on for chains that have one (limbs); off = always rotate one bone.
+  std::atomic_bool overlay_ik_enabled{true};
+  // Joint limits: hinge bones (finger joints past the root, elbows, knees)
+  // only bend about their own axis and within a range. Off = free rotation.
+  std::atomic_bool overlay_limits_enabled{};
+  // Render thread only.
+  bool overlay_mouse_was_down{};
+  bool overlay_right_was_down{};
+  bool overlay_dragging{};
+  bool overlay_press_right{};  // the drag was started with the right button
+  std::uint32_t overlay_press_joint{(std::numeric_limits<std::uint32_t>::max)()};
+  float overlay_press_x{};
+  float overlay_press_y{};
+
+  std::mutex state_mutex;
+  std::mutex pose_angles_mutex;
+  RenderSnapshot snapshot;
+  RuntimeState runtime;
+  AnomalyGenerationHandleV1 settings_schema{};
+  std::vector<std::array<double, 3>> bone_angles;
+  std::vector<std::array<double, 12>> pose_base_locals;
+  std::uintptr_t pose_base_mesh{};
+  bool pose_base_ready{};
+  std::atomic_bool pose_settings_dirty{};
+  std::uintptr_t g_objects_address{};
+  ObjectRegistry object_registry{};
+  std::string reflection_status{"reflection idle"};
+  std::array<char, 256> pose_status{};
+  std::vector<std::string> bone_names;
+  std::vector<std::int32_t> bone_parents;
+  std::uintptr_t bone_parents_mesh{};
+  std::uint32_t bone_parents_count{};
+  bool bone_parents_ready{};
+  std::uintptr_t bone_names_mesh{};
+  std::uint32_t bone_names_count{};
+  bool bone_names_attempted{};
+  std::array<char, 128> bone_filter{};
+
+  std::atomic_bool freeze_enabled{};
+  std::atomic_bool rate_override_enabled{};
+  std::atomic_bool root_motion_override_enabled{};
+  std::atomic_bool pose_override_enabled{};
+  AnomalyGenerationHandleV1 tick_hook{};
+  std::uintptr_t tick_original{};
+  std::uintptr_t tick_target{};
+  std::atomic<std::uint32_t> reflection_action_requested{0};
+  std::atomic<float> requested_rate_scale{1.0F};
+  std::atomic<float> requested_root_motion_scale{1.0F};
+  std::atomic<std::uint32_t> requested_bone_index{0};
+  std::array<std::atomic<double>, 3> requested_translation{};
+  std::array<std::atomic<double>, 3> requested_root_offset{};
+  std::array<std::atomic<double>, 3> edited_translation{};
+  std::atomic_bool pose_reset_requested{};
+  // Undo/redo. The history lives on the game thread (UpdateRuntime); the panel
+  // and the Ctrl+Z / Ctrl+Y keys only post requests, and read back the counts.
+  better_pose::history::PoseHistory pose_history;
+  std::uintptr_t pose_history_mesh{};
+  std::atomic<int> pose_history_request{};  // 1 undo, 2 redo, 0 none
+  // Mirror request from the panel: 1 flip, 2 left to right, 3 right to left.
+  std::atomic<int> pose_mirror_request{};
+
+  // Expression (morph targets) on the body mesh. The catalogue and weights
+  // are guarded by morph_mutex: Draw edits the weights, the game thread reads
+  // them and writes each driven morph with SetMorphTarget every update (the
+  // game's own face animation writes the same morphs, so a single write would
+  // be undone by the next blink). Everything else is game-thread only.
+  std::mutex morph_mutex;
+  better_pose::morph::Catalog morph_catalog;
+  better_pose::morph::Weights morph_weights;
+  std::array<char, 64> morph_filter{};
+  std::atomic_bool morph_release_all{};       // panel: hand every morph back
+  std::atomic_bool morph_rescan_requested{};  // panel: read the list again
+  std::string morph_status;                   // guarded by morph_mutex
+  std::uintptr_t morph_mesh{};
+  std::uint32_t morph_array_offset{};  // USkeletalMesh::MorphTargets, found once
+  std::uintptr_t morph_set_function{};
+  std::uintptr_t morph_process_event{};
+  std::vector<std::uint32_t> morph_released;  // written back to 0 once, then left alone
+  std::vector<std::uint8_t> morph_was_driven;
+  // Expression undo/redo: its own history (Ctrl+Z on the expression page
+  // undoes expressions, on the pose page poses). Game thread owns it.
+  better_pose::history::ExpressionHistory morph_history;
+  std::uintptr_t morph_history_mesh{};
+  std::atomic<int> morph_history_request{};  // 1 undo, 2 redo
+  std::atomic<std::uint32_t> morph_undo_count{};
+  std::atomic<std::uint32_t> morph_redo_count{};
+  // Which page the panel showed last frame, so Ctrl+Z goes to the right one.
+  std::atomic_bool expression_page_active{};
+  // Expression file: name typed in the panel; export/import run on the game
+  // thread, which owns the catalogue's FNames.
+  std::array<char, 128> morph_export_name{};
+  std::string morph_file_status;  // guarded by morph_mutex
+  std::atomic<int> morph_file_request{};  // 1 export, 2 import
+  std::wstring morph_import_path;         // guarded by morph_mutex
+  std::atomic<std::uint32_t> pose_undo_count{};
+  std::atomic<std::uint32_t> pose_redo_count{};
+  // Held while a mouse button is down over the panel or the canvas, so a slow
+  // slider drag with a pause in the middle is still one step.
+  std::atomic_bool pose_edit_held{};
+  bool pose_undo_key_was_down{};  // render thread
+  bool pose_redo_key_was_down{};  // render thread
+  std::atomic<std::uint32_t> pose_file_action_requested{0};
+  std::string active_character_id;
+  bool character_profiles_initialized{};
+  std::array<char, 128> pose_export_name{};
+  std::string pose_export_folder;
+  std::string pose_import_file;
+
+  // MMD motion tracks loaded from the offline converter's JSON. Rotation-only:
+  // every driven bone gets an absolute local rotation, everything else keeps the
+  // captured base pose.
+  struct MotionTrack {
+    std::vector<std::string> bone_names;
+    std::vector<std::uint32_t> bone_indices;
+    bool indices_ready{};
+    std::uint32_t bone_count{};
+    std::uint32_t frame_count{};
+    std::uint32_t first_frame{};
+    double fps{30.0};
+    bool has_root{};
+    std::uint32_t root_bone_index{};
+    std::string root_bone_name;
+    std::vector<float> rotations;   // frame_count * bone_count * 4
+    std::vector<float> roots;       // frame_count * 3
+    // Per-bone *local translations* (cm), applied on top of the engine reference pose. The
+    // converter emits these for bones whose parent carries a rotation they must not inherit
+    // (the spine under a pelvis that also carries the hip rotation): the rotation alone cannot
+    // move a bone's origin, so the base offset is counter-rotated per frame instead.
+    std::vector<std::string> offset_names;
+    std::vector<std::uint32_t> offset_indices;
+    bool offsets_ready{};
+    std::vector<float> offsets;     // frame_count * offset_count * 3
+    // Root translation units. "mmd" (current converter) means the values are
+    // offsets in MMD units relative to the first frame, so the runtime scales
+    // them by *this* character's leg length; anything else is the old absolute
+    // centimetre form that carried the exporting character's height.
+    bool roots_in_mmd_units{};
+    double mmd_leg_length{};
+    std::string mesh_id;
+    std::string path;
+    // Facial keys by MMD morph name, in VMD frames (the timeline firstFrame
+    // indexes into). Mapped onto the character's morphs at playback time.
+    std::vector<std::string> morph_names;
+    std::vector<std::vector<better_pose::mmd_morph::Key>> morph_keys;
+  };
+  // MMD morphs -> this character's morph catalogue, rebuilt when either the
+  // motion or the catalogue changes. Game thread only.
+  std::vector<better_pose::mmd_morph::Resolved> motion_morph_map;
+  std::uintptr_t motion_morph_map_asset{};
+  std::string motion_morph_map_path;
+  std::atomic_bool motion_expression_enabled{true};  // panel: play the VMD's facial keys
+  std::atomic<std::uint32_t> motion_morph_mapped{};   // for the panel: MMD morphs with a target
+  std::atomic<std::uint32_t> motion_morph_total{};
+  // NTE morphs the motion is driving right now, so they can be handed back
+  // to the game when playback stops. Game thread only.
+  std::vector<std::uint8_t> motion_morph_driving;
+  std::mutex motion_mutex;
+  MotionTrack motion;
+  // Guarded by motion_mutex: a worker started before unload/switch cannot
+  // publish a conversion made for the previous skeleton afterwards.
+  std::uint64_t motion_load_epoch{};
+  std::atomic_bool motion_loaded{};
+  std::atomic_bool motion_playing{};
+  std::atomic_bool motion_loop{true};
+  std::atomic_bool motion_apply_root{true};
+  // Play the motion in place: drop the root translation's two horizontal components and keep the
+  // height (mmd y -> the target's z, see the root application below), so a travelling motion can
+  // be judged where the character stands without losing its bob and jump.
+  std::atomic_bool motion_lock_planar{};
+  // Which reference bone table interprets a VMD. Off = the bundled 初音ミク PMD (the model the
+  // user plays in MMD, so the game reproduces what they see there); on = the Unity MMD-for-Unity
+  // plugin's own reference (Kinsama式初音ミクV4C). A motion authored against one rig reads
+  // differently on the other -- resting arms differ by ~35 deg and the hips' travel around the
+  // waist by up to 21 cm -- so this is a per-motion choice, not a global "better" one.
+  std::atomic_bool motion_reference_unity{};
+  // Camera VMD (a separate file from the motion): loaded on the worker, sampled on the render
+  // thread, so the track itself is guarded and only the flags are atomic.
+  std::mutex camera_mutex;
+  CameraTrack camera;
+  std::atomic_bool camera_loaded{};
+  std::atomic_bool camera_enabled{};
+  std::string camera_file;
+  // Follow mode: ignore whatever camera file is loaded and simply keep the character's own
+  // displacement in the middle of the frame, from a world direction anchored on the first driven
+  // frame. Distance is how far back along that direction the camera sits, height how far above the
+  // character's feet; the aim is the character's own chest. Both are centimetres.
+  std::atomic_bool camera_follow{};
+  // Pose camera: a mouse-only orbit camera for editing, driven through the
+  // same view-point hook as the follow camera. Draw posts mouse motion into
+  // the orbit (orbit_mutex); the detour turns it into the view each frame.
+  std::atomic_bool orbit_enabled{};
+  std::atomic_bool orbit_initialized{};
+  std::atomic_bool orbit_focus_requested{};
+  std::mutex orbit_mutex;
+  better_pose::orbit::Orbit orbit;
+  std::array<double, 3> orbit_focus_target{};
+  std::atomic<double> orbit_focal_pixels{};  // measured from the AHUD projection
+  // Pose camera lens: horizontal field of view in degrees (the engine's
+  // convention), 0 = leave the game's own. `orbit_game_fov` is the game's value
+  // read when the pose camera took over, for the slider's starting point and
+  // for handing the lens back when it is switched off.
+  std::atomic<float> orbit_fov{};
+  std::atomic<float> orbit_game_fov{};
+  std::atomic_bool orbit_fov_restore{};
+  // Render thread only.
+  bool orbit_right_dragging{};
+  bool orbit_middle_was_down{};
+  float orbit_last_x{};
+  float orbit_last_y{};
+  std::atomic<double> camera_follow_distance_cm{380.0};
+  std::atomic<double> camera_follow_height_cm{150.0};
+  // Whether the follow camera rides the character's up/down. On is the loose, hand-held look; off
+  // pins the height to the ground level the shot was anchored at, so a jump reads as the character
+  // moving in the frame. The horizontal follow is unaffected either way.
+  std::atomic_bool camera_follow_vertical{true};
+  std::atomic<double> camera_anchor_ground{};
+  std::atomic<double> camera_frame{-1.0};
+  // Camera hook and character anchor. The hook rewrites the POV at view-build time (see
+  // CameraPovDetour); the manager is cached to notice a camera swap, and the shot's angle
+  // relative to the character is captured on the first driven frame.
+  AnomalyGenerationHandleV1 camera_pov_hook{};
+  std::uintptr_t camera_pov_original{};
+  std::uintptr_t camera_pov_target{};
+  std::uintptr_t camera_pov_resolved_target{};
+  // The accessor's own struct (manager + its `lea` displacement). Only the lens is written there
+  // now: the camera itself travels through the getter's out-parameters.
+  std::uintptr_t camera_pov_struct{};
+  std::atomic<std::uintptr_t> camera_manager{};
+  std::atomic_bool camera_manager_resolved{};
+  std::atomic_bool camera_hook_ready{};
+  std::atomic_bool camera_anchored{};
+  std::atomic<double> camera_logged_second{-1.0};
+  // A free-running clock for the drive log's once-a-second throttle. The motion's own frame is the
+  // wrong key for it: follow mode has no timeline, so its frame stays 0 and the log printed one
+  // line and then nothing, which reads exactly like "the plugin stopped driving".
+  std::atomic<double> camera_log_clock{};
+  // Frames spent waiting for a plausible camera reading to anchor the shot on. After a couple of
+  // seconds the first reading is taken whatever it is, so a placeholder can never leave the plugin
+  // writing nothing at all.
+  int camera_anchor_wait{};
+  // True once the shot has been started for the current switch-on: dropped when driving is switched
+  // off, kept across pauses so a resume does not re-anchor the shot.
+  bool camera_was_enabled{};
+  std::atomic<double> camera_yaw{};   // captured once: local +Y (the model's facing) -> world
+  // Centimetres per MMD unit for the live character, published by the motion path and sized by the
+  // camera's own fallback until then; it scales the camera track's travel.
+  std::atomic<double> mmd_unit_cm{};
+  // Two root references, both in this rig's local axes and centimetres: what the pose path actually
+  // applied (honouring "lock planar motion" and the root-motion toggle), and where the file's own
+  // world puts the model (the motion's root translation). A camera file is authored in a world where
+  // the model walks; the difference between the two is how far the camera must not walk.
+  std::array<std::atomic<double>, 3> motion_applied_offset{};
+  std::array<std::atomic<double>, 3> motion_authored_offset{};
+  std::atomic_bool motion_baseline_logged{};
+  std::atomic<double> motion_seconds{0.0};
+  std::atomic<double> motion_seek{-1.0};
+  // Bumped every time a seek is applied. The music follower watches it so that moving the progress
+  // bar re-syncs the track at once, however small the jump.
+  std::atomic<std::uint32_t> motion_seek_serial{};
+  std::atomic<double> motion_display_seconds{0.0};
+  // True from the moment the cursor consumes a seek until the track has actually been told where
+  // to play. While it is set the animation must listen to the bar only: pulling it towards the
+  // audio would drag it back to the position the audio is still on.
+  std::atomic_bool motion_seek_pending{};
+  // A seek that has to cut over at once instead of waiting for the drag to settle: a loop wrap, where
+  // the alternative is 0.2 s of the pre-wrap song playing over the wrapped animation.
+  std::atomic_bool motion_seek_immediate{};
+  std::string motion_file;
+  std::array<char, 96> motion_status{};
+
+  // Read-only scan: how many skeletal mesh components share this skeleton?
+  // Motivated by a character whose outer hair layer stays frozen while the body
+  // dances -- if that layer lives in a second component, the answer tells us so
+  // without touching any existing write path.
+  std::atomic_bool mesh_scan_requested{};
+  // Read-only attach discovery: find the offset at which a component stores a
+  // weak pointer to its attach parent. Needed because the frozen hair accessory
+  // is almost certainly socket-attached, and the profile has no layout for
+  // USceneComponent to read that from.
+  std::atomic_bool attach_scan_requested{};
+  std::vector<std::pair<std::uint32_t, std::string>> attach_offsets;
+  // Found by the read-only attach scan (StepAttachScan) and validated by
+  // resolving through GObjects to an HTSkeletalMeshComponent: the offset at which
+  // a component stores its attach parent.
+  std::uint32_t attach_parent_offset{};
+  // Every candidate component (accepted for bone driving or not): the attach
+  // resync applies to all of them, since it does not need a bone map at all.
+  std::vector<std::uintptr_t> extra_targets;
+  std::uint32_t extra_resync_count{};
+  // Engine reference (bind) pose, read out of the character's mesh asset. A live
+  // capture is whatever pose the character happened to be in, and every bone roll
+  // downstream inherits that posture; the reference pose is the one the geometry is
+  // actually skinned in, so it is the only pose-independent source for those rolls.
+  std::vector<std::array<double, 12>> ref_locals;
+  bool ref_pose_attempted{};
+  std::uintptr_t ref_pose_character{};
+  std::uintptr_t ref_pose_object{};
+  std::string ref_pose_status;
+  bool extra_build_pending{};
+  std::uint32_t extra_drop_count{};
+  std::uint32_t extra_resync_log_tick{};
+  std::uint32_t extra_resync_last{};
+  bool mesh_scan_running{};
+  std::uint32_t mesh_scan_cursor{};
+  std::uintptr_t mesh_scan_class{};
+  std::uint32_t mesh_scan_reference_bone{};
+  std::array<double, 3> mesh_scan_reference{};
+  std::uint32_t mesh_scan_same_class{};
+  std::uint32_t mesh_scan_mesh_objects{};
+  std::uint32_t mesh_scan_mesh_assets{};
+  std::uint32_t mesh_scan_skinned{};
+  // Objects whose class says "SkeletalMesh": the scan summary reports the count.
+  std::uint32_t mesh_scan_skeletal{};
+  std::vector<std::uint32_t> mesh_scan_bone_counts;
+  std::uintptr_t mesh_scan_extra_address{};
+  std::uint32_t mesh_scan_extra_count{};
+  std::vector<std::pair<std::uintptr_t, std::uint32_t>> mesh_scan_candidates;
+  // The mesh the last *completed* scan belonged to. Kept separate from
+  // extra_mesh_owner, which is only set when the scan actually found extra
+  // components: using that one as the "already scanned" marker made the scan
+  // restart forever whenever it found nothing.
+  std::uintptr_t mesh_scan_owner{};
+  ULONGLONG next_mesh_scan_retry_ms{};
+  // How many times an empty scan has been retried for the current mesh. A character with
+  // no modular accessories legitimately finds nothing, so the retry - which exists for
+  // components that appear after the pawn - has to stop instead of rescanning forever.
+  std::uint32_t mesh_scan_empty_retries{};
+  std::map<std::uintptr_t, std::string> mesh_scan_class_cache;
+  std::vector<std::string> mesh_scan_class_names;
+  std::vector<std::uintptr_t> skeleton_meshes;
+
+  // Extra skeletal mesh components owned by the same pawn (hair layers,
+  // accessories, cloth). They carry their own small skeletons and may have
+  // independent animation and budget scheduling; the diagnostic path records
+  // their pose arrays without assuming a leader-pose relationship.
+  struct ExtraMesh {
+    std::uintptr_t object{};
+    std::uintptr_t asset{};
+    std::uint32_t bone_count{};
+    std::uintptr_t component_space_data{};
+    std::uintptr_t bone_space_data{};
+    std::vector<std::uint32_t> bone_map;   // its bone -> body bone (max = none)
+    std::vector<std::array<std::uint8_t, 8>> bone_fnames;
+    std::vector<std::uint32_t> position_map;
+    double position_match_cm{};
+    bool used_position{};
+    // Bind-pose mapping: the same idea as position_map, but both skeletons are
+    // compared in their *bind* pose, which does not care about the current pose of
+    // either mesh. Needed for meshes whose bones are named in a different space
+    // (Bone_hairRb00, Pelvis_adjust): a name mapping finds nothing, and the live
+    // positions are unusable while we override the body or while the mesh sits frozen.
+    std::vector<std::uint32_t> bind_map;
+    double bind_match_cm{};
+    bool used_bind{};
+    // Modular mesh driven through its own hierarchy: its anatomy attach bones take
+    // the matching body bone's transform (fuzzy name match), the bones below them lag
+    // behind their rigid orientation, and the components are accumulated through its
+    // own parents. This is what a separately-authored hair mesh (its own
+    // Bone_hairBR00..06 chains) needs, since nothing about it matches the body's
+    // skeleton by name or by position.
+    std::vector<std::int32_t> parents;
+    std::vector<std::array<double, 12>> bind_locals;
+    // Packed (12 doubles per bone) so this struct stays free of the transform types,
+    // which are declared further down the file.
+    std::vector<std::array<double, 12>> bind_world;
+    std::vector<std::array<double, 4>> lag;
+    bool lag_ready{};
+    bool used_hierarchy{};
+    std::uint32_t anchor_extra{};
+    std::uint32_t anchor_body{};
+    std::uintptr_t poseable_component{};
+    bool poseable_active{};
+    bool poseable_source_visibility_changed{};
+    bool poseable_attempted{};
+    std::uint32_t poseable_socket_bone{(std::numeric_limits<std::uint32_t>::max)()};
+    std::array<double, 12> poseable_socket_relative{};
+    std::array<double, 12> poseable_expected_relative{};
+    bool poseable_bind_written{};
+    bool poseable_last_write_ok{};
+    // Reflected entry points resolved once when the replacement is created.
+    // CallVirtualUFunction looks its function up by name on every call, and the
+    // accessory writer calls it once per bone per frame, so the lookup - not the
+    // event itself - is what makes a clothed character slow.
+    std::uintptr_t poseable_process_event{};
+    std::uintptr_t poseable_set_bone_function{};
+    std::uintptr_t poseable_set_relative_function{};
+    std::uintptr_t poseable_get_transform_function{};
+    // The pose last sent to the component: only the simulated bones move, so the rest
+    // are skipped instead of being re-sent every frame. PackedTransform is not declared
+    // yet at this point, so these hold its bytes.
+    std::vector<std::array<double, 12>> poseable_written_pose;
+    std::vector<std::array<double, 12>> poseable_scratch_pose;
+    better_pose::accessory::Dynamics accessory_dynamics;
+    bool buffers_modified{};
+    std::vector<std::uint8_t> saved_component;
+    std::vector<std::uint8_t> saved_bone;
+  };
+  std::mutex extra_mesh_mutex;
+  std::vector<ExtraMesh> extra_meshes;
+  std::uintptr_t extra_mesh_owner{};
+  std::uint32_t extra_mesh_mapped{};
+  bool poseable_prototype_enabled{true};
+};
+
+std::atomic<Context *> g_active{};
+
+// Declared early because the mesh resolution path (which runs long before the
+// extra mesh helpers are defined) has to drop them when the pawn changes.
+bool DropExtraMeshes(Context &context) noexcept;
+void BindRuntimeCharacter(Context &context, std::uintptr_t character,
+                          std::uintptr_t mesh) noexcept;
+
+AnomalyStatusV1 Status(const std::uint32_t code,
+                       const std::string_view message = {}) noexcept {
+  return {code, 0, {message.data(), message.size()}};
+}
+
+template <typename Struct, typename Field>
+bool HasField(const Struct *value, const std::size_t offset) noexcept {
+  return value != nullptr && value->struct_size >= offset + sizeof(Field);
+}
+
+template <typename Service>
+const Service *Query(const AnomalyHostApiV1 *host, const char *id,
+                     const std::uint32_t version) noexcept {
+  return anomaly::sdk::Host(host).Query<Service>(id, version).get();
+}
+
+bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
+  return HasField<AnomalyCoreServiceV1,
+                  decltype(AnomalyCoreServiceV1::read_memory)>(
+             service, offsetof(AnomalyCoreServiceV1, read_memory)) &&
+         HasField<AnomalyCoreServiceV1,
+                  decltype(AnomalyCoreServiceV1::write_memory)>(
+             service, offsetof(AnomalyCoreServiceV1, write_memory)) &&
+         service->read_memory != nullptr && service->write_memory != nullptr;
+}
+
+bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
+  return HasField<AnomalySignatureServiceV1,
+                  decltype(AnomalySignatureServiceV1::resolve)>(
+             service, offsetof(AnomalySignatureServiceV1, resolve)) &&
+         service->resolve != nullptr;
+}
+
+bool UiReady(const AnomalyUiServiceV1 *service) noexcept {
+  return HasField<AnomalyUiServiceV1,
+                  decltype(AnomalyUiServiceV1::input_double)>(
+             service, offsetof(AnomalyUiServiceV1, input_double)) &&
+         service->set_next_window_size != nullptr &&
+         service->begin_window != nullptr && service->end_window != nullptr &&
+         service->text != nullptr && service->checkbox != nullptr &&
+         service->slider_float != nullptr && service->input_double != nullptr &&
+         service->separator != nullptr && service->button != nullptr &&
+         service->same_line != nullptr;
+}
+
+bool HookReady(const AnomalyHookServiceV1 *service) noexcept {
+  return HasField<AnomalyHookServiceV1,
+                  decltype(AnomalyHookServiceV1::end_callback)>(
+             service, offsetof(AnomalyHookServiceV1, end_callback)) &&
+         service->create != nullptr && service->release != nullptr &&
+         service->begin_callback != nullptr && service->end_callback != nullptr;
+}
+
+bool ConfigReady(const AnomalyConfigServiceV1 *service) noexcept {
+  return HasField<AnomalyConfigServiceV1,
+                  decltype(AnomalyConfigServiceV1::write_atomic)>(
+             service, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
+         service->register_schema != nullptr && service->read != nullptr &&
+         service->write_atomic != nullptr &&
+         service->unregister_schema != nullptr;
+}
+
+bool StorageReady(const AnomalyStorageServiceV1 *service) noexcept {
+  return service != nullptr && service->read != nullptr &&
+         service->write_atomic != nullptr;
+}
+
+bool SchedulerReady(const AnomalySchedulerServiceV1 *service) noexcept {
+  return service != nullptr && service->schedule != nullptr;
+}
+
+bool AhudReady(const AnomalyUe5AhudServiceV1 *service) noexcept {
+  return HasField<AnomalyUe5AhudServiceV1,
+                  decltype(AnomalyUe5AhudServiceV1::unsubscribe)>(
+             service, offsetof(AnomalyUe5AhudServiceV1, unsubscribe)) &&
+         service->service_version >= ANOMALY_UE5_AHUD_SERVICE_V1_VERSION &&
+         service->subscribe != nullptr && service->unsubscribe != nullptr;
+}
+
+bool AhudFrameReady(const AnomalyUe5AhudFrameV1 *frame) noexcept {
+  return HasField<AnomalyUe5AhudFrameV1,
+                  decltype(AnomalyUe5AhudFrameV1::draw_rect)>(
+             frame, offsetof(AnomalyUe5AhudFrameV1, draw_rect)) &&
+         frame->viewport_width != 0 && frame->viewport_height != 0 &&
+         frame->project != nullptr && frame->draw_line != nullptr &&
+         frame->draw_rect != nullptr;
+}
+
+bool InputReady(const AnomalyInputServiceV1 *service) noexcept {
+  return HasField<AnomalyInputServiceV1,
+                  decltype(AnomalyInputServiceV1::snapshot)>(
+             service, offsetof(AnomalyInputServiceV1, snapshot)) &&
+         service->snapshot != nullptr;
+}
+
+AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
+  return {reinterpret_cast<const std::uint8_t *>(value.data()), value.size()};
+}
+
+void EnsurePoseAngleCapacity(Context &context) noexcept {
+  std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+  const auto count = context.runtime.local_space_count;
+  if (context.bone_angles.size() < count)
+    context.bone_angles.resize(count);
+}
+
+// The camera VMD and its switch are stored in the same settings document as the pose: the host
+// recreates the plugin on every reload, and re-picking the file plus re-enabling driving after
+// each rebuild is pure friction. Declared here, defined next to the UTF-8 helpers it needs.
+
+// How the last pose document landed: bones matched by name, by index (old
+// files), and the named bones this character lacks. The import path turns it
+// into its status line.
+struct PoseApplyReport {
+  std::size_t by_name{};
+  std::size_t by_index{};
+  std::vector<std::string> missing;
+};
+
+bool ApplyPoseDocument(Context &context, const nlohmann::json &json,
+                       PoseApplyReport *report = nullptr) noexcept {  try {
+    if (!json.is_object() || !json.contains("bones") ||
+        !json.at("bones").is_array())
+      return false;
+    std::vector<better_pose::pose_document::SavedBone> saved;
+    for (const auto &item : json.at("bones")) {
+      if (!item.is_object() || !item.contains("index") ||
+          !item.contains("pitch") || !item.contains("yaw") ||
+          !item.contains("roll"))
+        return false;
+      const auto index = item.at("index").get<std::uint64_t>();
+      if (index >= kMaximumBoneIndex)
+        return false;
+      auto pitch = item.at("pitch").get<double>();
+      auto yaw = item.at("yaw").get<double>();
+      auto roll = item.at("roll").get<double>();
+      const auto normalize_angle = [](double value) {
+        while (value > 180.0)
+          value -= 360.0;
+        while (value <= -180.0)
+          value += 360.0;
+        return value;
+      };
+      pitch = normalize_angle(pitch);
+      yaw = normalize_angle(yaw);
+      roll = normalize_angle(roll);
+      if (pitch < -180.0 || pitch > 180.0 || yaw < -180.0 || yaw > 180.0 ||
+          roll < -180.0 || roll > 180.0)
+        return false;
+      better_pose::pose_document::SavedBone bone;
+      bone.index = index;
+      if (item.contains("name") && item.at("name").is_string())
+        bone.name = item.at("name").get<std::string>();
+      bone.pitch = pitch;
+      bone.yaw = yaw;
+      bone.roll = roll;
+      saved.push_back(std::move(bone));
+    }
+    // Names first: an index only means something on the skeleton it was
+    // saved from (pose_document.hpp).
+    const auto placed =
+        better_pose::pose_document::Place(saved, context.bone_names, kMaximumBoneIndex);
+    std::vector<std::array<double, 3>> loaded;
+    for (const auto &bone : placed.placed) {
+      if (loaded.size() <= bone.bone)
+        loaded.resize(static_cast<std::size_t>(bone.bone) + 1);
+      loaded[bone.bone] = {bone.pitch, bone.yaw, bone.roll};
+    }
+    if (report != nullptr) {
+      report->by_name = placed.by_name;
+      report->by_index = placed.by_index;
+      report->missing = placed.missing;
+    }
+    std::array<double, 3> root_offset{};
+    if (json.contains("rootOffset")) {
+      if (!json.at("rootOffset").is_array() || json.at("rootOffset").size() != 3)
+        return false;
+      for (std::size_t index{}; index != 3; ++index) {
+        if (!json.at("rootOffset").at(index).is_number())
+          return false;
+        root_offset[index] = json.at("rootOffset").at(index).get<double>();
+      }
+    }
+    if (json.contains("musicVolume")) {
+      if (!json.at("musicVolume").is_number_integer())
+        return false;
+      const int volume = json.at("musicVolume").get<int>();
+      if (volume < 0 || volume > 100)
+        return false;
+      // Applied on the tick, like every other MCI change: the panel and this restore path
+      // only ever publish requests.
+      g_music_request_volume.store(volume, std::memory_order_release);
+      g_music_request_volume_pending.store(true, std::memory_order_release);
+    }
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    context.bone_angles = std::move(loaded);
+    context.requested_root_offset[0].store(root_offset[0], std::memory_order_release);
+    context.requested_root_offset[1].store(root_offset[1], std::memory_order_release);
+    context.requested_root_offset[2].store(root_offset[2], std::memory_order_release);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+// The pose document: the edited joint angles and the body offset. The camera VMD and its switches
+// used to ride along in the plugin's own saved settings, which meant a reload came back with
+// whatever shot was last picked -- including one picked for a different character or a different
+// scene. They are runtime state now: pick the file again when it is wanted.
+std::string BuildPoseDocument(Context &context) noexcept {
+  nlohmann::json root = nlohmann::json::object();
+  auto bones = nlohmann::json::array();
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    for (std::size_t index{}; index != context.bone_angles.size(); ++index) {
+      const auto &angle = context.bone_angles[index];
+      if (angle[0] == 0.0 && angle[1] == 0.0 && angle[2] == 0.0)
+        continue;
+      nlohmann::json bone{{"index", index},
+                          {"pitch", angle[0]},
+                          {"yaw", angle[1]},
+                          {"roll", angle[2]}};
+      // The name is what another character is matched by; the index stays
+      // for older readers and for skeletons whose names are not loaded.
+      if (index < context.bone_names.size() && !context.bone_names[index].empty())
+        bone["name"] = context.bone_names[index];
+      bones.push_back(std::move(bone));
+    }
+  }
+  std::array<double, 3> root_offset{};
+  root_offset[0] = context.requested_root_offset[0].load(std::memory_order_acquire);
+  root_offset[1] = context.requested_root_offset[1].load(std::memory_order_acquire);
+  root_offset[2] = context.requested_root_offset[2].load(std::memory_order_acquire);
+  root["bones"] = std::move(bones);
+  root["rootOffset"] = root_offset;
+  root["musicVolume"] = g_music_volume.load(std::memory_order_acquire);
+  return root.dump();
+}
+
+std::string PoseProfilePath(const std::string &character_id) noexcept {
+  return "character-pose-profile-" + character_id + ".json";
+}
+
+bool PersistPoseSettings(Context &context) noexcept {
+  if (!ConfigReady(context.config))
+    return false;
+  try {
+    const std::string document = BuildPoseDocument(context);
+    if (document.size() > kMaximumPoseSettingsBytes)
+      return false;
+    const auto config_status = context.config->write_atomic(
+        context.config->user, anomaly::sdk::StringView(kPoseSettingsSchemaId),
+        kPoseSettingsSchemaVersion, Bytes(document));
+    bool profile_ok = true;
+    if (!context.active_character_id.empty() && StorageReady(context.storage)) {
+      const std::string path = PoseProfilePath(context.active_character_id);
+      const std::string profile = BuildPoseDocument(context);
+      profile_ok =
+          context.storage
+              ->write_atomic(context.storage->user,
+                             anomaly::sdk::StringView(path), Bytes(profile))
+              .code == ANOMALY_STATUS_V1_OK;
+    }
+    return config_status.code == ANOMALY_STATUS_V1_OK && profile_ok;
+  } catch (...) {
+    return false;
+  }
+}
+
+int LoadCharacterPoseProfile(Context &context,
+                             const std::string &character_id) noexcept {
+  if (!StorageReady(context.storage))
+    return -1;
+  const std::string path = PoseProfilePath(character_id);
+  std::size_t size{};
+  const auto probe = context.storage->read(
+      context.storage->user, anomaly::sdk::StringView(path), {nullptr, 0},
+      &size);
+  if (probe.code == ANOMALY_STATUS_V1_NOT_FOUND)
+    return 0;
+  if (probe.code != ANOMALY_STATUS_V1_OK || size == 0 ||
+      size > kMaximumPoseSettingsBytes)
+    return -1;
+  std::string document(size, '\0');
+  std::size_t copied = size;
+  if (context.storage
+          ->read(context.storage->user, anomaly::sdk::StringView(path),
+                 {reinterpret_cast<std::uint8_t *>(document.data()),
+                  document.size()},
+                 &copied)
+          .code != ANOMALY_STATUS_V1_OK ||
+      copied == 0 || copied > document.size())
+    return -1;
+  try {
+    const auto json =
+        nlohmann::json::parse(document.begin(), document.begin() + copied);
+    return ApplyPoseDocument(context, json) ? 1 : -1;
+  } catch (...) {
+    return -1;
+  }
+}
+
+void ResetPoseValues(Context &context) noexcept {
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    for (auto &angle : context.bone_angles)
+      angle = {0.0, 0.0, 0.0};
+  }
+  context.requested_root_offset[0].store(0.0, std::memory_order_release);
+  context.requested_root_offset[1].store(0.0, std::memory_order_release);
+  context.requested_root_offset[2].store(0.0, std::memory_order_release);
+}
+
+better_pose::history::PoseState CapturePoseState(Context &context) {
+  better_pose::history::PoseState state;
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    state.angles = context.bone_angles;
+  }
+  for (std::size_t axis{}; axis != 3; ++axis)
+    state.root_offset[axis] = context.requested_root_offset[axis].load(std::memory_order_acquire);
+  return state;
+}
+
+void RestorePoseState(Context &context, const better_pose::history::PoseState &state) {
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    // Keep the table at least as long as the skeleton; the pose code reads
+    // bone_angles[0 .. count) and the recorded table may be shorter.
+    const std::size_t size = (std::max)(context.bone_angles.size(), state.angles.size());
+    context.bone_angles.assign(size, {0.0, 0.0, 0.0});
+    std::copy(state.angles.begin(), state.angles.end(), context.bone_angles.begin());
+  }
+  for (std::size_t axis{}; axis != 3; ++axis)
+    context.requested_root_offset[axis].store(state.root_offset[axis], std::memory_order_release);
+  context.pose_override_enabled.store(true, std::memory_order_release);
+  context.pose_settings_dirty.store(true, std::memory_order_release);
+}
+
+// Game thread: mirror the manual pose. Every bone's final local rotation is
+// offset * base; the mirror reflects the finals (see pose_mirror.hpp) and the
+// new offsets are final' * base^-1, back into the slider angles. The rig is
+// measured from the captured base pose, so it follows whatever skeleton the
+// character has. The body offset is reflected across the same plane. The
+// change is an ordinary edit, so undo takes it back.
+bool MirrorPose(Context &context, const int request) noexcept;
+
+// Game thread, every update: record settled edits, apply a posted undo/redo.
+// A different mesh (character switch) starts a fresh history.
+void StepPoseHistory(Context &context) noexcept {
+  try {
+    const std::uint64_t now = GetTickCount64();
+    if (context.pose_history_mesh != context.runtime.mesh) {
+      context.pose_history_mesh = context.runtime.mesh;
+      context.pose_history.Reset(CapturePoseState(context));
+      context.pose_history_request.store(0, std::memory_order_release);
+    } else {
+      const int request = context.pose_history_request.exchange(0, std::memory_order_acq_rel);
+      const auto live = CapturePoseState(context);
+      better_pose::history::PoseState target;
+      if (request == 1 ? context.pose_history.Undo(live, target)
+                       : request == 2 ? context.pose_history.Redo(live, target) : false)
+        RestorePoseState(context, target);
+      else
+        static_cast<void>(context.pose_history.Observe(
+            live, context.pose_edit_held.load(std::memory_order_acquire), now));
+    }
+    context.pose_undo_count.store(static_cast<std::uint32_t>(context.pose_history.UndoCount()),
+                                  std::memory_order_release);
+    context.pose_redo_count.store(static_cast<std::uint32_t>(context.pose_history.RedoCount()),
+                                  std::memory_order_release);
+  } catch (...) {
+  }
+}
+
+bool LoadPoseSettings(Context &context) noexcept {
+  if (!ConfigReady(context.config))
+    return false;
+  try {
+    std::uint32_t version{};
+    std::size_t size{};
+    const auto probe = context.config->read(
+        context.config->user, anomaly::sdk::StringView(kPoseSettingsSchemaId),
+        &version, {nullptr, 0}, &size);
+    if (probe.code == ANOMALY_STATUS_V1_NOT_FOUND) {
+      {
+        std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+        context.bone_angles.clear();
+      }
+      return PersistPoseSettings(context);
+    }
+    if (probe.code != ANOMALY_STATUS_V1_OK ||
+        version != kPoseSettingsSchemaVersion || size == 0 ||
+        size > kMaximumPoseSettingsBytes)
+      return false;
+    std::string document(size, '\0');
+    std::size_t copied = size;
+    if (context.config
+            ->read(context.config->user,
+                   anomaly::sdk::StringView(kPoseSettingsSchemaId), &version,
+                   {reinterpret_cast<std::uint8_t *>(document.data()),
+                    document.size()},
+                   &copied)
+            .code != ANOMALY_STATUS_V1_OK ||
+        copied == 0 || copied > document.size())
+      return false;
+    const auto json =
+        nlohmann::json::parse(document.begin(), document.begin() + copied);
+    if (!ApplyPoseDocument(context, json))
+      return false;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+bool ObjectsReady(const AnomalyUe5ObjectsServiceV1 *service) noexcept {
+  return HasField<AnomalyUe5ObjectsServiceV1,
+                  decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
+             service, offsetof(AnomalyUe5ObjectsServiceV1, find_exact)) &&
+         service->find_exact != nullptr;
+}
+
+bool NamesReady(const AnomalyUe5NamesServiceV1 *service) noexcept {
+  return HasField<AnomalyUe5NamesServiceV1,
+                  decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
+             service, offsetof(AnomalyUe5NamesServiceV1, resolve_utf8)) &&
+         service->resolve_utf8 != nullptr;
+}
+
+bool AddAddress(const std::uintptr_t base, const std::uint64_t offset,
+                std::uintptr_t &result) noexcept {
+  if (base == 0 || offset > (std::numeric_limits<std::uintptr_t>::max)() - base)
+    return false;
+  result = base + static_cast<std::uintptr_t>(offset);
+  return true;
+}
+
+template <typename T>
+bool Read(Context &context, const std::uintptr_t address, T &value) noexcept {
+  if (!CoreReady(context.core) || address == 0)
+    return false;
+  AnomalyMutableByteSpanV1 destination{
+      reinterpret_cast<std::uint8_t *>(&value), sizeof(value)};
+  return context.core->read_memory(context.core->user, address, destination)
+             .code == ANOMALY_STATUS_V1_OK;
+}
+
+template <typename T>
+bool Write(Context &context, const std::uintptr_t address,
+           const T &value) noexcept {
+  if (!CoreReady(context.core) || address == 0)
+    return false;
+  const AnomalyByteSpanV1 source{
+      reinterpret_cast<const std::uint8_t *>(&value), sizeof(value)};
+  return context.core->write_memory(context.core->user, address, source).code ==
+         ANOMALY_STATUS_V1_OK;
+}
+
+bool ReadPointerAt(Context &context, const std::uintptr_t base,
+                   const std::uint32_t offset,
+                   std::uintptr_t &value) noexcept {
+  std::uintptr_t address{};
+  return AddAddress(base, offset, address) && Read(context, address, value) &&
+         value != 0;
+}
+
+bool ResolveSignature(Context &context, const std::string_view pattern,
+                      std::uintptr_t &address) noexcept {
+  address = 0;
+  return SignatureReady(context.signature) &&
+         context.signature
+                 ->resolve(context.signature->user,
+                           anomaly::sdk::StringView("HTGame.exe"),
+                           anomaly::sdk::StringView(".text"),
+                           anomaly::sdk::StringView(pattern), &address)
+                 .code == ANOMALY_STATUS_V1_OK &&
+         address != 0;
+}
+
+bool ResolveGWorld(Context &context) noexcept {
+  std::uintptr_t instruction{};
+  std::int32_t displacement{};
+  if (!ResolveSignature(context, kGWorldPattern, instruction) ||
+      !Read(context, instruction + kGWorldResolveOffset, displacement))
+    return false;
+  const auto resolved = static_cast<std::intptr_t>(instruction) +
+                        kGWorldInstructionSize + displacement;
+  if (resolved <= 0)
+    return false;
+  context.runtime.g_world_address = static_cast<std::uintptr_t>(resolved);
+  return true;
+}
+
+bool ResolveLocalCharacter(Context &context) noexcept {
+  context.runtime.character = 0;
+  context.runtime.mesh = 0;
+  context.runtime.anim_instance = 0;
+  std::uintptr_t world{};
+  std::uintptr_t game_instance{};
+  std::uintptr_t local_players{};
+  std::uintptr_t local_player{};
+  std::uintptr_t controller{};
+  std::uintptr_t character{};
+  std::uintptr_t mesh{};
+  if (!Read(context, context.runtime.g_world_address, world) ||
+      !ReadPointerAt(context, world, kWorldGameInstanceOffset, game_instance) ||
+      !ReadPointerAt(context, game_instance, kGameInstanceLocalPlayersOffset,
+                     local_players) ||
+      !Read(context, local_players, local_player) || local_player == 0 ||
+      !ReadPointerAt(context, local_player, kLocalPlayerControllerOffset,
+                     controller) ||
+      !ReadPointerAt(context, controller, kControllerPawnOffset, character) ||
+      !ReadPointerAt(context, character, kCharacterMeshOffset, mesh)) {
+    return false;
+  }
+  BindRuntimeCharacter(context, character, mesh);
+  context.runtime.character = character;
+  context.runtime.mesh = mesh;
+  if (context.extra_mesh_owner != mesh &&
+      context.mesh_scan_owner != mesh &&
+      !context.mesh_scan_requested.load(std::memory_order_acquire) &&
+      !context.mesh_scan_running) {
+    // The extra components belong to a pawn, so switching character invalidates
+    // them; rescan once per pawn instead of asking for another scan. Cheap: it is
+    // chunked across ticks and read-only.
+    context.mesh_scan_requested.store(true, std::memory_order_release);
+  }
+  return true;
+}
+
+bool ReadAnimationState(Context &context) noexcept {
+  const auto mesh = context.runtime.mesh;
+  if (mesh == 0)
+    return false;
+  std::uint8_t animation_mode{};
+  std::uint8_t animation_flags{};
+  if (!Read(context, mesh + kMeshAnimationModeOffset, animation_mode) ||
+      !Read(context, mesh + kMeshAnimationFlagsOffset, animation_flags))
+    return false;
+  static_cast<void>(Read(context, mesh + kMeshAnimScriptInstanceOffset,
+                        context.runtime.anim_instance));
+  context.runtime.animation_mode = animation_mode;
+  context.runtime.animation_flags = animation_flags;
+  return true;
+}
+
+bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
+                     std::uintptr_t &data, std::uint32_t &count) noexcept {
+  data = 0;
+  count = 0;
+  if (array_address == 0)
+    return false;
+  std::int32_t count_value{};
+  if (!Read(context, array_address + kArrayDataOffset, data) ||
+      !Read(context, array_address + kArrayCountOffset, count_value) ||
+      count_value < 0)
+    return false;
+  count = static_cast<std::uint32_t>(count_value);
+  return true;
+}
+
+bool ReadPoseArrays(Context &context) noexcept {
+  const auto mesh = context.runtime.mesh;
+  if (mesh == 0)
+    return false;
+  std::uintptr_t bone_space_data{};
+  std::uint32_t bone_space_count{};
+  std::uintptr_t component_space_data{};
+  std::uint32_t component_space_count{};
+  std::uintptr_t local_space_data{};
+  std::uint32_t local_space_count{};
+  const bool authoritative =
+      ReadArrayHeader(context, mesh + kMeshComponentSpaceBuffer0Offset,
+                      bone_space_data, bone_space_count) &&
+      ReadArrayHeader(context, mesh + kMeshComponentSpaceBuffer1Offset,
+                      component_space_data, component_space_count) &&
+      ReadArrayHeader(context, mesh + kMeshLocalSpaceTransformsOffset,
+                      local_space_data, local_space_count) &&
+      bone_space_data != 0 && bone_space_count != 0 &&
+      component_space_data != 0 && component_space_count != 0 &&
+      local_space_data != 0 && local_space_count != 0 &&
+      bone_space_count == component_space_count &&
+      component_space_count == local_space_count;
+  if (authoritative) {
+    context.runtime.bone_space_data = bone_space_data;
+    context.runtime.bone_space_count = bone_space_count;
+    context.runtime.component_space_data = component_space_data;
+    context.runtime.component_space_count = component_space_count;
+    context.runtime.local_space_data = local_space_data;
+    context.runtime.local_space_count = local_space_count;
+    return true;
+  }
+  static_cast<void>(ReadArrayHeader(
+      context, mesh + kMeshCachedBoneSpaceTransformsOffset,
+      context.runtime.bone_space_data, context.runtime.bone_space_count));
+  return ReadArrayHeader(
+      context, mesh + kMeshCachedComponentSpaceTransformsOffset,
+      context.runtime.component_space_data,
+      context.runtime.component_space_count);
+}
+
+bool RestorePause(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!state.saved_pause || state.mesh == 0)
+    return true;
+  if (!Write(context, state.mesh + kMeshAnimationFlagsOffset,
+             state.original_animation_flags))
+    return false;
+  state.saved_pause = false;
+  state.animation_flags = state.original_animation_flags;
+  return true;
+}
+
+bool ApplyPause(Context &context, const bool enabled) noexcept {
+  RuntimeState &state = context.runtime;
+  if (state.mesh == 0)
+    return false;
+  if (!enabled)
+    return RestorePause(context);
+  if (state.saved_pause)
+    return true;
+  std::uint8_t flags{};
+  if (!Read(context, state.mesh + kMeshAnimationFlagsOffset, flags))
+    return false;
+  state.original_animation_flags = flags;
+  flags |= static_cast<std::uint8_t>(1U << kAnimationFlagPauseAnimsBit);
+  if (!Write(context, state.mesh + kMeshAnimationFlagsOffset, flags))
+    return false;
+  state.saved_pause = true;
+  state.animation_flags = flags;
+  return true;
+}
+
+bool RestoreRate(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!state.saved_rate || state.mesh == 0)
+    return true;
+  if (!Write(context, state.mesh + kMeshGlobalAnimRateScaleOffset,
+             state.original_rate_scale))
+    return false;
+  state.saved_rate = false;
+  return true;
+}
+
+bool ApplyRate(Context &context, const bool enabled, const float value) noexcept {
+  RuntimeState &state = context.runtime;
+  if (state.mesh == 0)
+    return false;
+  if (!enabled)
+    return RestoreRate(context);
+  if (!state.saved_rate) {
+    float original{};
+    if (!Read(context, state.mesh + kMeshGlobalAnimRateScaleOffset, original))
+      return false;
+    state.original_rate_scale = original;
+    state.saved_rate = true;
+  }
+  return Write(context, state.mesh + kMeshGlobalAnimRateScaleOffset, value);
+}
+
+bool RestoreRootMotion(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!state.saved_root_motion || state.character == 0)
+    return true;
+  if (!Write(context, state.character + kCharacterAnimRootMotionScaleOffset,
+             state.original_root_motion_scale))
+    return false;
+  state.saved_root_motion = false;
+  return true;
+}
+
+bool ApplyRootMotion(Context &context, const bool enabled,
+                     const float value) noexcept {
+  RuntimeState &state = context.runtime;
+  if (state.character == 0)
+    return false;
+  if (!enabled)
+    return RestoreRootMotion(context);
+  if (!state.saved_root_motion) {
+    float original{};
+    if (!Read(context, state.character + kCharacterAnimRootMotionScaleOffset,
+              original))
+      return false;
+    state.original_root_motion_scale = original;
+    state.saved_root_motion = true;
+  }
+  return Write(context, state.character + kCharacterAnimRootMotionScaleOffset,
+               value);
+}
+
+bool RestoreMultiThreadedUpdate(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!state.saved_multi_threaded_update || state.anim_instance == 0)
+    return true;
+  if (state.multi_threaded_update_instance != state.anim_instance) {
+    state.saved_multi_threaded_update = false;
+    return true;
+  }
+  if (!Write(context, state.anim_instance + kAnimInstanceUseMultiThreadedUpdateOffset,
+             state.original_multi_threaded_update_flags))
+    return false;
+  state.saved_multi_threaded_update = false;
+  state.multi_threaded_update_instance = 0;
+  return true;
+}
+
+bool ApplyMultiThreadedUpdate(Context &context, const bool enabled) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!enabled)
+    return RestoreMultiThreadedUpdate(context);
+  if (state.anim_instance == 0)
+    return false;
+  if (state.saved_multi_threaded_update &&
+      state.multi_threaded_update_instance != state.anim_instance) {
+    state.saved_multi_threaded_update = false;
+  }
+  if (!state.saved_multi_threaded_update) {
+    std::uint8_t flags{};
+    if (!Read(context, state.anim_instance + kAnimInstanceUseMultiThreadedUpdateOffset,
+              flags))
+      return false;
+    state.original_multi_threaded_update_flags = flags;
+    state.saved_multi_threaded_update = true;
+    state.multi_threaded_update_instance = state.anim_instance;
+  }
+  std::uint8_t flags = state.original_multi_threaded_update_flags;
+  flags &= static_cast<std::uint8_t>(
+      ~(1U << kAnimInstanceUseMultiThreadedUpdateBit));
+  return Write(context, state.anim_instance + kAnimInstanceUseMultiThreadedUpdateOffset,
+               flags);
+}
+
+bool RestorePose(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!state.saved_pose)
+    return true;
+  state.pose_descendants.clear();
+  state.saved_pose = false;
+  return true;
+}
+
+bool CallVirtualUFunction(Context &context, std::uintptr_t object,
+                          std::string_view function_path, const void *parameters,
+                          std::size_t parameter_size, std::string &detail,
+                          void *output = nullptr) noexcept;
+bool FindObjectAddressByPath(Context &context, std::string_view path, std::uintptr_t &object,
+                             std::string *detail) noexcept;
+bool ApplyPoseByName(Context &context, std::uint32_t bone,
+                     const std::array<double, 3> &translation,
+                     std::string &detail) noexcept;
+
+bool ForceMeshObjectUpdate(Context &context,
+                           const std::uintptr_t mesh) noexcept {
+  if (mesh == 0)
+    return false;
+  std::uint8_t flags{};
+  if (!Read(context, mesh + kMeshForceMeshObjectUpdateOffset, flags))
+    return false;
+  flags |= static_cast<std::uint8_t>(1U << kMeshForceMeshObjectUpdateBit);
+  return Write(context, mesh + kMeshForceMeshObjectUpdateOffset, flags);
+}
+
+bool ForcePoseMeshObjectUpdate(Context &context) noexcept {
+  return ForceMeshObjectUpdate(context, context.runtime.mesh);
+}
+
+struct Vec3d {
+  double x{};
+  double y{};
+  double z{};
+};
+
+struct Quatd {
+  double x{};
+  double y{};
+  double z{};
+  double w{1.0};
+};
+
+struct Transformd {
+  Quatd rotation{};
+  Vec3d translation{};
+  Vec3d scale{1.0, 1.0, 1.0};
+};
+
+Quatd QuatMultiply(const Quatd &a, const Quatd &b) noexcept {
+  Quatd out;
+  out.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
+  out.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
+  out.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
+  out.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
+  return out;
+}
+
+Vec3d QuatRotateVector(const Quatd &q, const Vec3d &v) noexcept {
+  const Vec3d u{q.x, q.y, q.z};
+  const Vec3d uv{
+      u.y * v.z - u.z * v.y,
+      u.z * v.x - u.x * v.z,
+      u.x * v.y - u.y * v.x,
+  };
+  const Vec3d uuv{
+      u.y * uv.z - u.z * uv.y,
+      u.z * uv.x - u.x * uv.z,
+      u.x * uv.y - u.y * uv.x,
+  };
+  const double two = 2.0;
+  return Vec3d{
+      v.x + two * (q.w * uv.x + uuv.x),
+      v.y + two * (q.w * uv.y + uuv.y),
+      v.z + two * (q.w * uv.z + uuv.z),
+  };
+}
+
+Transformd TransformMultiply(const Transformd &a,
+                             const Transformd &b) noexcept {
+  Transformd out;
+  out.rotation = QuatMultiply(a.rotation, b.rotation);
+  const Vec3d scaled{
+      b.translation.x * a.scale.x,
+      b.translation.y * a.scale.y,
+      b.translation.z * a.scale.z,
+  };
+  const Vec3d rotated = QuatRotateVector(a.rotation, scaled);
+  out.translation = Vec3d{
+      a.translation.x + rotated.x,
+      a.translation.y + rotated.y,
+      a.translation.z + rotated.z,
+  };
+  out.scale = Vec3d{
+      a.scale.x * b.scale.x,
+      a.scale.y * b.scale.y,
+      a.scale.z * b.scale.z,
+  };
+  return out;
+}
+
+Quatd RotatorToQuat(const double pitch_degrees, const double yaw_degrees,
+                    const double roll_degrees) noexcept {
+  constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
+  const double half = kDegreesToRadians * 0.5;
+  const double sp = std::sin(pitch_degrees * half);
+  const double cp = std::cos(pitch_degrees * half);
+  const double sy = std::sin(yaw_degrees * half);
+  const double cy = std::cos(yaw_degrees * half);
+  const double sr = std::sin(roll_degrees * half);
+  const double cr = std::cos(roll_degrees * half);
+  Quatd out;
+  out.x = cr * sp * sy - sr * cp * cy;
+  out.y = -cr * sp * cy - sr * cp * sy;
+  out.z = cr * cp * sy - sr * sp * cy;
+  out.w = cr * cp * cy + sr * sp * sy;
+  return out;
+}
+
+bool ReadTransform(Context &context, const std::uintptr_t address,
+                   Transformd &transform) noexcept {
+  if (!Read(context, address + kTransformRotationOffset, transform.rotation) ||
+      !Read(context, address + kTransformTranslationOffset,
+            transform.translation) ||
+      !Read(context, address + kTransformScaleOffset, transform.scale))
+    return false;
+  return true;
+}
+
+bool WriteTransform(Context &context, const std::uintptr_t address,
+                    const Transformd &transform) noexcept {
+  return Write(context, address + kTransformRotationOffset,
+               transform.rotation) &&
+         Write(context, address + kTransformTranslationOffset,
+               transform.translation) &&
+         Write(context, address + kTransformScaleOffset, transform.scale);
+}
+
+struct PackedTransform {
+  double rotation[4]{};
+  double translation[3]{};
+  double padding{};
+  double scale[3]{1.0, 1.0, 1.0};
+  double tail_padding{};
+};
+
+static_assert(sizeof(PackedTransform) == kTransformSize,
+              "PackedTransform must match the game FTransform layout");
+
+Transformd UnpackTransform(const PackedTransform &source) noexcept {
+  Transformd out;
+  out.rotation =
+      Quatd{source.rotation[0], source.rotation[1], source.rotation[2],
+            source.rotation[3]};
+  out.translation = Vec3d{source.translation[0], source.translation[1],
+                          source.translation[2]};
+  out.scale = Vec3d{source.scale[0], source.scale[1], source.scale[2]};
+  return out;
+}
+
+void PackTransform(const Transformd &source, PackedTransform &destination) noexcept {
+  destination.rotation[0] = source.rotation.x;
+  destination.rotation[1] = source.rotation.y;
+  destination.rotation[2] = source.rotation.z;
+  destination.rotation[3] = source.rotation.w;
+  destination.translation[0] = source.translation.x;
+  destination.translation[1] = source.translation.y;
+  destination.translation[2] = source.translation.z;
+  destination.padding = 0.0;
+  destination.scale[0] = source.scale.x;
+  destination.scale[1] = source.scale.y;
+  destination.scale[2] = source.scale.z;
+}
+
+
+bool WriteBytes(Context &context, const std::uintptr_t address,
+                const void *data, const std::size_t size) noexcept {
+  if (!CoreReady(context.core) || address == 0 || data == nullptr || size == 0)
+    return false;
+  const AnomalyByteSpanV1 source{
+      reinterpret_cast<const std::uint8_t *>(data), size};
+  return context.core->write_memory(context.core->user, address, source).code ==
+         ANOMALY_STATUS_V1_OK;
+}
+
+Transformd ComputeBoneComponent(
+    const std::uint32_t bone_index,
+    const std::vector<Transformd> &locals,
+    const std::vector<std::int32_t> &parents,
+    std::vector<Transformd> &components,
+    std::vector<std::uint8_t> &marks) noexcept {
+  if (marks[bone_index] == 2)
+    return components[bone_index];
+  if (marks[bone_index] == 1)
+    return {};
+  marks[bone_index] = 1;
+  Transformd parent_component;
+  const std::int32_t parent = parents[bone_index];
+  if (parent >= 0 && static_cast<std::uint32_t>(parent) < parents.size())
+    parent_component =
+        ComputeBoneComponent(static_cast<std::uint32_t>(parent), locals,
+                             parents, components, marks);
+  components[bone_index] =
+      TransformMultiply(parent_component, locals[bone_index]);
+  marks[bone_index] = 2;
+  return components[bone_index];
+}
+
+void ApplyPoseOverridesInTick(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
+      state.mesh == 0 || state.local_space_data == 0 || state.pose_data == 0 ||
+      state.pose_component_data == 0 || state.local_space_count == 0 ||
+      state.pose_count != state.local_space_count ||
+      state.pose_component_count != state.local_space_count)
+    return;
+
+  const std::uint32_t count = state.local_space_count;
+  std::vector<std::array<double, 3>> angles;
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    if (context.bone_angles.size() < count)
+      return;
+    angles.assign(context.bone_angles.begin(),
+                  context.bone_angles.begin() + count);
+  }
+  if (context.bone_parents.size() != count)
+    return;
+
+  bool any_override = false;
+  for (const auto &angle : angles) {
+    if (angle[0] != 0.0 || angle[1] != 0.0 || angle[2] != 0.0) {
+      any_override = true;
+      break;
+    }
+  }
+  if (!any_override)
+    return;
+
+  std::vector<Transformd> locals(count);
+  for (std::uint32_t bone_index{}; bone_index != count; ++bone_index) {
+    std::uintptr_t local_address{};
+    if (!AddAddress(state.local_space_data,
+                    static_cast<std::uint64_t>(bone_index) * kTransformSize,
+                    local_address) ||
+        !ReadTransform(context, local_address, locals[bone_index]))
+      return;
+    if (angles[bone_index][0] != 0.0 || angles[bone_index][1] != 0.0 ||
+        angles[bone_index][2] != 0.0) {
+      const Quatd offset =
+          RotatorToQuat(angles[bone_index][0], angles[bone_index][1],
+                        angles[bone_index][2]);
+      locals[bone_index].rotation =
+          QuatMultiply(offset, locals[bone_index].rotation);
+    }
+  }
+
+  std::vector<Transformd> components(count);
+  std::vector<std::uint8_t> marks(count, 0);
+  for (std::uint32_t bone_index{}; bone_index != count; ++bone_index)
+    static_cast<void>(ComputeBoneComponent(bone_index, locals,
+                                           context.bone_parents, components,
+                                           marks));
+
+  std::vector<PackedTransform> packed(count);
+  for (std::uint32_t bone_index{}; bone_index != count; ++bone_index)
+    PackTransform(components[bone_index], packed[bone_index]);
+
+  const auto *bytes = reinterpret_cast<const std::uint8_t *>(packed.data());
+  const auto byte_count = packed.size() * sizeof(PackedTransform);
+  static_cast<void>(WriteBytes(context, state.pose_data, bytes, byte_count));
+  static_cast<void>(
+      WriteBytes(context, state.pose_component_data, bytes, byte_count));
+  static_cast<void>(ForcePoseMeshObjectUpdate(context));
+}
+
+bool BuildPoseDescendants(Context &context, const std::uint32_t bone,
+                          std::vector<std::uint32_t> &descendants) noexcept {
+  descendants.clear();
+  const auto count = context.runtime.local_space_count;
+  if (bone >= count)
+    return false;
+  descendants.push_back(bone);
+  if (context.bone_parents.size() != count)
+    return false;
+  std::vector<std::vector<std::uint32_t>> children(count);
+  for (std::uint32_t index{}; index != count; ++index) {
+    const std::int32_t parent = context.bone_parents[index];
+    if (parent >= 0 && static_cast<std::uint32_t>(parent) < count)
+      children[static_cast<std::uint32_t>(parent)].push_back(index);
+  }
+  for (std::size_t cursor{}; cursor != descendants.size(); ++cursor) {
+    const auto parent = descendants[cursor];
+    for (const std::uint32_t child : children[parent])
+      descendants.push_back(child);
+  }
+  return true;
+}
+
+bool ApplyPose(Context &context, const bool enabled, const std::uint32_t bone,
+               const std::array<double, 3> &rotation) noexcept {
+  RuntimeState &state = context.runtime;
+  if (state.mesh == 0 || state.bone_space_data == 0 ||
+      state.bone_space_count == 0 || bone >= state.bone_space_count ||
+      state.component_space_data == 0 || state.component_space_count == 0 ||
+      bone >= state.component_space_count || state.local_space_data == 0 ||
+      state.local_space_count == 0 || bone >= state.local_space_count)
+    return false;
+  if (!enabled)
+    return RestorePose(context);
+
+  const bool same_bone = state.saved_pose && state.pose_bone_index == bone &&
+                         state.pose_mesh == state.mesh &&
+                         state.pose_data == state.bone_space_data &&
+                         state.pose_component_data == state.component_space_data;
+  if (!same_bone) {
+    if (state.saved_pose && !RestorePose(context))
+      return false;
+    std::vector<std::uint32_t> descendants;
+    if (!BuildPoseDescendants(context, bone, descendants) ||
+        descendants.empty())
+      return false;
+    state.saved_pose = true;
+    state.pose_mesh = state.mesh;
+    state.pose_data = state.bone_space_data;
+    state.pose_count = state.bone_space_count;
+    state.pose_component_data = state.component_space_data;
+    state.pose_component_count = state.component_space_count;
+    state.pose_bone_index = bone;
+    state.pose_descendants = std::move(descendants);
+  }
+
+  std::snprintf(context.pose_status.data(), context.pose_status.size(),
+                "pose: joint=%u pitch=%.2f yaw=%.2f roll=%.2f bones=%u",
+                static_cast<unsigned>(bone), rotation[0], rotation[1],
+                rotation[2],
+                static_cast<unsigned>(state.pose_descendants.size()));
+  return true;
+}
+
+bool ResolvePoseTickTarget(Context &context, std::uintptr_t &target) noexcept {
+  target = 0;
+  const auto mesh = context.runtime.mesh;
+  if (mesh == 0)
+    return false;
+  std::uintptr_t vtable{};
+  if (!Read(context, mesh, vtable) || vtable == 0)
+    return false;
+  std::uintptr_t function{};
+  const std::uint64_t slot_address =
+      static_cast<std::uint64_t>(kSkeletalMeshTickVtableSlot) * sizeof(void *);
+  if (slot_address > (std::numeric_limits<std::uintptr_t>::max)() - vtable ||
+      !Read(context, vtable + static_cast<std::uintptr_t>(slot_address),
+            function) ||
+      function == 0)
+    return false;
+  if (function < 0x140000000ULL || function > 0x180000000ULL)
+    return false;
+  target = function;
+  return true;
+}
+
+void ANOMALY_CALL SkeletalMeshTickDetour(void *object, float delta_seconds,
+                                         unsigned tick_type,
+                                         void *tick_function) noexcept;
+void ApplyPoseOverridesDirect(Context &context) noexcept;
+void ApplyMotionPoseDirect(Context &context) noexcept;
+
+// Two root references for the camera, published as atomics so the view-build thread never touches the
+// pose buffers.
+void PublishRootOffsets(Context &context, const double applied[3],
+                        const double authored[3]) noexcept {
+  for (int axis = 0; axis < 3; ++axis) {
+    context.motion_applied_offset[axis].store(applied[axis], std::memory_order_release);
+    context.motion_authored_offset[axis].store(authored[axis], std::memory_order_release);
+  }
+}
+void MaybeRefreshBoneNames(Context &context) noexcept;
+bool GetBoneNameForMesh(Context &context, std::uintptr_t mesh,
+                        std::uint32_t bone_index, std::string &name) noexcept;
+bool GetBoneFNameForMesh(Context &context, std::uintptr_t mesh,
+                         std::uint32_t bone_index,
+                         std::array<std::uint8_t, 8> &fname,
+                         std::string &name) noexcept;
+bool TryAssetReferencePose(Context &context, std::uintptr_t asset) noexcept;
+bool FindReferencePose(Context &context) noexcept;
+Transformd TransformInverse(const Transformd &value) noexcept;
+std::string ClassNameOf(Context &context, std::uintptr_t object) noexcept;
+std::string ObjectNameOf(Context &context, std::uintptr_t object) noexcept;
+void LogDiagnostic(Context &context, const std::string &message) noexcept;
+void BuildExtraMeshes(Context &context) noexcept;
+void WriteExtraMeshes(Context &context,
+                      const std::vector<PackedTransform> &packed) noexcept;
+bool RestoreExtraMeshes(Context &context) noexcept;
+bool DropExtraMeshes(Context &context) noexcept;
+bool EnsurePoseableAccessory(Context &context, Context::ExtraMesh &extra) noexcept;
+bool WritePoseableAccessoryPose(Context::ExtraMesh &extra,
+                                const std::vector<std::array<double, 12>> &components) noexcept;
+void DestroyPoseableAccessories(Context &context) noexcept;
+void DestroyStalePoseableComponent(Context &context,
+                                   std::uintptr_t component) noexcept;
+
+bool ReleasePoseTickHook(Context &context) noexcept {
+  if (!HookReady(context.hook) || context.tick_hook.id == 0)
+    return true;
+  const auto status =
+      context.hook->release(context.hook->user, context.tick_hook);
+  if (status.code != ANOMALY_STATUS_V1_OK) {
+    return false;
+  }
+  context.tick_hook = {};
+  context.tick_original = 0;
+  context.tick_target = 0;
+  g_active.store(nullptr, std::memory_order_release);
+  return true;
+}
+
+bool EnsurePoseTickHook(Context &context) noexcept {
+  if (!HookReady(context.hook))
+    return false;
+  std::uintptr_t target{};
+  if (!ResolvePoseTickTarget(context, target))
+    return false;
+  if (context.tick_hook.id != 0 && context.tick_target == target &&
+      context.tick_original != 0)
+    return true;
+  if (context.tick_hook.id != 0) {
+    if (!ReleasePoseTickHook(context))
+      return false;
+  }
+  g_active.store(&context, std::memory_order_release);
+  AnomalyHookRequestV1 request{sizeof(request)};
+  request.kind = ANOMALY_HOOK_V1_FUNCTION;
+  request.target = target;
+  request.detour = reinterpret_cast<void *>(&SkeletalMeshTickDetour);
+  request.label = anomaly::sdk::StringView("character-pose-skeletal-tick");
+  std::uintptr_t original{};
+  AnomalyGenerationHandleV1 handle{};
+  const auto status =
+      context.hook->create(context.hook->user, &request, &original, &handle);
+  if (status.code != ANOMALY_STATUS_V1_OK || handle.id == 0 || original == 0) {
+    g_active.store(nullptr, std::memory_order_release);
+    context.tick_hook = {};
+    context.tick_original = 0;
+    context.tick_target = 0;
+    return false;
+  }
+  context.tick_hook = handle;
+  context.tick_original = original;
+  context.tick_target = target;
+  return true;
+}
+
+using SkeletalMeshTickFn = void(ANOMALY_CALL *)(void *, float, unsigned, void *);
+
+void ANOMALY_CALL SkeletalMeshTickDetour(void *object, float delta_seconds,
+                                         unsigned tick_type,
+                                         void *tick_function) noexcept {
+  Context *context = g_active.load(std::memory_order_acquire);
+  AnomalyGenerationHandleV1 lease{};
+  bool leased = false;
+  SkeletalMeshTickFn original = nullptr;
+  try {
+    if (context != nullptr && context->tick_hook.id != 0 &&
+        HookReady(context->hook)) {
+      leased = context->hook
+                   ->begin_callback(context->hook->user, context->tick_hook,
+                                    &lease)
+                   .code == ANOMALY_STATUS_V1_OK;
+      original = reinterpret_cast<SkeletalMeshTickFn>(context->tick_original);
+    }
+  } catch (...) {
+    original = context == nullptr
+                   ? nullptr
+                   : reinterpret_cast<SkeletalMeshTickFn>(context->tick_original);
+  }
+
+  try {
+    if (original != nullptr)
+      original(object, delta_seconds, tick_type, tick_function);
+  } catch (...) {
+  }
+
+  try {
+    if (context != nullptr &&
+        (context->motion_loaded.load(std::memory_order_acquire) ||
+         context->pose_override_enabled.load(std::memory_order_acquire)) &&
+        object == reinterpret_cast<void *>(context->runtime.mesh)) {
+      if (context->motion_loaded.load(std::memory_order_acquire))
+        ApplyMotionPoseDirect(*context);
+      else
+        ApplyPoseOverridesDirect(*context);
+    }
+  } catch (...) {
+  }
+
+  if (leased && context != nullptr && HookReady(context->hook)) {
+    static_cast<void>(context->hook->end_callback(context->hook->user, lease));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Camera VMD driving: the manager's cached POV is overwritten with the sampled track.
+// ---------------------------------------------------------------------------
+
+constexpr double kCameraDegreesToRadians = 3.14159265358979323846 / 180.0;
+constexpr double kCameraRadiansToDegrees = 180.0 / 3.14159265358979323846;
+// The reference model both converters are built around (data/reference-pmx.json, 初音ミク) has a
+// leg of 9.418982 units -- the value `mmdLegLength` carries and the denominator of the runtime's
+// centimetres-per-unit ratio. With no motion loaded there is no file to take that side from.
+constexpr double kReferenceLegUnits = 9.418982;
+// Last resort, when neither the reference pose nor the captured pose could be read: MMD's own
+// convention of about 8 cm per unit (a 20-unit model is ~160 cm). It is 6.8 % short for a 169 cm
+// character, which is what made a camera-only shot tighter than the file's own framing.
+constexpr double kCameraFallbackUnitCm = 8.0;
+
+// Camera basis of an MMD camera rotation triple (radians). MMD stores a Y-X-Z Euler
+// triple and its camera looks along its own +Z, with +X to the right and +Y up.
+void MmdCameraBasis(const double rotation[3], double right[3], double up[3],
+                    double forward[3]) noexcept {
+  const double cx = std::cos(rotation[0]);
+  const double sx = std::sin(rotation[0]);
+  const double cy = std::cos(rotation[1]);
+  const double sy = std::sin(rotation[1]);
+  const double cz = std::cos(rotation[2]);
+  const double sz = std::sin(rotation[2]);
+  // R = Ry * Rx * Rz; its columns are the camera's right, up and forward axes.
+  const double matrix[3][3] = {
+      {cy * cz + sy * sx * sz, -cy * sz + sy * sx * cz, sy * cx},
+      {cx * sz, cx * cz, -sx},
+      {-sy * cz + cy * sx * sz, sy * sz + cy * sx * cz, cy * cx}};
+  double *columns[3] = {right, up, forward};
+  for (int column = 0; column < 3; ++column) {
+    for (int row = 0; row < 3; ++row)
+      columns[column][row] = matrix[row][column];
+  }
+}
+
+// Camera basis of a game view rotation in degrees (X forward, Y right, Z up): the same
+// decomposition the view-point rotation itself carries.
+std::atomic<Context *> g_camera_pov{};
+
+using CameraPovFn = void *(ANOMALY_CALL *)(void *, void *, void *);
+
+void *ANOMALY_CALL CameraPovDetour(void *self, void *first, void *second) noexcept;
+
+// PlayerController -> camera manager, the offset the active Profile validates.
+bool ResolveCameraManager(Context &context, std::uintptr_t &manager) noexcept {
+  manager = 0;
+  std::uintptr_t world{};
+  std::uintptr_t game_instance{};
+  std::uintptr_t local_players{};
+  std::uintptr_t local_player{};
+  std::uintptr_t controller{};
+  return Read(context, context.runtime.g_world_address, world) &&
+         ReadPointerAt(context, world, kWorldGameInstanceOffset, game_instance) &&
+         ReadPointerAt(context, game_instance, kGameInstanceLocalPlayersOffset,
+                       local_players) &&
+         Read(context, local_players, local_player) && local_player != 0 &&
+         ReadPointerAt(context, local_player, kLocalPlayerControllerOffset, controller) &&
+         ReadPointerAt(context, controller, kControllerCameraManagerOffset, manager) &&
+         manager != 0;
+}
+
+// The manager's own vtable slot holds the view-point getter. Before it becomes a hook
+// target its body is checked: the getter reads the manager's vtable (`mov rax,[rcx]`) and
+// calls the POV accessor (`call [rax+0x7A0]`) before copying the POV into the caller's
+// outputs. This is what keeps a wrong or stale slot (and another camera implementation)
+// from being hooked, which on a stale offset would mean detouring an unrelated function.
+// Replace the game's view point with the loaded camera track. The track is applied as a
+// movement away from the pose the game produced on the first driven frame: the MMD
+// camera's displacement is expressed in that first frame's own camera basis and rebuilt
+// in the anchor's basis, which reproduces the shot without having to know how MMD's axes
+// line up with this rig's (the mapping is applied to the basis and to the offsets, so it
+// cancels). Both sides use the same Y-X-Z triple, so the rotation deltas simply add.
+// Drive the game's camera from the loaded track: read the manager's cached POV, let
+// ApplyCameraTrack turn the track's movement into a world pose relative to the anchor, and
+// write it back. Nothing else in the frame rewrites the cache, and the getter (owned by the
+// other plugin) copies from it, so the write reaches the view.
+void *ANOMALY_CALL CameraPovDetour(void *self, void *first, void *second) noexcept;
+
+// The view-point getter (manager vtable +0x850) belongs to the free-camera plugin, so it is not
+// available as a hook target here. Its own body names the accessor that produces the POV through
+// a second vtable slot, and that slot is read out of the getter's bytes rather than hardcoded:
+//     48 8b 01            mov rax, [rcx]       ; the manager's vtable
+//     ff 90 a0 07 00 00   call [rax+0x7A0]     ; -> the POV accessor
+// Hooking the accessor and returning a patched copy of its result is the same edit the getter
+// would have received, made one call closer to the source.
+// The view-point getter (manager vtable +0x850) is the function the view is actually built from:
+// it fills its two out-parameters with the camera's location and rotation, which is how the
+// free-camera plugin drives the camera and the only place a write has been seen to reach the
+// screen. Its own body names the accessor that produces the POV member, and that is still resolved
+// -- for the struct the file's lens has to be written into -- from the `call [rax+slot]` and the
+// accessor's `lea rax,[rcx+disp32]`, rather than hardcoded.
+bool ResolveCameraPovTarget(Context &context, const std::uintptr_t manager,
+                            std::uintptr_t &target) noexcept {
+  target = 0;
+  std::uintptr_t vtable{};
+  std::uintptr_t getter{};
+  if (!Read(context, manager, vtable) || vtable == 0 ||
+      !ReadPointerAt(context, vtable, kCameraViewPointVtableOffset, getter) || getter == 0)
+    return false;
+  std::array<std::uint8_t, 32> code{};
+  if (!Read(context, getter, code))
+    return false;
+  for (std::size_t index = 0; index + 6 <= code.size(); ++index) {
+    if (code[index] != 0xFF || code[index + 1] != 0x90)
+      continue;
+    const std::uint32_t slot = static_cast<std::uint32_t>(code[index + 2]) |
+                               (static_cast<std::uint32_t>(code[index + 3]) << 8U) |
+                               (static_cast<std::uint32_t>(code[index + 4]) << 16U) |
+                               (static_cast<std::uint32_t>(code[index + 5]) << 24U);
+    std::uintptr_t accessor{};
+    if (!ReadPointerAt(context, vtable, slot, accessor) || accessor == 0 || accessor == getter)
+      continue;
+    std::array<std::uint8_t, 8> body{};
+    if (!Read(context, accessor, body) || body[0] != 0x48 || body[1] != 0x8D ||
+        body[2] != 0x81 || body[7] != 0xC3)
+      continue;
+    const std::uint32_t displacement = static_cast<std::uint32_t>(body[3]) |
+                                       (static_cast<std::uint32_t>(body[4]) << 8U) |
+                                       (static_cast<std::uint32_t>(body[5]) << 16U) |
+                                       (static_cast<std::uint32_t>(body[6]) << 24U);
+    std::uintptr_t structure{};
+    if (AddAddress(manager, displacement, structure) && structure != 0)
+      context.camera_pov_struct = structure;
+    target = getter;
+    return true;
+  }
+  return false;
+}
+
+bool RefreshCameraPovTarget(Context &context) noexcept {
+  std::uintptr_t manager{};
+  if (!ResolveCameraManager(context, manager)) {
+    context.camera_manager.store(0, std::memory_order_release);
+    context.camera_manager_resolved.store(false, std::memory_order_release);
+    return false;
+  }
+  // Once this plugin's detour owns the accessor, its first bytes are that detour's stub rather
+  // than the plain getter, so the shape gate must not be asked again. A swapped camera is caught
+  // by the manager pointer changing.
+  if (context.camera_pov_hook.id != 0 &&
+      context.camera_manager.load(std::memory_order_acquire) == manager)
+    return true;
+  std::uintptr_t target{};
+  if (!ResolveCameraPovTarget(context, manager, target)) {
+    context.camera_manager.store(0, std::memory_order_release);
+    context.camera_manager_resolved.store(false, std::memory_order_release);
+    return false;
+  }
+  const std::uintptr_t previous =
+      context.camera_manager.exchange(manager, std::memory_order_acq_rel);
+  context.camera_pov_resolved_target = target;
+  context.camera_manager_resolved.store(true, std::memory_order_release);
+  // A different camera taking over does *not* drop the anchor: the shot's angle is a world
+  // direction, the placement is relative to the character, so the shot survives the swap. Clearing
+  // it here is what left the modes writing nothing at all, because the replacement reading the
+  // re-anchor waits for is often a placeholder the distance test then rejects.
+  static_cast<void>(previous);
+  return true;
+}
+
+bool ReleaseCameraPovHook(Context &context) noexcept {
+  g_camera_pov.store(nullptr, std::memory_order_release);
+  context.camera_manager.store(0, std::memory_order_release);
+  context.camera_manager_resolved.store(false, std::memory_order_release);
+  context.camera_hook_ready.store(false, std::memory_order_release);
+  // The anchor is deliberately left alone: releasing the hook happens on every pause now, and the
+  // yaw was captured from wherever the game camera happened to look, so dropping it here would make
+  // the shot re-orient itself each time playback resumes.
+  if (!HookReady(context.hook) || context.camera_pov_hook.id == 0) {
+    context.camera_pov_hook = {};
+    context.camera_pov_original = 0;
+    context.camera_pov_target = 0;
+    return true;
+  }
+  const auto status = context.hook->release(context.hook->user, context.camera_pov_hook);
+  if (status.code != ANOMALY_STATUS_V1_OK)
+    return false;
+  context.camera_pov_hook = {};
+  context.camera_pov_original = 0;
+  context.camera_pov_target = 0;
+  return true;
+}
+
+bool EnsureCameraPovHook(Context &context) noexcept {
+  if (!HookReady(context.hook) ||
+      !context.camera_manager_resolved.load(std::memory_order_acquire))
+    return false;
+  const std::uintptr_t target = context.camera_pov_resolved_target;
+  if (target == 0)
+    return false;
+  if (context.camera_pov_hook.id != 0 && context.camera_pov_target == target &&
+      context.camera_pov_original != 0)
+    return true;
+  if (context.camera_pov_hook.id != 0 && !ReleaseCameraPovHook(context))
+    return false;
+  context.camera_pov_target = target;
+  g_camera_pov.store(&context, std::memory_order_release);
+  AnomalyHookRequestV1 request{sizeof(request)};
+  request.kind = ANOMALY_HOOK_V1_FUNCTION;
+  request.target = target;
+  request.detour = reinterpret_cast<void *>(&CameraPovDetour);
+  request.label = anomaly::sdk::StringView("better-pose-camera-pov");
+  std::uintptr_t original{};
+  AnomalyGenerationHandleV1 handle{};
+  const auto status =
+      context.hook->create(context.hook->user, &request, &original, &handle);
+  if (status.code != ANOMALY_STATUS_V1_OK || handle.id == 0 || original == 0) {
+    g_camera_pov.store(nullptr, std::memory_order_release);
+    context.camera_pov_hook = {};
+    context.camera_pov_original = 0;
+    context.camera_pov_target = 0;
+    return false;
+  }
+  context.camera_pov_hook = handle;
+  context.camera_pov_original = original;
+  return true;
+}
+
+void LogCameraDrive(Context &context, const bool follow_mode, const double location[3],
+                    const double rotation[3], const double unit_cm,
+                    const double model_distance_cm, const double aim_cm, const double feet[3],
+                    const double height_cm, const double applied[3],
+                    const double game_location[3], const double game_rotation[3],
+                    const double landed_cm) noexcept;
+
+// MMD (x, y, z) -> the rig's local axes, the mapping the motion retarget uses. The model faces
+// its own -Z, which lands on local +Y, so local +Y is "the way the character faces".
+void MmdToLocal(const double source[3], double local[3]) noexcept {
+  local[0] = source[0];
+  local[1] = -source[2];
+  local[2] = source[1];
+}
+
+// The character's feet and the middle of their bounding box, from the mesh's world bounds.
+bool CharacterBounds(Context &context, double feet[3], double centre[3]) noexcept {
+  const std::uintptr_t mesh = context.runtime.mesh;
+  std::uintptr_t origin_address{};
+  std::uintptr_t extent_address{};
+  double origin[3]{};
+  double extent[3]{};
+  if (mesh == 0 ||
+      !AddAddress(mesh, kCharacterBoundsOriginOffset, origin_address) ||
+      !AddAddress(mesh, kCharacterBoundsExtentOffset, extent_address) ||
+      !Read(context, origin_address, origin) || !Read(context, extent_address, extent))
+    return false;
+  // A character-sized box, so a stale offset cannot quietly place the camera at the origin.
+  if (!(extent[2] > 1.0 && extent[2] < 500.0))
+    return false;
+  for (int axis = 0; axis < 3; ++axis) {
+    if (!std::isfinite(origin[axis]))
+      return false;
+  }
+  feet[0] = origin[0];
+  feet[1] = origin[1];
+  feet[2] = origin[2] - extent[2];
+  centre[0] = origin[0];
+  centre[1] = origin[1];
+  centre[2] = origin[2];
+  return true;
+}
+
+// Is a reading of the game's own camera one that could plausibly be that camera? Right after a
+// reload, and in menus or loading screens, the view point holds placeholder values -- measured as
+// x = 0 with pitch 0 while the character stood 11.5 km away. Only a reading taken near the
+// character is allowed to anchor the shot; the attempt is retried until one arrives, and the
+// distance test alone is enough, because a placeholder is nowhere near the character.
+bool GameCameraReadingIsPlausible(const double location[3], const double centre[3]) noexcept {
+  const double dx = centre[0] - location[0];
+  const double dy = centre[1] - location[1];
+  const double dz = centre[2] - location[2];
+  const double range = std::sqrt(dx * dx + dy * dy + dz * dz);
+  return range >= 50.0 && range <= 2500.0;
+}
+
+// The root offset the pose path applied arrives in this camera's own axes (the rig's, the mapping
+// both converters bake): its x is the character's left, its y the way they walk, its z up, and it
+// is used as it arrives. Turning it a half turn first was tried and reverted: it pointed the
+// track shot's aim at a point mirrored through the character, which is a shot staring at scenery.
+double CameraUnitCm(Context &context) noexcept {
+  const double unit = context.mmd_unit_cm.load(std::memory_order_acquire);
+  return unit > 1e-6 ? unit : kCameraFallbackUnitCm;
+}
+
+// The file's distances are scaled so the subject keeps the size it has in MMD. The two fields of
+// view are not the same kind of number: the game's POV field of view is horizontal (UE) while an
+// MMD camera's view angle is vertical -- the model is what has to fit in frame. Converting the
+// game's to vertical first is what makes this a 16:9-correct ratio instead of a 16:9-too-close one.
+// The aspect is the usual 16:9; an ultrawide display shifts this by its own ratio.
+// The track's camera position in MMD axes: the keyed look-at point pulled back along the camera's
+// own view axis by the keyed distance (the sign is the one measured across four camera VMDs).
+bool SampleCameraTrack(Context &context, double position[3], double rotation[3],
+                       double *distance, double *fov) noexcept {
+  std::lock_guard<std::mutex> lock(context.camera_mutex);
+  return context.camera.Sample(context.camera_frame.load(std::memory_order_acquire), position,
+                               rotation, distance, fov);
+}
+
+// Follow mode: keep the character's own displacement in the middle of the frame from a fixed world
+// direction, ignoring any camera file. The direction is the anchored one (see the anchor in
+// CameraPovDetour): the way the game's camera looked at the character when the shot started, which
+// is why the camera ends up behind them -- and it never turns with the model, only the model's
+// travel is followed.
+void DriveFollowCamera(Context &context, const double feet[3], const double centre[3],
+                       const double game_location[3], const double game_rotation[3],
+                       const std::uintptr_t base, const std::uintptr_t rotation_address,
+                       double location[3], double rotation[3]) noexcept {
+  double applied[3]{};
+  for (int axis = 0; axis < 3; ++axis)
+    applied[axis] = context.motion_applied_offset[axis].load(std::memory_order_acquire);
+  const double yaw = context.camera_yaw.load(std::memory_order_acquire);
+  const double cos_yaw = std::cos(yaw);
+  const double sin_yaw = std::sin(yaw);
+  // The level everything vertical is measured from: the ground contact captured when the shot was
+  // anchored. With the vertical follow on, the camera rises and falls with the character at **half**
+  // the gain -- the animated bounds' bottom is recomputed from the bones every frame, and passing
+  // that straight into the camera height is what made the follow feel too sensitive. The aim below
+  // still uses the character's true chest height, so damping the camera does not make them drift in
+  // the frame.
+  const bool vertical_follow =
+      context.camera_follow_vertical.load(std::memory_order_acquire);
+  const double anchor_ground =
+      context.camera_anchor_ground.load(std::memory_order_acquire);
+  const double camera_ground =
+      vertical_follow ? anchor_ground + 0.5 * (feet[2] - anchor_ground) : anchor_ground;
+  // Rz(yaw) * (0, 1) is the direction from the character towards the anchored camera position.
+  const double follow_x = feet[0] + applied[0] * cos_yaw - applied[1] * sin_yaw;
+  const double follow_y = feet[1] + applied[0] * sin_yaw + applied[1] * cos_yaw;
+  const double follow_z = feet[2] + (vertical_follow ? applied[2] : 0.0);
+  // How far the game's own camera stands from the character right now. That camera does collision
+  // work (it pulls in rather than clipping through a wall), so the follow distance never exceeds
+  // it: a slider asking for more than the game camera itself will take is what put the shot inside
+  // the scenery. The anchored direction stays ours, so the mouse still does not turn this camera.
+  double game_distance = 0.0;
+  {
+    const double dx = follow_x - game_location[0];
+    const double dy = follow_y - game_location[1];
+    const double dz = follow_z - game_location[2];
+    game_distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+  }
+  double distance = context.camera_follow_distance_cm.load(std::memory_order_relaxed);
+  if (game_distance > 60.0 && game_distance < distance)
+    distance = game_distance;
+  const double height = context.camera_follow_height_cm.load(std::memory_order_relaxed);
+  location[0] = follow_x - sin_yaw * distance;
+  location[1] = follow_y + cos_yaw * distance;
+  // The aim rides the character's jump (which keeps them vertically centred); the camera itself
+  // only moves up and down with them, at half gain, when the vertical follow is on.
+  location[2] = camera_ground + height;
+  const double aim_z = follow_z + (centre[2] - feet[2]);
+  const double dx = follow_x - location[0];
+  const double dy = follow_y - location[1];
+  const double planar = std::sqrt(dx * dx + dy * dy);
+  if (planar <= 1.0)
+    return;
+  const double aim_dz = aim_z - location[2];
+  rotation[0] = std::atan2(aim_dz, planar) * kCameraRadiansToDegrees;
+  rotation[1] = std::atan2(dy, dx) * kCameraRadiansToDegrees;
+  rotation[2] = 0.0;
+  // The file's lens is not touched: this mode has no camera file to take one from.
+  {
+    auto *out_location = reinterpret_cast<double *>(base);
+    auto *out_rotation = reinterpret_cast<double *>(rotation_address);
+    for (int axis = 0; axis < 3; ++axis) {
+      out_location[axis] = location[axis];
+      out_rotation[axis] = rotation[axis];
+    }
+    const double landed_cm = std::sqrt((out_location[0] - location[0]) *
+                                           (out_location[0] - location[0]) +
+                                       (out_location[1] - location[1]) *
+                                           (out_location[1] - location[1]) +
+                                       (out_location[2] - location[2]) *
+                                           (out_location[2] - location[2]));
+    LogCameraDrive(context, true, location, rotation, CameraUnitCm(context),
+                   std::sqrt(dx * dx + dy * dy + aim_dz * aim_dz), aim_z - feet[2], feet,
+                   2.0 * (centre[2] - feet[2]), applied, game_location, game_rotation,
+                   landed_cm);
+  }
+}
+
+// The track shot: the file's own camera placement relative to the character, with the walk the file
+// assumes replaced by the walk actually applied, aimed the way the file aims.
+void DriveCameraTrack(Context &context, const double feet[3], const double centre[3],
+                      const double game_location[3], const double game_rotation[3],
+                      const double file_position[3], const double file_rotation[3],
+                      const double file_distance, const double file_fov,
+                      const std::uintptr_t base, const std::uintptr_t rotation_address,
+                      const std::uintptr_t fov_address, double location[3],
+                      double rotation[3]) noexcept {
+  double right[3]{};
+  double up[3]{};
+  double forward[3]{};
+  MmdCameraBasis(file_rotation, right, up, forward);
+  double camera_mmd[3]{};
+  for (int axis = 0; axis < 3; ++axis)
+    camera_mmd[axis] = file_position[axis] + forward[axis] * file_distance;
+  double local[3]{};
+  MmdToLocal(camera_mmd, local);
+  // MMD's +X is the model's left while the local frame's +X is its right, so the lateral
+  // axis needs the mirror a rotation cannot give. Mirroring X leaves the front/back
+  // behaviour (the Y component) exactly as it is.
+  local[0] = -local[0];
+  // MMD units become centimetres and nothing else: the file's own distance, height and
+  // angles are used as authored. The lens is matched further down instead of the
+  // distances being stretched to fit the game's.
+  const double unit = CameraUnitCm(context);
+  const double yaw = context.camera_yaw.load(std::memory_order_acquire);
+  const double cos_yaw = std::cos(yaw);
+  const double sin_yaw = std::sin(yaw);
+  const double x = local[0] * unit;
+  const double y = local[1] * unit;
+  // The file's placement is relative to the world its model walks through, so the walk it
+  // assumes is replaced by the walk actually applied: with planar motion locked the model
+  // stays put and the camera must not sail past it. Both references are zero when no motion
+  // is loaded, which leaves the file's placement alone.
+  double applied[3]{};
+  double authored[3]{};
+  for (int axis = 0; axis < 3; ++axis) {
+    applied[axis] = context.motion_applied_offset[axis].load(std::memory_order_acquire);
+    authored[axis] = context.motion_authored_offset[axis].load(std::memory_order_acquire);
+  }
+  const double placed_x = x - authored[0] + applied[0];
+  const double placed_y = y - authored[1] + applied[1];
+  const double placed_z = local[2] * unit - authored[2] + applied[2];
+  location[0] = feet[0] + placed_x * cos_yaw - placed_y * sin_yaw;
+  location[1] = feet[1] + placed_x * sin_yaw + placed_y * cos_yaw;
+  location[2] = feet[2] + placed_z;
+  // MMD aims at its keyed look-at point, and that point carries the author's composition:
+  // its height decides whether a shot reads level or from above. It is *not* always on the
+  // model though -- at f0 it sits 1.24 m in front of it, and several metres off at other
+  // keys -- so the aim takes the author's height and follows the model horizontally.
+  double target[3]{};
+  MmdToLocal(file_position, target);
+  const double aim_x = feet[0] + applied[0] * cos_yaw - applied[1] * sin_yaw - location[0];
+  const double aim_y = feet[1] + applied[0] * sin_yaw + applied[1] * cos_yaw - location[1];
+  const double aim_z = feet[2] + target[2] * unit - authored[2] + applied[2] - location[2];
+  const double planar = std::sqrt(aim_x * aim_x + aim_y * aim_y);
+  if (planar > 1.0) {
+    rotation[0] = std::atan2(aim_z, planar) * kCameraRadiansToDegrees;
+    rotation[1] = std::atan2(aim_y, aim_x) * kCameraRadiansToDegrees;
+    rotation[2] = 0.0;
+  }
+  // The view is built from this struct, its field of view included, so the file's lens is
+  // written here: an MMD view angle is vertical and the engine's is horizontal, which is
+  // the only place the aspect ratio enters.
+  float lens = 0.0F;
+  if (file_fov > 1.0 && file_fov < 179.0) {
+    const double half = std::tan(file_fov * kCameraDegreesToRadians * 0.5) * (16.0 / 9.0);
+    lens = static_cast<float>(2.0 * std::atan(half) * kCameraRadiansToDegrees);
+  }
+  if (lens <= 1.0F || Write(context, fov_address, lens)) {
+    auto *out_location = reinterpret_cast<double *>(base);
+    auto *out_rotation = reinterpret_cast<double *>(rotation_address);
+    for (int axis = 0; axis < 3; ++axis) {
+      out_location[axis] = location[axis];
+      out_rotation[axis] = rotation[axis];
+    }
+    const double landed_cm = std::sqrt((out_location[0] - location[0]) *
+                                           (out_location[0] - location[0]) +
+                                       (out_location[1] - location[1]) *
+                                           (out_location[1] - location[1]) +
+                                       (out_location[2] - location[2]) *
+                                           (out_location[2] - location[2]));
+    LogCameraDrive(context, false, location, rotation, unit,
+                   std::sqrt(placed_x * placed_x + placed_y * placed_y + placed_z * placed_z),
+                   aim_z + location[2] - feet[2], feet, 2.0 * (centre[2] - feet[2]), applied,
+                   game_location, game_rotation, landed_cm);
+  }
+}
+
+// Rewrite the POV the view is built from. Patching the game's struct in place and returning its
+// pointer unchanged is deliberate -- handing back a substitute buffer is what crashed the game once.
+void *ANOMALY_CALL CameraPovDetour(void *self, void *first, void *second) noexcept {
+  Context *context = g_camera_pov.load(std::memory_order_acquire);
+  AnomalyGenerationHandleV1 lease{};
+  bool leased = false;
+  CameraPovFn original = nullptr;
+  try {
+    if (context != nullptr && context->camera_pov_hook.id != 0 && HookReady(context->hook)) {
+      leased = context->hook
+                   ->begin_callback(context->hook->user, context->camera_pov_hook, &lease)
+                   .code == ANOMALY_STATUS_V1_OK;
+      original = reinterpret_cast<CameraPovFn>(context->camera_pov_original);
+    }
+  } catch (...) {
+    original = context == nullptr
+                   ? nullptr
+                   : reinterpret_cast<CameraPovFn>(context->camera_pov_original);
+  }
+
+  void *pov = nullptr;
+  try {
+    if (original != nullptr)
+      pov = original(self, first, second);
+  } catch (...) {
+  }
+
+  // The pose camera comes first and owns the view outright while it is on.
+  try {
+    auto *out_location = static_cast<double *>(first);
+    auto *out_rotation = static_cast<double *>(second);
+    if (context != nullptr && out_location != nullptr && out_rotation != nullptr) {
+      const bool finite = std::isfinite(out_location[0]) && std::isfinite(out_location[1]) &&
+                          std::isfinite(out_location[2]) && std::isfinite(out_rotation[0]) &&
+                          std::isfinite(out_rotation[1]) && std::isfinite(out_rotation[2]);
+      if (context->orbit_enabled.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(context->orbit_mutex);
+        if (!context->orbit_initialized.load(std::memory_order_acquire) && finite) {
+          // Circle whatever the player was looking at: the character if it is
+          // in front of the camera, else a point 300 cm ahead.
+          std::array<double, 3> location{out_location[0], out_location[1], out_location[2]};
+          std::array<double, 3> rotation{out_rotation[0], out_rotation[1], out_rotation[2]};
+          double feet[3]{};
+          double centre[3]{};
+          double distance = 300.0;
+          if (CharacterBounds(*context, feet, centre)) {
+            const double dx = centre[0] - location[0];
+            const double dy = centre[1] - location[1];
+            const double dz = centre[2] - location[2];
+            const double range = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (range > 50.0 && range < 2500.0)
+              distance = range;
+          }
+          context->orbit = better_pose::orbit::FromView(location, rotation, distance);
+          context->orbit_initialized.store(true, std::memory_order_release);
+        }
+        if (context->orbit_focus_requested.exchange(false, std::memory_order_acq_rel))
+          better_pose::orbit::Focus(context->orbit, context->orbit_focus_target);
+        if (context->orbit_initialized.load(std::memory_order_acquire)) {
+          const auto view = better_pose::orbit::ViewOf(context->orbit);
+          for (int axis = 0; axis < 3; ++axis) {
+            out_location[axis] = view.location[static_cast<std::size_t>(axis)];
+            out_rotation[axis] = view.rotation[static_cast<std::size_t>(axis)];
+          }
+          // The lens lives in the POV struct, not in the getter's outputs (the
+          // same place the camera track writes its lens). The game's own value
+          // is read once, before the first write, so it can be handed back.
+          std::uintptr_t fov_address{};
+          if (AddAddress(context->camera_pov_struct, kCameraPovFovOffset, fov_address)) {
+            if (context->orbit_game_fov.load(std::memory_order_acquire) <= 0.0F) {
+              float game_fov{};
+              if (Read(*context, fov_address, game_fov) && game_fov > 5.0F && game_fov < 170.0F)
+                context->orbit_game_fov.store(game_fov, std::memory_order_release);
+            }
+            const float lens = context->orbit_fov.load(std::memory_order_acquire);
+            const float game_fov = context->orbit_game_fov.load(std::memory_order_acquire);
+            if (lens >= better_pose::orbit::kMinimumFov && lens <= better_pose::orbit::kMaximumFov) {
+              static_cast<void>(Write(*context, fov_address, lens));
+              context->orbit_fov_restore.store(true, std::memory_order_release);
+            } else if (context->orbit_fov_restore.exchange(false, std::memory_order_acq_rel) &&
+                       game_fov > 5.0F && game_fov < 170.0F) {
+              // "Game" pressed while the pose camera stays on: hand the lens back now.
+              static_cast<void>(Write(*context, fov_address, game_fov));
+            }
+          }
+          if (leased && HookReady(context->hook))
+            static_cast<void>(context->hook->end_callback(context->hook->user, lease));
+          return pov;
+        }
+      } else if (context->orbit_fov_restore.exchange(false, std::memory_order_acq_rel)) {
+        // Pose camera just switched off (the hook stays while another camera
+        // mode wants it): put the game's lens back once. If the hook goes
+        // away first, the game rewrites the POV itself on its next update.
+        const float game_fov = context->orbit_game_fov.load(std::memory_order_acquire);
+        std::uintptr_t fov_address{};
+        if (game_fov > 5.0F && game_fov < 170.0F &&
+            AddAddress(context->camera_pov_struct, kCameraPovFovOffset, fov_address))
+          static_cast<void>(Write(*context, fov_address, game_fov));
+      }
+    }
+  } catch (...) {
+  }
+
+  try {
+    const bool follow_mode =
+        context != nullptr && context->camera_follow.load(std::memory_order_acquire);
+    const bool track_mode =
+        context != nullptr && context->camera_enabled.load(std::memory_order_acquire) &&
+        context->camera_loaded.load(std::memory_order_acquire);
+    // The getter's two out-parameters are the camera the view is built from: a location and a
+    // rotation, three doubles each -- the free-camera plugin hooks this same function and reads and
+    // writes the same two, which is why this plugin now drives them instead of the POV member the
+    // accessor returns. Writes to that member were measured to be reverted inside the same call,
+    // with the view left under the game's own (mouse-rotatable) camera.
+    auto *out_location = static_cast<double *>(first);
+    auto *out_rotation = static_cast<double *>(second);
+    if (context != nullptr && (follow_mode || track_mode) && out_location != nullptr &&
+        out_rotation != nullptr) {
+      const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(out_location);
+      const std::uintptr_t rotation_address = reinterpret_cast<std::uintptr_t>(out_rotation);
+      std::uintptr_t fov_address{};
+      // The lens has no out-parameter here, so it still goes into the accessor's struct.
+      if (AddAddress(context->camera_pov_struct, kCameraPovFovOffset, fov_address)) {
+        double location[3] = {out_location[0], out_location[1], out_location[2]};
+        double rotation[3] = {out_rotation[0], out_rotation[1], out_rotation[2]};
+        bool read_ok = std::isfinite(location[0]) && std::isfinite(location[1]) &&
+                       std::isfinite(location[2]) && std::isfinite(rotation[0]) &&
+                       std::isfinite(rotation[1]) && std::isfinite(rotation[2]);
+        if (read_ok) {
+          bool usable = std::isfinite(location[0]) && std::isfinite(location[1]) &&
+                        std::isfinite(location[2]) && std::isfinite(rotation[0]) &&
+                        std::isfinite(rotation[1]) && std::isfinite(rotation[2]) &&
+                        std::abs(rotation[0]) <= 90.0;
+          double file_position[3]{};
+          double file_rotation[3]{};
+          double file_distance = 0.0;
+          double file_fov = 0.0;
+          double feet[3]{};
+          double centre[3]{};
+          // The game's own camera, as it was before this detour replaces it: the follow camera is
+          // anchored to it and clamps its distance to it, and the log's pair of positions is what
+          // tells "our shot is somewhere else" apart from "the character is not where we think".
+          const double game_location[3] = {location[0], location[1], location[2]};
+          const double game_rotation[3] = {rotation[0], rotation[1], rotation[2]};
+          // Follow mode never reads the track, whatever file happens to be loaded.
+          const bool sampled =
+              track_mode && SampleCameraTrack(*context, file_position, file_rotation,
+                                              &file_distance, &file_fov);
+          if (usable && (follow_mode || sampled) &&
+              CharacterBounds(*context, feet, centre)) {
+            // The shot's angle is captured once, from the direction the game's own camera looked at
+            // the character: that direction is the way the character faces. The local frame needs a
+            // half turn before it is rotated onto that facing -- +Z_mmd (the way an MMD model faces)
+            // lands on local -Y, not +Y, which is what put every shot behind the character.
+            // Only a reading that could be a real third-person camera is allowed to anchor the
+            // shot, and the attempt is retried every frame until one arrives: anchoring on the
+            // placeholder view point a reload leaves behind is what aimed the shot at a wall.
+            if (!context->camera_anchored.load(std::memory_order_acquire)) {
+              const bool plausible =
+                  GameCameraReadingIsPlausible(game_location, centre) ||
+                  ++context->camera_anchor_wait > 90;
+              const double dx = centre[0] - location[0];
+              const double dy = centre[1] - location[1];
+              if (plausible && std::sqrt(dx * dx + dy * dy) > 1.0) {
+                context->camera_yaw.store(std::atan2(dy, dx) + 1.5707963267948966,
+                                          std::memory_order_release);
+                context->camera_anchor_ground.store(feet[2], std::memory_order_release);
+                context->camera_anchored.store(true, std::memory_order_release);
+              }
+            }
+            if (context->camera_anchored.load(std::memory_order_acquire)) {
+              if (follow_mode)
+                DriveFollowCamera(*context, feet, centre, game_location, game_rotation, base,
+                                  rotation_address, location, rotation);
+              else
+                DriveCameraTrack(*context, feet, centre, game_location, game_rotation,
+                                 file_position, file_rotation, file_distance, file_fov, base,
+                                 rotation_address, fov_address, location, rotation);
+            }
+          }
+        }
+      }
+    }
+  } catch (...) {
+  }
+
+  if (leased && context != nullptr && HookReady(context->hook))
+    static_cast<void>(context->hook->end_callback(context->hook->user, lease));
+  return pov;
+}
+
+// One log line per second while driving: the frame and the camera that came out. Enough to tell
+// "the track is not advancing" from "the write never reaches the view" without another round of
+// guessing, plus the character's own numbers for checking the shot's framing.
+void LogCameraDrive(Context &context, const bool follow_mode, const double location[3],
+                    const double rotation[3], const double unit_cm,
+                    const double model_distance_cm, const double aim_cm, const double feet[3],
+                    const double height_cm, const double applied[3],
+                    const double game_location[3], const double game_rotation[3],
+                    const double landed_cm) noexcept {
+  const double clock = context.camera_log_clock.load(std::memory_order_acquire);
+  const double previous = context.camera_logged_second.load(std::memory_order_acquire);
+  if (previous >= 0.0 && clock - previous < 1.0)
+    return;
+  context.camera_logged_second.store(clock, std::memory_order_release);
+  const double seconds = context.camera_frame.load(std::memory_order_relaxed) / 30.0;
+  char line[576]{};
+  std::snprintf(line, sizeof(line),
+                "betterpose camera drive: %s f%.0f, camera (%.1f, %.1f, %.1f) / "
+                "(%.1f, %.1f, %.1f), game camera (%.1f, %.1f, %.1f) / (%.1f, %.1f, %.1f), "
+                "readback off %.2f cm, unit %.2f cm/u, model %.0f cm away, aim %.0f cm up, "
+                "feet (%.1f, %.1f, %.1f), applied (%.1f, %.1f, %.1f), lock %d root %d, "
+                "h %.0f cm",
+                follow_mode ? "follow" : "track", seconds * 30.0, location[0], location[1],
+                location[2], rotation[0], rotation[1], rotation[2], game_location[0],
+                game_location[1], game_location[2], game_rotation[0], game_rotation[1],
+                game_rotation[2], landed_cm, unit_cm, model_distance_cm, aim_cm, feet[0],
+                feet[1], feet[2], applied[0], applied[1], applied[2],
+                context.motion_lock_planar.load(std::memory_order_relaxed) ? 1 : 0,
+                context.motion_apply_root.load(std::memory_order_relaxed) ? 1 : 0, height_cm);
+  LogDiagnostic(context, line);
+}
+
+// Where the camera should look: the character's chest, from the mesh's world bounds (the box is
+// centred on them, so the chest sits above its origin). False when the character is not readable
+// -- loading screens and menus -- in which case the track's own rotation is left in place.
+// The accessor returns a pointer to the POV the view is built from. While driving, that POV is
+// rewritten in place: the same edit the getter's output would have received, made where nothing
+// can run between this call and the view build to undo it, and with the pointer itself left
+// alone so the rest of the struct keeps whatever the engine put there.
+bool ResolveGObjects(Context &context) noexcept {
+  std::uintptr_t instruction{};
+  std::int32_t displacement{};
+  if (!ResolveSignature(context, kGObjectsPattern, instruction) ||
+      !Read(context, instruction + kGObjectsResolveOffset, displacement))
+    return false;
+  const auto resolved = static_cast<std::intptr_t>(instruction) +
+                        kGObjectsInstructionSize + displacement +
+                        kGObjectsAddend;
+  if (resolved <= 0)
+    return false;
+  context.g_objects_address = static_cast<std::uintptr_t>(resolved);
+  return true;
+}
+
+bool RefreshObjectRegistry(Context &context) noexcept {
+  if (context.object_registry.items != 0)
+    return true;
+  if (context.g_objects_address == 0 && !ResolveGObjects(context))
+    return false;
+  ObjectRegistry next{};
+  std::uint32_t count{};
+  std::uint32_t max_count{};
+  std::uint32_t max_chunks{};
+  std::uint32_t num_chunks{};
+  if (!ReadPointerAt(context, context.g_objects_address, kObjectItemsOffset,
+                     next.items) ||
+      !Read(context, context.g_objects_address + kObjectCountOffset, count) ||
+      !Read(context, context.g_objects_address + kObjectMaxCountOffset,
+            max_count) ||
+      !Read(context, context.g_objects_address + kObjectMaxChunksOffset,
+            max_chunks) ||
+      !Read(context, context.g_objects_address + kObjectNumChunksOffset,
+            num_chunks) ||
+      count == 0 || max_count < count || max_chunks < num_chunks ||
+      num_chunks == 0 || num_chunks > 4096)
+    return false;
+  next.count = count;
+  next.max_count = max_count;
+  next.max_chunks = max_chunks;
+  next.num_chunks = num_chunks;
+  context.object_registry = next;
+  return true;
+}
+
+bool FindObjectAddressByPath(Context &context, const std::string_view path,
+                             std::uintptr_t &object,
+                             std::string *detail = nullptr) noexcept {
+  object = 0;
+  if (!ObjectsReady(context.objects) || path.empty()) {
+    if (detail != nullptr) *detail = "object service or path unavailable";
+    return false;
+  }
+  if (!RefreshObjectRegistry(context)) {
+    if (detail != nullptr) *detail = "GObjects registry unavailable";
+    return false;
+  }
+  AnomalyGenerationHandleV1 handle{};
+  auto find = [&](const std::string_view candidate) {
+    handle = {};
+    return context.objects
+               ->find_exact(context.objects->user,
+                            anomaly::sdk::StringView(candidate), &handle)
+               .code == ANOMALY_STATUS_V1_OK &&
+           handle.id != 0;
+  };
+  if (!find(path)) {
+    std::string alternate(path);
+    const auto separator = alternate.rfind('.');
+    if (separator == std::string::npos) {
+      if (detail != nullptr) *detail = "exact object lookup failed";
+      return false;
+    }
+    alternate[separator] = ':';
+    if (!find(alternate)) {
+      if (detail != nullptr) *detail = "exact object lookup failed";
+      return false;
+    }
+  }
+  if (handle.id == 0) {
+    if (detail != nullptr) *detail = "exact object handle is invalid";
+    return false;
+  }
+  const std::uint32_t index = ANOMALY_UE5_OBJECT_HANDLE_INDEX(handle);
+  if (index >= context.object_registry.count) {
+    if (detail != nullptr) *detail = "exact object index is out of range";
+    return false;
+  }
+  const std::uint32_t chunk_index = index / kObjectChunkSize;
+  const std::uint32_t within_chunk = index % kObjectChunkSize;
+  if (chunk_index >= context.object_registry.num_chunks) {
+    if (detail != nullptr) *detail = "exact object chunk is out of range";
+    return false;
+  }
+  std::uintptr_t chunk{};
+  if (!ReadPointerAt(context, context.object_registry.items,
+                     static_cast<std::uint32_t>(chunk_index * sizeof(void *)),
+                     chunk) ||
+      !ReadPointerAt(context, chunk,
+                     static_cast<std::uint32_t>(within_chunk) *
+                         kObjectItemStride,
+                     object)) {
+    if (detail != nullptr) *detail = "exact object slot is unreadable";
+    return false;
+  }
+  if (object == 0) {
+    if (detail != nullptr) *detail = "exact object slot is null";
+    return false;
+  }
+  return true;
+}
+
+std::string Hex(const std::uintptr_t value) noexcept;
+
+bool ResolveName(Context &context, const std::uint32_t name_id,
+                 std::string &value) noexcept {
+  value.clear();
+  if (!NamesReady(context.names) || name_id == 0)
+    return false;
+  std::array<char, 128> local{};
+  std::size_t size = local.size();
+  AnomalyStatusV1 status = context.names->resolve_utf8(
+      context.names->user, name_id, local.data(), &size);
+  if (status.code == ANOMALY_STATUS_V1_OK && size > 1 && size <= local.size()) {
+    value.assign(local.data(), size - 1U);
+    return true;
+  }
+  if (status.code != ANOMALY_STATUS_V1_BUFFER_TOO_SMALL || size <= 1 ||
+      size > 2048)
+    return false;
+  std::string buffer(size, '\0');
+  status = context.names->resolve_utf8(context.names->user, name_id,
+                                       buffer.data(), &size);
+  if (status.code != ANOMALY_STATUS_V1_OK || size <= 1 || size > buffer.size())
+    return false;
+  buffer.resize(size - 1U);
+  value = std::move(buffer);
+  return true;
+}
+
+bool CallVirtualUFunction(Context &context, const std::uintptr_t object,
+                          const std::string_view function_path,
+                          const void *parameters,
+                          const std::size_t parameter_size,
+                          std::string &detail,
+                          void *output) noexcept {
+  detail.clear();
+  if (object == 0 || function_path.empty() ||
+      parameter_size > kMaximumUFunctionParameterBytes ||
+      (parameter_size != 0 && parameters == nullptr)) {
+    detail = "invalid object, path, or parameters";
+    return false;
+  }
+  std::uintptr_t function{};
+  if (!FindObjectAddressByPath(context, function_path, function, &detail)) {
+    detail.insert(0, "find function failed: ");
+    return false;
+  }
+  std::uintptr_t vtable{};
+  if (!Read(context, object, vtable) || vtable == 0) {
+    detail = "read object vtable failed";
+    return false;
+  }
+  std::uintptr_t process_event{};
+  if (!Read(context,
+            vtable + static_cast<std::uint64_t>(kProcessEventVtableSlot) *
+                        sizeof(void *),
+            process_event) ||
+      process_event == 0) {
+    detail = "ProcessEvent vtable slot is unreadable";
+    return false;
+  }
+
+  using ProcessEventFn = void(__fastcall *)(void *, void *, void *);
+  std::array<std::uint8_t, kMaximumUFunctionParameterBytes> buffer{};
+  if (parameter_size != 0)
+    std::memcpy(buffer.data(), parameters, parameter_size);
+  const auto invoke = reinterpret_cast<ProcessEventFn>(process_event);
+  invoke(reinterpret_cast<void *>(object), reinterpret_cast<void *>(function),
+         parameter_size != 0 ? buffer.data() : nullptr);
+  if (output != nullptr && parameter_size != 0)
+    std::memcpy(output, buffer.data(), parameter_size);
+  detail = "ok function=" + Hex(function) + " process_event=" + Hex(process_event);
+  return true;
+}
+
+// Resolve the entry points a hot path needs, once. CallVirtualUFunction looks the
+// function up by name (through the object registry, under a lock) on every single
+// call; the accessory writer calls it once per bone per frame, which is what makes a
+// character with more clothing slower.
+bool ResolvePoseableEntryPoints(Context &context,
+                                Context::ExtraMesh &extra) noexcept {
+  std::string detail;
+  if (!FindObjectAddressByPath(context, kFunctionPoseableSetBoneTransformByNamePath,
+                               extra.poseable_set_bone_function, &detail) ||
+      extra.poseable_set_bone_function == 0) {
+    LogDiagnostic(context, "betterpose poseable entry: set bone lookup failed " + detail);
+    return false;
+  }
+  if (!FindObjectAddressByPath(context, kFunctionSceneSetRelativeTransformPath,
+                               extra.poseable_set_relative_function, &detail) ||
+      extra.poseable_set_relative_function == 0) {
+    LogDiagnostic(context, "betterpose poseable entry: set relative lookup failed " + detail);
+    return false;
+  }
+  if (!FindObjectAddressByPath(context, kFunctionSceneGetComponentTransformPath,
+                               extra.poseable_get_transform_function, &detail) ||
+      extra.poseable_get_transform_function == 0) {
+    LogDiagnostic(context, "betterpose poseable entry: get transform lookup failed " + detail);
+    return false;
+  }
+  std::uintptr_t vtable{};
+  if (!Read(context, extra.poseable_component, vtable) || vtable == 0 ||
+      !Read(context,
+            vtable + static_cast<std::uint64_t>(kProcessEventVtableSlot) *
+                        sizeof(void *),
+            extra.poseable_process_event) ||
+      extra.poseable_process_event == 0) {
+    LogDiagnostic(context, "betterpose poseable entry: process event slot unreadable");
+    return false;
+  }
+  return true;
+}
+
+// The same call without the lookup: the caller resolved the function and the
+// component's ProcessEvent slot once. The parameter buffer is deliberately not
+// zero-initialised - only the bytes the function reads are ever copied in.
+bool CallResolvedUFunction(const std::uintptr_t object,
+                           const std::uintptr_t function,
+                           const std::uintptr_t process_event,
+                           const void *parameters, const std::size_t parameter_size,
+                           void *output = nullptr) noexcept {
+  if (object == 0 || function == 0 || process_event == 0 ||
+      parameter_size > kMaximumUFunctionParameterBytes ||
+      (parameter_size != 0 && parameters == nullptr))
+    return false;
+  using ProcessEventFn = void(__fastcall *)(void *, void *, void *);
+  std::array<std::uint8_t, kMaximumUFunctionParameterBytes> buffer;
+  if (parameter_size != 0)
+    std::memcpy(buffer.data(), parameters, parameter_size);
+  reinterpret_cast<ProcessEventFn>(process_event)(
+      reinterpret_cast<void *>(object), reinterpret_cast<void *>(function),
+      parameter_size != 0 ? buffer.data() : nullptr);
+  if (output != nullptr && parameter_size != 0)
+    std::memcpy(output, buffer.data(), parameter_size);
+  return true;
+}
+
+bool GetBoneNameFName(Context &context, const std::uint32_t bone_index,
+                      std::array<std::uint8_t, 8> &name) noexcept {
+  name.fill(0);
+  if (context.runtime.mesh == 0)
+    return false;
+  std::array<std::uint8_t, 12> parameters{};
+  const std::int32_t index = static_cast<std::int32_t>(bone_index);
+  std::memcpy(parameters.data(), &index, sizeof(index));
+  std::array<std::uint8_t, 12> output{};
+  std::string detail;
+  if (!CallVirtualUFunction(context, context.runtime.mesh, kFunctionGetBoneNamePath,
+                            parameters.data(), parameters.size(), detail,
+                            output.data()))
+    return false;
+  std::memcpy(name.data(), output.data() + 4, name.size());
+  return true;
+}
+
+bool GetParentBoneFName(Context &context,
+                        const std::array<std::uint8_t, 8> &child,
+                        std::array<std::uint8_t, 8> &parent) noexcept {
+  parent.fill(0);
+  if (context.runtime.mesh == 0)
+    return false;
+  std::array<std::uint8_t, 16> parameters{};
+  std::memcpy(parameters.data(), child.data(), child.size());
+  std::array<std::uint8_t, 16> output{};
+  std::string detail;
+  if (!CallVirtualUFunction(context, context.runtime.mesh,
+                            kFunctionGetParentBonePath, parameters.data(),
+                            parameters.size(), detail, output.data()))
+    return false;
+  std::memcpy(parent.data(), output.data() + 8, parent.size());
+  return true;
+}
+
+bool GetBoneIndexFName(Context &context,
+                       const std::array<std::uint8_t, 8> &name,
+                       std::int32_t &index) noexcept {
+  index = -1;
+  if (context.runtime.mesh == 0)
+    return false;
+  std::array<std::uint8_t, 12> parameters{};
+  std::memcpy(parameters.data(), name.data(), name.size());
+  std::array<std::uint8_t, 12> output{};
+  std::string detail;
+  if (!CallVirtualUFunction(context, context.runtime.mesh,
+                            kFunctionGetBoneIndexPath, parameters.data(),
+                            parameters.size(), detail, output.data()))
+    return false;
+  std::memcpy(&index, output.data() + 8, sizeof(index));
+  return true;
+}
+
+void RefreshBoneHierarchy(Context &context) noexcept {
+  const auto count = context.runtime.local_space_count;
+  context.bone_parents.assign(count, -1);
+  if (context.bone_names.size() != count)
+    return;
+  for (std::uint32_t index{}; index != count; ++index) {
+    std::array<std::uint8_t, 8> child_fname{};
+    if (!GetBoneNameFName(context, index, child_fname))
+      continue;
+    std::array<std::uint8_t, 8> parent_fname{};
+    if (!GetParentBoneFName(context, child_fname, parent_fname))
+      continue;
+    std::uint32_t parent_name_id{};
+    std::memcpy(&parent_name_id, parent_fname.data(), sizeof(parent_name_id));
+    std::string parent_name;
+    if (!ResolveName(context, parent_name_id, parent_name))
+      continue;
+    const auto it = std::find(context.bone_names.begin(),
+                              context.bone_names.end(), parent_name);
+    if (it != context.bone_names.end())
+      context.bone_parents[index] =
+          static_cast<std::int32_t>(it - context.bone_names.begin());
+  }
+}
+
+void RefreshBoneHierarchyDirect(Context &context) noexcept {
+  const auto count = context.runtime.local_space_count;
+  if (count == 0)
+    return;
+  if (context.bone_parents_ready &&
+      context.bone_parents_mesh == context.runtime.mesh &&
+      context.bone_parents_count == count)
+    return;
+  context.bone_parents.assign(count, -1);
+  for (std::uint32_t index{}; index != count; ++index) {
+    std::array<std::uint8_t, 8> child_fname{};
+    if (!GetBoneNameFName(context, index, child_fname))
+      continue;
+    std::array<std::uint8_t, 8> parent_fname{};
+    if (!GetParentBoneFName(context, child_fname, parent_fname))
+      continue;
+    const std::uint64_t parent_name =
+        *reinterpret_cast<const std::uint64_t *>(parent_fname.data());
+    if (parent_name == 0)
+      continue;
+    std::int32_t parent_index = -1;
+    if (!GetBoneIndexFName(context, parent_fname, parent_index))
+      continue;
+    if (parent_index >= 0 &&
+        static_cast<std::uint32_t>(parent_index) < count)
+      context.bone_parents[index] = parent_index;
+  }
+  context.bone_parents_mesh = context.runtime.mesh;
+  context.bone_parents_count = count;
+  context.bone_parents_ready = true;
+}
+
+bool ApplyPoseByName(Context &context, const std::uint32_t bone,
+                     const std::array<double, 3> &translation,
+                     std::string &detail) noexcept {
+  detail.clear();
+  if (context.runtime.mesh == 0) {
+    detail = "local mesh is unavailable";
+    return false;
+  }
+  std::array<std::uint8_t, 8> name{};
+  if (!GetBoneNameFName(context, bone, name)) {
+    detail = "GetBoneName failed";
+    return false;
+  }
+  std::array<std::uint8_t, 0x28> parameters{};
+  std::memcpy(parameters.data(), name.data(), name.size());
+  std::memcpy(parameters.data() + 0x08, translation.data(),
+              sizeof(double) * 3);
+  const std::uint8_t component_space = 1;
+  parameters[0x20] = component_space;
+  return CallVirtualUFunction(context, context.runtime.mesh,
+                              kFunctionSetBoneLocationByNamePath,
+                              parameters.data(), parameters.size(), detail);
+}
+
+struct Rotator3d {
+  double pitch{};
+  double yaw{};
+  double roll{};
+};
+
+bool ApplyBoneRotationByName(Context &context, const std::uint32_t bone,
+                             const double pitch, const double yaw,
+                             const double roll, std::string &detail) noexcept {
+  detail.clear();
+  if (context.runtime.mesh == 0) {
+    detail = "local mesh is unavailable";
+    return false;
+  }
+  std::array<std::uint8_t, 8> name{};
+  if (!GetBoneNameFName(context, bone, name)) {
+    detail = "GetBoneName failed";
+    return false;
+  }
+  std::array<std::uint8_t, 0x28> parameters{};
+  std::memcpy(parameters.data(), name.data(), name.size());
+  const Rotator3d rotation{pitch, yaw, roll};
+  std::memcpy(parameters.data() + 0x08, &rotation, sizeof(rotation));
+  const std::uint8_t component_space = 1;
+  parameters[0x20] = component_space;
+  return CallVirtualUFunction(context, context.runtime.mesh,
+                              kFunctionSetBoneRotationByNamePath,
+                              parameters.data(), parameters.size(), detail);
+}
+
+void ApplyPoseOverridesViaUFunction(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
+      state.mesh == 0)
+    return;
+  std::vector<std::array<double, 3>> angles;
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    if (context.bone_angles.size() < state.local_space_count)
+      return;
+    angles.assign(context.bone_angles.begin(),
+                  context.bone_angles.begin() + state.local_space_count);
+  }
+  for (std::uint32_t bone{}; bone != state.local_space_count; ++bone) {
+    const auto &angle = angles[bone];
+    if (angle[0] == 0.0 && angle[1] == 0.0 && angle[2] == 0.0)
+      continue;
+    std::string detail;
+    static_cast<void>(ApplyBoneRotationByName(
+        context, bone, angle[0], angle[1], angle[2], detail));
+  }
+  static_cast<void>(ForcePoseMeshObjectUpdate(context));
+}
+
+bool CapturePoseBase(Context &context) noexcept {
+  const auto mesh = context.runtime.mesh;
+  const auto data = context.runtime.local_space_data;
+  const auto count = context.runtime.local_space_count;
+  if (mesh == 0 || data == 0 || count == 0)
+    return false;
+  std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+  if (context.pose_base_ready && context.pose_base_mesh == mesh &&
+      context.pose_base_locals.size() == count)
+    return true;
+  std::vector<std::array<double, 12>> base(count);
+  for (std::uint32_t bone{}; bone != count; ++bone) {
+    std::uintptr_t address{};
+    if (!AddAddress(data, static_cast<std::uint64_t>(bone) * kTransformSize,
+                    address) ||
+        !Read(context, address, base[bone]))
+      return false;
+  }
+  context.pose_base_locals = std::move(base);
+  context.pose_base_mesh = mesh;
+  context.pose_base_ready = true;
+  return true;
+}
+
+void ApplyPoseOverridesDirect(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
+      state.mesh == 0 || state.local_space_data == 0 ||
+      state.local_space_count == 0 || state.component_space_data == 0 ||
+      state.component_space_count != state.local_space_count)
+    return;
+  if (!CapturePoseBase(context))
+    return;
+  const std::uint32_t count = state.local_space_count;
+  std::vector<std::array<double, 12>> base_locals;
+  std::vector<std::array<double, 3>> angles;
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    if (context.pose_base_locals.size() != count ||
+        context.bone_angles.size() < count)
+      return;
+    base_locals = context.pose_base_locals;
+    angles.assign(context.bone_angles.begin(),
+                  context.bone_angles.begin() + count);
+  }
+
+  std::array<double, 3> root_offset{
+      context.requested_root_offset[0].load(std::memory_order_acquire),
+      context.requested_root_offset[1].load(std::memory_order_acquire),
+      context.requested_root_offset[2].load(std::memory_order_acquire)};
+  const bool has_root_offset =
+      root_offset[0] != 0.0 || root_offset[1] != 0.0 || root_offset[2] != 0.0;
+
+  std::vector<Transformd> locals(count);
+  bool any_override = false;
+  for (std::uint32_t bone{}; bone != count; ++bone) {
+    const auto &raw = base_locals[bone];
+    locals[bone].rotation = Quatd{raw[0], raw[1], raw[2], raw[3]};
+    locals[bone].translation = Vec3d{raw[4], raw[5], raw[6]};
+    locals[bone].scale = Vec3d{raw[8], raw[9], raw[10]};
+    const auto &angle = angles[bone];
+    if (angle[0] == 0.0 && angle[1] == 0.0 && angle[2] == 0.0)
+      continue;
+    any_override = true;
+    const Quatd offset =
+        RotatorToQuat(angle[0], angle[1], angle[2]);
+    locals[bone].rotation = QuatMultiply(offset, locals[bone].rotation);
+  }
+  if (!any_override && !has_root_offset)
+    return;
+
+  if (context.bone_parents.size() != count)
+    return;
+  std::vector<Transformd> components(count);
+  std::vector<std::uint8_t> marks(count, 0);
+  for (std::uint32_t bone{}; bone != count; ++bone)
+    static_cast<void>(ComputeBoneComponent(bone, locals, context.bone_parents,
+                                           components, marks));
+
+  std::vector<PackedTransform> packed(count);
+  for (std::uint32_t bone{}; bone != count; ++bone)
+    PackTransform(components[bone], packed[bone]);
+  for (std::uint32_t bone{}; bone != count; ++bone) {
+    packed[bone].translation[0] += root_offset[0];
+    packed[bone].translation[1] += root_offset[1];
+    packed[bone].translation[2] += root_offset[2];
+  }
+  // Both arrays are component-space buffers selected by the engine's read index.
+  // The legacy state member bone_space_data names buffer 0, not local transforms.
+  const auto *bytes = reinterpret_cast<const std::uint8_t *>(packed.data());
+  const auto byte_count = packed.size() * sizeof(PackedTransform);
+  static_cast<void>(WriteBytes(context, state.component_space_data, bytes,
+                               byte_count));
+  static_cast<void>(WriteBytes(context, state.bone_space_data, bytes,
+                               byte_count));
+  WriteExtraMeshes(context, packed);
+  static_cast<void>(ForcePoseMeshObjectUpdate(context));
+}
+
+// ---------------------------------------------------------------------------
+// MMD motion playback
+//
+// The tracks come from the offline converter (tools/mmd2bip.py): per frame, an
+// absolute local rotation for every driven bone plus the root translation in
+// component space. Bones the file does not mention keep the captured base pose,
+// exactly like the manual pose override does.
+// ---------------------------------------------------------------------------
+
+struct MotionSample {
+  std::vector<std::uint32_t> indices;
+  std::vector<std::array<double, 4>> rotations;
+  std::array<double, 3> root_translation{0.0, 0.0, 0.0};
+  std::uint32_t root_index{};
+  bool has_root{};
+  std::vector<std::uint32_t> offset_indices;
+  std::vector<std::array<double, 3>> offsets;
+};
+
+double MotionDuration(const Context::MotionTrack &motion) noexcept {
+  if (motion.frame_count <= 1)
+    return 0.0;
+  const double fps = motion.fps > 0.0 ? motion.fps : 30.0;
+  return static_cast<double>(motion.frame_count - 1) / fps;
+}
+
+// Maps the file's bone names onto this skeleton's bone indices. Needs the bone
+// name table, which can only be read on the game thread, so this runs from
+// Update rather than from the loading task.
+bool ResolveMotionIndices(Context &context) noexcept {
+  if (!context.motion_loaded.load(std::memory_order_acquire))
+    return false;
+  std::lock_guard<std::mutex> lock(context.motion_mutex);
+  auto &motion = context.motion;
+  if (motion.indices_ready)
+    return true;
+  if (motion.bone_names.empty())
+    return false;
+  if (context.bone_names.empty())
+    MaybeRefreshBoneNames(context);
+  if (context.bone_names.empty())
+    return false;
+  std::vector<std::uint32_t> indices(motion.bone_names.size(),
+                                     (std::numeric_limits<std::uint32_t>::max)());
+  std::uint32_t resolved{};
+  for (std::size_t track{}; track != motion.bone_names.size(); ++track) {
+    const std::string &wanted = motion.bone_names[track];
+    for (std::size_t bone{}; bone != context.bone_names.size(); ++bone) {
+      if (context.bone_names[bone] == wanted) {
+        indices[track] = static_cast<std::uint32_t>(bone);
+        ++resolved;
+        break;
+      }
+    }
+  }
+  if (resolved == 0)
+    return false;
+  // How many of the file's tracks this skeleton actually has, and which names
+  // found nothing. "Fingers do not move" is only worth investigating once the
+  // finger tracks are known to be resolved at all.
+  {
+    std::string message = "betterpose motion resolved " +
+                          std::to_string(resolved) + "/" +
+                          std::to_string(motion.bone_names.size());
+    std::size_t shown{};
+    for (std::size_t track{};
+         track != motion.bone_names.size() && shown != 8; ++track) {
+      if (indices[track] != (std::numeric_limits<std::uint32_t>::max)())
+        continue;
+      message += " ";
+      message += motion.bone_names[track];
+      ++shown;
+    }
+    if (shown != 0)
+      message += " missing";
+    LogDiagnostic(context, message);
+  }
+  motion.bone_indices = std::move(indices);
+  motion.root_bone_index = (std::numeric_limits<std::uint32_t>::max)();
+  if (!motion.root_bone_name.empty()) {
+    for (std::size_t bone{}; bone != context.bone_names.size(); ++bone) {
+      if (context.bone_names[bone] == motion.root_bone_name) {
+        motion.root_bone_index = static_cast<std::uint32_t>(bone);
+        break;
+      }
+    }
+  }
+  motion.offset_indices.assign(motion.offset_names.size(),
+                               (std::numeric_limits<std::uint32_t>::max)());
+  for (std::size_t track{}; track != motion.offset_names.size(); ++track) {
+    for (std::size_t bone{}; bone != context.bone_names.size(); ++bone) {
+      if (context.bone_names[bone] == motion.offset_names[track]) {
+        motion.offset_indices[track] = static_cast<std::uint32_t>(bone);
+        break;
+      }
+    }
+  }
+  motion.offsets_ready = motion.offsets_ready &&
+                         motion.offset_indices.size() == motion.offset_names.size();
+  motion.indices_ready = true;
+  return true;
+}
+
+bool SampleMotion(Context &context, const double seconds,
+                  MotionSample &out) noexcept {
+  std::lock_guard<std::mutex> lock(context.motion_mutex);
+  const auto &motion = context.motion;
+  if (!motion.indices_ready || motion.bone_count == 0 || motion.frame_count == 0)
+    return false;
+  const double fps = motion.fps > 0.0 ? motion.fps : 30.0;
+  const double duration = MotionDuration(motion);
+  double time = seconds;
+  if (time < 0.0)
+    time = 0.0;
+  if (time > duration)
+    time = duration;
+  const double position = time * fps;
+  const auto frame0 = static_cast<std::uint32_t>(position);
+  const auto frame1 = frame0 + 1 < motion.frame_count ? frame0 + 1 : frame0;
+  const float blend = static_cast<float>(position - static_cast<double>(frame0));
+  out.indices.resize(motion.bone_count);
+  out.rotations.resize(motion.bone_count);
+  for (std::size_t track{}; track != motion.bone_count; ++track) {
+    out.indices[track] = motion.bone_indices[track];
+    const auto offset0 =
+        (static_cast<std::size_t>(frame0) * motion.bone_count + track) * 4;
+    const auto offset1 =
+        (static_cast<std::size_t>(frame1) * motion.bone_count + track) * 4;
+    double dot{};
+    for (int k{}; k != 4; ++k)
+      dot += static_cast<double>(motion.rotations[offset0 + k]) *
+             static_cast<double>(motion.rotations[offset1 + k]);
+    const double sign = dot < 0.0 ? -1.0 : 1.0;
+    std::array<double, 4> value{};
+    double length{};
+    for (int k{}; k != 4; ++k) {
+      const double a = motion.rotations[offset0 + k];
+      const double b = sign * motion.rotations[offset1 + k];
+      value[k] = a + (b - a) * static_cast<double>(blend);
+      length += value[k] * value[k];
+    }
+    length = std::sqrt(length);
+    if (length > 1e-9)
+      for (int k{}; k != 4; ++k)
+        value[k] /= length;
+    else
+      value = {0.0, 0.0, 0.0, 1.0};
+    out.rotations[track] = value;
+  }
+  out.has_root = motion.has_root &&
+                 motion.root_bone_index !=
+                     (std::numeric_limits<std::uint32_t>::max)() &&
+                 motion.roots.size() >=
+                     static_cast<std::size_t>(motion.frame_count) * 3;
+  out.root_index = motion.root_bone_index;
+  if (out.has_root) {
+    for (int k{}; k != 3; ++k) {
+      const double a = motion.roots[static_cast<std::size_t>(frame0) * 3 + k];
+      const double b = motion.roots[static_cast<std::size_t>(frame1) * 3 + k];
+      out.root_translation[k] = a + (b - a) * static_cast<double>(blend);
+    }
+  }
+  const std::size_t offset_count = motion.offset_indices.size();
+  if (motion.offsets_ready && offset_count != 0 &&
+      motion.offsets.size() >= static_cast<std::size_t>(motion.frame_count) *
+                                   offset_count * 3) {
+    out.offset_indices.resize(offset_count);
+    out.offsets.resize(offset_count);
+    for (std::size_t track{}; track != offset_count; ++track) {
+      out.offset_indices[track] = motion.offset_indices[track];
+      for (int k{}; k != 3; ++k) {
+        const double a = motion.offsets[
+            (static_cast<std::size_t>(frame0) * offset_count + track) * 3 + k];
+        const double b = motion.offsets[
+            (static_cast<std::size_t>(frame1) * offset_count + track) * 3 + k];
+        out.offsets[track][k] = a + (b - a) * static_cast<double>(blend);
+      }
+    }
+  }
+  return true;
+}
+
+// Leg length of the live character in centimetres, from the *segment* lengths the converter
+// measures on the source side, so the ratio is this character's own centimetres per MMD unit.
+// The calf's local translation is the thigh's length and the foot's is the shin's; the thigh's own
+// translation is the hip's lateral offset from the pelvis (about 6.5 cm on this rig), not a
+// segment, and both converters leave it out when they derive `unitScaleCmPerMmdUnit`
+// (motion_builder.cpp:2120-2131, mmd2bip.py:1463-1471). Counting it made the runtime scale 8 %
+// larger than the file's own: the log's camera heights read 9.233 cm per MMD unit while the
+// motion JSON's `unitScaleCmPerMmdUnit` is 8.545, so every MMD-unit motion and the camera track
+// were stretched by that factor. The asset's own reference pose is preferred: it is the pose the
+// converter measured `mmdLegLength` against and it is readable before any motion has been applied,
+// which is the state a camera file is driven in on its own.
+double LiveLegLength(Context &context) noexcept {
+  static constexpr const char *kChain[] = {"Bip001-L-Calf", "Bip001-L-Foot"};
+  double total = 0.0;
+  std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+  const std::vector<std::array<double, 12>> &source =
+      context.ref_locals.size() == context.bone_names.size() && !context.ref_locals.empty()
+          ? context.ref_locals
+          : context.pose_base_locals;
+  for (const auto *wanted : kChain) {
+    for (std::size_t bone{}; bone != context.bone_names.size(); ++bone) {
+      if (context.bone_names[bone] != wanted)
+        continue;
+      if (bone < source.size()) {
+        const auto &local = source[bone];
+        total += std::sqrt(local[4] * local[4] + local[5] * local[5] +
+                           local[6] * local[6]);
+      }
+      break;
+    }
+  }
+  return total;
+}
+
+
+void ApplyMotionPoseDirect(Context &context) noexcept {
+  RuntimeState &state = context.runtime;
+  if (state.mesh == 0 || state.local_space_data == 0 ||
+      state.local_space_count == 0 || state.component_space_data == 0 ||
+      state.component_space_count != state.local_space_count)
+    return;
+  MotionSample sample;
+  if (!SampleMotion(context, context.motion_seconds.load(std::memory_order_acquire),
+                    sample))
+    return;
+  if (!CapturePoseBase(context))
+    return;
+  // The reference pose is what undriven bones should sit at; read it once per
+  // character. The mesh scan usually got there first, in which case this is free.
+  if (context.ref_locals.empty() && !context.ref_pose_attempted) {
+    context.ref_pose_attempted = true;
+    if (!FindReferencePose(context)) {
+      char status[160]{};
+      std::snprintf(status, sizeof(status),
+                    "betterpose motion baseline: captured pose (reference pose "
+                    "unavailable: %s)",
+                    context.ref_pose_status.c_str());
+      LogDiagnostic(context, status);
+    }
+  }
+  const std::uint32_t count = state.local_space_count;
+  if (context.bone_parents.size() != count)
+    return;
+  std::vector<std::array<double, 12>> base_locals;
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    if (context.pose_base_locals.size() != count)
+      return;
+    base_locals = context.pose_base_locals;
+  }
+  // Bones the motion does not drive are the ones that decide whether a skirt hangs
+  // naturally or stays flung: this rig's cloth and skirt bones hang off helper bones
+  // (wq_*, VB*, hand/foot IK targets) that no MMD track ever covers, and their live
+  // values differ from the reference pose by up to 173 degrees and 17 cm. Keeping the
+  // captured pose therefore froze a skirt that happened to be mid-swing. The engine's
+  // reference pose is the undeformed pose, so use it as the baseline whenever it has
+  // been read; the captured pose stays the fallback.
+  bool baseline_is_bind = false;
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    if (context.ref_locals.size() == count) {
+      base_locals = context.ref_locals;
+      baseline_is_bind = true;
+    }
+  }
+  if (baseline_is_bind && !context.motion_baseline_logged.exchange(true)) {
+    LogDiagnostic(context,
+                  "betterpose motion baseline: engine reference pose "
+                  "(undriven bones no longer inherit the captured pose)");
+  }
+
+  std::vector<Transformd> locals(count);
+  for (std::uint32_t bone{}; bone != count; ++bone) {
+    const auto &raw = base_locals[bone];
+    locals[bone].rotation = Quatd{raw[0], raw[1], raw[2], raw[3]};
+    locals[bone].translation = Vec3d{raw[4], raw[5], raw[6]};
+    locals[bone].scale = Vec3d{raw[8], raw[9], raw[10]};
+  }
+  for (std::size_t track{}; track != sample.indices.size(); ++track) {
+    const std::uint32_t bone = sample.indices[track];
+    if (bone >= count)
+      continue;
+    const auto &q = sample.rotations[track];
+    locals[bone].rotation = Quatd{q[0], q[1], q[2], q[3]};
+  }
+  for (std::size_t track{}; track != sample.offset_indices.size(); ++track) {
+    const std::uint32_t bone = sample.offset_indices[track];
+    if (bone >= count)
+      continue;
+    const auto &o = sample.offsets[track];
+    locals[bone].translation = Vec3d{o[0], o[1], o[2]};
+  }
+  const double no_offset[3] = {0.0, 0.0, 0.0};
+  PublishRootOffsets(context, no_offset, no_offset);
+  if (sample.has_root && sample.root_index < count &&
+      context.motion_apply_root.load(std::memory_order_acquire)) {
+    const auto &track = context.motion;
+    // MMD-unit offsets are relative to the character's own pose, scaled by *this*
+    // character's leg length. The absolute centimetre form baked the exporting
+    // character's height into the file and made a taller character play 24 cm too
+    // low; keep reading it so old files still behave as before.
+    if (track.roots_in_mmd_units && track.mmd_leg_length > 1e-6) {
+      const double live_leg = LiveLegLength(context);
+      const double scale =
+          live_leg > 1e-6 ? live_leg / track.mmd_leg_length : 1.0;
+      // The camera track travels in the same MMD units, so it needs the same ratio.
+      context.mmd_unit_cm.store(scale, std::memory_order_release);
+      const auto base = locals[sample.root_index].translation;
+      // The emitted vector is already in this rig's axes (mmd y -> z), so the height is [2] and
+      // the plane is [0]/[1]. "Lock planar motion" keeps the height and drops the two horizontal
+      // components: the character plays in place and still bobs and jumps.
+      const bool lock_planar = context.motion_lock_planar.load(std::memory_order_acquire);
+      const double applied[3] = {lock_planar ? 0.0 : sample.root_translation[0] * scale,
+                                 lock_planar ? 0.0 : sample.root_translation[1] * scale,
+                                 sample.root_translation[2] * scale};
+      const double authored[3] = {sample.root_translation[0] * scale,
+                                  sample.root_translation[1] * scale,
+                                  sample.root_translation[2] * scale};
+      locals[sample.root_index].translation =
+          Vec3d{base.x + applied[0], base.y + applied[1], base.z + applied[2]};
+      PublishRootOffsets(context, applied, authored);
+    } else {
+      locals[sample.root_index].translation =
+          Vec3d{sample.root_translation[0], sample.root_translation[1],
+                sample.root_translation[2]};
+      const double as_is[3] = {sample.root_translation[0], sample.root_translation[1],
+                               sample.root_translation[2]};
+      PublishRootOffsets(context, as_is, as_is);
+    }
+  }
+
+  std::vector<Transformd> components(count);
+  std::vector<std::uint8_t> marks(count, 0);
+  for (std::uint32_t bone{}; bone != count; ++bone)
+    static_cast<void>(ComputeBoneComponent(bone, locals, context.bone_parents,
+                                           components, marks));
+  std::vector<PackedTransform> packed(count);
+  for (std::uint32_t bone{}; bone != count; ++bone)
+    PackTransform(components[bone], packed[bone]);
+  // Same as the manual pose path: 0x628 gets the component data, because that is
+  // what this build actually renders from.
+  const auto *bytes = reinterpret_cast<const std::uint8_t *>(packed.data());
+  const auto byte_count = packed.size() * sizeof(PackedTransform);
+  static_cast<void>(WriteBytes(context, state.component_space_data, bytes,
+                               byte_count));
+  static_cast<void>(WriteBytes(context, state.bone_space_data, bytes,
+                               byte_count));
+  WriteExtraMeshes(context, packed);
+  static_cast<void>(ForcePoseMeshObjectUpdate(context));
+}
+
+// Walks the GObjects registry a slice at a time (never more than a fraction of a
+// tick) and collects every object whose class pointer equals our mesh's and
+// whose bone array holds the same bone count. Strictly read-only.
+void StepMeshScan(Context &context) noexcept {
+  if (!context.mesh_scan_requested.load(std::memory_order_acquire))
+    return;
+  if (context.runtime.mesh == 0) {
+    context.mesh_scan_requested.store(false, std::memory_order_release);
+    context.mesh_scan_running = false;
+    return;
+  }
+  if (!RefreshObjectRegistry(context)) {
+    context.mesh_scan_requested.store(false, std::memory_order_release);
+    context.mesh_scan_running = false;
+    return;
+  }
+  if (!context.mesh_scan_running) {
+    context.mesh_scan_running = true;
+    context.mesh_scan_cursor = 0;
+    context.mesh_scan_class = 0;
+    context.mesh_scan_same_class = 0;
+    context.mesh_scan_reference = {0.0, 0.0, 0.0};
+    context.mesh_scan_candidates.clear();
+    context.skeleton_meshes.clear();
+    context.mesh_scan_mesh_assets = 0;
+    context.mesh_scan_skinned = 0;
+    context.mesh_scan_mesh_objects = 0;
+    context.mesh_scan_bone_counts.clear();
+    context.mesh_scan_skeletal = 0;
+    context.ref_locals.clear();
+    if (!Read(context, context.runtime.mesh + kObjectClassOffset,
+              context.mesh_scan_class))
+      context.mesh_scan_class = 0;
+    // Reference bone: pick one with a non-zero local translation so the compare
+    // is actually discriminating (bone 5 is a spine joint in this rig).
+    std::uint32_t reference = 0;
+    {
+      std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+      if (!context.pose_base_locals.empty()) {
+        reference = static_cast<std::uint32_t>(
+            (std::min)(context.pose_base_locals.size() - 1, std::size_t{5}));
+        context.mesh_scan_reference = {context.pose_base_locals[reference][4],
+                                       context.pose_base_locals[reference][5],
+                                       context.pose_base_locals[reference][6]};
+      }
+    }
+    context.mesh_scan_reference_bone = reference;
+  }
+  const ObjectRegistry &registry = context.object_registry;
+  std::uint32_t budget = 20000;
+  while (context.mesh_scan_cursor < registry.count && budget-- != 0) {
+    const std::uint32_t index = context.mesh_scan_cursor++;
+    const std::uint32_t chunk = index / kObjectChunkSize;
+    if (chunk >= registry.num_chunks)
+      break;
+    std::uintptr_t chunk_pointer{};
+    if (!ReadPointerAt(context, registry.items, chunk * sizeof(std::uintptr_t),
+                       chunk_pointer) ||
+        chunk_pointer == 0)
+      continue;
+    std::uintptr_t object{};
+    if (!ReadPointerAt(context, chunk_pointer,
+                       (index % kObjectChunkSize) * kObjectItemStride,
+                       object) ||
+        object == 0)
+      continue;
+    std::uintptr_t klass{};
+    if (!Read(context, object + kObjectClassOffset, klass) || klass == 0)
+      continue;
+    // A "Mesh" name match also hits SkeletalMeshSocket / MeshDeformer, which say
+    // nothing about who owns geometry, so require an actual component class.
+    // The cache holds the *raw* class name because ClassNameOf shares this map.
+    std::string class_name;
+    const auto cached = context.mesh_scan_class_cache.find(klass);
+    if (cached != context.mesh_scan_class_cache.end()) {
+      class_name = cached->second;
+    } else {
+      std::uint32_t name_id{};
+      if (Read(context, klass + kObjectNameOffset, name_id))
+        static_cast<void>(ResolveName(context, name_id, class_name));
+      context.mesh_scan_class_cache[klass] = class_name;
+    }
+    if (class_name.empty())
+      continue;
+    if (class_name.find("SkeletalMesh") != std::string::npos)
+      ++context.mesh_scan_skeletal;
+    // Mesh assets carry the bind pose. The scan already walks every object, so it
+    // is the cheapest place to pick that up; a success is logged and reused by the
+    // skeleton export.
+    if (class_name.find("SkeletalMesh") != std::string::npos &&
+        class_name.find("Component") == std::string::npos) {
+      ++context.mesh_scan_mesh_assets;
+      if (context.ref_locals.empty())
+        static_cast<void>(TryAssetReferencePose(context, object));
+    }
+    if (class_name.find("MeshComponent") == std::string::npos)
+      continue;
+    ++context.mesh_scan_mesh_objects;
+    // Only the local player's own components: the outer of a component is the
+    // actor that owns it, so anything else in the world is filtered out here.
+    std::uintptr_t outer{};
+    if (context.runtime.character == 0 ||
+        !Read(context, object + kObjectOuterOffset, outer) ||
+        outer != context.runtime.character)
+      continue;
+    // A readable bone array of a sane length means this component really owns a
+    // skeleton. The bone count is the identifier that matters: our body mesh has
+    // 262, a hair-only component would have its own much smaller one.
+    std::uintptr_t data{};
+    std::uint32_t count{};
+    if (!ReadArrayHeader(context, object + kMeshComponentSpaceBuffer0Offset, data,
+                         count) ||
+        data == 0 || count == 0 || count > 4096)
+      continue;
+    ++context.mesh_scan_skinned;
+    if (context.mesh_scan_bone_counts.size() < 6 &&
+        std::find(context.mesh_scan_bone_counts.begin(),
+                  context.mesh_scan_bone_counts.end(), count) ==
+            context.mesh_scan_bone_counts.end())
+      context.mesh_scan_bone_counts.push_back(count);
+    // Anything that is not the body mesh itself is a candidate for the extra
+    // component pass (hair layers, accessories, cloth).
+    if (count != context.runtime.bone_space_count &&
+        context.mesh_scan_candidates.size() < 16)
+      context.mesh_scan_candidates.emplace_back(object, count);
+  }
+  const bool done = context.mesh_scan_cursor >= registry.count;
+  if (done) {
+    context.mesh_scan_requested.store(false, std::memory_order_release);
+    context.mesh_scan_running = false;
+    // Keep the owner for diagnostics. An empty result is only a snapshot of
+    // the current object registry: modular accessories can be created after
+    // the pawn and after this scan completes.
+    context.mesh_scan_owner = context.runtime.mesh;
+    // Deliberately tiny: only digits and commas, so screen readers and OCR get
+    // it right. "counts" are the distinct bone counts of skinned components.
+    std::string list;
+    for (std::size_t i{}; i != context.mesh_scan_bone_counts.size(); ++i) {
+      if (i != 0)
+        list += ",";
+      list += std::to_string(context.mesh_scan_bone_counts[i]);
+    }
+    if (list.empty())
+      list = "-";
+    // Build the bone-name mapping for the extra components right away, and let
+    // that report replace the plain count: "map <mapped>/<total> in <n>" tells
+    // us whether the accessory mapping keys actually line up.
+    // Log the outcome: the panel text is not visible to anyone reading the log, and
+    // "how many mesh assets were even seen" is the number that decides whether the
+    // bind-pose read is worth retrying.
+    {
+      char message[224]{};
+      std::snprintf(message, sizeof(message),
+                    "betterpose mesh scan done meshobjects %u assets %u skinned %u "
+                    "skeletal %u candidates %zu refpose %s",
+                    static_cast<unsigned>(context.mesh_scan_mesh_objects),
+                    static_cast<unsigned>(context.mesh_scan_mesh_assets),
+                    static_cast<unsigned>(context.mesh_scan_skinned),
+                    static_cast<unsigned>(context.mesh_scan_skeletal),
+                    context.mesh_scan_candidates.size(),
+                    context.ref_locals.empty() ? context.ref_pose_status.c_str()
+                                               : "read");
+      LogDiagnostic(context, message);
+    }
+    if (context.mesh_scan_candidates.empty()) {
+      static_cast<void>(DropExtraMeshes(context));
+    } else {
+      context.mesh_scan_empty_retries = 0;
+      BuildExtraMeshes(context);
+    }
+  }
+}
+
+void UnloadMotion(Context &context) noexcept {
+  std::lock_guard<std::mutex> lock(context.motion_mutex);
+  ++context.motion_load_epoch;
+  context.motion_loaded.store(false, std::memory_order_release);
+  context.motion_playing.store(false, std::memory_order_release);
+  context.motion = Context::MotionTrack{};
+  context.motion_seconds.store(0.0, std::memory_order_release);
+  context.motion_display_seconds.store(0.0, std::memory_order_release);
+  context.motion_seek.store(-1.0, std::memory_order_release);
+  context.motion_seek_pending.store(false, std::memory_order_release);
+  context.motion_seek_immediate.store(false, std::memory_order_release);
+  context.motion_seek_serial.fetch_add(1, std::memory_order_release);
+}
+
+bool LoadMotionDocument(Context &context, const std::string &document,
+                        const std::string &path, const std::uint64_t load_epoch) {
+  const auto json = nlohmann::json::parse(document);
+  if (json.value("kind", std::string()) != "better-pose-motion")
+    throw std::runtime_error("not a better-pose motion document");
+  const auto &bones = json.at("bones");
+  if (!bones.is_object() || bones.empty())
+    throw std::runtime_error("motion has no bone tracks");
+  Context::MotionTrack track;
+  track.path = path;
+  track.fps = json.value("fps", 30.0);
+  track.frame_count = json.value("frameCount", 0U);
+  track.first_frame = json.value("firstFrame", 0U);
+  track.mesh_id = json.value("targetMesh", std::string());
+  track.root_bone_name = json.value("rootBone", std::string());
+  track.roots_in_mmd_units =
+      json.value("rootTranslationUnit", std::string()) == "mmd";
+  track.mmd_leg_length = json.value("mmdLegLength", 0.0);
+  if (track.frame_count == 0)
+    throw std::runtime_error("motion has no frames");
+  if (track.frame_count > 600000)
+    throw std::runtime_error("motion is unreasonably long");
+
+  track.bone_names.reserve(bones.size());
+  for (auto it = bones.begin(); it != bones.end(); ++it) {
+    track.bone_names.push_back(it.key());
+    if (!it.value().is_array() || it.value().size() != track.frame_count)
+      throw std::runtime_error("bone track length does not match frameCount");
+  }
+  track.bone_count = static_cast<std::uint32_t>(track.bone_names.size());
+  track.rotations.assign(
+      static_cast<std::size_t>(track.frame_count) * track.bone_count * 4, 0.0F);
+  std::size_t track_index{};
+  for (auto it = bones.begin(); it != bones.end(); ++it, ++track_index) {
+    std::size_t frame{};
+    for (const auto &key : it.value()) {
+      if (!key.is_array() || key.size() != 4)
+        throw std::runtime_error("bone keyframe is not a quaternion");
+      const auto offset = (frame * track.bone_count + track_index) * 4;
+      for (std::size_t k{}; k != 4; ++k)
+        track.rotations[offset + k] = key[k].get<float>();
+      ++frame;
+    }
+  }
+  const auto roots = json.find("rootTranslation");
+  if (roots != json.end() && roots->is_array() &&
+      roots->size() == track.frame_count) {
+    track.roots.assign(static_cast<std::size_t>(track.frame_count) * 3, 0.0F);
+    std::size_t frame{};
+    for (const auto &key : *roots) {
+      if (!key.is_array() || key.size() != 3)
+        throw std::runtime_error("root translation is not a vector");
+      for (std::size_t k{}; k != 3; ++k)
+        track.roots[frame * 3 + k] = key[k].get<float>();
+      ++frame;
+    }
+    track.has_root = !track.root_bone_name.empty();
+  }
+  const auto offsets = json.find("boneOffsets");
+  if (offsets != json.end() && offsets->is_object() &&
+      !offsets->empty()) {
+    track.offset_names.reserve(offsets->size());
+    for (auto it = offsets->begin(); it != offsets->end(); ++it) {
+      if (!it.value().is_array() || it.value().size() != track.frame_count)
+        throw std::runtime_error("boneOffset track length does not match frameCount");
+      track.offset_names.push_back(it.key());
+    }
+    const std::size_t n = track.offset_names.size();
+    track.offsets.assign(static_cast<std::size_t>(track.frame_count) * n * 3, 0.0F);
+    std::size_t track_index{};
+    for (auto it = offsets->begin(); it != offsets->end(); ++it, ++track_index) {
+      std::size_t frame{};
+      for (const auto &key : it.value()) {
+        if (!key.is_array() || key.size() != 3)
+          throw std::runtime_error("boneOffset keyframe is not a vector");
+        for (std::size_t k{}; k != 3; ++k)
+          track.offsets[(frame * n + track_index) * 3 + k] = key[k].get<float>();
+        ++frame;
+      }
+    }
+    track.offsets_ready = true;
+  }
+  // Facial keys (optional; motions converted before this carry none).
+  const auto morphs = json.find("morphs");
+  if (morphs != json.end() && morphs->is_object()) {
+    for (auto it = morphs->begin(); it != morphs->end(); ++it) {
+      if (!it.value().is_array())
+        continue;
+      std::vector<better_pose::mmd_morph::Key> keys;
+      for (const auto &key : it.value()) {
+        if (!key.is_array() || key.size() != 2 || !key[0].is_number() || !key[1].is_number())
+          continue;
+        const float weight = key[1].get<float>();
+        if (!std::isfinite(weight))
+          continue;
+        keys.push_back({key[0].get<std::uint32_t>(), weight});
+      }
+      if (keys.empty())
+        continue;
+      std::stable_sort(keys.begin(), keys.end(),
+                       [](const auto &a, const auto &b) { return a.frame < b.frame; });
+      track.morph_names.push_back(it.key());
+      track.morph_keys.push_back(std::move(keys));
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(context.motion_mutex);
+    if (load_epoch != context.motion_load_epoch)
+      return false;
+    context.motion = std::move(track);
+    context.motion_loaded.store(true, std::memory_order_release);
+    context.motion_playing.store(false, std::memory_order_release);
+    context.motion_seconds.store(0.0, std::memory_order_release);
+    context.motion_display_seconds.store(0.0, std::memory_order_release);
+  }
+  return true;
+}
+
+bool GetBoneCount(Context &context, std::int32_t &count,
+                  std::string &detail) noexcept {
+  count = 0;
+  if (context.runtime.mesh == 0) {
+    detail = "local mesh is unavailable";
+    return false;
+  }
+  std::array<std::uint8_t, 4> parameters{};
+  std::array<std::uint8_t, 4> output{};
+  if (!CallVirtualUFunction(context, context.runtime.mesh,
+                            kFunctionGetNumBonesPath, parameters.data(),
+                            parameters.size(), detail, output.data())) {
+    detail.insert(0, "GetNumBones failed: ");
+    return false;
+  }
+  std::int32_t value{};
+  std::memcpy(&value, output.data(), sizeof(value));
+  if (value < 0) {
+    detail = "GetNumBones returned a negative count";
+    return false;
+  }
+  count = value;
+  return true;
+}
+
+bool GetBoneNameForMesh(Context &context, const std::uintptr_t mesh,
+                        const std::uint32_t bone_index,
+                        std::string &name) noexcept {
+  name.clear();
+  if (mesh == 0)
+    return false;
+  std::array<std::uint8_t, 12> parameters{};
+  const std::int32_t index = static_cast<std::int32_t>(bone_index);
+  std::memcpy(parameters.data(), &index, sizeof(index));
+  std::array<std::uint8_t, 12> output{};
+  std::string detail;
+  if (!CallVirtualUFunction(context, mesh, kFunctionGetBoneNamePath,
+                            parameters.data(), parameters.size(), detail,
+                            output.data()))
+    return false;
+  std::uint32_t name_id{};
+  std::memcpy(&name_id, output.data() + 4, sizeof(name_id));
+  if (ResolveName(context, name_id, name))
+    return true;
+  name = "Bone_" + std::to_string(bone_index);
+  return false;
+}
+
+bool GetBoneFNameForMesh(Context &context, const std::uintptr_t mesh,
+                         const std::uint32_t bone_index,
+                         std::array<std::uint8_t, 8> &fname,
+                         std::string &name) noexcept {
+  fname.fill(0);
+  name.clear();
+  if (mesh == 0)
+    return false;
+  std::array<std::uint8_t, 12> parameters{};
+  const std::int32_t index = static_cast<std::int32_t>(bone_index);
+  std::memcpy(parameters.data(), &index, sizeof(index));
+  std::array<std::uint8_t, 12> output{};
+  std::string detail;
+  if (!CallVirtualUFunction(context, mesh, kFunctionGetBoneNamePath,
+                            parameters.data(), parameters.size(), detail,
+                            output.data()))
+    return false;
+  std::memcpy(fname.data(), output.data() + 4, fname.size());
+  std::uint32_t name_id{};
+  std::memcpy(&name_id, fname.data(), sizeof(name_id));
+  if (ResolveName(context, name_id, name))
+    return true;
+  name = "Bone_" + std::to_string(bone_index);
+  return false;
+}
+
+bool EnsurePoseableAccessory(Context &context,
+                             Context::ExtraMesh &extra) noexcept {
+  if (!context.poseable_prototype_enabled || extra.asset == 0 ||
+      context.runtime.character == 0 || extra.poseable_attempted)
+    return extra.poseable_active;
+  // Hidden costume pieces must not acquire a visible replacement. Query before
+  // our own SetVisibility(false), and leave them eligible if the game shows them later.
+  std::string detail;
+  std::uint8_t visible{};
+  if (!CallVirtualUFunction(context, extra.object, kFunctionSceneIsVisiblePath,
+                            &visible, sizeof(visible), detail, &visible) || visible == 0)
+    return false;
+  extra.poseable_attempted = true;
+
+  // Preserve the actual socket contract, not a fuzzy match to a hair-chain
+  // bone. The observed accessories attach directly to Head/Pelvis bones.
+  std::uintptr_t source_parent{};
+  std::array<std::uint8_t, 8> socket_parameters{}, socket_name{};
+  if (!ReadPointerAt(context, extra.object, kMeshAttachParentOffset, source_parent) ||
+      source_parent != context.runtime.mesh ||
+      !CallVirtualUFunction(context, extra.object,
+                            kFunctionSceneGetAttachSocketNamePath,
+                            socket_parameters.data(), socket_parameters.size(),
+                            detail, socket_name.data())) {
+    LogDiagnostic(context, "betterpose poseable unavailable: source body socket " + detail);
+    return false;
+  }
+  std::array<std::uint8_t, 12> index_parameters{}, index_output{};
+  std::memcpy(index_parameters.data(), socket_name.data(), socket_name.size());
+  std::int32_t socket_bone{-1};
+  if (CallVirtualUFunction(context, context.runtime.mesh, kFunctionGetBoneIndexPath,
+                           index_parameters.data(), index_parameters.size(),
+                           detail, index_output.data()))
+    std::memcpy(&socket_bone, index_output.data() + 8, sizeof(socket_bone));
+  std::array<std::uint8_t, 96> relative_parameters{};
+  if (socket_bone < 0 ||
+      static_cast<std::size_t>(socket_bone) >= context.bone_names.size() ||
+      !CallVirtualUFunction(context, extra.object, kFunctionSceneGetRelativeTransformPath,
+                            relative_parameters.data(), relative_parameters.size(), detail,
+                            extra.poseable_socket_relative.data())) {
+    LogDiagnostic(context, "betterpose poseable unavailable: socket is not a body bone " + detail);
+    return false;
+  }
+  extra.poseable_socket_bone = static_cast<std::uint32_t>(socket_bone);
+  LogDiagnostic(context, "betterpose poseable socket source=" + Hex(extra.object) +
+                         " bone=" + context.bone_names[extra.poseable_socket_bone] +
+                         " mode=rigid-bind");
+
+  std::uintptr_t poseable_class{};
+  if (!FindObjectAddressByPath(context, "/Script/Engine.PoseableMeshComponent",
+                               poseable_class, &detail)) {
+    LogDiagnostic(context, "betterpose poseable create: class lookup failed " +
+                               detail);
+    return false;
+  }
+
+  // AddComponentByClass(TSubclassOf<UActorComponent>, bManualAttachment,
+  // FTransform RelativeTransform, bDeferredFinish), ReturnValue at +120.
+  std::array<std::uint8_t, 128> add_parameters{};
+  std::memcpy(add_parameters.data(), &poseable_class, sizeof(poseable_class));
+  add_parameters[8] = 1;
+  PackedTransform identity{};
+  identity.rotation[3] = 1.0;
+  identity.scale[0] = identity.scale[1] = identity.scale[2] = 1.0;
+  std::memcpy(add_parameters.data() + 16, &identity, sizeof(identity));
+  std::array<std::uint8_t, 128> add_output{};
+  if (!CallVirtualUFunction(
+          context, context.runtime.character,
+          kFunctionActorAddComponentByClassPath, add_parameters.data(),
+          add_parameters.size(), detail, add_output.data())) {
+    LogDiagnostic(context, "betterpose poseable create: AddComponentByClass failed " +
+                               detail);
+    return false;
+  }
+  std::memcpy(&extra.poseable_component, add_output.data() + 120,
+              sizeof(extra.poseable_component));
+  if (extra.poseable_component == 0) {
+    LogDiagnostic(context, "betterpose poseable create: returned null");
+    return false;
+  }
+
+  const std::array<std::uint8_t, 8> asset_parameters = [&] {
+    std::array<std::uint8_t, 8> value{};
+    std::memcpy(value.data(), &extra.asset, sizeof(extra.asset));
+    return value;
+  }();
+  if (!CallVirtualUFunction(context, extra.poseable_component,
+                            kFunctionSetSkeletalMeshAssetPath,
+                            asset_parameters.data(), asset_parameters.size(),
+                            detail)) {
+    LogDiagnostic(context, "betterpose poseable create: SetSkeletalMeshAsset failed " +
+                               detail);
+    return false;
+  }
+
+  // Attach without a socket: each pose update explicitly composes the body
+  // socket transform with the authored offset. Engine scene attachment ticks
+  // otherwise lag behind the body buffers overwritten by BetterPose.
+  std::array<std::uint8_t, 21> attach_parameters{};
+  std::memcpy(attach_parameters.data(), &context.runtime.mesh,
+              sizeof(context.runtime.mesh));
+  std::array<std::uint8_t, 21> attach_output{};
+  if (!CallVirtualUFunction(context, extra.poseable_component,
+                            kFunctionSceneAttachComponentPath,
+                            attach_parameters.data(), attach_parameters.size(),
+                            detail, attach_output.data()) ||
+      attach_output[20] == 0) {
+    LogDiagnostic(context, "betterpose poseable create: attach failed " + detail);
+    return false;
+  }
+
+  if (!ResolvePoseableEntryPoints(context, extra)) {
+    LogDiagnostic(context, "betterpose poseable create: entry points unresolved");
+    return false;
+  }
+  extra.poseable_written_pose.clear();
+  extra.poseable_written_pose.resize(extra.bone_count);
+  extra.poseable_active = true;
+  char message[256]{};
+  std::snprintf(message, sizeof(message),
+                "betterpose poseable created source=%llX component=%llX "
+                "asset=%llX bones=%u",
+                static_cast<unsigned long long>(extra.object),
+                static_cast<unsigned long long>(extra.poseable_component),
+                static_cast<unsigned long long>(extra.asset),
+                static_cast<unsigned>(extra.bone_count));
+  LogDiagnostic(context, message);
+  return true;
+}
+
+bool WritePoseableAccessoryPose(
+    Context::ExtraMesh &extra,
+    const std::vector<std::array<double, 12>> &components) noexcept {  if (!extra.poseable_active || extra.poseable_component == 0 ||
+      components.size() != extra.bone_count ||
+      extra.bone_fnames.size() != extra.bone_count ||
+      extra.poseable_set_bone_function == 0 || extra.poseable_process_event == 0)
+    return false;
+  // Only the simulated bones move; the rest hold their bind pose in component space, so
+  // after the first write they are skipped instead of being re-sent every frame. A
+  // clothed character is mostly rigid accessories, and each skipped bone is one
+  // reflected call saved.
+  if (extra.poseable_written_pose.size() != extra.bone_count)
+    extra.poseable_written_pose.assign(extra.bone_count, std::array<double, 12>{});
+  bool all_ok = true;
+  std::array<std::uint8_t, 113> parameters{};
+  for (std::uint32_t bone{}; bone != extra.bone_count; ++bone) {
+    if (std::memcmp(extra.poseable_written_pose[bone].data(), components[bone].data(),
+                    sizeof(PackedTransform)) == 0)
+      continue;
+    std::memset(parameters.data(), 0, parameters.size());
+    std::memcpy(parameters.data(), extra.bone_fnames[bone].data(), 8);
+    std::memcpy(parameters.data() + 16, components[bone].data(),
+                sizeof(PackedTransform));
+    // EBoneSpaces::ComponentSpace in this build (WorldSpace=0,
+    // ComponentSpace=1; there is no LocalSpace enum in this API).
+    parameters[112] = 1;
+    if (!CallResolvedUFunction(extra.poseable_component,
+                               extra.poseable_set_bone_function,
+                               extra.poseable_process_event, parameters.data(),
+                               parameters.size()))
+      all_ok = false;
+    else
+      extra.poseable_written_pose[bone] = components[bone];
+  }
+  return all_ok;
+}
+
+// Component placement remains socket-driven; the optional strand only changes
+// the replacement's own component-space bones.
+bool DrivePoseableSocketPose(Context &context, Context::ExtraMesh &extra,
+                            const std::vector<PackedTransform> &body_pose) noexcept {
+  if (extra.poseable_socket_bone >= body_pose.size())
+    return false;
+  PackedTransform authored{};
+  std::memcpy(&authored, extra.poseable_socket_relative.data(), sizeof(authored));
+  PackedTransform placement{};
+  PackTransform(TransformMultiply(UnpackTransform(body_pose[extra.poseable_socket_bone]),
+                                  UnpackTransform(authored)), placement);
+  std::memcpy(extra.poseable_expected_relative.data(), &placement, sizeof(placement));
+  std::array<std::uint8_t, 369> parameters{};
+  static_assert(parameters.size() <= kMaximumUFunctionParameterBytes);
+  std::memcpy(parameters.data(), &placement, sizeof(placement));
+  if (extra.poseable_set_relative_function == 0 || extra.poseable_process_event == 0 ||
+      !CallResolvedUFunction(extra.poseable_component,
+                             extra.poseable_set_relative_function,
+                             extra.poseable_process_event, parameters.data(),
+                             parameters.size()))
+    return false;
+  const bool was_dynamic = extra.accessory_dynamics.Moving();
+  const bool strand_enabled = extra.accessory_dynamics.DrivenBones() != 0;
+  const std::vector<std::array<double, 12>>* desired_pose = &extra.bind_world;
+  if (strand_enabled) {
+    std::array<std::uint8_t, 96> world_query{};
+    PackedTransform component_world{};
+    const bool world_ok = extra.poseable_get_transform_function != 0 &&
+        CallResolvedUFunction(extra.poseable_component,
+                              extra.poseable_get_transform_function,
+                              extra.poseable_process_event, world_query.data(),
+                              world_query.size(), &component_world);
+    const auto& s = component_world.scale;
+    const bool uniform_scale = std::isfinite(s[0]) && s[0] > 1e-6 &&
+                               std::abs(s[0]-s[1]) < 1e-5 && std::abs(s[0]-s[2]) < 1e-5;
+    if (world_ok && uniform_scale) {
+      using namespace better_pose::accessory;
+      Frame frame{{component_world.translation[0],component_world.translation[1],component_world.translation[2]},
+                  {component_world.rotation[0],component_world.rotation[1],component_world.rotation[2],component_world.rotation[3]},s[0]};
+      const Frame placement_frame{
+          {placement.translation[0],placement.translation[1],placement.translation[2]},
+          {placement.rotation[0],placement.rotation[1],placement.rotation[2],placement.rotation[3]},placement.scale[0]};
+      const Frame body_world = Compose(frame, Inverse(placement_frame));
+      const auto capsules = extra.accessory_dynamics.BodyCapsules(body_pose.size(),
+          [&](int bone) { const auto& p=body_pose[bone].translation; return Vec{p[0],p[1],p[2]}; }, body_world);
+      desired_pose = &extra.accessory_dynamics.Sample(
+          frame, context.motion_seconds.load(std::memory_order_acquire),
+          context.motion_seek_serial.load(std::memory_order_acquire),
+          context.motion_loaded.load(std::memory_order_acquire) &&
+              context.motion_playing.load(std::memory_order_acquire), capsules);
+    } else {
+      extra.accessory_dynamics.Reset();
+    }
+  } else if (was_dynamic) {
+    extra.accessory_dynamics.Reset();
+  }
+  if (!extra.poseable_bind_written || strand_enabled || was_dynamic) {
+    if (extra.bind_world.size() != extra.bone_count)
+      return false;
+    // Reused, so a clothed character does not allocate one vector per accessory per frame.
+    if (extra.poseable_scratch_pose.size() != extra.bone_count)
+      extra.poseable_scratch_pose.assign(extra.bone_count, std::array<double, 12>{});
+    for (std::size_t bone{}; bone != extra.poseable_scratch_pose.size(); ++bone)
+      extra.poseable_scratch_pose[bone] = (*desired_pose)[bone];
+    if (!WritePoseableAccessoryPose(extra, extra.poseable_scratch_pose))
+      return false;
+    extra.poseable_bind_written = true;
+  }
+  if (!extra.poseable_source_visibility_changed) {
+    std::string detail;
+    const std::array<std::uint8_t, 2> hidden{0, 0};
+    if (!CallVirtualUFunction(context, extra.object, kFunctionSceneSetVisibilityPath,
+                              hidden.data(), hidden.size(), detail))
+      return false;
+    extra.poseable_source_visibility_changed = true;
+  }
+  return true;
+}
+
+void DestroyPoseableAccessories(Context &context) noexcept {
+  for (auto &extra : context.extra_meshes) {
+    if (extra.poseable_component == 0)
+      continue;
+    std::string detail;
+    if (extra.poseable_source_visibility_changed) {
+      // Only visible sources are replaced. Restore only the flag we changed;
+      // do not alter HiddenInGame or propagate into independently hidden children.
+      const std::array<std::uint8_t, 2> visible_parameters{1, 0};
+      static_cast<void>(CallVirtualUFunction(
+          context, extra.object, kFunctionSceneSetVisibilityPath,
+          visible_parameters.data(), visible_parameters.size(), detail));
+    }
+    // K2_DestroyComponent(Object) permits the component itself or its owner.
+    // A null Object silently refuses destruction for these actor-owned meshes.
+    const auto destroy_caller = extra.poseable_component;
+    static_cast<void>(CallVirtualUFunction(
+        context, extra.poseable_component,
+        kFunctionActorComponentDestroyPath, &destroy_caller,
+        sizeof(destroy_caller), detail));
+    LogDiagnostic(context, "betterpose poseable destroy self=" + Hex(destroy_caller) +
+                           " result=" + detail);
+    extra.poseable_component = 0;
+    extra.poseable_active = false;
+    extra.poseable_source_visibility_changed = false;
+    extra.poseable_attempted = false;
+    extra.poseable_bind_written = false;
+    extra.poseable_last_write_ok = false;
+    extra.poseable_process_event = 0;
+    extra.poseable_set_bone_function = 0;
+    extra.poseable_set_relative_function = 0;
+    extra.poseable_get_transform_function = 0;
+    extra.accessory_dynamics.Reset();
+    extra.poseable_written_pose.clear();
+  }
+}
+
+void DestroyStalePoseableComponent(Context &context,
+                                   const std::uintptr_t component) noexcept {
+  if (component == 0)
+    return;
+  std::string detail;
+  const bool called = CallVirtualUFunction(
+      context, component, kFunctionActorComponentDestroyPath,
+      &component, sizeof(component), detail);
+  LogDiagnostic(context, "betterpose poseable stale destroy self=" + Hex(component) +
+                           " called=" + (called ? "1" : "0") + " result=" + detail);
+}
+
+
+bool GetBoneName(Context &context, const std::uint32_t bone_index,
+                 std::string &name) noexcept {
+  return GetBoneNameForMesh(context, context.runtime.mesh, bone_index, name);
+}
+
+// ---------------------------------------------------------------------------
+// Extra skeletal mesh components on the same pawn
+//
+// Discovered by StepMeshScan (owner == pawn, class name contains
+// "MeshComponent", readable bone array whose length differs from the body's).
+// Each of their bones is mapped to a body bone by name, bind pose, or hierarchy.
+// The attach parent only establishes scene-component placement; it does not
+// establish a leader-pose relationship.
+// ---------------------------------------------------------------------------
+
+bool ReadBoneTranslations(Context &context, const std::uintptr_t array,
+                          const std::uint32_t count,
+                          std::vector<std::array<double, 3>> &out) noexcept {
+  out.clear();
+  if (!CoreReady(context.core) || array == 0 || count == 0 || count > 8192)
+    return false;
+  if (context.core->read_memory == nullptr)
+    return false;
+  std::vector<std::uint8_t> raw(static_cast<std::size_t>(count) * kTransformSize);
+  AnomalyMutableByteSpanV1 span{raw.data(), raw.size()};
+  if (context.core->read_memory(context.core->user, array, span).code !=
+      ANOMALY_STATUS_V1_OK)
+    return false;
+  out.resize(count);
+  for (std::uint32_t index{}; index != count; ++index) {
+    double values[3]{};
+    std::memcpy(values,
+                raw.data() + static_cast<std::size_t>(index) * kTransformSize +
+                    kTransformTranslationOffset,
+                sizeof(values));
+    out[index] = {values[0], values[1], values[2]};
+  }
+  return true;
+}
+
+bool ObjectAtIndex(Context &context, const std::uint32_t index,
+                   std::uintptr_t &object) noexcept {
+  object = 0;
+  const ObjectRegistry &registry = context.object_registry;
+  if (index >= registry.count)
+    return false;
+  const std::uint32_t chunk = index / kObjectChunkSize;
+  if (chunk >= registry.num_chunks)
+    return false;
+  std::uintptr_t chunk_pointer{};
+  if (!ReadPointerAt(context, registry.items, chunk * sizeof(std::uintptr_t),
+                     chunk_pointer) ||
+      chunk_pointer == 0)
+    return false;
+  return ReadPointerAt(context, chunk_pointer,
+                       (index % kObjectChunkSize) * kObjectItemStride,
+                       object) &&
+         object != 0;
+}
+
+std::string ClassNameOf(Context &context, const std::uintptr_t object) noexcept {
+  std::uintptr_t klass{};
+  if (!Read(context, object + kObjectClassOffset, klass) || klass == 0)
+    return {};
+  const auto cached = context.mesh_scan_class_cache.find(klass);
+  if (cached != context.mesh_scan_class_cache.end())
+    return cached->second;
+  std::uint32_t name_id{};
+  std::string name;
+  if (Read(context, klass + kObjectNameOffset, name_id))
+    static_cast<void>(ResolveName(context, name_id, name));
+  context.mesh_scan_class_cache[klass] = name;
+  return name;
+}
+
+std::string ObjectNameOf(Context &context, const std::uintptr_t object) noexcept {
+  std::uint32_t name_id{};
+  std::string name;
+  if (Read(context, object + kObjectNameOffset, name_id))
+    static_cast<void>(ResolveName(context, name_id, name));
+  return name;
+}
+
+// Read ANY mesh asset's reference (bind) skeleton: the same RawRefBoneInfo /
+// RawRefBonePose pair as TryAssetReferencePose, but validated against *that* mesh's
+// bone names instead of the body's. The pawn's extra meshes name their bones in a
+// different space (Bone_hairRb00, Pelvis_adjust), so the name mapping finds nothing
+// and their live positions cannot be compared while we override the body or while
+// they sit frozen; matching them in bind pose is independent of both.
+bool ReadAssetBindSkeleton(Context &context, const std::uintptr_t asset,
+                           const std::uintptr_t component,
+                           const std::uint32_t bone_count,
+                           std::vector<std::array<double, 12>> &locals,
+                           std::vector<std::int32_t> &parents) noexcept {
+  if (asset == 0 || component == 0 || bone_count == 0 || bone_count > 4096)
+    return false;
+  for (std::uint32_t offset = 16; offset + 16 <= 0x800; offset += 8) {
+    std::uintptr_t pose_data{};
+    std::uint32_t pose_count{};
+    std::uint32_t pose_capacity{};
+    if (!ReadPointerAt(context, asset, offset, pose_data) || pose_data == 0)
+      continue;
+    if (!Read(context, asset + offset + 8, pose_count) ||
+        !Read(context, asset + offset + 12, pose_capacity))
+      continue;
+    if (pose_count != bone_count || pose_capacity < pose_count ||
+        pose_capacity > (1U << 20))
+      continue;
+    std::uintptr_t info_data{};
+    std::uint32_t info_count{};
+    if (!ReadPointerAt(context, asset, offset - 16, info_data) || info_data == 0)
+      continue;
+    if (!Read(context, asset + offset - 8, info_count) || info_count != bone_count)
+      continue;
+    std::array<double, 12> probe{};
+    for (const std::size_t sample :
+         {std::size_t{0}, static_cast<std::size_t>(bone_count - 1)}) {
+      if (!Read(context, pose_data + sample * kTransformSize, probe))
+        return false;
+      const double norm = probe[0] * probe[0] + probe[1] * probe[1] +
+                          probe[2] * probe[2] + probe[3] * probe[3];
+      if (norm < 0.9 || norm > 1.1)
+        return false;
+      if (std::fabs(probe[8] - 1.0) > 0.05 || std::fabs(probe[9] - 1.0) > 0.05 ||
+          std::fabs(probe[10] - 1.0) > 0.05)
+        return false;
+    }
+    for (const std::uint32_t stride : {12U, 16U}) {
+      bool names_ok = true;
+      for (const std::uint32_t sample : {0U, bone_count / 2, bone_count - 1}) {
+        std::int32_t name_id{};
+        std::string expected;
+        std::string found;
+        if (!Read(context, info_data + sample * stride, name_id) ||
+            !GetBoneNameForMesh(context, component, sample, expected) ||
+            !ResolveName(context, static_cast<std::uint32_t>(name_id), found) ||
+            found != expected) {
+          names_ok = false;
+          break;
+        }
+      }
+      if (!names_ok)
+        continue;
+      std::vector<std::array<double, 12>> read_locals(bone_count);
+      std::vector<std::int32_t> read_parents(bone_count, -1);
+      bool ok = true;
+      for (std::uint32_t bone{}; bone != bone_count && ok; ++bone) {
+        std::int32_t parent{};
+        if (!Read(context, pose_data + bone * kTransformSize, read_locals[bone]) ||
+            !Read(context, info_data + bone * stride + 8, parent) || parent < -1 ||
+            parent >= static_cast<std::int32_t>(bone_count) ||
+            parent >= static_cast<std::int32_t>(bone)) {
+          ok = false;                  // not a parent-before-child tree
+          break;
+        }
+        read_parents[bone] = parent;
+      }
+      if (!ok)
+        continue;
+      locals = std::move(read_locals);
+      parents = std::move(read_parents);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Component-space positions from a bind skeleton: the transforms below, positions only.
+std::vector<Transformd> BindPoseTransforms(
+    const std::vector<std::array<double, 12>> &locals,
+    const std::vector<std::int32_t> &parents) noexcept;
+
+std::vector<std::array<double, 3>> BindPosePositions(
+    const std::vector<std::array<double, 12>> &locals,
+    const std::vector<std::int32_t> &parents) noexcept {
+  const auto transforms = BindPoseTransforms(locals, parents);
+  std::vector<std::array<double, 3>> positions(transforms.size());
+  for (std::size_t bone{}; bone != transforms.size(); ++bone) {
+    positions[bone] = {transforms[bone].translation.x,
+                       transforms[bone].translation.y,
+                       transforms[bone].translation.z};
+  }
+  return positions;
+}
+
+// Component-space bind transforms (rotation + position) from a bind skeleton.
+//
+// bone_parents is NOT guaranteed to list parents before children (ComputeBoneComponent
+// recurses with a mark array for exactly that reason), and assuming it was made the
+// accumulation treat most bones as roots: their bind position came out near zero, so
+// the delta against the live transform measured a whole body height (1.65 m) instead
+// of how far the bone had moved. Walk each bone's parent chain instead.
+std::vector<Transformd> BindPoseTransforms(
+    const std::vector<std::array<double, 12>> &locals,
+    const std::vector<std::int32_t> &parents) noexcept {
+  std::vector<Transformd> out(locals.size());
+  std::vector<std::size_t> chain;
+  for (std::size_t bone{}; bone != locals.size(); ++bone) {
+    chain.clear();
+    std::size_t current = bone;
+    for (std::size_t guard{}; guard <= locals.size(); ++guard) {
+      chain.push_back(current);
+      const std::int32_t parent =
+          current < parents.size() ? parents[current] : -1;
+      if (parent < 0 || static_cast<std::size_t>(parent) >= locals.size() ||
+          static_cast<std::size_t>(parent) == current)
+        break;
+      current = static_cast<std::size_t>(parent);
+    }
+    Transformd accumulated;
+    for (auto step = chain.rbegin(); step != chain.rend(); ++step) {
+      const auto &raw = locals[*step];
+      Transformd local;
+      local.rotation = Quatd{raw[0], raw[1], raw[2], raw[3]};
+      local.translation = Vec3d{raw[4], raw[5], raw[6]};
+      local.scale = Vec3d{raw[8], raw[9], raw[10]};
+      accumulated = TransformMultiply(accumulated, local);
+    }
+    out[bone] = accumulated;
+  }
+  return out;
+}
+
+Quatd QuatConjugate(const Quatd &q) noexcept {
+  return Quatd{-q.x, -q.y, -q.z, q.w};
+}
+
+Transformd TransformInverse(const Transformd &value) noexcept {
+  Transformd out;
+  out.rotation = QuatConjugate(value.rotation);
+  out.scale = Vec3d{value.scale.x != 0.0 ? 1.0 / value.scale.x : 1.0,
+                    value.scale.y != 0.0 ? 1.0 / value.scale.y : 1.0,
+                    value.scale.z != 0.0 ? 1.0 / value.scale.z : 1.0};
+  const Vec3d negated{-value.translation.x, -value.translation.y,
+                      -value.translation.z};
+  const Vec3d rotated = QuatRotateVector(out.rotation, negated);
+  out.translation = Vec3d{rotated.x * out.scale.x, rotated.y * out.scale.y,
+                          rotated.z * out.scale.z};
+  return out;
+}
+
+// Normalised-lerp quaternion blend: stable, and a lag only ever asks for small angles.
+Quatd QuatBlend(const Quatd &from, const Quatd &to, const double alpha) noexcept {
+  double dot = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
+  Quatd target = to;
+  if (dot < 0.0) {                        // q and -q are the same rotation
+    target = Quatd{-to.x, -to.y, -to.z, -to.w};
+  }
+  Quatd out{from.x + (target.x - from.x) * alpha,
+            from.y + (target.y - from.y) * alpha,
+            from.z + (target.z - from.z) * alpha,
+            from.w + (target.w - from.w) * alpha};
+  const double norm = std::sqrt(out.x * out.x + out.y * out.y + out.z * out.z +
+                                out.w * out.w);
+  if (norm < 1e-9)
+    return to;
+  out.x /= norm;
+  out.y /= norm;
+  out.z /= norm;
+  out.w /= norm;
+  return out;
+}
+
+// Lower-case alphanumeric words of a bone name, camelCase and digits split out.
+std::vector<std::string> NameTokens(const std::string &name) noexcept {
+  std::vector<std::string> tokens;
+  std::string current;
+  const auto flush = [&tokens, &current]() {
+    if (!current.empty()) {
+      tokens.push_back(current);
+      current.clear();
+    }
+  };
+  for (const char raw : name) {
+    const auto c = static_cast<unsigned char>(raw);
+    if (std::isalnum(c) == 0) {
+      flush();
+      continue;
+    }
+    const bool upper = std::isupper(c) != 0;
+    const bool digit = std::isdigit(c) != 0;
+    const bool previous_digit =
+        !current.empty() && std::isdigit(static_cast<unsigned char>(current.back())) != 0;
+    if (!current.empty() && (upper || (digit != previous_digit)))
+      flush();
+    current.push_back(static_cast<char>(std::tolower(c)));
+  }
+  flush();
+  return tokens;
+}
+
+// Which body bone does one of a modular mesh's attach bones belong to?
+//
+// The pawn's extra meshes name those after the anatomy with an _adjust suffix
+// (head_adjust, clavicle_r_adjust, spine_01_adjust), while the body uses
+// Bip001-Head, Bip001-R-Clavicle, Bip001-Spine1. Every token of the extra name has
+// to appear in the body name, digits have to appear *after* the words they qualify
+// (which is what keeps spine_01_adjust off Bip001-Spine2), and anatomical
+// Bip001-* bones win over helper bones. Returns kNoBone when nothing matches.
+std::uint32_t MatchBodyBone(Context &context, const std::string &name) noexcept {
+  std::vector<std::string> words;
+  std::vector<std::string> digits;
+  for (auto &token : NameTokens(name)) {
+    if (token == "adjust" || token == "position" || token == "root" ||
+        token == "bone" || token == "bip" || token == "bip001")
+      continue;
+    if (std::all_of(token.begin(), token.end(), [](const char c) {
+          return std::isdigit(static_cast<unsigned char>(c)) != 0;
+        }))
+      digits.push_back(token);
+    else
+      words.push_back(token);
+  }
+  if (words.empty() && digits.empty())
+    return (std::numeric_limits<std::uint32_t>::max)();
+  const auto normalized_of = [](const std::string &value) {
+    std::string out;
+    for (const char raw : value) {
+      const auto c = static_cast<unsigned char>(raw);
+      if (std::isalnum(c) != 0)
+        out.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return out;
+  };
+  std::uint32_t best = (std::numeric_limits<std::uint32_t>::max)();
+  std::size_t best_length = 0;
+  bool best_anatomical = false;
+  for (std::uint32_t index{}; index != context.bone_names.size(); ++index) {
+    const std::string normalized = normalized_of(context.bone_names[index]);
+    if (normalized.empty())
+      continue;
+    std::size_t after_words = 0;
+    bool ok = true;
+    const auto body_tokens = NameTokens(context.bone_names[index]);
+    for (const auto &word : words) {
+      if (word.size() == 1) {
+        // A side marker has to be a token of its own: matching "r" as a substring is
+        // what put upperarm_r_adjust on Bip001-L-UpperArm (the "r" in "upperarm").
+        if (std::find(body_tokens.begin(), body_tokens.end(), word) ==
+            body_tokens.end()) {
+          ok = false;
+          break;
+        }
+        continue;
+      }
+      const std::size_t position = normalized.find(word);
+      if (position == std::string::npos) {
+        ok = false;
+        break;
+      }
+      after_words = (std::max)(after_words, position + word.size());
+    }
+    if (!ok)
+      continue;
+    for (const auto &digit : digits) {
+      std::string want = digit;
+      const std::size_t first = want.find_first_not_of('0');
+      want = first == std::string::npos ? std::string("0") : want.substr(first);
+      const std::size_t position = normalized.find(want, after_words);
+      if (position == std::string::npos) {
+        ok = false;
+        break;
+      }
+      after_words = position + want.size();
+    }
+    if (!ok)
+      continue;
+    const bool anatomical =
+        context.bone_names[index].rfind("Bip001", 0) == 0 ||
+        context.bone_names[index].rfind("Bone-", 0) == 0;
+    if (best != (std::numeric_limits<std::uint32_t>::max)() &&
+        !(anatomical && !best_anatomical) &&
+        !(anatomical == best_anatomical && normalized.size() < best_length))
+      continue;
+    best = index;
+    best_length = normalized.size();
+    best_anatomical = anatomical;
+  }
+  return best;
+}
+
+// Read the engine's reference (bind) pose out of the character's mesh asset.
+//
+// Strictly read-only. A pointer inside the mesh component that resolves to a
+// USkeletalMesh, then the FReferenceSkeleton inside that asset: RawRefBoneInfo
+// (FName + parent, 12 bytes per bone) sits immediately before RawRefBonePose
+// (an FTransform per bone). Candidates are accepted only when the array counts
+// match this skeleton AND resolving the FNames out of the info array reproduces
+// this skeleton's bone names - random memory does not do that, and a mismatched
+// asset (another character's mesh) does not either.
+// Read the reference (bind) pose out of one mesh asset. RawRefBoneInfo (FName +
+// parent, 12 bytes per bone) sits immediately before RawRefBonePose (an FTransform
+// per bone), so the pair of TArray headers identifies the block: both counts must
+// equal this skeleton's bone count, the transforms must be sane, and resolving the
+// FNames out of the info array must reproduce this skeleton's bone names. Random
+// memory and another character's mesh both fail that.
+bool TryAssetReferencePose(Context &context,
+                           const std::uintptr_t asset) noexcept {
+  if (asset == 0 || context.bone_names.empty())
+    return false;
+  const std::size_t count = context.bone_names.size();
+  const auto expected = static_cast<std::uint32_t>(count);
+  const auto name_matches = [&context, count](const std::uintptr_t info,
+                                              const std::uint32_t stride) noexcept {
+    for (std::size_t sample : {std::size_t{0}, count / 2, count - 1}) {
+      std::int32_t name_id{};
+      if (!Read(context, info + sample * stride, name_id))
+        return false;
+      std::string name;
+      if (!ResolveName(context, static_cast<std::uint32_t>(name_id), name))
+        return false;
+      if (name != context.bone_names[sample])
+        return false;
+    }
+    return true;
+  };
+  for (std::uint32_t offset = 16; offset + 16 <= 0x800; offset += 8) {
+    std::uintptr_t pose_data{};
+    std::uint32_t pose_count{};
+    std::uint32_t pose_capacity{};
+    if (!ReadPointerAt(context, asset, offset, pose_data) || pose_data == 0)
+      continue;
+    if (!Read(context, asset + offset + 8, pose_count) ||
+        !Read(context, asset + offset + 12, pose_capacity))
+      continue;
+    if (pose_count != expected || pose_capacity < pose_count ||
+        pose_capacity > (1U << 20))
+      continue;
+    std::uintptr_t info_data{};
+    std::uint32_t info_count{};
+    if (!ReadPointerAt(context, asset, offset - 16, info_data) || info_data == 0)
+      continue;
+    if (!Read(context, asset + offset - 8, info_count) || info_count != expected)
+      continue;
+    // Sample the first and last transform: unit rotation, unit scale.
+    for (const std::size_t sample : {std::size_t{0}, count - 1}) {
+      std::array<double, 12> probe{};
+      if (!Read(context, pose_data + sample * kTransformSize, probe))
+        return false;
+      const double norm = probe[0] * probe[0] + probe[1] * probe[1] +
+                          probe[2] * probe[2] + probe[3] * probe[3];
+      if (norm < 0.9 || norm > 1.1)
+        return false;
+      if (std::fabs(probe[8] - 1.0) > 0.05 || std::fabs(probe[9] - 1.0) > 0.05 ||
+          std::fabs(probe[10] - 1.0) > 0.05)
+        return false;
+    }
+    if (!name_matches(info_data, 12) && !name_matches(info_data, 16))
+      continue;
+    std::vector<std::array<double, 12>> locals(count);
+    for (std::size_t bone{}; bone != count; ++bone) {
+      if (!Read(context, pose_data + bone * kTransformSize, locals[bone]))
+        return false;
+    }
+    context.ref_locals = std::move(locals);
+    context.ref_pose_object = asset;
+    context.ref_pose_status = "reference pose read from the mesh asset";
+    {
+      char message[160]{};
+      std::snprintf(message, sizeof(message),
+                    "betterpose refpose read %zu bones from mesh asset %llX",
+                    count, static_cast<unsigned long long>(asset));
+      LogDiagnostic(context, message);
+    }
+    return true;
+  }
+  return false;
+}
+
+// Find the character's mesh asset and read its reference pose. Called by the
+// skeleton export (and driven from the mesh scan, which already walks every
+// object, so it can also succeed there).
+bool FindReferencePose(Context &context) noexcept {
+  if (!context.ref_locals.empty())
+    return true;
+  context.ref_pose_object = 0;
+  context.ref_pose_status = "mesh unavailable";
+  const auto mesh = context.runtime.mesh;
+  if (mesh == 0)
+    return false;
+  if (context.bone_names.empty())
+    MaybeRefreshBoneNames(context);
+  const std::size_t count = context.bone_names.size();
+  if (count == 0) {
+    context.ref_pose_status = "bone names unavailable";
+    return false;
+  }
+  std::vector<std::uintptr_t> candidates;
+  // USkinnedMeshComponent is deep enough that SkeletalMesh can sit past 0x800, and
+  // this game subclasses the asset type (HTSkeletalMesh...), so match on the class
+  // name containing SkeletalMesh while excluding *Component* classes.
+  const auto looks_like_mesh_asset = [&context](const std::uintptr_t object) noexcept {
+    const std::string name = ClassNameOf(context, object);
+    if (name.empty())
+      return false;
+    if (name.find("SkeletalMesh") == std::string::npos)
+      return false;
+    return name.find("Component") == std::string::npos;
+  };
+  for (std::uint32_t offset{}; offset + 8 <= 0x2000; offset += 8) {
+    std::uintptr_t candidate{};
+    if (!ReadPointerAt(context, mesh, offset, candidate) || candidate == 0)
+      continue;
+    if (!looks_like_mesh_asset(candidate))
+      continue;
+    if (std::find(candidates.begin(), candidates.end(), candidate) ==
+        candidates.end())
+      candidates.push_back(candidate);
+  }
+  if (candidates.empty() && RefreshObjectRegistry(context)) {
+    // Fallback: the component does not hold the asset as a plain pointer here (the
+    // mesh scan found it only by walking the registry), so sweep the whole registry.
+    // This walks a few hundred thousand objects, which is why it only runs from an
+    // explicit action - and every candidate still has to pass the FName check.
+    for (std::uint32_t index{}; index < context.object_registry.count; ++index) {
+      std::uintptr_t candidate{};
+      if (!ObjectAtIndex(context, index, candidate))
+        continue;
+      if (!looks_like_mesh_asset(candidate))
+        continue;
+      if (TryAssetReferencePose(context, candidate))
+        return true;
+      candidates.push_back(candidate);
+    }
+  }
+  if (candidates.empty()) {
+    context.ref_pose_status = "no SkeletalMesh pointer in the mesh component";
+    return false;
+  }
+  for (const auto asset : candidates) {
+    if (TryAssetReferencePose(context, asset))
+      return true;
+  }
+  char status[128]{};
+  std::snprintf(status, sizeof(status),
+                "no reference pose array matched %zu mesh asset candidate(s)",
+                candidates.size());
+  context.ref_pose_status = status;
+  return false;
+}
+
+// Read-only discovery of the attach-parent offset. A component stores its attach
+// parent as an FWeakObjectPtr {int32 ObjectIndex, int32 SerialNumber}, so a
+// candidate offset is only accepted when the index resolves through GObjects to
+// an object whose stored serial matches -- and when that holds for *every* probe
+// component at once, which random data never does.
+void StepAttachScan(Context &context) noexcept {
+  if (!context.attach_scan_requested.load(std::memory_order_acquire))
+    return;
+  context.attach_scan_requested.store(false, std::memory_order_release);
+  if (!RefreshObjectRegistry(context)) {
+    return;
+  }
+  std::vector<std::uintptr_t> probes;
+  if (context.runtime.mesh != 0)
+    probes.push_back(context.runtime.mesh);
+  for (const auto &candidate : context.mesh_scan_candidates) {
+    if (probes.size() >= 5)
+      break;
+    probes.push_back(candidate.first);
+  }
+  if (probes.size() < 2) {
+    return;
+  }
+  context.attach_offsets.clear();
+  auto read_weak = [&](const std::uintptr_t object, const std::uint32_t offset,
+                       std::uintptr_t &target, std::string &target_class) {
+    target = 0;
+    target_class.clear();
+    // UE5 declares AttachParent as TObjectPtr, which is a raw pointer in a
+    // non-editor build; older layouts use an FWeakObjectPtr {index, serial}.
+    // Try both and accept whichever resolves to a Component/Actor class, which
+    // random data has no way of doing.
+    std::uintptr_t raw{};
+    if (Read(context, object + offset, raw) && raw > 0x10000U &&
+        raw < 0x7FFFFFFFFFFFULL) {
+      std::string raw_class = ClassNameOf(context, raw);
+      if (raw_class.find("Component") != std::string::npos ||
+          raw_class.find("Actor") != std::string::npos) {
+        target = raw;
+        target_class = raw_class;
+        return true;
+      }
+    }
+    std::uint32_t index{};
+    std::uint32_t serial{};
+    if (!Read(context, object + offset, index) ||
+        !Read(context, object + offset + 4, serial) || index == 0)
+      return false;
+    std::uintptr_t candidate{};
+    if (!ObjectAtIndex(context, index, candidate))
+      return false;
+    // The serial guards against a stale index that now points elsewhere.
+    const std::uint32_t chunk = index / kObjectChunkSize;
+    std::uintptr_t chunk_pointer{};
+    std::uint32_t stored_serial{};
+    if (!ReadPointerAt(context, context.object_registry.items,
+                       chunk * sizeof(std::uintptr_t), chunk_pointer) ||
+        chunk_pointer == 0 ||
+        !Read(context,
+              chunk_pointer + (index % kObjectChunkSize) * kObjectItemStride +
+                  16,
+              stored_serial) ||
+        stored_serial != serial)
+      return false;
+    target = candidate;
+    target_class = ClassNameOf(context, candidate);
+    return !target_class.empty();
+  };
+  struct AttachHit {
+    std::uint32_t offset{};
+    std::uint32_t hits{};
+    std::string sample;
+  };
+  std::vector<AttachHit> hits;
+  for (std::uint32_t offset = 0x80; offset < 0xC00; offset += 8) {
+    std::uint32_t matched{};
+    std::string sample;
+    for (const auto probe : probes) {
+      std::uintptr_t target{};
+      std::string target_class;
+      if (read_weak(probe, offset, target, target_class)) {
+        ++matched;
+        if (sample.empty())
+          sample = target_class;
+      }
+    }
+    // Requiring *every* probe to match was the mistake that produced "none": a
+    // component with no attach parent (or an unreadable one) can never satisfy
+    // it. Accept a majority instead and report how many matched, so a partial
+    // answer still tells us something.
+    if (matched >= 2 && matched * 2 >= probes.size())
+      hits.push_back({offset, matched, sample});
+  }
+  std::sort(hits.begin(), hits.end(),
+            [](const AttachHit &left, const AttachHit &right) {
+              return left.hits > right.hits;
+            });
+  context.attach_offsets.clear();
+  for (const auto &hit : hits)
+    context.attach_offsets.emplace_back(hit.offset, hit.sample);
+  std::string list;
+  for (std::size_t i{}; i != hits.size() && i != 2; ++i) {
+    char entry[64]{};
+    std::snprintf(entry, sizeof(entry), "%s%X:%.16s %u/%zu",
+                  i == 0 ? "" : " ", static_cast<unsigned>(hits[i].offset),
+                  hits[i].sample.c_str(), static_cast<unsigned>(hits[i].hits),
+                  probes.size());
+    list += entry;
+  }
+  if (list.empty())
+    list = "none";
+  context.attach_parent_offset = hits.empty() ? 0U : hits[0].offset;
+}
+
+// Diagnostics go to the runtime log so they can be read without asking the user
+// to transcribe (and OCR) a status line.
+void LogDiagnostic(Context &context, const std::string &message) noexcept {
+  if (context.core == nullptr || context.core->log == nullptr)
+    return;
+  context.core->log(context.core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO,
+                    anomaly::sdk::StringView(message));
+}
+
+
+
+void ResyncExtraMeshes(Context &context) noexcept {
+  // Log the *state* even when this returns early: a silent no-op is what made the
+  // previous test unreadable ("还是没有" told us nothing about which precondition
+  // was missing).
+  const std::uint32_t parent_offset = context.attach_parent_offset;
+  if (parent_offset == 0)
+    return;
+  std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
+  if (context.extra_mesh_owner != context.runtime.mesh)
+    return;
+  // Detection only. The old leader-pose setter experiment is off limits: it was
+  // measured twice and posed the hair sideways before crashing the game.
+  //   * SetMasterPoseComponent / SetLeaderPoseComponent, with force=true and
+  //     again with the same leader and force=false -- re-asserting the leader
+  //     re-evaluates the binding instead of merely refreshing the copy, i.e. it
+  //     makes a persistent change to game state;
+  //   * nudging an accessory's animation mode (away -> back, every frame or
+  //     every 30), holding it in Custom, applying the pose before and after the
+  //     tick, writing the follower's own two buffers, writing the body's true
+  //     locals, writing the (empty) cached transform pair. None of them made a
+  //     independently animated accessory follow, and two of them crashed the game.
+  // The mode byte is left exactly as the game set it. What is left is to count how
+  // many accessory components still have an attach parent.
+  std::uint32_t attached{};
+  for (const auto object : context.extra_targets) {
+    std::uintptr_t parent{};
+    if (Read(context, object + parent_offset, parent) && parent != 0)
+      ++attached;
+  }
+  context.extra_resync_count = attached;
+  // Report roughly every two seconds, plus immediately whenever the count
+  // changes: the log is the only place I can read this from.
+  if (++context.extra_resync_log_tick >= 120 ||
+      attached != context.extra_resync_last) {
+    context.extra_resync_log_tick = 0;
+    context.extra_resync_last = attached;
+    char state[192]{};
+    std::snprintf(state, sizeof(state),
+                  "betterpose attach state off %X targets %zu "
+                  "motion %d pending %d names %zu owner %llX mesh %llX "
+                  "scanowner %llX drops %u attached %u",
+                  static_cast<unsigned>(parent_offset),
+                  context.extra_targets.size(),
+                  context.motion_loaded.load(std::memory_order_acquire) ? 1 : 0,
+                  context.extra_build_pending ? 1 : 0,
+                  context.bone_names.size(),
+                  static_cast<unsigned long long>(context.extra_mesh_owner),
+                  static_cast<unsigned long long>(context.runtime.mesh),
+                  static_cast<unsigned long long>(context.mesh_scan_owner),
+                  static_cast<unsigned>(context.extra_drop_count),
+                  static_cast<unsigned>(attached));
+    LogDiagnostic(context, state);
+  }
+}
+
+void BuildExtraMeshes(Context &context) noexcept {
+  // Never latch the result onto an empty mesh: runtime.mesh is zeroed on frames
+  // where the local character cannot be resolved, and a build that ran on such a
+  // frame stored owner = 0 while clearing the pending flag, which disabled the
+  // attach resync permanently.
+  if (context.runtime.mesh == 0) {
+    context.extra_build_pending = true;
+    return;
+  }
+  // Bone names are the mapping key, and they must belong to *this* mesh: after a
+  // character switch the cached table is for the previous pawn.
+  if (context.bone_names.empty() ||
+      context.bone_names_mesh != context.runtime.mesh)
+    MaybeRefreshBoneNames(context);
+  if (context.bone_names.empty()) {
+    // The bone table can only be read on the game thread and may simply not be
+    // ready yet. Returning for good here left extra_mesh_owner unset while the
+    // scan was already marked done, which silently disabled everything after it;
+    // retry from Update instead.
+    context.extra_build_pending = true;
+    return;
+  }
+  std::vector<Context::ExtraMesh> built;
+  std::uint32_t mapped_total{};
+  std::uint32_t bone_total{};
+  std::uint32_t position_total{};
+  std::uint32_t bind_total{};
+  std::string sample_name;
+  for (const auto &candidate : context.mesh_scan_candidates) {
+    const std::uintptr_t object = candidate.first;
+    const std::uint32_t bone_count = candidate.second;
+    if (bone_count == 0 || bone_count > 4096)
+      continue;
+    Context::ExtraMesh extra;
+    extra.object = object;
+    extra.bone_count = bone_count;
+    std::uintptr_t component_data{};
+    std::uint32_t component_count{};
+    std::uintptr_t bone_data{};
+    std::uint32_t bone_array_count{};
+    if (!ReadArrayHeader(context, object + kMeshComponentSpaceBuffer1Offset,
+                         component_data, component_count) ||
+        !ReadArrayHeader(context, object + kMeshComponentSpaceBuffer0Offset,
+                         bone_data, bone_array_count))
+      continue;
+    if (component_data == 0 || bone_data == 0 || component_count < bone_count ||
+        bone_array_count < bone_count)
+      continue;
+    // Ignore poseable components created by an earlier plugin generation. They
+    // are additive prototypes, not source accessories for a new mapping pass.
+    const std::string candidate_class = ClassNameOf(context, object);
+    if (candidate_class == "PoseableMeshComponent") {
+      DestroyStalePoseableComponent(context, object);
+      continue;
+    }
+    // Layout sanity check before we ever save or write this component: the first
+    // transform must start with a plausible unit quaternion. It costs one read
+    // and it is what keeps a mis-identified object from being scribbled on.
+    std::array<double, 4> first_rotation{};
+    if (!Read(context, component_data, first_rotation))
+      continue;
+    const double rotation_norm =
+        std::sqrt(first_rotation[0] * first_rotation[0] +
+                  first_rotation[1] * first_rotation[1] +
+                  first_rotation[2] * first_rotation[2] +
+                  first_rotation[3] * first_rotation[3]);
+    if (rotation_norm < 0.9 || rotation_norm > 1.1)
+      continue;
+    extra.component_space_data = component_data;
+    extra.bone_space_data = bone_data;
+    extra.bone_fnames.assign(bone_count, std::array<std::uint8_t, 8>{});
+    // Save the untouched buffers so unloading can put them back: without this
+    // the components keep our last written pose and only a relog fixes them.
+    const auto byte_count =
+        static_cast<std::size_t>(bone_count) * kTransformSize;
+    extra.saved_component.assign(byte_count, 0);
+    extra.saved_bone.assign(byte_count, 0);
+    // Read through the core service in one call: the single-value Read template
+    // is sized by its argument, and these buffers are runtime sized.
+    auto read_block = [&](const std::uintptr_t address,
+                          std::vector<std::uint8_t> &destination) {
+      if (!CoreReady(context.core) || address == 0)
+        return false;
+      AnomalyMutableByteSpanV1 span{destination.data(), destination.size()};
+      return context.core->read_memory(context.core->user, address, span).code ==
+             ANOMALY_STATUS_V1_OK;
+    };
+    if (!read_block(component_data, extra.saved_component) ||
+        !read_block(bone_data, extra.saved_bone))
+      continue;
+    extra.bone_map.assign(bone_count, (std::numeric_limits<std::uint32_t>::max)());
+    std::string first_name;
+    std::vector<std::string> extra_names(bone_count);
+    for (std::uint32_t bone{}; bone != bone_count; ++bone) {
+      std::string name;
+      if (!GetBoneFNameForMesh(context, object, bone, extra.bone_fnames[bone],
+                               name) ||
+          name.empty())
+        continue;
+      extra_names[bone] = name;
+      if (bone == 0)
+        first_name = name;
+      ++bone_total;
+      for (std::size_t body{}; body != context.bone_names.size(); ++body) {
+        if (context.bone_names[body] == name) {
+          extra.bone_map[bone] = static_cast<std::uint32_t>(body);
+          ++mapped_total;
+          break;
+        }
+      }
+    }
+    if (first_name.empty())
+      first_name = "(noname)";
+    if (sample_name.empty())
+      sample_name = first_name;
+    // Naming does not have to match: measure a positional mapping as well and
+    // let the numbers decide which one to trust. Same skeleton layout means the
+    // matching bones sit at nearly the same place in component space -- but only
+    // while both are in the *same pose*. The extra components stop following the
+    // moment we override the body, so a positional comparison taken then is
+    // meaningless (measured 9.7 cm of pure pose error). Only use it when nothing
+    // is being overridden.
+    const bool in_sync =
+        !context.motion_loaded.load(std::memory_order_acquire) &&
+        !context.pose_override_enabled.load(std::memory_order_acquire);
+    const std::uint32_t name_mapped = static_cast<std::uint32_t>(
+        std::count_if(extra.bone_map.begin(), extra.bone_map.end(),
+                      [](std::uint32_t value) {
+                        return value !=
+                               (std::numeric_limits<std::uint32_t>::max)();
+                      }));
+    std::vector<std::array<double, 3>> extra_positions;
+    std::vector<std::array<double, 3>> body_positions;
+    if (in_sync &&
+        ReadBoneTranslations(context, component_data, bone_count,
+                             extra_positions) &&
+        ReadBoneTranslations(context, context.runtime.component_space_data,
+                             context.runtime.component_space_count,
+                             body_positions) &&
+        !body_positions.empty()) {
+      extra.position_map.assign(
+          bone_count, (std::numeric_limits<std::uint32_t>::max)());
+      double total_distance{};
+      std::uint32_t matched{};
+      for (std::uint32_t bone{}; bone != bone_count; ++bone) {
+        double best = 1e30;
+        std::uint32_t best_index{};
+        for (std::size_t body{}; body != body_positions.size(); ++body) {
+          const double dx = extra_positions[bone][0] - body_positions[body][0];
+          const double dy = extra_positions[bone][1] - body_positions[body][1];
+          const double dz = extra_positions[bone][2] - body_positions[body][2];
+          const double distance = dx * dx + dy * dy + dz * dz;
+          if (distance < best) {
+            best = distance;
+            best_index = static_cast<std::uint32_t>(body);
+          }
+        }
+        if (best < 1e29) {
+          extra.position_map[bone] = best_index;
+          total_distance += std::sqrt(best);
+          ++matched;
+        }
+      }
+      if (matched != 0)
+        extra.position_match_cm = total_distance / matched;
+    }
+    const std::uint32_t position_mapped =
+        extra.position_map.empty()
+            ? 0U
+            : static_cast<std::uint32_t>(std::count_if(
+                  extra.position_map.begin(), extra.position_map.end(),
+                  [](std::uint32_t value) {
+                    return value != (std::numeric_limits<std::uint32_t>::max)();
+                  }));
+    // Bind-pose mapping: compare the two skeletons in *bind* pose, which is the same
+    // idea as position_map but independent of the current pose. That matters twice
+    // here: we are usually overriding the body by the time a scan runs, and a mesh we
+    // never drove sits frozen in an older pose, so comparing live positions measures
+    // the pose difference (measured 16.2 cm mean on one character) rather than the
+    // layout. Two corresponding bones sit within millimetres of each other in bind
+    // pose, so kExtraMeshBindCm is a real discriminator.
+    extra.bind_map.assign(bone_count, (std::numeric_limits<std::uint32_t>::max)());
+    std::uint32_t bind_mapped{};
+    double bind_distance{};
+    std::uintptr_t extra_asset{};
+    for (std::uint32_t offset{}; offset + 8 <= 0x2000; offset += 8) {
+      std::uintptr_t asset_candidate{};
+      if (!ReadPointerAt(context, object, offset, asset_candidate) ||
+          asset_candidate == 0)
+        continue;
+      const std::string asset_class = ClassNameOf(context, asset_candidate);
+      if (asset_class.find("SkeletalMesh") == std::string::npos ||
+          asset_class.find("Component") != std::string::npos)
+        continue;
+      extra_asset = asset_candidate;
+      break;
+    }
+    extra.asset = extra_asset;
+    if (extra_asset != 0 && !context.ref_locals.empty() &&
+        context.bone_parents.size() == context.ref_locals.size()) {
+      std::vector<std::array<double, 12>> extra_locals;
+      std::vector<std::int32_t> extra_parents;
+      if (ReadAssetBindSkeleton(context, extra_asset, object, bone_count,
+                                extra_locals, extra_parents)) {
+        const auto bind_body = BindPosePositions(context.ref_locals,
+                                                 context.bone_parents);
+        const auto bind_extra = BindPosePositions(extra_locals, extra_parents);
+        for (std::uint32_t bone{}; bone != bone_count; ++bone) {
+          double best = kExtraMeshBindCm;
+          std::uint32_t best_index = (std::numeric_limits<std::uint32_t>::max)();
+          for (std::size_t body{}; body != bind_body.size(); ++body) {
+            const double dx = bind_extra[bone][0] - bind_body[body][0];
+            const double dy = bind_extra[bone][1] - bind_body[body][1];
+            const double dz = bind_extra[bone][2] - bind_body[body][2];
+            const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (distance < best) {
+              best = distance;
+              best_index = static_cast<std::uint32_t>(body);
+            }
+          }
+          if (best_index != (std::numeric_limits<std::uint32_t>::max)()) {
+            extra.bind_map[bone] = best_index;
+            ++bind_mapped;
+            bind_distance += best;
+          }
+        }
+        if (bind_mapped != 0)
+          extra.bind_match_cm = bind_distance / bind_mapped;
+      }
+    }
+    // What are these meshes and how did each mapping do? Only a log can answer that
+    // after a scan, and the bone names decide what is mappable at all.
+    {
+      char summary[512]{};
+      std::snprintf(summary, sizeof(summary),
+                    "betterpose extra mesh %llX asset %s class %s bones %u "
+                    "name %u bind %u bindmean %.2fcm pos %u posmean %.1fcm",
+                    static_cast<unsigned long long>(object),
+                    extra_asset != 0 ? ObjectNameOf(context, extra_asset).c_str()
+                                     : "-",
+                    extra_asset != 0 ? ClassNameOf(context, extra_asset).c_str()
+                                     : "-",
+                    static_cast<unsigned>(bone_count),
+                    static_cast<unsigned>(name_mapped),
+                    static_cast<unsigned>(bind_mapped), extra.bind_match_cm,
+                    static_cast<unsigned>(position_mapped),
+                    extra.position_match_cm);
+      LogDiagnostic(context, summary);
+      for (std::uint32_t start{}; start < bone_count; start += 12) {
+        std::string line =
+            "betterpose extra mesh bones " + std::to_string(start) + ":";
+        for (std::uint32_t bone = start; bone < bone_count && bone < start + 12;
+             ++bone) {
+          std::string name;
+          if (!GetBoneNameForMesh(context, object, bone, name))
+            name = "?";
+          line += " ";
+          line += name;
+        }
+        LogDiagnostic(context, line);
+      }
+    }
+    // Prefer names when they mostly line up, then the bind-pose match, otherwise the
+    // live positions -- but only when they really are close, since a bad mapping is
+    // worse than none.
+    const bool name_ok = name_mapped * 2 >= bone_count;
+    const bool bind_ok = bind_mapped * 2 >= bone_count &&
+                         extra.bind_match_cm > 0.0 &&
+                         extra.bind_match_cm <= 0.5;
+    const bool position_ok = position_mapped * 2 >= bone_count &&
+                             extra.position_match_cm > 0.0 &&
+                             extra.position_match_cm <= kExtraMeshMatchCm;
+    if (!name_ok && !bind_ok && !position_ok) {
+      // Last resort: drive the mesh through its own hierarchy. It only needs the
+      // mesh's own bind skeleton plus at least two attach bones that name a body
+      // part -- which is exactly how a separately authored hair mesh is built
+      // (head_adjust and friends next to its own Bone_hairBR00..06 chains).
+      bool drivable = false;
+      if (extra_asset != 0) {
+        std::vector<std::array<double, 12>> blend_locals;
+        std::vector<std::int32_t> blend_parents;
+        if (ReadAssetBindSkeleton(context, extra_asset, object, bone_count,
+                                  blend_locals, blend_parents)) {
+          std::vector<std::uint32_t> hierarchy_map(
+              bone_count, (std::numeric_limits<std::uint32_t>::max)());
+          std::vector<std::string> pairs;
+          std::uint32_t matched{};
+          for (std::uint32_t bone{}; bone != bone_count; ++bone) {
+            std::string bone_name;
+            if (!GetBoneNameForMesh(context, object, bone, bone_name))
+              continue;
+            const std::uint32_t body = MatchBodyBone(context, bone_name);
+            if (body == (std::numeric_limits<std::uint32_t>::max)() ||
+                body >= context.bone_names.size())
+              continue;
+            hierarchy_map[bone] = body;
+            ++matched;
+            if (pairs.size() < 8)
+              pairs.push_back(bone_name + "->" + context.bone_names[body]);
+          }
+          // The attach bone with the most descendants is the one the chains hang
+          // off (head_adjust carries all four hair chains), so that is the anchor.
+          std::uint32_t anchor = (std::numeric_limits<std::uint32_t>::max)();
+          std::uint32_t anchor_subtree{};
+          for (std::uint32_t bone{}; bone != bone_count; ++bone) {
+            if (hierarchy_map[bone] == (std::numeric_limits<std::uint32_t>::max)())
+              continue;
+            std::uint32_t size{};
+            for (std::uint32_t other{}; other != bone_count; ++other) {
+              std::int32_t walk = blend_parents[other];
+              for (std::uint32_t guard{}; walk >= 0 && guard != bone_count;
+                   ++guard) {
+                if (static_cast<std::uint32_t>(walk) == bone) {
+                  ++size;
+                  break;
+                }
+                walk = blend_parents[static_cast<std::size_t>(walk)];
+              }
+            }
+            if (anchor == (std::numeric_limits<std::uint32_t>::max)() ||
+                size > anchor_subtree) {
+              anchor = bone;
+              anchor_subtree = size;
+            }
+          }
+          if (matched >= 2 && anchor != (std::numeric_limits<std::uint32_t>::max)()) {
+            extra.bone_map = std::move(hierarchy_map);
+            extra.parents = std::move(blend_parents);
+            extra.bind_locals = std::move(blend_locals);
+            const auto bind_world =
+                BindPoseTransforms(extra.bind_locals, extra.parents);
+            extra.bind_world.assign(bind_world.size(), std::array<double, 12>{});
+            for (std::size_t index{}; index != bind_world.size(); ++index) {
+              PackedTransform packed_bind{};
+              PackTransform(bind_world[index], packed_bind);
+              const auto *raw = reinterpret_cast<const double *>(&packed_bind);
+              for (std::size_t k{}; k != 12; ++k)
+                extra.bind_world[index][k] = raw[k];
+            }
+            extra.lag.assign(bone_count, std::array<double, 4>{0.0, 0.0, 0.0, 1.0});
+            extra.anchor_extra = anchor;
+            extra.anchor_body = extra.bone_map[anchor];
+            extra.used_hierarchy = true;
+            drivable = true;
+            mapped_total += matched;
+            std::string joined;
+            for (const auto &pair : pairs) {
+              joined += " ";
+              joined += pair;
+            }
+            LogDiagnostic(context, "betterpose extra mesh hierarchy " +
+                                       std::to_string(object) + " matched " +
+                                       std::to_string(matched) + "/" +
+                                       std::to_string(bone_count) + " anchor " +
+                                       std::to_string(anchor) + "->" +
+                                       std::to_string(extra.anchor_body) + joined);
+          }
+        }
+      }
+      if (!drivable) {
+        position_total += position_mapped;
+        continue;
+      }
+    }
+    if (!name_ok && bind_ok) {
+      extra.bone_map = extra.bind_map;
+      extra.used_bind = true;
+      bind_total += bind_mapped;
+      mapped_total = mapped_total - name_mapped + bind_mapped;
+    } else if (!name_ok && !extra.used_hierarchy) {
+      extra.bone_map = extra.position_map;
+      extra.used_position = true;
+      position_total += position_mapped;
+      mapped_total = mapped_total - name_mapped + position_mapped;
+    }
+    if (extra.used_hierarchy) {
+      const bool configured = extra.accessory_dynamics.Configure(extra.bind_world, extra.parents, extra_names);
+      LogDiagnostic(context, "betterpose accessory dynamics source=" + Hex(extra.object) +
+                             " rules=body-secondary configured=" + std::to_string(configured) + " driven_bones=" +
+                             std::to_string(extra.accessory_dynamics.DrivenBones()));
+    }
+    built.push_back(std::move(extra));
+  }
+  {
+    // Put any previously written components back before replacing the set: a
+    // rescan that ends up skipping a component must not leave our pose in it.
+    static_cast<void>(RestoreExtraMeshes(context));
+    std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
+    context.extra_meshes = std::move(built);
+    context.extra_mesh_owner = context.runtime.mesh;
+    context.extra_mesh_mapped = mapped_total;
+    context.extra_targets.clear();
+    for (const auto &candidate : context.mesh_scan_candidates)
+      context.extra_targets.push_back(candidate.first);
+    context.extra_build_pending = false;
+  }
+}
+
+void WriteExtraMeshes(Context &context,
+                      const std::vector<PackedTransform> &packed) noexcept {
+  std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
+  if (context.extra_meshes.empty() ||
+      context.extra_mesh_owner != context.runtime.mesh)
+    return;
+  std::vector<PackedTransform> out;
+  // The body's bind pose, needed to turn the anchor's current transform into a delta.
+  // Read once per call and only when some mesh actually needs it.
+  std::vector<Transformd> body_bind;
+  for (const auto &extra : context.extra_meshes) {
+    if (extra.used_hierarchy && !context.ref_locals.empty() &&
+        context.bone_parents.size() == context.ref_locals.size()) {
+      body_bind = BindPoseTransforms(context.ref_locals, context.bone_parents);
+      break;
+    }
+  }
+  for (auto &extra : context.extra_meshes) {
+    if (extra.component_space_data == 0 || extra.bone_count == 0)
+      continue;
+    if (context.poseable_prototype_enabled && extra.used_hierarchy) {
+      const bool ready = EnsurePoseableAccessory(context, extra);
+      if (ready && !extra.accessory_dynamics.CollisionsConfigured() &&
+          extra.poseable_socket_bone < body_bind.size()) {
+        std::vector<better_pose::accessory::Bone> collision_bind(body_bind.size());
+        for (std::size_t i{}; i != body_bind.size(); ++i) {
+          PackedTransform bone{};
+          PackTransform(body_bind[i], bone);
+          std::memcpy(collision_bind[i].data(), &bone, sizeof(bone));
+        }
+        PackedTransform authored{}, bind_placement{};
+        std::memcpy(&authored, extra.poseable_socket_relative.data(), sizeof(authored));
+        PackTransform(TransformMultiply(body_bind[extra.poseable_socket_bone],
+                                        UnpackTransform(authored)), bind_placement);
+        better_pose::accessory::Bone placement_raw{};
+        std::memcpy(placement_raw.data(), &bind_placement, sizeof(bind_placement));
+        extra.accessory_dynamics.ConfigureCollisions(collision_bind, context.bone_names,
+            better_pose::accessory::Transform(placement_raw), context.bone_names[extra.poseable_socket_bone]);
+        // One diagnostic line per accessory per build, not per frame. The radii are
+        // measured from the accessory's own rest clearance and capped at half the hip
+        // separation, so two leg capsules that overlap would make the constraint
+        // unsatisfiable no matter how the solver searches.
+        const auto volumes = extra.accessory_dynamics.BodyCapsules(
+            collision_bind.size(),
+            [&](const int bone) { return better_pose::accessory::Position(collision_bind[bone]); },
+            better_pose::accessory::Frame{});
+        std::string radii;
+        std::string clearances;
+        double tightest_pair = 0.0;
+        bool pair_measured = false;
+        const auto measured_clearances = extra.accessory_dynamics.VolumeClearances();
+        for (std::size_t i{}; i != volumes.size(); ++i) {
+          if (volumes[i].mask != better_pose::secondary::kCollideLegs)
+            continue;
+          radii += (radii.empty() ? "" : ",") + std::to_string(volumes[i].radius);
+          if (i < measured_clearances.size())
+            clearances += (clearances.empty() ? "" : ",") +
+                           std::to_string(measured_clearances[i]);
+          for (std::size_t j{}; j != i; ++j) {
+            if (volumes[j].mask != better_pose::secondary::kCollideLegs)
+              continue;
+            const better_pose::accessory::Vec mid_i =
+                (volumes[i].a + volumes[i].b) * 0.5;
+            const better_pose::accessory::Vec mid_j =
+                (volumes[j].a + volumes[j].b) * 0.5;
+            const double gap = better_pose::accessory::Length(mid_i - mid_j) -
+                               volumes[i].radius - volumes[j].radius;
+            if (!pair_measured || gap < tightest_pair) tightest_pair = gap;
+            pair_measured = true;
+          }
+        }
+        LogDiagnostic(context, "betterpose accessory collisions source=" + Hex(extra.object) +
+                                   " socket=" + context.bone_names[extra.poseable_socket_bone] +
+                                   " driven=" + std::to_string(extra.accessory_dynamics.DrivenBones()) +
+                                   " masked_legs=" +
+                                   std::to_string(extra.accessory_dynamics.MaskedBones(
+                                       better_pose::secondary::kCollideLegs)) +
+                                   " masked_torso=" +
+                                   std::to_string(extra.accessory_dynamics.MaskedBones(
+                                       better_pose::secondary::kCollideTorso)) +
+                                   " leg_radii=" + (radii.empty() ? "none" : radii) +
+                                   " leg_clearances=" +
+                                   (clearances.empty() ? "none" : clearances) +
+                                   " tightest_pair_gap=" +
+                                   (pair_measured ? std::to_string(tightest_pair) : "n/a") +
+                                   "cm overlap=" +
+                                   (pair_measured && tightest_pair < 0.0 ? "1" : "0"));
+      }
+      extra.poseable_last_write_ok = ready && DrivePoseableSocketPose(context, extra, packed);
+      // The prototype owns the replacement only. Do not deform the hidden
+      // source as well, or reapply a second body delta to individual hair bones.
+      continue;
+    }
+    if (extra.used_hierarchy && extra.bind_locals.size() == extra.bone_count &&
+        extra.parents.size() == extra.bone_count &&
+        extra.bind_world.size() == extra.bone_count &&
+        extra.lag.size() == extra.bone_count) {
+      // Modular mesh: hang the whole thing off the body bone its attach bone belongs
+      // to, and let each bone below that trail behind its rigid orientation. Uniform
+      // lag still accumulates down a chain, which is what makes a tail whip.
+      // Per-bone driving replaced the single anchor delta: each attach bone follows
+      // its own body bone, so the hair follows the head rather than the whole mesh
+      // following whichever attach bone had the most descendants.
+      out.assign(extra.bone_count, PackedTransform{});
+       // Both destinations are component-space buffers. The engine selects one
+       // with CurrentReadIndex, so both must receive the same component-space
+       // pose. locals_out remains a diagnostic reference for the separately
+       // authored hierarchy, but it is not written into a render buffer.
+      std::vector<PackedTransform> locals_out(extra.bone_count);
+      std::vector<Transformd> world(extra.bone_count);
+      for (std::uint32_t bone{}; bone != extra.bone_count; ++bone) {
+        Transformd bind_world;
+        bind_world.rotation =
+            Quatd{extra.bind_world[bone][0], extra.bind_world[bone][1],
+                  extra.bind_world[bone][2], extra.bind_world[bone][3]};
+        bind_world.translation =
+            Vec3d{extra.bind_world[bone][4], extra.bind_world[bone][5],
+                  extra.bind_world[bone][6]};
+        bind_world.scale = Vec3d{extra.bind_world[bone][8], extra.bind_world[bone][9],
+                                 extra.bind_world[bone][10]};
+        const std::uint32_t mapped = extra.bone_map[bone];
+        Transformd want;
+        if (mapped != (std::numeric_limits<std::uint32_t>::max)() &&
+            mapped < body_bind.size() && mapped < packed.size()) {
+          // An attach bone: follow the body bone it belongs to by that bone's own
+          // delta since bind, applied to this bone's bind transform. Applying the
+          // delta (not the body's transform) is what keeps the mesh's own shape --
+          // the body bone sits somewhere else.
+          const Transformd delta = TransformMultiply(
+              UnpackTransform(packed[mapped]),
+              TransformInverse(body_bind[mapped]));
+          want = TransformMultiply(delta, bind_world);
+        } else {
+          // Inside the mesh: follow the parent, trailing behind the rigid pose. The
+          // lag is what makes a hair chain swing instead of moving like a plank.
+          const std::int32_t parent = extra.parents[bone];
+          Transformd local;
+          local.rotation = Quatd{extra.bind_locals[bone][0], extra.bind_locals[bone][1],
+                                 extra.bind_locals[bone][2], extra.bind_locals[bone][3]};
+          local.translation =
+              Vec3d{extra.bind_locals[bone][4], extra.bind_locals[bone][5],
+                    extra.bind_locals[bone][6]};
+          local.scale = Vec3d{extra.bind_locals[bone][8], extra.bind_locals[bone][9],
+                              extra.bind_locals[bone][10]};
+          if (parent >= 0 && static_cast<std::uint32_t>(parent) < bone) {
+            const Quatd previous{extra.lag[bone][0], extra.lag[bone][1],
+                                 extra.lag[bone][2], extra.lag[bone][3]};
+            const Quatd lagged = QuatBlend(previous, local.rotation, 0.35);
+            extra.lag[bone] = {lagged.x, lagged.y, lagged.z, lagged.w};
+            local.rotation = lagged;
+            want = TransformMultiply(world[static_cast<std::size_t>(parent)], local);
+          } else {
+            want = local;
+          }
+        }
+        world[bone] = want;
+        PackTransform(want, out[bone]);
+        const std::int32_t up = extra.parents[bone];
+        if (up >= 0 && static_cast<std::uint32_t>(up) < bone)
+          PackTransform(TransformMultiply(
+                            TransformInverse(world[static_cast<std::size_t>(up)]),
+                            want),
+                        locals_out[bone]);
+        else
+          PackTransform(want, locals_out[bone]);
+      }
+      extra.lag_ready = true;
+      extra.buffers_modified = true;
+      const auto *mesh_bytes = reinterpret_cast<const std::uint8_t *>(out.data());
+      const auto mesh_size = out.size() * sizeof(PackedTransform);
+      static_cast<void>(WriteBytes(context, extra.component_space_data, mesh_bytes, mesh_size));
+      static_cast<void>(WriteBytes(context, extra.bone_space_data, mesh_bytes, mesh_size));
+      static_cast<void>(ForceMeshObjectUpdate(context, extra.object));
+      continue;
+    }
+    out.assign(extra.bone_count, PackedTransform{});
+    for (std::uint32_t bone{}; bone != extra.bone_count; ++bone) {
+      const std::uint32_t source =
+          bone < extra.bone_map.size()
+              ? extra.bone_map[bone]
+              : (std::numeric_limits<std::uint32_t>::max)();
+      if (source < packed.size()) {
+        out[bone] = packed[source];
+      } else if (extra.saved_component.size() >=
+                 (static_cast<std::size_t>(bone) + 1) * kTransformSize) {
+        // Unmapped bone: keep whatever it had, so nothing collapses.
+        std::memcpy(&out[bone],
+                    extra.saved_component.data() +
+                        static_cast<std::size_t>(bone) * kTransformSize,
+                    sizeof(PackedTransform));
+      }
+    }
+    const auto *bytes = reinterpret_cast<const std::uint8_t *>(out.data());
+    const auto byte_count = out.size() * sizeof(PackedTransform);
+    extra.buffers_modified = true;
+    static_cast<void>(
+        WriteBytes(context, extra.component_space_data, bytes, byte_count));
+    static_cast<void>(
+        WriteBytes(context, extra.bone_space_data, bytes, byte_count));
+    // Same as the hierarchy path: the renderer only picks the buffer up when the
+    // component's update flag is set.
+    static_cast<void>(ForceMeshObjectUpdate(context, extra.object));
+  }
+}
+
+bool RestoreExtraMeshes(Context &context) noexcept {
+  std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
+  DestroyPoseableAccessories(context);
+  for (auto &extra : context.extra_meshes) {
+    if (extra.buffers_modified && extra.component_space_data != 0 && !extra.saved_component.empty())
+      static_cast<void>(WriteBytes(context, extra.component_space_data,
+                                   extra.saved_component.data(),
+                                   extra.saved_component.size()));
+    if (extra.buffers_modified && extra.bone_space_data != 0 && !extra.saved_bone.empty())
+      static_cast<void>(WriteBytes(context, extra.bone_space_data,
+                                   extra.saved_bone.data(),
+                                   extra.saved_bone.size()));
+    extra.buffers_modified = false;
+  }
+  return true;
+}
+
+bool DropExtraMeshes(Context &context) noexcept {  // Put the original buffers back before forgetting about them: dropping them
+  // while our pose is still in place is what left a character stuck until a
+  // relog.
+  static_cast<void>(RestoreExtraMeshes(context));
+  std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
+  context.extra_meshes.clear();
+  ++context.extra_drop_count;
+  context.extra_mesh_owner = 0;
+  context.extra_mesh_mapped = 0;
+  return true;
+}
+
+bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
+                      std::string &detail) noexcept {
+  names.clear();
+  detail.clear();
+  std::int32_t count{};
+  if (!GetBoneCount(context, count, detail))
+    return false;
+  if (count <= 0 || count > 8192) {
+    detail = "GetNumBones returned an invalid count";
+    return false;
+  }
+  names.reserve(static_cast<std::size_t>(count));
+  for (std::int32_t index{}; index != count; ++index) {
+    std::string name;
+    static_cast<void>(GetBoneName(context, static_cast<std::uint32_t>(index),
+                                  name));
+    names.push_back(std::move(name));
+  }
+  detail = "loaded " + std::to_string(count) + " bone names";
+  return true;
+}
+
+void MaybeRefreshBoneNames(Context &context) noexcept {
+  const auto mesh = context.runtime.mesh;
+  const auto count = context.runtime.bone_space_count;
+  if (mesh == 0 || count == 0)
+    return;
+  if (!context.bone_names.empty() && context.bone_names_mesh == mesh &&
+      context.bone_names_count == count)
+    return;
+  if (context.bone_names_attempted && context.bone_names_mesh == mesh &&
+      context.bone_names_count == count)
+    return;
+  context.bone_names_attempted = true;
+  std::string detail;
+  std::vector<std::string> names;
+  if (!RefreshBoneNames(context, names, detail)) {
+    context.bone_names.clear();
+    return;
+  }
+  context.bone_names = std::move(names);
+  context.bone_names_mesh = mesh;
+  context.bone_names_count = count;
+  RefreshBoneHierarchy(context);
+}
+
+bool ForcePoseCache(Context &context, std::string &detail) noexcept {
+  detail.clear();
+  if (context.runtime.mesh == 0) {
+    detail = "local mesh is unavailable";
+    return false;
+  }
+
+  std::array<std::uint8_t, 12> bone_name_parameters{};
+  const std::int32_t bone_index = 0;
+  std::memcpy(bone_name_parameters.data(), &bone_index, sizeof(bone_index));
+  std::array<std::uint8_t, 12> bone_name_output{};
+  if (!CallVirtualUFunction(context, context.runtime.mesh,
+                            kFunctionGetBoneNamePath,
+                            bone_name_parameters.data(),
+                            bone_name_parameters.size(), detail,
+                            bone_name_output.data())) {
+    detail.insert(0, "GetBoneName failed: ");
+    return false;
+  }
+
+  std::array<std::uint8_t, 112> bone_transform_parameters{};
+  std::memcpy(bone_transform_parameters.data(), bone_name_output.data() + 4,
+              sizeof(std::uint64_t));
+  const std::uint8_t transform_space = 2;
+  bone_transform_parameters[8] = transform_space;
+  std::array<std::uint8_t, 112> bone_transform_output{};
+  if (!CallVirtualUFunction(context, context.runtime.mesh,
+                            kFunctionGetBoneTransformPath,
+                            bone_transform_parameters.data(),
+                            bone_transform_parameters.size(), detail,
+                            bone_transform_output.data())) {
+    detail.insert(0, "GetBoneTransform failed: ");
+    return false;
+  }
+
+  detail = "pose cache refreshed (bone 0)";
+  return true;
+}
+
+bool EnsurePoseForcedLod(Context &context, const bool enabled) noexcept {
+  RuntimeState &state = context.runtime;
+  if (state.mesh == 0)
+    return false;
+  if (!enabled) {
+    if (state.saved_forced_lod && state.forced_lod_applied) {
+      std::string detail;
+      const std::int32_t original = state.original_forced_lod;
+      if (CallVirtualUFunction(context, state.mesh, kFunctionSetForcedLodPath,
+                               &original, sizeof(original), detail)) {
+        state.forced_lod_applied = false;
+        state.saved_forced_lod = false;
+        state.original_forced_lod = 0;
+      }
+    } else {
+      state.saved_forced_lod = false;
+      state.forced_lod_applied = false;
+      state.original_forced_lod = 0;
+    }
+    return true;
+  }
+  if (!state.saved_forced_lod) {
+    std::int32_t original{};
+    if (!Read(context, state.mesh + kMeshForcedLodModelOffset, original))
+      return false;
+    state.original_forced_lod = original;
+    state.saved_forced_lod = true;
+    state.forced_lod_applied = false;
+  }
+  if (state.forced_lod_applied)
+    return true;
+  const std::int32_t high_lod = 0;
+  std::string detail;
+  if (!CallVirtualUFunction(context, state.mesh, kFunctionSetForcedLodPath,
+                            &high_lod, sizeof(high_lod), detail))
+    return false;
+  state.forced_lod_applied = true;
+  return true;
+}
+
+bool EnsurePoseAnimationMode(Context &context, const bool enabled) noexcept {
+  RuntimeState &state = context.runtime;
+  if (state.mesh == 0)
+    return false;
+  if (!enabled) {
+    if (state.saved_animation_mode && state.animation_mode_applied) {
+      const std::uint8_t original = state.original_animation_mode;
+      if (!Write(context, state.mesh + kMeshAnimationModeOffset, original))
+        return false;
+      state.animation_mode_applied = false;
+      state.saved_animation_mode = false;
+      state.original_animation_mode = 0;
+    } else {
+      state.saved_animation_mode = false;
+      state.animation_mode_applied = false;
+      state.original_animation_mode = 0;
+    }
+    return true;
+  }
+  if (!state.saved_animation_mode) {
+    std::uint8_t original{};
+    if (!Read(context, state.mesh + kMeshAnimationModeOffset, original))
+      return false;
+    state.original_animation_mode = original;
+    state.saved_animation_mode = true;
+    state.animation_mode_applied = false;
+  }
+  if (state.animation_mode_applied)
+    return true;
+
+  struct SetAnimationModeParameters {
+    std::uint8_t mode;
+    std::uint8_t force_init;
+  };
+  const SetAnimationModeParameters parameters{kAnimationModeCustom, 0};
+  std::string detail;
+  if (CallVirtualUFunction(context, state.mesh, kFunctionSetAnimationModePath,
+                           &parameters, sizeof(parameters), detail)) {
+    state.animation_mode_applied = true;
+    return true;
+  }
+
+  // SetAnimationMode can be missing or overridden in stripped builds. Fall back
+  // to the direct property write, which is sufficient when no AnimInstance
+  // reinitialization is requested.
+  const std::uint8_t custom = kAnimationModeCustom;
+  if (!Write(context, state.mesh + kMeshAnimationModeOffset, custom))
+    return false;
+  state.animation_mode_applied = true;
+  return true;
+}
+
+void SetReflectionStatus(Context &context, const std::string_view message) {
+  std::scoped_lock lock(context.state_mutex);
+  context.reflection_status.assign(message.data(), message.size());
+}
+
+std::wstring Utf8ToWide(const std::string_view value) {
+  if (value.empty() ||
+      value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+    return {};
+  const int required = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
+      nullptr, 0);
+  if (required <= 0)
+    return {};
+  std::wstring result(static_cast<std::size_t>(required), L'\0');
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                          static_cast<int>(value.size()), result.data(),
+                          required) != required)
+    return {};
+  return result;
+}
+
+std::string WideToUtf8(const std::wstring_view value) {
+  if (value.empty() ||
+      value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+    return {};
+  const int required = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
+      nullptr, 0, nullptr, nullptr);
+  if (required <= 0)
+    return {};
+  std::string result(static_cast<std::size_t>(required), '\0');
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                          static_cast<int>(value.size()), result.data(), required,
+                          nullptr, nullptr) != required)
+    return {};
+  return result;
+}
+
+class ComApartment final {
+public:
+  ComApartment() noexcept : result_(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {}
+  ~ComApartment() {
+    if (SUCCEEDED(result_))
+      CoUninitialize();
+  }
+  [[nodiscard]] bool Usable() const noexcept {
+    return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE;
+  }
+private:
+  HRESULT result_{};
+};
+
+std::optional<std::filesystem::path> ChooseFolder(
+    const std::string_view current_utf8) {
+  ComApartment apartment;
+  if (!apartment.Usable())
+    return std::nullopt;
+  ComPtr<IFileOpenDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog))))
+    return std::nullopt;
+  DWORD options{};
+  if (SUCCEEDED(dialog->GetOptions(&options))) {
+    static_cast<void>(dialog->SetOptions(options | FOS_PICKFOLDERS |
+                                         FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST));
+  }
+  if (!current_utf8.empty()) {
+    const std::wstring current = Utf8ToWide(current_utf8);
+    if (!current.empty()) {
+      ComPtr<IShellItem> folder;
+      if (SUCCEEDED(SHCreateItemFromParsingName(
+              current.c_str(), nullptr, IID_PPV_ARGS(&folder))))
+        static_cast<void>(dialog->SetFolder(folder.Get()));
+    }
+  }
+  if (FAILED(dialog->Show(nullptr)))
+    return std::nullopt;
+  ComPtr<IShellItem> selected;
+  if (FAILED(dialog->GetResult(&selected)))
+    return std::nullopt;
+  PWSTR raw{};
+  if (FAILED(selected->GetDisplayName(SIGDN_FILESYSPATH, &raw)) || raw == nullptr)
+    return std::nullopt;
+  std::filesystem::path result(raw);
+  CoTaskMemFree(raw);
+  return result;
+}
+
+// What a file picker is for: it only changes the filter list it opens with.
+enum class FileKind { Json, Vmd, Audio, Motion };
+
+// A chosen motion path is either a source VMD, which has to be converted, or a document that was
+// converted earlier, which must not go through the converter again.
+bool PathIsConvertedMotion(const std::string &path) noexcept {
+  const std::size_t dot = path.find_last_of('.');
+  if (dot == std::string::npos)
+    return false;
+  std::string extension = path.substr(dot);
+  for (char &c : extension)
+    c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+  return extension == ".json";
+}
+
+std::optional<std::filesystem::path> ChooseFile(
+    const std::string_view current_utf8, const FileKind kind = FileKind::Json) {
+  ComApartment apartment;
+  if (!apartment.Usable())
+    return std::nullopt;
+  ComPtr<IFileOpenDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog))))
+    return std::nullopt;
+  DWORD options{};
+  if (SUCCEEDED(dialog->GetOptions(&options))) {
+    static_cast<void>(dialog->SetOptions(options | FOS_FORCEFILESYSTEM |
+                                         FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST));
+  }
+  COMDLG_FILTERSPEC json_filters[] = {
+      {L"JSON", L"*.json"},
+      {L"All Files", L"*.*"},
+  };
+  // The VMD picker opens on the motion filter, since that is the only file it can use.
+  COMDLG_FILTERSPEC vmd_filters[] = {
+      {L"MMD motion (VMD)", L"*.vmd"},
+      {L"All Files", L"*.*"},
+  };
+  COMDLG_FILTERSPEC audio_filters[] = {
+      {L"Audio (mp3/wav/m4a/ogg)", L"*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.wma;*.flac"},
+      {L"All Files", L"*.*"},
+  };
+  // The motion picker takes either a source VMD or an already-converted document, so a converted
+  // motion can be handed around without the VMD and the reference table it was built from.
+  COMDLG_FILTERSPEC motion_filters[] = {
+      {L"MMD motion (VMD) or converted motion (JSON)", L"*.vmd;*.json"},
+      {L"MMD motion (VMD)", L"*.vmd"},
+      {L"Converted motion (JSON)", L"*.json"},
+      {L"All Files", L"*.*"},
+  };
+  const COMDLG_FILTERSPEC *filters = json_filters;
+  UINT count = ARRAYSIZE(json_filters);
+  if (kind == FileKind::Vmd) {
+    filters = vmd_filters;
+    count = ARRAYSIZE(vmd_filters);
+  } else if (kind == FileKind::Audio) {
+    filters = audio_filters;
+    count = ARRAYSIZE(audio_filters);
+  } else if (kind == FileKind::Motion) {
+    filters = motion_filters;
+    count = ARRAYSIZE(motion_filters);
+  }
+  static_cast<void>(dialog->SetFileTypes(count, filters));
+  if (!current_utf8.empty()) {
+    const std::wstring current = Utf8ToWide(current_utf8);
+    if (!current.empty()) {
+      ComPtr<IShellItem> folder;
+      if (SUCCEEDED(SHCreateItemFromParsingName(
+              current.c_str(), nullptr, IID_PPV_ARGS(&folder))))
+        static_cast<void>(dialog->SetFolder(folder.Get()));
+    }
+  }
+  if (FAILED(dialog->Show(nullptr)))
+    return std::nullopt;
+  ComPtr<IShellItem> selected;
+  if (FAILED(dialog->GetResult(&selected)))
+    return std::nullopt;
+  PWSTR raw{};
+  if (FAILED(selected->GetDisplayName(SIGDN_FILESYSPATH, &raw)) || raw == nullptr)
+    return std::nullopt;
+  std::filesystem::path result(raw);
+  CoTaskMemFree(raw);
+  return result;
+}
+
+// ---- MP3 frame table: exact time <-> byte ----------------------------------------------------
+//
+// MCI builds its time<->byte model from the *first* frame's bitrate, and on an MP3 whose first frame
+// is the Xing/Info header that is not the audio's rate: 爱言叶4 .mp3 carries an Info frame declaring
+// 64 kbps in front of 9698 frames of 128 kbps, so the device reports the 232.8 s track as 465.6 s and
+// `play ... from 200000` starts about 100 s of audio in. That is the "the further in, the further
+// behind" report -- and it is why a re-encoded CBR copy of the same song seeks correctly.
+//
+// The device also refuses `time format bytes` (MCIERR 282) on this machine, so the only lever left is
+// the number handed to `play from`: turn the requested time into an exact byte offset with the table
+// below, then express it in the device's own time base using the rate it believes in (file size /
+// the length it reports). Verified outside the game -- seeking to 230 s plays the last 2.8 s (3.05 s
+// measured) where the raw 230000 ms request was still playing after 12 s, and a CBR file, whose first
+// frame *is* the audio's rate, behaves identically either way (2.96 s vs 3.06 s).
+constexpr std::size_t kMp3MaxFrames = 2000000;
+constexpr std::uintmax_t kMp3MaxBytes = 256ull * 1024ull * 1024ull;
+
+struct Mp3FrameTable {
+  std::vector<std::uint64_t> byte;  // start of each frame
+  std::vector<double> time;         // its start time in seconds
+  double total_seconds = 0.0;
+  std::uint64_t file_bytes = 0;
+  bool valid = false;
+
+  // Linear inside a frame (24 ms at 48 kHz), which is finer than anything the device resolves.
+  double TimeForByte(const double offset) const {
+    if (!valid || byte.size() < 2)
+      return 0.0;
+    if (offset <= static_cast<double>(byte.front()))
+      return time.front();
+    if (offset >= static_cast<double>(byte.back()))
+      return total_seconds;
+    std::size_t low = 0;
+    std::size_t high = byte.size() - 1;
+    while (low < high) {
+      const std::size_t mid = (low + high + 1) / 2;
+      if (static_cast<double>(byte[mid]) <= offset)
+        low = mid;
+      else
+        high = mid - 1;
+    }
+    const double span = static_cast<double>(byte[low + 1] - byte[low]);
+    const double fraction = span > 0.0 ? (offset - static_cast<double>(byte[low])) / span : 0.0;
+    return time[low] + fraction * (time[low + 1] - time[low]);
+  }
+
+  double ByteForTime(const double seconds) const {
+    if (!valid || byte.size() < 2)
+      return 0.0;
+    if (seconds <= time.front())
+      return static_cast<double>(byte.front());
+    if (seconds >= total_seconds)
+      return static_cast<double>(file_bytes);
+    std::size_t low = 0;
+    std::size_t high = time.size() - 1;
+    while (low < high) {
+      const std::size_t mid = (low + high + 1) / 2;
+      if (time[mid] <= seconds)
+        low = mid;
+      else
+        high = mid - 1;
+    }
+    const double span = time[low + 1] - time[low];
+    const double fraction = span > 1e-9 ? (seconds - time[low]) / span : 0.0;
+    return static_cast<double>(byte[low]) +
+           fraction * static_cast<double>(byte[low + 1] - byte[low]);
+  }
+};
+
+// Walks the MPEG audio frames of an MP3. Layer III only, which is what every .mp3 in practice is; a
+// file that does not walk cleanly simply leaves the table invalid and the player stays on the
+// device's own clock, exactly as before.
+bool BuildMp3FrameTable(const std::wstring &path, Mp3FrameTable *out) {
+  std::error_code ec;
+  const std::uintmax_t size = std::filesystem::file_size(path, ec);
+  if (ec || size == 0 || size > kMp3MaxBytes)
+    return false;
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream)
+    return false;
+  std::vector<std::uint8_t> data(static_cast<std::size_t>(size));
+  stream.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size()));
+  if (!stream)
+    return false;
+
+  static const int kBitrateV1[16] = {0,   32,  40,  48,  56,  64,  80,  96,
+                                     112, 128, 160, 192, 224, 256, 320, 0};
+  static const int kBitrateV2[16] = {0, 8,  16, 24,  32,  40,  48, 56,
+                                     64, 80, 96, 112, 128, 144, 160, 0};
+  static const int kRateV1[4] = {44100, 48000, 32000, 0};
+  static const int kRateV2[4] = {22050, 24000, 16000, 0};
+  static const int kRateV25[4] = {11025, 12000, 8000, 0};
+
+  std::size_t position = 0;
+  // ID3v2: 10-byte header, size is 7 bits per byte.
+  if (data.size() > 10 && data[0] == 'I' && data[1] == 'D' && data[2] == '3') {
+    const std::uint32_t declared = (static_cast<std::uint32_t>(data[6] & 0x7F) << 21) |
+                                   (static_cast<std::uint32_t>(data[7] & 0x7F) << 14) |
+                                   (static_cast<std::uint32_t>(data[8] & 0x7F) << 7) |
+                                   static_cast<std::uint32_t>(data[9] & 0x7F);
+    position = 10u + declared;
+  }
+  double time = 0.0;
+  out->byte.reserve(16384);
+  out->time.reserve(16384);
+  while (position + 4 <= data.size() && out->byte.size() < kMp3MaxFrames) {
+    const std::uint8_t *header = data.data() + position;
+    if (header[0] != 0xFF || (header[1] & 0xE0) != 0xE0)
+      break;
+    const int version = (header[1] >> 3) & 0x03;   // 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5, 1 = reserved
+    const int layer = (header[1] >> 1) & 0x03;     // 1 = Layer III
+    const int bitrate_index = (header[2] >> 4) & 0x0F;
+    const int rate_index = (header[2] >> 2) & 0x03;
+    const int padding = (header[2] >> 1) & 0x01;
+    if (layer != 1 || version == 1 || rate_index == 3)
+      break;
+    const int bitrate =
+        (version == 3 ? kBitrateV1 : kBitrateV2)[bitrate_index] * 1000;
+    const int rate = version == 3 ? kRateV1[rate_index]
+                                  : (version == 2 ? kRateV2[rate_index] : kRateV25[rate_index]);
+    if (bitrate <= 0 || rate <= 0)
+      break;
+    const int samples = version == 3 ? 1152 : 576;
+    const std::size_t frame_bytes =
+        static_cast<std::size_t>(samples / 8) * static_cast<std::size_t>(bitrate) /
+            static_cast<std::size_t>(rate) +
+        static_cast<std::size_t>(padding);
+    if (frame_bytes <= 4 || position + frame_bytes > data.size())
+      break;
+    out->byte.push_back(position);
+    out->time.push_back(time);
+    time += static_cast<double>(samples) / rate;
+    position += frame_bytes;
+  }
+  out->total_seconds = time;
+  out->file_bytes = data.size();
+  out->valid = out->byte.size() > 8 && time > 1.0;
+  return out->valid;
+}
+
+// Music, so a motion can be judged with its song. MCI (winmm) decodes mp3/wav/m4a through the
+// codecs already on the machine, exposes a playhead in milliseconds and needs no device of its
+// own -- which is all this fits: the plugin only has the ImGui-style UI service and raw Win32.
+// It plays on its own audio path, so the game's own sound keeps working; a track that the system
+// has no codec for reports its MCI error instead of failing silently.
+class MusicPlayer {
+ public:
+  MusicPlayer() = default;
+  MusicPlayer(const MusicPlayer &) = delete;
+  MusicPlayer &operator=(const MusicPlayer &) = delete;
+  ~MusicPlayer() { Close(); }
+
+  bool Open(const std::string &utf8_path, std::string *error) {
+    Close();
+    std::error_code ec;
+    const std::filesystem::path path = std::filesystem::path(Utf8ToWide(utf8_path));
+    if (!std::filesystem::exists(path, ec) || ec) {
+      Set(error, "file not found");
+      return false;
+    }
+    std::wstring extension = path.extension().wstring();
+    for (wchar_t &c : extension)
+      c = static_cast<wchar_t>(::towlower(c));
+    // Everything goes through the DirectShow-style codecs. The waveaudio device refuses the
+    // whole `setaudio` family on this machine - measured: mute and volume both answer 261,
+    // "the driver does not recognise the command" - so a WAV opened there could not be muted
+    // or turned down. `mpegvideo` plays the same file with identical length/position
+    // readouts and supports both commands.
+    const std::wstring device = L"mpegvideo";
+    // The alias namespace survives a hot reload (it lives as long as the process), so a previous
+    // instance can still hold the name: close it first, and if it is somehow still taken fall back
+    // to a numbered alias instead of leaving the panel dead with "alias already in use".
+    const std::string base = "anomaly_bp_music_" + std::to_string(::GetCurrentProcessId());
+    const std::string file_name = WideToUtf8(path.filename().wstring());
+    std::string last_error;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+      const std::string candidate =
+          attempt == 0 ? base : base + "_" + std::to_string(attempt);
+      std::string ignored;
+      static_cast<void>(Command(L"close " + Utf8ToWide(candidate), &ignored));
+      std::string open_error;
+      if (Command(L"open \"" + Utf8ToWide(utf8_path) + L"\" type " + device + L" alias " +
+                      Utf8ToWide(candidate),
+                  &open_error)) {
+        alias_ = candidate;
+        path_ = utf8_path;
+        name_ = file_name;
+        muted_ = false;
+        // Pin the time format: `play ... from`, `position` and `length` then all speak milliseconds.
+        // Leaving it to the driver's default is how a seek ends up interpreted in another unit --
+        // and 0 is the only position that means the same thing in every unit.
+        std::string ignored_again;
+        static_cast<void>(Command(L"set " + Utf8ToWide(alias_) + L" time format ms",
+                                  &ignored_again));
+        // Re-apply the chosen volume: a fresh alias starts at the device default.
+        if (volume_percent_ != 100)
+          static_cast<void>(SetVolume(volume_percent_, &ignored_again));
+        // The track's own frame table, and the rate the device believes in. Everything the player
+        // asks for or reports goes through them (see Mp3FrameTable); without them it stays on the
+        // device clock, which is what every non-MP3 file and every unparsable one does.
+        frame_table_ = Mp3FrameTable{};
+        device_rate_ = 0.0;
+        timing_note_.clear();
+        if (extension == L".mp3" && BuildMp3FrameTable(path.wstring(), &frame_table_)) {
+          long long length_ms{};
+          if (Query(L"length", &length_ms) && length_ms > 500) {
+            const double rate = static_cast<double>(frame_table_.file_bytes) /
+                                (static_cast<double>(length_ms) / 1000.0);
+            if (rate >= 1000.0 && rate <= 200000.0) {
+              device_rate_ = rate;
+              char note[96]{};
+              std::snprintf(note, sizeof(note), ", %zu frames, device clock x%.2f",
+                            frame_table_.byte.size(),
+                            (static_cast<double>(length_ms) / 1000.0) / frame_table_.total_seconds);
+              timing_note_ = note;
+            }
+          }
+        }
+        return true;
+      }
+      last_error = open_error;
+    }
+    Set(error, last_error.empty() ? "could not open the audio file" : last_error);
+    path_.clear();
+    name_.clear();
+    return false;
+  }
+
+  void Close() {
+    if (!alias_.empty()) {
+      std::string ignored;
+      static_cast<void>(Command(L"close " + Utf8ToWide(alias_), &ignored));
+    }
+    alias_.clear();
+    path_.clear();
+    name_.clear();
+    timing_note_.clear();
+    frame_table_ = Mp3FrameTable{};
+    device_rate_ = 0.0;
+  }
+
+  bool Play(std::string *error) {
+    if (alias_.empty())
+      return false;
+    origin_true_seconds_ = 0.0;
+    origin_device_ms_ = 0;
+    return Command(L"play " + Utf8ToWide(alias_), error);
+  }
+
+  // Restarting from a known time is one command; seeking a *playing* mpegvideo device repeatedly
+  // is what made the track stutter and die, so re-syncs always go through this.
+  bool PlayFrom(const double seconds, std::string *error) {
+    if (alias_.empty())
+      return false;
+    // `motion + lead` can land past the end of the track -- a 29.4 s song under a 29.4 s motion asks
+    // for 29.55 s on the last frame, and a loop wrap asks again from the end -- and MCI answers that
+    // with "the parameter is out of range for the specified command" instead of clamping. Ask for the
+    // last sliver instead: the track ends either way, without the error line.
+    const double position = ClampToTrack(seconds);
+    const long long device_ms = DeviceMilliseconds(position);
+    origin_true_seconds_ = position;
+    origin_device_ms_ = device_ms;
+    return Command(L"play " + Utf8ToWide(alias_) + L" from " + std::to_wstring(device_ms), error);
+  }
+
+  bool Pause(std::string *error) {
+    if (alias_.empty())
+      return false;
+    return Command(L"pause " + Utf8ToWide(alias_), error);
+  }
+
+  bool Stop(std::string *error) {
+    if (alias_.empty())
+      return false;
+    static_cast<void>(Command(L"stop " + Utf8ToWide(alias_), error));
+    origin_true_seconds_ = 0.0;
+    origin_device_ms_ = 0;
+    return Command(L"seek " + Utf8ToWide(alias_) + L" to start", error);
+  }
+
+  bool Seek(const double seconds, std::string *error) {
+    if (alias_.empty())
+      return false;
+    const double position = ClampToTrack(seconds);
+    const long long device_ms = DeviceMilliseconds(position);
+    origin_true_seconds_ = position;
+    origin_device_ms_ = device_ms;
+    return Command(L"seek " + Utf8ToWide(alias_) + L" to " + std::to_wstring(device_ms), error);
+  }
+
+  // Muting instead of pausing keeps the playhead running, so unmuting stays in sync.
+  bool SetMuted(const bool muted, std::string *error) {
+    if (alias_.empty())
+      return false;
+    if (!Command(L"setaudio " + Utf8ToWide(alias_) + (muted ? L" off" : L" on"), error))
+      return false;
+    muted_ = muted;
+    return true;
+  }
+
+  // Volume in percent. MCI takes 0..1000 on the same `setaudio` command the mute uses, and
+  // the DirectShow device reports it back through `status ... volume` (measured: 100 and
+  // 1000 round-trip exactly). The value is kept even when no track is open, so the panel can
+  // show it and the next Open re-applies it.
+  bool SetVolume(const int percent, std::string *error) {
+    const int clamped = (std::max)(0, (std::min)(100, percent));
+    volume_percent_ = clamped;
+    if (alias_.empty())
+      return true;
+    return Command(L"setaudio " + Utf8ToWide(alias_) + L" volume to " +
+                       std::to_wstring(clamped * 10),
+                   error);
+  }
+  int Volume() const { return volume_percent_; }
+
+  double Position() const {
+    long long milliseconds{};
+    if (!Query(L"position", &milliseconds))
+      return 0.0;
+    const double seconds = static_cast<double>(milliseconds) / 1000.0;
+    if (frame_table_.valid) {
+      // The playhead counts real milliseconds from the position it was *given* -- verified on the
+      // 64 kbps-header file: `play from 230000` read 241616 ms after 12.04 s of playing, i.e. exactly
+      // the requested value plus the elapsed time, even though it landed 100 s of audio away. So the
+      // track's own time is the origin plus that elapsed part, which stays exact whichever way the
+      // landing went. (Multiplying by the device's assumed byte rate instead would be wrong: the
+      // length and the playhead do not share a base on such a file.)
+      const double value =
+          origin_true_seconds_ + seconds - static_cast<double>(origin_device_ms_) / 1000.0;
+      return (std::max)(0.0, (std::min)(frame_table_.total_seconds, value));
+    }
+    return seconds;
+  }
+
+  double Length() const {
+    if (frame_table_.valid)
+      return frame_table_.total_seconds;
+    long long milliseconds{};
+    if (!Query(L"length", &milliseconds))
+      return 0.0;
+    return static_cast<double>(milliseconds) / 1000.0;
+  }
+
+  // Ask the device instead of remembering: when a track ends on its own (or anything else stops
+  // it) a cached flag would keep the follower from ever restarting it.
+  bool playing() const {
+    wchar_t reply[32]{};
+    if (alias_.empty())
+      return false;
+    const std::wstring command =
+        std::wstring(L"status ") + Utf8ToWide(alias_) + L" mode";
+    if (::mciSendStringW(command.c_str(), reply, ARRAYSIZE(reply), nullptr) != 0)
+      return false;
+    return std::wstring(reply) == L"playing";
+  }
+
+  bool opened() const { return !alias_.empty(); }
+  const std::string &name() const { return name_; }
+  const std::string &timing_note() const { return timing_note_; }
+
+ private:
+  static void Set(std::string *error, const std::string &text) {
+    if (error != nullptr)
+      *error = text;
+  }
+
+  // A position for `play`/`seek`, expressed in the device's own time base. The device's clock and the
+  // file's clock are the same thing on a CBR file and differ by the ratio of the two bitrates on one
+  // whose header frame lies, which is exactly the case the frame table exists for (see Mp3FrameTable).
+  long long DeviceMilliseconds(const double seconds) const {
+    const double clamped = (std::max)(0.0, seconds);
+    if (frame_table_.valid && device_rate_ > 0.0)
+      return static_cast<long long>(frame_table_.ByteForTime(clamped) * 1000.0 / device_rate_);
+    return static_cast<long long>(clamped * 1000.0);
+  }
+
+  // MCI rejects a position at or past the end of the track ("the parameter is out of range for the
+  // specified command"), so a request aimed there is pulled back to the last 50 ms.
+  double ClampToTrack(const double seconds) const {
+    const double length = Length();
+    if (length > 0.1)
+      return (std::max)(0.0, (std::min)(seconds, length - 0.05));
+    return (std::max)(0.0, seconds);
+  }
+
+  bool Command(const std::wstring &command, std::string *error) const {
+    wchar_t reply[128]{};
+    const MCIERROR code = ::mciSendStringW(command.c_str(), reply, ARRAYSIZE(reply), nullptr);
+    if (code == 0)
+      return true;
+    wchar_t text[256]{};
+    if (::mciGetErrorStringW(code, text, ARRAYSIZE(text)) != 0)
+      Set(error, WideToUtf8(text));
+    else
+      Set(error, "MCI error " + std::to_string(static_cast<unsigned long>(code)));
+    return false;
+  }
+
+  bool Query(const wchar_t *what, long long *out) const {
+    if (alias_.empty())
+      return false;
+    wchar_t reply[64]{};
+    const std::wstring command = std::wstring(L"status ") + Utf8ToWide(alias_) + L" " + what;
+    if (::mciSendStringW(command.c_str(), reply, ARRAYSIZE(reply), nullptr) != 0)
+      return false;
+    *out = ::_wcstoi64(reply, nullptr, 10);
+    return true;
+  }
+
+  std::string alias_;
+  std::string path_;
+  std::string name_;
+  std::string timing_note_;
+  Mp3FrameTable frame_table_;
+  double device_rate_ = 0.0;
+  // Where the playhead was last placed: the track's time there, and the value handed to the device.
+  double origin_true_seconds_ = 0.0;
+  long long origin_device_ms_ = 0;
+  bool muted_{};
+  int volume_percent_ = 100;
+};
+
+// One player per plugin instance. **The game tick thread owns it**, because MCI does not share a
+// device between threads: an alias opened from the panel answers "the specified device is not open
+// or is not recognised by MCI" to every command sent from the tick, which is exactly what happened
+// when the follower was moved onto the tick while the panel still did the open().
+//
+// So the two directions are explicit:
+//   panel -> tick : a track to open, a mute state to apply, a close request (requests, guarded)
+//   tick -> panel : name, position, length, playing, error (published for display)
+MusicPlayer g_music;
+std::mutex g_music_mutex;          // guards the player, the request strings and g_music_name/error
+std::string g_music_request_path;  // non-empty: the tick should open this and clear it
+bool g_music_request_mute_pending = false;
+bool g_music_request_mute = false;
+bool g_music_request_close = false;
+std::atomic_bool g_music_muted{false};
+std::string g_music_name;
+std::string g_music_error;
+std::atomic_bool g_music_opened{false};
+std::atomic_bool g_music_playing{false};
+std::atomic<double> g_music_position{0.0};
+std::atomic<double> g_music_length{0.0};
+// Auto-pairing (find the song next to the motion) runs on the tick too, so this remembers the
+// motion it was tried for.
+std::string g_music_paired_for;
+
+// Defined below; the follower uses it to find the song next to the motion.
+std::string FindSiblingAudio(const std::string &motion_path);
+
+// How far the track may sit from the motion before it is restarted, how long a tick may take
+// before the motion is assumed to have lost time, and how often a drift may be corrected.
+// How often a stopped track may be restarted (a seek is never throttled).
+constexpr double kMusicResyncInterval = 1.0;
+// Soft sync: while a track plays, the *animation* clock is pulled towards the device by at most a
+// quarter of its rate, and a gap too large to hide snaps the animation rather than the audio.
+// Measured before this: the device's position ramped away from the motion cursor by 0.30 s every
+// 4-5 s (a ~6 % rate difference, not jitter), and correcting that by restarting the track is what
+// the player hears as "it jumps". MCI has no rate control, so the audio is the master clock and the
+// picture follows it.
+constexpr double kMusicSyncGain = 1.5;
+constexpr double kMusicHardSnapSeconds = 3.0;
+// A drag on the progress bar bumps the seek serial on every change, and each `play from` restarts
+// the device (which takes real time, and issuing them back to back can leave it mid-seek). Wait for
+// the drag to settle, then issue one command for the final position.
+constexpr double kMusicSeekSettleSeconds = 0.20;
+// How far ahead of the motion the track is started. A device only begins producing sound a little
+// after `play ... from` and MCI's playhead does not model that delay, so the offset was measured by
+// ear at 0.15 s. It is no longer a slider or a saved setting: a value stored from an earlier version
+// would come back with no way to change it back.
+constexpr double kMusicLeadSeconds = 0.15;
+
+void PublishMusicState(const bool opened, const bool playing, const double position,
+                       const double length) noexcept {
+  g_music_opened.store(opened, std::memory_order_release);
+  g_music_playing.store(playing, std::memory_order_release);
+  g_music_position.store(position, std::memory_order_release);
+  g_music_length.store(length, std::memory_order_release);
+}
+
+// The music follows the motion, and this runs on every tick -- deliberately NOT from the panel,
+// which is where it used to live: a collapsed panel culls the whole block, so the follower only
+// ran while the panel was open. Drift therefore accumulated unseen (the two clocks are independent
+// by construction: the motion cursor adds up the game tick's deltas, so a stalled tick, a long
+// frame or a paused game all lose time, while the track runs on the audio device's own clock) and
+// was corrected in one audible lurch the moment the panel was drawn. A stall now forces the
+// correction, and the drift threshold is small enough to catch the device-start offset that the
+// old 1.5 s window never saw.
+void StepMusic(Context &context, const double delta_seconds) noexcept {
+  // Never block the game tick on the panel: skip this tick instead (its critical sections are
+  // short, so the next tick gets through).
+  std::unique_lock<std::mutex> lock(g_music_mutex, std::try_to_lock);
+  if (!lock.owns_lock())
+    return;
+  static std::uint32_t music_seek_seen{};
+  static double since_resync = kMusicResyncInterval;
+
+  // ---- requests from the panel -------------------------------------------------------------
+  if (g_music_request_close) {
+    g_music_request_close = false;
+    g_music.Close();
+    g_music_name.clear();
+    g_music_opened.store(false, std::memory_order_release);
+  }
+  if (!g_music_request_path.empty()) {
+    const std::string path = g_music_request_path;
+    g_music_request_path.clear();
+    g_music_error.clear();
+    // A manual pick counts as this motion's choice, so the sibling search below does not undo it.
+    g_music_paired_for = context.motion_file;
+    if (!g_music.Open(path, &g_music_error)) {
+      g_music_name.clear();
+      LogDiagnostic(context, "betterpose music open failed: " + g_music_error);
+    } else {
+      g_music_name = g_music.name();
+      char line[256]{};
+      std::snprintf(line, sizeof(line), "betterpose music opened: %s, %.1f s%s",
+                    g_music_name.c_str(), g_music.Length(), g_music.timing_note().c_str());
+      LogDiagnostic(context, line);
+    }
+  }
+  if (g_music_request_mute_pending) {
+    g_music_request_mute_pending = false;
+    g_music_muted.store(g_music_request_mute, std::memory_order_release);
+    g_music_error.clear();
+    if (g_music.opened() &&
+        !g_music.SetMuted(g_music_muted.load(std::memory_order_relaxed), &g_music_error))
+      LogDiagnostic(context, "betterpose music mute failed: " + g_music_error);
+  }
+  if (g_music_request_volume_pending.exchange(false, std::memory_order_acquire)) {
+    const int volume = g_music_request_volume.load(std::memory_order_relaxed);
+    g_music_volume.store(volume, std::memory_order_release);
+    g_music_error.clear();
+    // SetVolume keeps the value even with no track open, so a volume chosen before picking a
+    // song is applied by the Open that follows.
+    if (!g_music.SetVolume(volume, &g_music_error))
+      LogDiagnostic(context, "betterpose music volume failed: " + g_music_error);
+  }
+  // The song belongs to the motion: whenever a *different* motion is loaded the track is replaced by
+  // that motion's sibling audio, and one with no sibling goes silent. Waiting for an empty player
+  // instead (the earlier rule) meant the first song of the session played on for every motion after
+  // it -- "it is always that same song".
+  if (!context.motion_file.empty() && g_music_paired_for != context.motion_file) {
+    g_music_paired_for = context.motion_file;
+    g_music_error.clear();
+    const std::string sibling = FindSiblingAudio(context.motion_file);
+    if (sibling.empty()) {
+      g_music.Close();
+      g_music_name.clear();
+    } else if (!g_music.Open(sibling, &g_music_error)) {
+      LogDiagnostic(context, "betterpose music open failed: " + g_music_error);
+    } else {
+      g_music_name = g_music.name();
+      char line[256]{};
+      std::snprintf(line, sizeof(line), "betterpose music opened: %s, %.1f s%s",
+                    g_music_name.c_str(), g_music.Length(), g_music.timing_note().c_str());
+      LogDiagnostic(context, line);
+    }
+  }
+  const bool opened = g_music.opened();
+  const bool playing = opened && g_music.playing();
+  const double position = opened ? g_music.Position() : 0.0;
+  const double length = opened ? g_music.Length() : 0.0;
+  PublishMusicState(opened, playing, position, length);
+  if (!opened)
+    return;
+  if (!context.motion_loaded.load(std::memory_order_acquire)) {
+    if (playing) {
+      static_cast<void>(g_music.Pause(&g_music_error));
+      PublishMusicState(opened, g_music.playing(), position, length);
+    }
+    return;
+  }
+
+  // ---- follow -------------------------------------------------------------------------------
+  const bool motion_plays = context.motion_playing.load(std::memory_order_acquire);
+  const double want = context.motion_display_seconds.load(std::memory_order_acquire);
+  const double lead = kMusicLeadSeconds;
+  const double target = want + lead;
+  const std::uint32_t seek_serial = context.motion_seek_serial.load(std::memory_order_acquire);
+  // A drag bumps the serial many times; wait for it to settle before touching the device, and keep
+  // the animation on the bar's position until then (see motion_seek_pending).
+  static std::uint32_t music_seek_pending{};
+  static double since_seek_change = kMusicSeekSettleSeconds;
+  static bool verify_pending = false;
+  static double verify_target = 0.0;
+  static bool verify_late = false;
+  static double verify_late_at = 0.0;
+  if (seek_serial != music_seek_pending) {
+    music_seek_pending = seek_serial;
+    since_seek_change = 0.0;
+  }
+  since_seek_change += delta_seconds;
+  // A loop wrap must not wait for the drag to settle: the animation has already jumped back.
+  if (context.motion_seek_immediate.exchange(false, std::memory_order_acq_rel))
+    since_seek_change = kMusicSeekSettleSeconds;
+  // The seek is only consumed once the track has actually been restarted, so scrubbing while paused
+  // still re-syncs on the next play.
+  const bool seek_ready = music_seek_pending != music_seek_seen &&
+                          since_seek_change >= kMusicSeekSettleSeconds;
+  // Only two things still restart the track: a settled seek (the player moved the bar, so the audio
+  // has to go there) and a track that is not playing when the motion is. Drift is no longer one of
+  // them -- it is corrected by nudging the *animation* clock in UpdateRuntime instead, because a
+  // rate difference cannot be fixed by jumping the audio, only made audible.
+  if (motion_plays && (seek_ready || (!playing && since_resync >= kMusicResyncInterval))) {
+    if (!g_music.PlayFrom(target, &g_music_error)) {
+      LogDiagnostic(context, "betterpose music resync failed: " + g_music_error);
+    } else {
+      char line[224]{};
+      std::snprintf(line, sizeof(line),
+                    "betterpose music resync: motion %.2f s, device %.2f s, lead %.2f s, %s",
+                    want, position, lead, seek_ready ? "after a seek" : "start");
+      LogDiagnostic(context, line);
+    }
+    music_seek_seen = music_seek_pending;
+    since_resync = 0.0;
+    // The device has been told where to play: the animation may follow it again.
+    context.motion_seek_pending.store(false, std::memory_order_release);
+    verify_pending = true;
+    verify_target = target;
+  } else if (!motion_plays && playing) {
+    static_cast<void>(g_music.Pause(&g_music_error));
+  }
+  since_resync += delta_seconds;
+  // Half a second after a restart, report where the device actually sits. `play ... from` is
+  // asynchronous in MCI, so "did it land where we asked" is a question only the device can answer,
+  // and without this line a seek that lands elsewhere is invisible in the log.
+  if (verify_pending && since_resync >= 0.5) {
+    verify_pending = false;
+    char line[160]{};
+    std::snprintf(line, sizeof(line),
+                  "betterpose music seek landed: requested %.2f s, device %.2f s", verify_target,
+                  position);
+    LogDiagnostic(context, line);
+    // A second look, two seconds later: if the driver seeks to the requested position and then
+    // *plays* from somewhere else, the reading is the only witness we have, and a reading that
+    // walks backwards would say so.
+    verify_late = true;
+    verify_late_at = since_resync;
+  }
+  if (verify_late && since_resync - verify_late_at >= 2.0) {
+    verify_late = false;
+    char line[160]{};
+    std::snprintf(line, sizeof(line),
+                  "betterpose music seek held: requested %.2f s, device %.2f s", verify_target,
+                  position);
+    LogDiagnostic(context, line);
+  }
+}
+
+// A track sitting next to the motion is almost always the right one, so offer it: the exact
+// basename first, then the same basename ignoring spaces (motions and songs are often named
+// "爱言叶4.vmd" / "爱言叶4 .mp3").
+std::string FindSiblingAudio(const std::string &motion_path) {
+  std::error_code ec;
+  const std::filesystem::path motion = std::filesystem::path(Utf8ToWide(motion_path));
+  const std::filesystem::path folder = motion.parent_path();
+  if (folder.empty() || !std::filesystem::is_directory(folder, ec) || ec)
+    return std::string();
+  const std::wstring stem = motion.stem().wstring();
+  const wchar_t *extensions[] = {L".mp3", L".wav", L".m4a", L".aac", L".ogg", L".wma", L".flac"};
+  std::string loose;
+  for (const wchar_t *extension : extensions) {
+    const std::filesystem::path exact = folder / (stem + extension);
+    if (std::filesystem::exists(exact, ec) && !ec)
+      return WideToUtf8(exact.wstring());
+  }
+  const auto squeeze = [](std::wstring value) {
+    value.erase(std::remove_if(value.begin(), value.end(),
+                               [](wchar_t c) { return c == L' ' || c == L'\u3000'; }),
+                value.end());
+    for (wchar_t &c : value)
+      c = static_cast<wchar_t>(::towlower(c));
+    return value;
+  };
+  const std::wstring wanted = squeeze(stem);
+  for (const auto &entry : std::filesystem::directory_iterator(folder, ec)) {
+    if (ec)
+      break;
+    if (!entry.is_regular_file(ec) || ec)
+      continue;
+    std::wstring extension = entry.path().extension().wstring();
+    for (wchar_t &c : extension)
+      c = static_cast<wchar_t>(::towlower(c));
+    bool audio = false;
+    for (const wchar_t *candidate : extensions)
+      audio = audio || extension == candidate;
+    if (!audio)
+      continue;
+    if (squeeze(entry.path().stem().wstring()) == wanted) {
+      loose = WideToUtf8(entry.path().wstring());
+      break;
+    }
+  }
+  return loose;
+}
+
+struct PoseFileTaskData final {
+  Context *context{};
+  std::uint32_t action{};
+  std::uint64_t motion_load_epoch{};
+  std::string document;
+  std::string path;
+  // Action 5 (VMD -> motion) needs more than a path pair: the skeleton export is read on
+  // the game thread and handed over here, and the converted document is written next to
+  // the source motion.
+  std::string skeleton_document;
+  std::string reference_document;
+  std::string output_path;
+};
+
+// Directory the plugin's own DLL lives in: the reference MMD bone table is shipped next
+// to it, and the plugin has no other way to find its own files.
+std::string ModuleDirectory() noexcept {
+  HMODULE module{};
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCWSTR>(&ModuleDirectory), &module) ||
+      module == nullptr)
+    return std::string();
+  std::wstring buffer(MAX_PATH, L'\0');
+  for (;;) {
+    const DWORD length = GetModuleFileNameW(module, buffer.data(),
+                                            static_cast<DWORD>(buffer.size()));
+    if (length == 0)
+      return std::string();
+    if (length < buffer.size()) {
+      buffer.resize(length);
+      break;
+    }
+    buffer.resize(buffer.size() * 2);
+  }
+  const std::size_t slash = buffer.find_last_of(L"\\/");
+  if (slash == std::wstring::npos)
+    return std::string();
+  return WideToUtf8(buffer.substr(0, slash));
+}
+
+std::string ReferenceBoneTablePath(bool unity_reference) noexcept {
+  const std::string directory = ModuleDirectory();
+  if (directory.empty())
+    return std::string();
+  return directory + (unity_reference ? "\\data\\reference-miku-unity.json"
+                                      : "\\data\\reference-pmx.json");
+}
+
+void ANOMALY_CALL PoseFileTask(void *value, AnomalyGenerationHandleV1) {
+  auto *data = static_cast<PoseFileTaskData *>(value);
+  if (data == nullptr)
+    return;
+  Context *context = data->context;
+  if (context == nullptr) {
+    delete data;
+    return;
+  }
+  try {
+    if (data->action == 1 || data->action == 3) {
+      const bool skeleton = data->action == 3;
+      const auto fail = [context, skeleton](const char *reason) {
+        SetReflectionStatus(
+            *context, (skeleton ? "skeleton export failed: " : "pose export failed: ") +
+                          std::string(reason));
+      };
+      std::ofstream file(Utf8ToWide(data->path), std::ios::binary);
+      if (!file) {
+        fail("cannot open file");
+        delete data;
+        return;
+      }
+      file.write(data->document.data(), static_cast<std::streamsize>(data->document.size()));
+      file.close();
+      if (!file) {
+        fail("write error");
+      } else {
+        SetReflectionStatus(*context, skeleton ? "skeleton exported" : "pose exported");
+      }
+    } else if (data->action == 2) {
+      std::ifstream file(Utf8ToWide(data->path), std::ios::binary);
+      if (!file) {
+        SetReflectionStatus(*context, "pose import failed: cannot open file");
+        delete data;
+        return;
+      }
+      std::string document((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+      if (file.bad() || document.empty() || document.size() > kMaximumPoseSettingsBytes) {
+        SetReflectionStatus(*context, "pose import failed: unreadable file");
+      } else {
+        const auto json = nlohmann::json::parse(document);
+        PoseApplyReport report;
+        if (!ApplyPoseDocument(*context, json, &report)) {
+          SetReflectionStatus(*context, "pose import failed: invalid document");
+        } else {
+          context->pose_override_enabled.store(true, std::memory_order_release);
+          context->pose_settings_dirty.store(true, std::memory_order_release);
+          std::string status =
+              "pose imported: " + std::to_string(report.by_name) + " bones by name";
+          if (report.by_index != 0)
+            status += ", " + std::to_string(report.by_index) +
+                      " by index (old file: may not match another character)";
+          if (!report.missing.empty())
+            status += ", " + std::to_string(report.missing.size()) +
+                      " not on this character (e.g. " + report.missing.front() + ")";
+          SetReflectionStatus(*context, status);
+        }
+      }
+    } else if (data->action == 4) {
+      std::ifstream file(Utf8ToWide(data->path), std::ios::binary);
+      if (!file) {
+        SetReflectionStatus(*context, "motion load failed: cannot open file");
+        delete data;
+        return;
+      }
+      std::string document((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+      if (file.bad() || document.empty() || document.size() > kMaximumMotionBytes) {
+        SetReflectionStatus(*context, "motion load failed: unreadable file");
+      } else {
+        try {
+          if (LoadMotionDocument(*context, document, data->path, data->motion_load_epoch))
+            SetReflectionStatus(*context, "motion loaded");
+          else
+            SetReflectionStatus(*context, "motion load cancelled: unloaded or character changed");
+        } catch (const std::exception &error) {
+          SetReflectionStatus(*context,
+                              std::string("motion load failed: ") + error.what());
+        }
+      }
+    } else if (data->action == 5) {
+      // VMD -> better-pose motion, entirely in process: the Python converter that produced
+      // the accepted files was ported for exactly this, and the port is verified against
+      // it frame by frame (see tools/mmd2bip/PORT-SPEC.md).
+      std::ifstream vmd(Utf8ToWide(data->path), std::ios::binary);
+      if (!vmd) {
+        SetReflectionStatus(*context, "motion convert failed: cannot open vmd");
+        delete data;
+        return;
+      }
+      std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(vmd)),
+                                      std::istreambuf_iterator<char>());
+      if (vmd.bad() || bytes.empty()) {
+        SetReflectionStatus(*context, "motion convert failed: unreadable vmd");
+        delete data;
+        return;
+      }
+      better_pose::mmd2bip::Input input;
+      input.vmd_path = data->path;
+      input.pmx_path = ReferenceBoneTablePath(
+          context->motion_reference_unity.load(std::memory_order_acquire));
+      input.skeleton_path = "";
+      input.skeleton_json = data->skeleton_document;
+      input.reference_pmx_json = data->reference_document;
+      input.vmd_bytes = std::move(bytes);
+      // These three were player-facing debug toggles; they are part of the conversion now: solve
+      // the VMD's IK (a motion can drive the legs purely through 左足ＩＫ -- rigoutput.vmd has no
+      // knee tracks at all), carry the hip rotation on the pelvis, and place the body from the
+      // pelvis so the feet stay where MMD's IK puts them.
+      input.ik = true;
+      input.hip_on_pelvis = true;
+      input.feet_anchor = false;
+      const auto result = better_pose::mmd2bip::BuildMotion(input);
+      if (!result.ok) {
+        SetReflectionStatus(*context, "motion convert failed: " + result.error);
+        delete data;
+        return;
+      }
+      {
+        std::ofstream out(Utf8ToWide(data->output_path), std::ios::binary);
+        if (!out) {
+          SetReflectionStatus(*context, "motion convert failed: cannot write output");
+          delete data;
+          return;
+        }
+        out.write(result.motion_json.data(),
+                  static_cast<std::streamsize>(result.motion_json.size()));
+        out.close();
+        if (!out) {
+          SetReflectionStatus(*context, "motion convert failed: write error");
+          delete data;
+          return;
+        }
+      }
+      LogDiagnostic(*context, "betterpose convert " + result.report);
+      try {
+        if (LoadMotionDocument(*context, result.motion_json, data->output_path, data->motion_load_epoch)) {
+          // Keep the selected source VMD in the picker. Reloading after a character
+          // switch must convert against the new skeleton instead of loading old JSON.
+          // Surface how many bones carry a per-frame translation: the re-solved legs and the
+          // spine make three. A stale build or a document without them loads as 0/1, so the
+          // status line alone tells which converter produced what is playing.
+          std::size_t offset_tracks = 0;
+          {
+            std::lock_guard<std::mutex> lock(context->motion_mutex);
+            offset_tracks = context->motion.offset_names.size();
+          }
+          SetReflectionStatus(*context,
+                              "motion converted and loaded [off " +
+                                  std::to_string(offset_tracks) + "]");
+        } else {
+          SetReflectionStatus(*context, "motion convert cancelled: unloaded or character changed");
+        }
+      } catch (const std::exception &error) {
+        SetReflectionStatus(*context,
+                            std::string("motion convert failed: ") + error.what());
+      }
+    }
+  } catch (...) {
+    SetReflectionStatus(*context, "pose file action threw an exception");
+  }
+  delete data;
+}
+
+// In-memory FTransform layout: rot(4 doubles) + translation(3) + pad + scale(3) + pad.
+nlohmann::json TransformToJson(const double *raw) noexcept {
+  nlohmann::json out = nlohmann::json::object();
+  out["rotation"] = {raw[0], raw[1], raw[2], raw[3]};
+  out["translation"] = {raw[4], raw[5], raw[6]};
+  out["scale"] = {raw[8], raw[9], raw[10]};
+  return out;
+}
+
+// Export the target skeleton: bone names, parent links, and two pose references.
+//
+// Why: to drive this character from an external motion file (e.g. an MMD VMD), a converter must
+// first know what the target skeleton looks like -- which bones exist, the parent chain, and each
+// bone's local orientation in UE's convention. Only with the local orientation can the converter
+// turn a source motion's rotation into "this bone's local rotation". The plugin already recomputes
+// FK and writes the pose buffers itself, so this path never touches the engine's skeleton
+// compatibility check.
+//
+// baseLocal comes from the pose captured by CapturePoseBase (the game's current pose). The
+// engine's reference (bind) pose is read separately, straight out of the mesh asset's
+// FReferenceSkeleton (FindReferencePose), and written as refLocal when the read succeeds: a live
+// capture always carries whatever posture the character was in, and the finger and limb rolls the
+// converter derives from it inherit that posture, whereas the reference pose is the one the
+// geometry is actually skinned in. refLocal falling back to nothing is fine -- the converter then
+// uses baseLocal exactly as before.
+std::string BuildSkeletonDocument(Context &context) noexcept {
+  const auto count = context.runtime.local_space_count;
+  // Bone names are the prerequisite for mapping; load them now if never loaded (also refreshes
+  // the parent chain).
+  if (context.bone_names.size() != count ||
+      context.bone_names_mesh != context.runtime.mesh) {
+    std::vector<std::string> names;
+    std::string detail;
+    if (RefreshBoneNames(context, names, detail)) {
+      context.bone_names = std::move(names);
+      context.bone_names_mesh = context.runtime.mesh;
+      context.bone_names_count = context.runtime.bone_space_count;
+      context.bone_names_attempted = true;
+      RefreshBoneHierarchy(context);
+    }
+  }
+  // The base pose is the reference frame for local rotations; without it this export is useless.
+  if (!CapturePoseBase(context))
+    return std::string();
+  // An index-only skeleton is not usable as a mapping target, so refuse instead of writing one.
+  if (count == 0 || context.bone_names.size() != count ||
+      !context.bone_parents_ready || context.bone_parents_count != count ||
+      context.bone_parents.size() != count)
+    return std::string();
+  const auto component_data = context.runtime.component_space_data;
+  const auto component_count = context.runtime.component_space_count;
+  // Read the bind pose first: the export is the only consumer, and a failed read must not change
+  // anything else (the document simply omits refLocal).
+  static_cast<void>(FindReferencePose(context));
+  const bool has_ref = context.ref_locals.size() == count;
+  if (!has_ref) {
+    char status[192]{};
+    std::snprintf(status, sizeof(status),
+                  "betterpose refpose unavailable (%s)",
+                  context.ref_pose_status.c_str());
+    LogDiagnostic(context, status);
+  }
+  auto bones = nlohmann::json::array();
+  for (std::uint32_t index{}; index != count; ++index) {
+    nlohmann::json bone = nlohmann::json::object();
+    bone["index"] = index;
+    bone["name"] = context.bone_names[index];
+    bone["parent"] = context.bone_parents[index];
+    std::array<double, 12> local{};
+    {
+      std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+      local = context.pose_base_locals[index];
+    }
+    bone["baseLocal"] = TransformToJson(local.data());
+    if (has_ref)
+      bone["refLocal"] = TransformToJson(context.ref_locals[index].data());
+    if (component_data != 0 && index < component_count) {
+      std::uintptr_t address{};
+      std::array<double, 12> component{};
+      if (AddAddress(component_data,
+                     static_cast<std::uint64_t>(index) * kTransformSize, address) &&
+          Read(context, address, component)) {
+        bone["liveComponent"] = TransformToJson(component.data());
+      }
+    }
+    bones.push_back(std::move(bone));
+  }
+  nlohmann::json root = nlohmann::json::object();
+  root["schemaVersion"] = 1;
+  root["kind"] = "better-pose-skeleton";
+  root["basis"] = has_ref ? "captured-live-pose plus refLocal from the mesh asset's "
+                            "FReferenceSkeleton (the bind pose)"
+                          : "captured-live-pose (engine reference pose unavailable)";
+  root["mesh"] = Hex(context.runtime.mesh);
+  root["boneCount"] = count;
+  root["boneSpaceCount"] = context.runtime.bone_space_count;
+  root["componentSpaceCount"] = component_count;
+  root["bones"] = std::move(bones);
+  return root.dump();
+}
+
+void ExecutePoseFileAction(Context &context) noexcept {
+  const std::uint32_t action =
+      context.pose_file_action_requested.exchange(0, std::memory_order_acquire);
+  if (action == 0)
+    return;
+  if (!SchedulerReady(context.scheduler)) {
+    SetReflectionStatus(context, "pose file action failed: scheduler unavailable");
+    return;
+  }
+  auto *data = new (std::nothrow) PoseFileTaskData();
+  if (data == nullptr) {
+    SetReflectionStatus(context, "pose file action failed: out of memory");
+    return;
+  }
+  data->context = &context;
+  data->action = action;
+  if (action == 1 || action == 3) {
+    // action 3 reuses the same folder/name inputs; only the suffix becomes .skeleton.json.
+    const bool skeleton = action == 3;
+    const auto fail = [&context, skeleton](const char *reason) {
+      SetReflectionStatus(
+          context, (skeleton ? "skeleton export failed: " : "pose export failed: ") +
+                       std::string(reason));
+    };
+    std::string name(context.pose_export_name.data());
+    if (name.empty())
+      name = skeleton ? "skeleton" : "pose";
+    if (name.size() < 5 || name.substr(name.size() - 5) != ".json")
+      name += ".json";
+    if (skeleton)
+      name = name.substr(0, name.size() - 5) + ".skeleton.json";
+    const std::wstring folder = Utf8ToWide(context.pose_export_folder);
+    if (folder.empty()) {
+      delete data;
+      fail("no folder selected");
+      return;
+    }
+    std::wstring path = folder;
+    if (path.back() != L'\\' && path.back() != L'/')
+      path.push_back(L'\\');
+    path += Utf8ToWide(name);
+    data->path = WideToUtf8(path);
+    if (data->path.empty()) {
+      delete data;
+      fail("invalid path");
+      return;
+    }
+    data->document =
+        skeleton ? BuildSkeletonDocument(context) : BuildPoseDocument(context);
+    if (data->document.empty()) {
+      delete data;
+      fail(skeleton ? "bone names or base pose unavailable; make the character visible first"
+                    : "empty document");
+      return;
+    }
+    if (data->document.size() > kMaximumPoseSettingsBytes) {
+      delete data;
+      fail("document too large");
+      return;
+    }
+  } else if (action == 2) {
+    if (context.pose_import_file.empty()) {
+      delete data;
+      SetReflectionStatus(context, "pose import failed: no file selected");
+      return;
+    }
+    data->path = context.pose_import_file;
+  } else if (action == 4) {
+    if (context.motion_file.empty()) {
+      delete data;
+      SetReflectionStatus(context, "motion load failed: no file selected");
+      return;
+    }
+    data->path = context.motion_file;
+  } else if (action == 5) {
+    // Conversion: the skeleton export has to be read here, on the game thread, because it
+    // walks live engine memory; the task thread only touches files and the documents.
+    if (context.motion_file.empty()) {
+      delete data;
+      SetReflectionStatus(context, "motion convert failed: no vmd selected");
+      return;
+    }
+    data->path = context.motion_file;
+    data->skeleton_document = BuildSkeletonDocument(context);
+    if (data->skeleton_document.empty()) {
+      delete data;
+      SetReflectionStatus(
+          context, "motion convert failed: skeleton unavailable (make the character visible)");
+      return;
+    }
+    const std::string reference_path =
+        ReferenceBoneTablePath(context.motion_reference_unity.load(std::memory_order_acquire));
+    {
+      std::ifstream reference(Utf8ToWide(reference_path), std::ios::binary);
+      if (!reference) {
+        delete data;
+        // The path is what makes this diagnosable: an install that does not carry the
+        // plugin's `data/` directory fails exactly here.
+        LogDiagnostic(context,
+                      "betterpose motion convert: reference bone table missing at " +
+                          reference_path);
+        SetReflectionStatus(context, "motion convert failed: reference bone table missing");
+        return;
+      }
+      data->reference_document.assign(std::istreambuf_iterator<char>(reference),
+                                      std::istreambuf_iterator<char>());
+    }
+    // Output next to the source motion so the converted document is easy to find.
+    std::string output = context.motion_file;
+    const std::size_t dot = output.find_last_of('.');
+    const std::size_t slash = output.find_last_of("\\/");
+    if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+      output = output.substr(0, dot);
+    data->output_path = output + ".betterpose.json";
+  }
+  if (action == 4 || action == 5) {
+    std::lock_guard<std::mutex> lock(context.motion_mutex);
+    data->motion_load_epoch = ++context.motion_load_epoch;
+  }
+  AnomalyGenerationHandleV1 task{};
+  const AnomalyStatusV1 status = context.scheduler->schedule(
+      context.scheduler->user, 0, PoseFileTask, data, &task);
+  if (status.code != ANOMALY_STATUS_V1_OK || task.id == 0) {
+    delete data;
+    SetReflectionStatus(context,
+                        "pose file action failed: schedule code=" +
+                            std::to_string(status.code));
+    return;
+  }
+  SetReflectionStatus(context, action == 1   ? "pose export queued"
+                               : action == 3 ? "skeleton export queued"
+                               : action == 4 ? "motion load queued"
+                               : action == 5 ? "motion convert queued"
+                                             : "pose import queued");
+}
+void EnsureActiveCharacterProfile(Context &context) noexcept {
+  if (context.runtime.mesh == 0 || !StorageReady(context.storage))
+    return;
+  const std::string profile_id = Hex(context.runtime.mesh);
+  if (profile_id.empty() || profile_id == context.active_character_id)
+    return;
+  const bool first_profile = !context.character_profiles_initialized;
+  context.active_character_id = profile_id;
+  const int loaded = LoadCharacterPoseProfile(context, profile_id);
+  if (loaded <= 0 && !first_profile)
+    ResetPoseValues(context);
+  context.character_profiles_initialized = true;
+  context.pose_settings_dirty.store(true, std::memory_order_release);
+}
+
+void ExecuteReflectionAction(Context &context) noexcept {
+  const std::uint32_t action =
+      context.reflection_action_requested.exchange(0, std::memory_order_acquire);
+  if (action == 0 || context.runtime.mesh == 0)
+    return;
+  try {
+    bool ok = false;
+    std::string detail;
+    if (action == 1) {
+      const std::uint8_t looping = 1;
+      ok = CallVirtualUFunction(context, context.runtime.mesh, kFunctionPlayPath,
+                                &looping, sizeof(looping), detail);
+    } else if (action == 2) {
+      ok = CallVirtualUFunction(context, context.runtime.mesh, kFunctionStopPath,
+                                nullptr, 0, detail);
+    } else if (action == 3) {
+      struct SetPositionParameters {
+        float position;
+        std::uint8_t fire_notifies;
+      };
+      SetPositionParameters parameters{};
+      parameters.position = 0.0F;
+      parameters.fire_notifies = 0;
+      ok = CallVirtualUFunction(context, context.runtime.mesh,
+                                kFunctionSetPositionPath, &parameters,
+                                sizeof(parameters), detail);
+    } else if (action == 4) {
+      if (context.runtime.character == 0) {
+        detail = "local character is unavailable";
+      } else {
+        ok = CallVirtualUFunction(context, context.runtime.character,
+                                  kFunctionRefreshAnimInstancePath, nullptr, 0,
+                                  detail);
+      }
+    } else if (action == 5) {
+      ok = ForcePoseCache(context, detail);
+    } else if (action == 6) {
+      std::vector<std::string> names;
+      ok = RefreshBoneNames(context, names, detail);
+      if (ok) {
+        context.bone_names = std::move(names);
+        context.bone_names_mesh = context.runtime.mesh;
+        context.bone_names_count = context.runtime.bone_space_count;
+        context.bone_names_attempted = true;
+        RefreshBoneHierarchy(context);
+      }
+    }
+    const std::string label = action == 1   ? "Play: "
+                              : action == 2 ? "Stop: "
+                              : action == 3 ? "Seek 0: "
+                              : action == 4 ? "Refresh Anim: "
+                              : action == 5 ? "Refresh Pose: "
+                                            : "Load Bones: ";
+    if (action == 5)
+      static_cast<void>(ReadPoseArrays(context));
+    SetReflectionStatus(context, label + (ok ? detail : detail));
+  } catch (...) {
+    SetReflectionStatus(context, "UFunction call threw an exception");
+  }
+}
+
+std::string Hex(const std::uintptr_t value) noexcept {
+  std::array<char, 32> buffer{};
+  std::snprintf(buffer.data(), buffer.size(), "0x%llX",
+                static_cast<unsigned long long>(value));
+  return std::string(buffer.data());
+}
+
+void SetStatus(RenderSnapshot &snapshot, const std::string_view message) {
+  const auto length = (std::min)(message.size(), snapshot.status.size() - 1U);
+  std::memcpy(snapshot.status.data(), message.data(), length);
+  snapshot.status[length] = '\0';
+}
+
+void PublishSnapshot(Context &context, const std::string_view status) {
+  RenderSnapshot next{};
+  next.active = context.runtime.character != 0 && context.runtime.mesh != 0;
+  next.character = context.runtime.character;
+  next.mesh = context.runtime.mesh;
+  next.anim_instance = context.runtime.anim_instance;
+  next.animation_mode = context.runtime.animation_mode;
+  next.bone_space_count = context.runtime.bone_space_count;
+  next.bone_space_data = context.runtime.bone_space_data;
+  next.component_space_count = context.runtime.component_space_count;
+  next.component_space_data = context.runtime.component_space_data;
+  next.rate_scale = context.runtime.rate_scale;
+  next.root_motion_scale = context.runtime.root_motion_scale;
+  next.pose_available = context.runtime.bone_space_data != 0 &&
+                        context.runtime.bone_space_count != 0 &&
+                        context.runtime.component_space_data != 0 &&
+                        context.runtime.component_space_count != 0 &&
+                        context.runtime.local_space_data != 0 &&
+                        context.runtime.local_space_count != 0;
+  next.bone_names = context.bone_names;
+  next.pose_bone_index =
+      context.requested_bone_index.load(std::memory_order_acquire);
+  if (context.runtime.component_space_data != 0 &&
+      next.pose_bone_index < context.runtime.component_space_count) {
+    std::uintptr_t component_transform{};
+    static_cast<void>(AddAddress(
+        context.runtime.component_space_data,
+        static_cast<std::uint64_t>(next.pose_bone_index) * kTransformSize,
+        component_transform));
+    static_cast<void>(Read(context,
+                           component_transform + kTransformTranslationOffset,
+                           next.component_translation_readback));
+  }
+  if (context.runtime.bone_space_data != 0 &&
+      next.pose_bone_index < context.runtime.bone_space_count) {
+    std::uintptr_t bone_transform{};
+    static_cast<void>(AddAddress(
+        context.runtime.bone_space_data,
+        static_cast<std::uint64_t>(next.pose_bone_index) * kTransformSize,
+        bone_transform));
+    static_cast<void>(Read(context, bone_transform + kTransformTranslationOffset,
+                           next.bone_translation_readback));
+  }
+  const auto pose_length =
+      (std::min)(context.pose_status.size(), next.pose_status.size() - 1U);
+  std::memcpy(next.pose_status.data(), context.pose_status.data(), pose_length);
+  next.pose_status[pose_length] = '\0';
+  SetStatus(next, status);
+  std::scoped_lock lock(context.state_mutex);
+  const auto length = (std::min)(context.reflection_status.size(),
+                                 next.reflection_status.size() - 1U);
+  std::memcpy(next.reflection_status.data(),
+              context.reflection_status.data(), length);
+  next.reflection_status[length] = '\0';
+  context.snapshot = next;
+}
+
+bool RefreshRuntime(Context &context) noexcept {
+  if (context.runtime.g_world_address == 0 && !ResolveGWorld(context))
+    return false;
+  if (!ResolveLocalCharacter(context))
+    return false;
+  if (!ReadAnimationState(context))
+    return false;
+  static_cast<void>(ReadPoseArrays(context));
+  EnsurePoseAngleCapacity(context);
+  MaybeRefreshBoneNames(context);
+  RefreshBoneHierarchyDirect(context);
+  static_cast<void>(Read(context,
+                         context.runtime.mesh + kMeshGlobalAnimRateScaleOffset,
+                         context.runtime.rate_scale));
+  static_cast<void>(Read(
+      context, context.runtime.character + kCharacterAnimRootMotionScaleOffset,
+      context.runtime.root_motion_scale));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Expression: the body mesh's morph targets (blend shapes).
+//
+// USkeletalMesh::MorphTargets is a TArray<UMorphTarget*>. Its offset is not in
+// the Profile, so it is found on the asset: the first TArray header whose
+// elements are live objects of a MorphTarget class. The names are the morph
+// objects' own FNames, which is exactly the FName SetMorphTarget takes.
+// SetMorphTarget(FName, float Value, bool bRemoveZeroWeight) is 13 bytes
+// (FName @0, float @8, bool @12), read from the engine's own reflection.
+// ---------------------------------------------------------------------------
+
+constexpr std::string_view kFunctionSetMorphTargetPath =
+    "/Script/Engine.SkeletalMeshComponent.SetMorphTarget";
+
+std::uintptr_t BodyMeshAsset(Context &context, const std::uintptr_t mesh) noexcept {
+  for (std::uint32_t offset{}; offset + 8 <= 0x2000; offset += 8) {
+    std::uintptr_t candidate{};
+    if (!ReadPointerAt(context, mesh, offset, candidate) || candidate == 0)
+      continue;
+    const std::string name = ClassNameOf(context, candidate);
+    if (name.find("SkeletalMesh") != std::string::npos &&
+        name.find("Component") == std::string::npos)
+      return candidate;
+  }
+  return 0;
+}
+
+bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
+                      std::vector<better_pose::morph::Entry> &entries) noexcept {
+  entries.clear();
+  const auto read_at = [&](const std::uint32_t offset) {
+    std::uintptr_t data{};
+    std::int32_t count{};
+    std::int32_t capacity{};
+    if (!Read(context, asset + offset, data) || !Read(context, asset + offset + 8, count) ||
+        !Read(context, asset + offset + 12, capacity))
+      return false;
+    if (data == 0 || count <= 0 || count > 4096 || capacity < count || capacity > 65536)
+      return false;
+    std::uintptr_t first{};
+    if (!Read(context, data, first) || first == 0 ||
+        ClassNameOf(context, first).find("MorphTarget") == std::string::npos)
+      return false;
+    for (std::int32_t index{}; index != count; ++index) {
+      std::uintptr_t morph{};
+      if (!Read(context, data + static_cast<std::uintptr_t>(index) * 8U, morph) || morph == 0)
+        continue;
+      better_pose::morph::Entry entry;
+      entry.name = ObjectNameOf(context, morph);
+      if (entry.name.empty() || !Read(context, morph + kObjectNameOffset, entry.fname))
+        continue;
+      entries.push_back(std::move(entry));
+    }
+    return !entries.empty();
+  };
+  if (context.morph_array_offset != 0 && read_at(context.morph_array_offset))
+    return true;
+  for (std::uint32_t offset = 0x28; offset + 16 <= 0x1000; offset += 8) {
+    if (read_at(offset)) {
+      context.morph_array_offset = offset;
+      return true;
+    }
+  }
+  return false;
+}
+
+better_pose::history::ExpressionState CaptureExpression(Context &context) {
+  std::lock_guard<std::mutex> lock(context.morph_mutex);
+  return {context.morph_weights.value, context.morph_weights.driven};
+}
+
+void RestoreExpression(Context &context, const better_pose::history::ExpressionState &state) {
+  std::lock_guard<std::mutex> lock(context.morph_mutex);
+  auto &weights = context.morph_weights;
+  const std::size_t count = weights.value.size();
+  for (std::size_t i{}; i != count; ++i) {
+    const bool driven = i < state.driven.size() && state.driven[i] != 0;
+    if (driven)
+      weights.Set(i, i < state.weights.size() ? state.weights[i] : 0.0F);
+    else
+      weights.Release(i);
+  }
+}
+
+// Game thread: undo/redo for the expression, the same settle-then-record
+// history as the pose (pose_history.hpp). A new mesh starts a fresh history.
+void StepExpressionHistory(Context &context) noexcept {
+  try {
+    if (context.morph_history_mesh != context.morph_mesh) {
+      context.morph_history_mesh = context.morph_mesh;
+      context.morph_history.Reset(CaptureExpression(context));
+      context.morph_history_request.store(0, std::memory_order_release);
+    } else {
+      const int request = context.morph_history_request.exchange(0, std::memory_order_acq_rel);
+      const auto live = CaptureExpression(context);
+      better_pose::history::ExpressionState target;
+      if (request == 1 ? context.morph_history.Undo(live, target)
+                       : request == 2 ? context.morph_history.Redo(live, target) : false)
+        RestoreExpression(context, target);
+      else
+        static_cast<void>(context.morph_history.Observe(
+            live, context.pose_edit_held.load(std::memory_order_acquire), GetTickCount64()));
+    }
+    context.morph_undo_count.store(static_cast<std::uint32_t>(context.morph_history.UndoCount()),
+                                   std::memory_order_release);
+    context.morph_redo_count.store(static_cast<std::uint32_t>(context.morph_history.RedoCount()),
+                                   std::memory_order_release);
+  } catch (...) {
+  }
+}
+
+// Game thread: expression file export/import. The document is small (a few
+// kilobytes), so it is written and read here rather than on a task.
+//   { "format": "betterpose-expression", "version": 1,
+//     "morphs": [ { "name": "jawOpen", "weight": 0.8 }, ... ] }
+void StepExpressionFile(Context &context) noexcept {
+  const int request = context.morph_file_request.exchange(0, std::memory_order_acq_rel);
+  if (request == 0)
+    return;
+  // Every message goes through the localizer: `key`, English fallback, and
+  // up to two {0}/{1} arguments.
+  const auto set_status = [&context](const std::string_view key, const std::string_view fallback,
+                                     const std::string &a = {}, const std::string &b = {}) {
+    const std::array<std::string_view, 2> arguments{a, b};
+    const std::size_t used = !b.empty() ? 2U : !a.empty() ? 1U : 0U;
+    std::string text = context.localizer.Format(
+        key, fallback, std::span<const std::string_view>(arguments.data(), used));
+    std::lock_guard<std::mutex> lock(context.morph_mutex);
+    context.morph_file_status = std::move(text);
+  };
+  try {
+    if (request == 1) {
+      std::string name(context.morph_export_name.data());
+      if (name.empty())
+        name = "expression";
+      if (name.size() < 5 || name.substr(name.size() - 5) != ".json")
+        name += ".json";
+      const std::wstring folder = Utf8ToWide(context.pose_export_folder);
+      if (folder.empty()) {
+        set_status("morph.file.no_folder", "Export failed: choose a folder first");
+        return;
+      }
+      std::wstring path = folder;
+      if (path.back() != L'\\' && path.back() != L'/')
+        path.push_back(L'\\');
+      path += Utf8ToWide(name);
+      nlohmann::json root;
+      root["format"] = "betterpose-expression";
+      root["version"] = 1;
+      nlohmann::json morphs = nlohmann::json::array();
+      {
+        std::lock_guard<std::mutex> lock(context.morph_mutex);
+        for (const auto &morph :
+             better_pose::morph::CollectDriven(context.morph_catalog, context.morph_weights))
+          morphs.push_back({{"name", morph.name}, {"weight", morph.weight}});
+      }
+      if (morphs.empty()) {
+        set_status("morph.file.nothing", "Export failed: no morph is set (drag a slider first)");
+        return;
+      }
+      const std::size_t saved = morphs.size();
+      root["morphs"] = std::move(morphs);
+      const std::string document = root.dump(2);
+      std::ofstream file(path, std::ios::binary);
+      if (!file) {
+        set_status("morph.file.open_failed", "Export failed: cannot open {0}", WideToUtf8(path));
+        return;
+      }
+      file.write(document.data(), static_cast<std::streamsize>(document.size()));
+      file.close();
+      if (file)
+        set_status("morph.file.exported", "Exported {0} morphs to {1}", std::to_string(saved),
+                   WideToUtf8(path));
+      else
+        set_status("morph.file.write_failed", "Export failed: write error");
+      return;
+    }
+
+    std::wstring path;
+    {
+      std::lock_guard<std::mutex> lock(context.morph_mutex);
+      path = context.morph_import_path;
+    }
+    if (path.empty()) {
+      set_status("morph.file.no_file", "Import failed: choose a file first");
+      return;
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+      set_status("morph.file.read_failed", "Import failed: cannot open the file");
+      return;
+    }
+    std::string document((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+    if (document.empty() || document.size() > 1024U * 1024U) {
+      set_status("morph.file.unreadable", "Import failed: the file cannot be read");
+      return;
+    }
+    const auto root = nlohmann::json::parse(document, nullptr, false);
+    if (!root.is_object() || root.value("format", std::string()) != "betterpose-expression" ||
+        !root.contains("morphs") || !root["morphs"].is_array()) {
+      set_status("morph.file.wrong_format", "Import failed: not an expression file");
+      return;
+    }
+    std::vector<better_pose::morph::SavedMorph> saved;
+    for (const auto &item : root["morphs"]) {
+      if (!item.is_object() || !item.contains("name") || !item["name"].is_string() ||
+          !item.contains("weight") || !item["weight"].is_number())
+        continue;
+      const float weight = item["weight"].get<float>();
+      if (!std::isfinite(weight))
+        continue;
+      saved.push_back({item["name"].get<std::string>(), weight});
+    }
+    std::vector<std::string> missing;
+    std::size_t matched{};
+    {
+      std::lock_guard<std::mutex> lock(context.morph_mutex);
+      matched = better_pose::morph::ApplySaved(context.morph_catalog, saved,
+                                              context.morph_weights, missing);
+    }
+    if (missing.empty())
+      set_status("morph.file.imported", "Imported {0} morphs", std::to_string(matched));
+    else
+      set_status("morph.file.imported_missing",
+                 "Imported {0} morphs; {1} are not on this character", std::to_string(matched),
+                 std::to_string(missing.size()) + " (" + missing.front() + " ...)");
+  } catch (...) {
+    if (request == 1)
+      set_status("morph.file.export_failed", "Export failed");
+    else
+      set_status("morph.file.invalid", "Import failed: invalid document");
+  }
+}
+
+// Game thread, every update: (re)load the catalogue for a new body mesh, and
+// write every driven weight. A morph the user released is written to 0 once
+// and then left to the game again.
+void StepExpression(Context &context) noexcept {
+  try {
+    const std::uintptr_t mesh = context.runtime.mesh;
+    if (mesh == 0)
+      return;
+    const bool rescan = context.morph_rescan_requested.exchange(false, std::memory_order_acq_rel);
+    if (mesh != context.morph_mesh || rescan) {
+      context.morph_mesh = mesh;
+      context.morph_set_function = 0;
+      context.morph_process_event = 0;
+      context.morph_released.clear();
+      const std::uintptr_t asset = BodyMeshAsset(context, mesh);
+      std::vector<better_pose::morph::Entry> entries;
+      const bool ok = asset != 0 && ReadMorphCatalog(context, asset, entries);
+      std::lock_guard<std::mutex> lock(context.morph_mutex);
+      const std::size_t count = entries.size();
+      context.morph_catalog.Build(asset, std::move(entries));
+      context.morph_weights.Resize(count);
+      context.morph_was_driven.assign(count, 0);
+      context.morph_status = ok ? "" : "no morph targets on this character";
+      // Every name into the log once per mesh, in chunks under the log's
+      // line limit: the MMD mapping table is written against these names.
+      if (ok) {
+        std::string line;
+        std::size_t chunk{};
+        const auto flush = [&]() {
+          if (line.empty())
+            return;
+          LogDiagnostic(context, "betterpose morph names " + Hex(asset) + " part " +
+                                     std::to_string(++chunk) + ": " + line);
+          line.clear();
+        };
+        for (const auto &entry : context.morph_catalog.entries) {
+          if (line.size() + entry.name.size() + 2 > 900)
+            flush();
+          line += (line.empty() ? "" : ", ") + entry.name;
+        }
+        flush();
+      }
+    }
+
+    // The loaded motion's facial keys, sampled at the playhead and mapped onto
+    // this character's morphs. Only while a motion with morphs is loaded and
+    // the page's switch is on; a morph the user set by hand wins over it.
+    std::vector<float> motion_weights;
+    std::vector<std::uint8_t> motion_touched;
+    const bool motion_drives =
+        context.motion_loaded.load(std::memory_order_acquire) &&
+        context.motion_expression_enabled.load(std::memory_order_acquire);
+    if (motion_drives) {
+      std::vector<std::string> catalogue_names;
+      std::uintptr_t catalogue_asset{};
+      {
+        std::lock_guard<std::mutex> lock(context.morph_mutex);
+        catalogue_asset = context.morph_catalog.asset;
+        catalogue_names.reserve(context.morph_catalog.entries.size());
+        for (const auto &entry : context.morph_catalog.entries)
+          catalogue_names.push_back(entry.name);
+      }
+      std::lock_guard<std::mutex> lock(context.motion_mutex);
+      const auto &motion = context.motion;
+      if (!motion.morph_names.empty() && !catalogue_names.empty()) {
+        if (context.motion_morph_map_asset != catalogue_asset ||
+            context.motion_morph_map_path != motion.path) {
+          context.motion_morph_map =
+              better_pose::mmd_morph::Resolve(motion.morph_names, catalogue_names);
+          context.motion_morph_map_asset = catalogue_asset;
+          context.motion_morph_map_path = motion.path;
+          std::uint32_t mapped{};
+          std::string unmapped;
+          for (const auto &resolved : context.motion_morph_map) {
+            if (!resolved.drives.empty())
+              ++mapped;
+            else
+              unmapped += (unmapped.empty() ? "" : ", ") + resolved.mmd;
+          }
+          context.motion_morph_mapped.store(mapped, std::memory_order_release);
+          context.motion_morph_total.store(
+              static_cast<std::uint32_t>(context.motion_morph_map.size()),
+              std::memory_order_release);
+          LogDiagnostic(context, "betterpose motion morphs: " + std::to_string(mapped) + "/" +
+                                     std::to_string(context.motion_morph_map.size()) +
+                                     " mapped" +
+                                     (unmapped.empty() ? "" : "; no target: " + unmapped));
+        }
+        // The same frame the bone sampler uses: seconds * fps from firstFrame.
+        const double fps = motion.fps > 0.0 ? motion.fps : 30.0;
+        const double frame = static_cast<double>(motion.first_frame) +
+                             context.motion_seconds.load(std::memory_order_acquire) * fps;
+        std::vector<float> sampled(motion.morph_keys.size());
+        for (std::size_t i{}; i != sampled.size(); ++i)
+          sampled[i] = better_pose::mmd_morph::Sample(motion.morph_keys[i], frame);
+        better_pose::mmd_morph::Combine(context.motion_morph_map, sampled, catalogue_names.size(),
+                                        motion_weights, motion_touched);
+      }
+    }
+
+    std::vector<std::pair<std::array<std::uint8_t, 8>, float>> writes;
+    {
+      std::lock_guard<std::mutex> lock(context.morph_mutex);
+      const auto &entries = context.morph_catalog.entries;
+      auto &weights = context.morph_weights;
+      if (context.morph_release_all.exchange(false, std::memory_order_acq_rel))
+        for (std::size_t i{}; i != weights.driven.size(); ++i)
+          weights.Release(i);
+      const std::size_t count = (std::min)(entries.size(), weights.value.size());
+      context.morph_was_driven.resize(count, 0);
+      context.motion_morph_driving.resize(count, 0);
+      for (std::size_t i{}; i != count; ++i) {
+        const bool from_motion = i < motion_touched.size() && motion_touched[i] != 0;
+        if (weights.driven[i] != 0) {
+          writes.emplace_back(entries[i].fname, weights.value[i]);
+          context.morph_was_driven[i] = 1;
+        } else if (from_motion) {
+          writes.emplace_back(entries[i].fname, motion_weights[i]);
+          context.morph_was_driven[i] = 1;
+        } else if (context.morph_was_driven[i] != 0) {
+          writes.emplace_back(entries[i].fname, 0.0F);  // released: back to neutral once
+          context.morph_was_driven[i] = 0;
+        }
+        context.motion_morph_driving[i] = from_motion ? 1 : 0;
+      }
+    }
+    if (writes.empty())
+      return;
+    if (context.morph_set_function == 0 &&
+        (!FindObjectAddressByPath(context, kFunctionSetMorphTargetPath,
+                                  context.morph_set_function) ||
+         context.morph_set_function == 0))
+      return;
+    if (context.morph_process_event == 0) {
+      std::uintptr_t vtable{};
+      if (!Read(context, mesh, vtable) || vtable == 0 ||
+          !Read(context, vtable + static_cast<std::uint64_t>(kProcessEventVtableSlot) * 8U,
+                context.morph_process_event) ||
+          context.morph_process_event == 0)
+        return;
+    }
+    for (const auto &[fname, value] : writes) {
+      std::array<std::uint8_t, 13> parameters{};
+      std::memcpy(parameters.data(), fname.data(), fname.size());
+      std::memcpy(parameters.data() + 8, &value, sizeof(value));
+      parameters[12] = 0;  // keep zero weights: the game may still be blending them
+      static_cast<void>(CallResolvedUFunction(mesh, context.morph_set_function,
+                                              context.morph_process_event, parameters.data(),
+                                              parameters.size()));
+    }
+  } catch (...) {
+  }
+}
+
+void UpdateRuntime(Context &context, const double delta_seconds) noexcept {
+  if (!RefreshRuntime(context)) {
+    PublishSnapshot(context, "local player character is unavailable");
+    return;
+  }
+
+  EnsureActiveCharacterProfile(context);
+  StepExpressionFile(context);
+  StepExpressionHistory(context);
+  StepExpression(context);
+
+  const bool freeze_enabled =
+      context.freeze_enabled.load(std::memory_order_acquire);
+  const bool rate_enabled =
+      context.rate_override_enabled.load(std::memory_order_acquire);
+  const float rate = context.requested_rate_scale.load(std::memory_order_acquire);
+  const bool root_enabled =
+      context.root_motion_override_enabled.load(std::memory_order_acquire);
+  const float root = context.requested_root_motion_scale.load(
+      std::memory_order_acquire);
+
+  ExecuteReflectionAction(context);
+  ExecutePoseFileAction(context);
+  StepMeshScan(context);
+  StepAttachScan(context);
+  // Retry the extra-component mapping until the bone table is readable.
+  if (context.extra_build_pending && !context.mesh_scan_candidates.empty() &&
+      !context.mesh_scan_running)
+    BuildExtraMeshes(context);
+
+  // Motion playback: resolve the file's bone names once the mesh is known, then
+  // advance the cursor. The tick detour does the actual pose write.
+  bool motion_ready = false;
+  if (context.motion_loaded.load(std::memory_order_acquire)) {
+    const double seek = context.motion_seek.exchange(-1.0, std::memory_order_acquire);
+    double seconds = context.motion_seconds.load(std::memory_order_acquire);
+    if (seek >= 0.0) {
+      seconds = seek;
+      context.motion_seek_serial.fetch_add(1, std::memory_order_release);
+      // The animation follows the bar from here until the track has been told where to play; the
+      // soft sync below would otherwise pull it straight back to the audio's old position.
+      context.motion_seek_pending.store(true, std::memory_order_release);
+    }
+    motion_ready = ResolveMotionIndices(context);
+    if (motion_ready &&
+        context.motion_playing.load(std::memory_order_acquire) &&
+        delta_seconds > 0.0) {
+      double duration{};
+      {
+        std::lock_guard<std::mutex> lock(context.motion_mutex);
+        duration = MotionDuration(context.motion);
+      }
+      seconds += delta_seconds;
+      // Audio is the master clock while a track plays. The device's position cannot be resampled
+      // (MCI has no rate control) and restarting the track every few seconds is exactly what the
+      // player hears as "it jumps back", so the *animation* clock is pulled towards the audio
+      // instead: at most a quarter of its rate, which closes a 0.3 s gap in about two seconds and
+      // is invisible. A gap too large to hide snaps the animation, never the audio.
+      if (!context.motion_seek_pending.load(std::memory_order_acquire) &&
+          g_music_opened.load(std::memory_order_acquire) &&
+          g_music_playing.load(std::memory_order_acquire)) {
+        const double audio_time =
+            g_music_position.load(std::memory_order_acquire) - kMusicLeadSeconds;
+        const double error = audio_time - seconds;
+        if (std::abs(error) > kMusicHardSnapSeconds) {
+          seconds = audio_time;
+        } else if (std::abs(error) > 1e-3) {
+          const double adjust = (std::max)(-0.25, (std::min)(0.25, error * kMusicSyncGain));
+          seconds += delta_seconds * adjust;
+        }
+      }
+      if (seconds > duration) {
+        if (context.motion_loop.load(std::memory_order_acquire) && duration > 0.0) {
+          seconds = std::fmod(seconds, duration);
+          // The track is the master clock and is usually longer than the motion, so without this the
+          // loop wraps the animation while the song keeps playing where it was and the two only meet
+          // again when one of them ends. A wrap *is* a seek back to the loop's start, so it goes
+          // through the same machinery the progress bar uses: the follower restarts the track there,
+          // and the animation is not pulled back to the old audio position meanwhile.
+          context.motion_seek_serial.fetch_add(1, std::memory_order_release);
+          context.motion_seek_pending.store(true, std::memory_order_release);
+          context.motion_seek_immediate.store(true, std::memory_order_release);
+        } else {
+          seconds = duration;
+          context.motion_playing.store(false, std::memory_order_release);
+        }
+      }
+    }
+    context.motion_seconds.store(seconds, std::memory_order_release);
+    context.motion_display_seconds.store(seconds, std::memory_order_release);
+    // The follower needs the value just stored, so it runs here rather than at the end of the
+    // update: a tick's worth of latency is exactly what "the music lags the progress bar" is.
+  }
+  // Outside the motion block: picking a track or muting must work before a motion is loaded, and
+  // the cursor the follower reads was just published above either way.
+  StepMusic(context, delta_seconds);
+  const bool motion_active = motion_ready;
+
+  // Keep the extra-component state fresh after every hot reload: both scans are read-only and
+  // chunked, so redo them automatically when a motion is loaded and the state for this pawn is
+  // missing.
+  if (context.motion_loaded.load(std::memory_order_acquire) &&
+      !context.mesh_scan_running &&
+      !context.mesh_scan_requested.load(std::memory_order_acquire) &&
+      !context.attach_scan_requested.load(std::memory_order_acquire)) {
+    const auto now = GetTickCount64();
+    const bool empty_scan = context.mesh_scan_candidates.empty();
+    // Three tries, then accept "this character has no accessories". Without the bound the
+    // scan re-ran every second forever on a character that has none, walking the whole
+    // object registry each time (measured: 227 scans, 6,406 mesh objects per scan).
+    const bool retry_empty = empty_scan && context.mesh_scan_empty_retries < 3 &&
+                             now >= context.next_mesh_scan_retry_ms;
+    if (context.mesh_scan_owner != context.runtime.mesh || retry_empty) {
+      if (context.mesh_scan_owner != context.runtime.mesh)
+        context.mesh_scan_empty_retries = 0;
+      else
+        ++context.mesh_scan_empty_retries;
+      context.mesh_scan_requested.store(true, std::memory_order_release);
+      context.next_mesh_scan_retry_ms = now + 1000;
+    } else if (context.attach_parent_offset == 0)
+      context.attach_scan_requested.store(true, std::memory_order_release);
+  }
+
+  if (context.pose_reset_requested.exchange(false, std::memory_order_acquire)) {
+    static_cast<void>(RestorePose(context));
+    static_cast<void>(EnsurePoseAnimationMode(context, false));
+    static_cast<void>(EnsurePoseForcedLod(context, false));
+    context.pose_override_enabled.store(false, std::memory_order_release);
+    ResetPoseValues(context);
+    context.pose_settings_dirty.store(true, std::memory_order_release);
+  }
+
+  // A loaded motion owns the pose; its frames are not manual edits.
+  if (!context.motion_loaded.load(std::memory_order_acquire)) {
+    const int mirror = context.pose_mirror_request.exchange(0, std::memory_order_acq_rel);
+    if (mirror != 0 && !MirrorPose(context, mirror))
+      SetReflectionStatus(context, "mirror unavailable: load the bones and make the character "
+                                   "visible first");
+    StepPoseHistory(context);
+  } else {
+    context.pose_mirror_request.store(0, std::memory_order_release);
+  }
+
+  const bool master_enabled =
+      context.pose_override_enabled.load(std::memory_order_acquire);  std::size_t active_joints{};
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    const auto active_count =
+        (std::min)(context.bone_angles.size(),
+                   static_cast<std::size_t>(context.runtime.local_space_count));
+    for (std::size_t index{}; index != active_count; ++index) {
+      const auto &angle = context.bone_angles[index];
+      if (angle[0] != 0.0 || angle[1] != 0.0 || angle[2] != 0.0)
+        ++active_joints;
+    }
+  }
+  const bool has_root_offset =
+      context.requested_root_offset[0].load(std::memory_order_acquire) != 0.0 ||
+      context.requested_root_offset[1].load(std::memory_order_acquire) != 0.0 ||
+      context.requested_root_offset[2].load(std::memory_order_acquire) != 0.0;
+  // A loaded motion drives the pose too, and takes precedence over the manual
+  // joint offsets (they stay untouched and come back when playback is off).
+  const bool pose_enabled =
+      motion_active || (master_enabled && (active_joints != 0 || has_root_offset));
+  const bool pose_available = context.runtime.bone_space_data != 0 &&
+                              context.runtime.bone_space_count != 0 &&
+                              context.runtime.component_space_data != 0 &&
+                              context.runtime.component_space_count != 0 &&
+                              context.runtime.local_space_data != 0 &&
+                              context.runtime.local_space_count != 0;
+  const bool force_ok = ApplyMultiThreadedUpdate(context, pose_enabled);
+  const bool pose_requested = pose_enabled && pose_available;
+  // Two very different things can put the plugin in charge of the camera. Follow mode is a camera
+  // mode of its own: it has no timeline and nothing to play, so it takes the camera the moment it
+  // is switched on -- which is what makes its sliders do something and the mouse stop turning the
+  // view. A loaded camera file is the other: that one *is* a timeline, authored against a
+  // particular dance, so it only owns the camera while that dance is actually playing. (The
+  // earlier "no playback, no camera" rule was about that file.)
+  const bool camera_follow_mode = context.camera_follow.load(std::memory_order_acquire);
+  const bool camera_track_ready =
+      context.camera_enabled.load(std::memory_order_acquire) &&
+      context.camera_loaded.load(std::memory_order_acquire);
+  const bool camera_configured = camera_follow_mode || camera_track_ready;
+  const bool motion_playing_now =
+      context.motion_playing.load(std::memory_order_acquire);
+  // Both modes wait for playback, and that is deliberate: with the motion paused the game's view
+  // point is often a placeholder the game is not recomputing (measured frozen with x = 0 for
+  // seconds), and a shot built against a placeholder is what "the camera stares at one place"
+  // turned out to be. Follow mode is an extra source of the shot, not an always-on override.
+  // The pose camera needs the hook whenever it is on, playing or not.
+  const bool orbit_on = context.orbit_enabled.load(std::memory_order_acquire);
+  const bool camera_requested = (camera_configured && motion_playing_now) || orbit_on;
+  // Size the camera's MMD world before any motion has published the exact ratio: the live
+  // character's leg over the reference model's is the same definition the converters bake into
+  // `mmdLegLength`, and MMD's bare 8 cm/unit convention is 6.8 % short for a 169 cm character
+  // (the log had a 394 cm shot fill 96.7 % of the frame where the file's own framing fills
+  // 90.5 %). An MMD-unit motion overwrites this with the file's exact ratio as soon as it plays.
+  if (context.camera_enabled.load(std::memory_order_acquire) &&
+      context.camera_loaded.load(std::memory_order_acquire) &&
+      context.mmd_unit_cm.load(std::memory_order_relaxed) <= 1e-6) {
+    const double live_leg = LiveLegLength(context);
+    if (live_leg > 1e-6)
+      context.mmd_unit_cm.store(live_leg / kReferenceLegUnits, std::memory_order_release);
+  }
+  // The camera write rides the same mesh tick as the pose, so the hook is installed for it
+  // too: that tick is the one that lands after the game has computed its own camera.
+  const bool hook_ok = !pose_requested || EnsurePoseTickHook(context);
+  // The camera owns the POV only while the dance is playing, so pausing hands the game's camera
+  // straight back. Installing it restarts the shot: the anchor (the yaw captured from the game
+  // camera's direction to the character) is dropped once, on the first play after a mode goes on,
+  // and kept across every later pause so the shot never re-orients itself.
+  bool camera_hook_ok = !camera_requested;
+  if (camera_requested) {
+    if (RefreshCameraPovTarget(context))
+      camera_hook_ok = EnsureCameraPovHook(context);
+    if (!context.camera_was_enabled && camera_configured && motion_playing_now) {
+      context.camera_was_enabled = true;
+      context.camera_anchored.store(false, std::memory_order_release);
+      context.camera_anchor_wait = 0;
+      context.camera_logged_second.store(-1.0, std::memory_order_release);
+    }
+    context.camera_log_clock.store(
+        context.camera_log_clock.load(std::memory_order_relaxed) + delta_seconds,
+        std::memory_order_release);
+    // The track shot rides the motion's timeline, the one the two files were authored on together;
+    // follow mode has no timeline of its own, and only the readout uses this.
+    context.camera_frame.store(
+        context.motion_display_seconds.load(std::memory_order_acquire) * 30.0,
+        std::memory_order_release);
+  } else {
+    if (context.camera_pov_hook.id != 0)
+      static_cast<void>(ReleaseCameraPovHook(context));
+    // Switching everything off (or unloading the file) clears the "already started" flag, so
+    // turning a mode back on re-anchors the shot instead of resuming one the user abandoned.
+    if (!camera_configured)
+      context.camera_was_enabled = false;
+  }
+  context.camera_hook_ready.store(camera_requested && camera_hook_ok,
+                                  std::memory_order_release);
+  const bool lod_ok = EnsurePoseForcedLod(context, pose_requested);
+  const bool freeze = freeze_enabled || pose_requested;
+  const bool freeze_ok = ApplyPause(context, freeze);
+  const bool rate_ok = ApplyRate(context, rate_enabled, rate);
+  const bool root_ok = ApplyRootMotion(context, root_enabled, root);
+  const bool mode_ok = EnsurePoseAnimationMode(context, pose_requested);
+  if (!pose_requested) {
+    static_cast<void>(RestorePose(context));
+    static_cast<void>(RestoreExtraMeshes(context));
+    static_cast<void>(ReleasePoseTickHook(context));
+  }
+  if (pose_requested) {
+    if (motion_active)
+      ApplyMotionPoseDirect(context);
+    else
+      ApplyPoseOverridesDirect(context);
+    ResyncExtraMeshes(context);
+  }
+  if (context.motion_loaded.load(std::memory_order_acquire)) {
+    const double seconds =
+        context.motion_display_seconds.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(context.motion_mutex);
+    std::snprintf(context.motion_status.data(), context.motion_status.size(),
+                  "%s%.2f/%.2fs %s", motion_active ? "" : "unmapped ",
+                  static_cast<double>(seconds),
+                  static_cast<double>(MotionDuration(context.motion)),
+                  context.motion_playing.load(std::memory_order_acquire)
+                      ? "playing"
+                      : "paused");
+  }
+  std::snprintf(context.pose_status.data(), context.pose_status.size(),
+                "joints active: %u fx %u", static_cast<unsigned>(active_joints),
+                static_cast<unsigned>(context.extra_resync_count));
+
+  bool settings_saved = true;
+  if (context.pose_settings_dirty.exchange(false, std::memory_order_acquire))
+    settings_saved = PersistPoseSettings(context);
+
+  if (pose_requested && !hook_ok) {
+    PublishSnapshot(context,
+                    "pose override unavailable: skeletal tick hook failed");
+  } else if (pose_requested && !lod_ok) {
+    PublishSnapshot(context, "failed to force pose LOD 0");
+  } else if (pose_requested && !mode_ok) {
+    PublishSnapshot(context, "failed to switch animation mode to custom");
+  } else if (!freeze_ok) {
+    PublishSnapshot(context, "failed to apply animation pause flag");
+  } else if (!rate_ok) {
+    PublishSnapshot(context, "failed to apply animation rate scale");
+  } else if (!root_ok) {
+    PublishSnapshot(context, "failed to apply root motion scale");
+  } else if (pose_requested) {
+    PublishSnapshot(context, settings_saved
+                                 ? "joint pose active (" +
+                                       std::to_string(active_joints) + " joints)"
+                                 : "pose active; settings save failed");
+  } else if (master_enabled && active_joints != 0 && !force_ok) {
+    PublishSnapshot(context,
+                    "pose override unavailable: AnimInstance is not available");
+  } else if (master_enabled && active_joints != 0) {
+    PublishSnapshot(context,
+                    "pose override pending: waiting for cached pose transforms");
+  } else if (!settings_saved) {
+    PublishSnapshot(context, "pose settings save failed");
+  } else {
+    PublishSnapshot(context, "ok");
+  }
+}
+
+void RestoreAll(Context &context) noexcept {
+  auto& state = context.runtime;
+  const auto active_character = state.character;
+  const auto active_mesh = state.mesh;
+  const auto active_instance = state.anim_instance;
+  // Restore to the objects whose values we captured, even during a pawn gap.
+  if (state.bound_mesh != 0) {
+    state.character = state.bound_character;
+    state.mesh = state.bound_mesh;
+  }
+  if (state.saved_multi_threaded_update)
+    state.anim_instance = state.multi_threaded_update_instance;
+  static_cast<void>(RestorePose(context));
+  static_cast<void>(RestoreExtraMeshes(context));
+  static_cast<void>(EnsurePoseAnimationMode(context, false));
+  static_cast<void>(EnsurePoseForcedLod(context, false));
+  static_cast<void>(RestoreMultiThreadedUpdate(context));
+  static_cast<void>(RestoreRootMotion(context));
+  static_cast<void>(RestoreRate(context));
+  static_cast<void>(RestorePause(context));
+  state.character = active_character;
+  state.mesh = active_mesh;
+  state.anim_instance = active_instance;
+}
+
+void BindRuntimeCharacter(Context &context, const std::uintptr_t character,
+                          const std::uintptr_t mesh) noexcept {
+  auto& state = context.runtime;
+  if (state.bound_character == character && state.bound_mesh == mesh)
+    return;
+  const auto previous_mesh = state.bound_mesh;
+  const auto g_world_address = state.g_world_address;
+  RestoreAll(context);
+  static_cast<void>(DropExtraMeshes(context));
+  state = RuntimeState{};
+  state.g_world_address = g_world_address;
+  state.bound_character = character;
+  state.bound_mesh = mesh;
+
+  // Converted rotations and offsets belong to one skeleton, even if another
+  // character has matching names/counts. Require an explicit load for the new rig.
+  if (previous_mesh != 0)
+    UnloadMotion(context);
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    context.pose_base_ready = false;
+    context.pose_base_mesh = 0;
+    context.pose_base_locals.clear();
+    context.ref_locals.clear();
+  }
+  context.bone_names.clear();
+  context.bone_names_mesh = 0;
+  context.bone_names_count = 0;
+  context.bone_names_attempted = false;
+  context.bone_parents.clear();
+  context.bone_parents_mesh = 0;
+  context.bone_parents_count = 0;
+  context.bone_parents_ready = false;
+  context.ref_pose_character = character;
+  context.ref_pose_object = 0;
+  context.ref_pose_status = "character changed";
+  context.ref_pose_attempted = false;
+  context.motion_baseline_logged.store(false, std::memory_order_release);
+  context.mmd_unit_cm.store(0, std::memory_order_release);
+  context.camera_anchored.store(false, std::memory_order_release);
+  const double no_offset[3]{};
+  PublishRootOffsets(context, no_offset, no_offset);
+
+  // An incremental scan must restart for the new pawn, not finish collecting
+  // candidates from the previous one and stamp them with the new mesh owner.
+  context.extra_targets.clear();
+  context.extra_build_pending = false;
+  context.mesh_scan_running = false;
+  context.mesh_scan_owner = 0;
+  context.mesh_scan_candidates.clear();
+  context.skeleton_meshes.clear();
+  context.next_mesh_scan_retry_ms = 0;
+  context.mesh_scan_requested.store(true, std::memory_order_release);
+  context.attach_scan_requested.store(false, std::memory_order_release);
+  if (previous_mesh != 0)
+    LogDiagnostic(context, "betterpose character rebound old_mesh=" + Hex(previous_mesh) +
+                           " new_mesh=" + Hex(mesh) + " takeover=reset motion=unloaded");
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton overlay: every joint of the local mesh drawn through the host AHUD,
+// with a line to its parent, and a click on a joint selects it for editing.
+// ---------------------------------------------------------------------------
+
+constexpr std::uint32_t kOverlayNoBone = (std::numeric_limits<std::uint32_t>::max)();
+constexpr float kOverlayPickRadius = 12.0F;
+constexpr std::uint32_t kOverlayResolveRetryFrames = 300;
+constexpr std::uint32_t kOverlayLineColor = ANOMALY_RGBA_V1(80, 220, 255, 190);
+constexpr std::uint32_t kOverlayJointFill = ANOMALY_RGBA_V1(255, 255, 255, 70);
+constexpr std::uint32_t kOverlayJointRing = ANOMALY_RGBA_V1(20, 20, 20, 150);
+constexpr std::uint32_t kOverlayJointCentre = ANOMALY_RGBA_V1(255, 255, 255, 230);
+constexpr std::uint32_t kOverlayHoverColor = ANOMALY_RGBA_V1(255, 160, 40, 255);
+constexpr std::uint32_t kOverlayHoverFill = ANOMALY_RGBA_V1(255, 160, 40, 90);
+constexpr std::uint32_t kOverlaySelectedColor = ANOMALY_RGBA_V1(255, 230, 0, 255);
+constexpr std::uint32_t kOverlaySelectedFill = ANOMALY_RGBA_V1(255, 230, 0, 90);
+constexpr float kOverlayDefaultRadius = 7.0F;
+constexpr float kOverlayMinimumRadius = 3.0F;
+constexpr float kOverlayMaximumRadius = 16.0F;
+
+Vec3d V3Sub(const Vec3d &a, const Vec3d &b) noexcept { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+Vec3d V3Add(const Vec3d &a, const Vec3d &b) noexcept { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+Vec3d V3Scale(const Vec3d &a, const double s) noexcept { return {a.x * s, a.y * s, a.z * s}; }
+double V3Dot(const Vec3d &a, const Vec3d &b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Vec3d V3Cross(const Vec3d &a, const Vec3d &b) noexcept {
+  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+double V3Length(const Vec3d &a) noexcept { return std::sqrt(V3Dot(a, a)); }
+
+Quatd QuatNormalize(const Quatd &q) noexcept {
+  const double length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+  if (!(length > 1e-12))
+    return Quatd{};
+  return Quatd{q.x / length, q.y / length, q.z / length, q.w / length};
+}
+
+Quatd QuatFromRotationVector(const std::array<double, 3> &omega) noexcept {
+  const double angle =
+      std::sqrt(omega[0] * omega[0] + omega[1] * omega[1] + omega[2] * omega[2]);
+  if (angle < 1e-12)
+    return QuatNormalize(Quatd{omega[0] * 0.5, omega[1] * 0.5, omega[2] * 0.5, 1.0});
+  const double s = std::sin(angle * 0.5) / angle;
+  return Quatd{omega[0] * s, omega[1] * s, omega[2] * s, std::cos(angle * 0.5)};
+}
+
+// The inverse of RotatorToQuat, in UE's FQuat::Rotator convention, so the
+// result round-trips through the joint sliders. Degrees, each in [-180, 180].
+std::array<double, 3> QuatToRotator(const Quatd &input) noexcept {
+  constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+  const Quatd q = QuatNormalize(input);
+  const auto normalize = [](double value) {
+    while (value > 180.0)
+      value -= 360.0;
+    while (value < -180.0)
+      value += 360.0;
+    return value;
+  };
+  const double singularity = q.z * q.x - q.w * q.y;
+  const double yaw_y = 2.0 * (q.w * q.z + q.x * q.y);
+  const double yaw_x = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+  constexpr double kThreshold = 0.4999995;
+  double pitch{};
+  double yaw = std::atan2(yaw_y, yaw_x) * kRadiansToDegrees;
+  double roll{};
+  if (singularity < -kThreshold) {
+    pitch = -90.0;
+    roll = normalize(-yaw - 2.0 * std::atan2(q.x, q.w) * kRadiansToDegrees);
+  } else if (singularity > kThreshold) {
+    pitch = 90.0;
+    roll = normalize(yaw - 2.0 * std::atan2(q.x, q.w) * kRadiansToDegrees);
+  } else {
+    pitch = std::asin(std::clamp(2.0 * singularity, -1.0, 1.0)) * kRadiansToDegrees;
+    roll = std::atan2(-2.0 * (q.w * q.x + q.y * q.z),
+                      1.0 - 2.0 * (q.x * q.x + q.y * q.y)) *
+           kRadiansToDegrees;
+  }
+  return {normalize(pitch), normalize(yaw), normalize(roll)};
+}
+
+// Joint drag is a view-plane rotation, like a rotate gizmo: the parent bone
+// turns about the view ray through it by exactly the angle the cursor has
+// swept around the parent on screen. That angle is a function of the cursor
+// alone, so holding the mouse still holds the bone still, and it cannot flip
+// to the far side of the joint's sphere. (An earlier free 3D solve re-ran every
+// frame with three unknowns and two screen coordinates; the unconstrained one
+// drifted whenever the projection moved by a fraction of a pixel.)
+
+double WrapAngle(double radians) noexcept {
+  constexpr double kPi = 3.14159265358979323846;
+  while (radians > kPi)
+    radians -= 2.0 * kPi;
+  while (radians < -kPi)
+    radians += 2.0 * kPi;
+  return radians;
+}
+
+// The view ray through `pivot`: the one world direction along which the
+// projection does not move, i.e. the cross product of the gradients of
+// screen x and screen y. Found numerically since the host exposes only project.
+// `sense` is +1 or -1 so that a positive angle about the axis turns a point
+// the same way the cursor angle atan2(dy, dx) increases on screen.
+template <typename Project>
+bool ViewRotationAxis(Project &&project, const Vec3d &pivot, Vec3d &axis,
+                      double &sense) noexcept;
+
+// The world directions that move `point` one screen pixel right and one pixel
+// down while staying at its depth (on the plane through it facing the view).
+// The inverse of the projection's 2x3 Jacobian restricted to that plane.
+template <typename Project>
+bool ViewPlaneBasis(Project &&project, const Vec3d &point, const Vec3d &view_axis,
+                    Vec3d &right, Vec3d &down) noexcept {
+  const Vec3d helper = std::abs(view_axis.z) < 0.9 ? Vec3d{0, 0, 1} : Vec3d{1, 0, 0};
+  Vec3d u = V3Cross(view_axis, helper);
+  u = V3Scale(u, 1.0 / V3Length(u));
+  const Vec3d v = V3Cross(view_axis, u);
+  constexpr double kStep = 1.0;  // cm
+  float centre[2]{};
+  float pu[2]{};
+  float pv[2]{};
+  const double c[3]{point.x, point.y, point.z};
+  const double cu[3]{point.x + u.x * kStep, point.y + u.y * kStep, point.z + u.z * kStep};
+  const double cv[3]{point.x + v.x * kStep, point.y + v.y * kStep, point.z + v.z * kStep};
+  if (!project(c, centre) || !project(cu, pu) || !project(cv, pv))
+    return false;
+  // Pixels per cm along u and v.
+  const double j00 = (static_cast<double>(pu[0]) - centre[0]) / kStep;
+  const double j10 = (static_cast<double>(pu[1]) - centre[1]) / kStep;
+  const double j01 = (static_cast<double>(pv[0]) - centre[0]) / kStep;
+  const double j11 = (static_cast<double>(pv[1]) - centre[1]) / kStep;
+  const double determinant = j00 * j11 - j01 * j10;
+  if (!(std::abs(determinant) > 1e-9) || !std::isfinite(determinant))
+    return false;
+  // [du dv] per pixel = J^-1.
+  const double i00 = j11 / determinant;
+  const double i01 = -j01 / determinant;
+  const double i10 = -j10 / determinant;
+  const double i11 = j00 / determinant;
+  right = V3Add(V3Scale(u, i00), V3Scale(v, i10));
+  down = V3Add(V3Scale(u, i01), V3Scale(v, i11));
+  return true;
+}
+
+template <typename Project>
+bool ViewRotationAxis(Project &&project, const Vec3d &pivot, Vec3d &axis,
+                      double &sense) noexcept {
+  constexpr double kStep = 1.0;  // cm
+  double gradient[2][3]{};
+  for (int component{}; component != 3; ++component) {
+    double plus[3]{pivot.x, pivot.y, pivot.z};
+    double minus[3]{pivot.x, pivot.y, pivot.z};
+    plus[component] += kStep;
+    minus[component] -= kStep;
+    float a[2]{};
+    float b[2]{};
+    if (!project(plus, a) || !project(minus, b))
+      return false;
+    gradient[0][component] = (static_cast<double>(a[0]) - b[0]) / (2.0 * kStep);
+    gradient[1][component] = (static_cast<double>(a[1]) - b[1]) / (2.0 * kStep);
+  }
+  const Vec3d gx{gradient[0][0], gradient[0][1], gradient[0][2]};
+  const Vec3d gy{gradient[1][0], gradient[1][1], gradient[1][2]};
+  Vec3d ray{gx.y * gy.z - gx.z * gy.y, gx.z * gy.x - gx.x * gy.z,
+            gx.x * gy.y - gx.y * gy.x};
+  const double length = std::sqrt(ray.x * ray.x + ray.y * ray.y + ray.z * ray.z);
+  if (!(length > 1e-12) || !std::isfinite(length))
+    return false;
+  axis = Vec3d{ray.x / length, ray.y / length, ray.z / length};
+
+  // Measure the handedness instead of assuming UE's axes and a y-down screen:
+  // turn a probe perpendicular to the axis a little and see which way it goes.
+  const Vec3d helper = std::abs(axis.z) < 0.9 ? Vec3d{0.0, 0.0, 1.0} : Vec3d{1.0, 0.0, 0.0};
+  Vec3d probe{axis.y * helper.z - axis.z * helper.y, axis.z * helper.x - axis.x * helper.z,
+              axis.x * helper.y - axis.y * helper.x};
+  const double probe_length =
+      std::sqrt(probe.x * probe.x + probe.y * probe.y + probe.z * probe.z);
+  probe = Vec3d{probe.x / probe_length * 10.0, probe.y / probe_length * 10.0,
+                probe.z / probe_length * 10.0};
+  const Vec3d turned = QuatRotateVector(
+      QuatFromRotationVector({axis.x * 0.1, axis.y * 0.1, axis.z * 0.1}), probe);
+  const double centre_world[3]{pivot.x, pivot.y, pivot.z};
+  const double probe_world[3]{pivot.x + probe.x, pivot.y + probe.y, pivot.z + probe.z};
+  const double turned_world[3]{pivot.x + turned.x, pivot.y + turned.y, pivot.z + turned.z};
+  float centre[2]{};
+  float before[2]{};
+  float after[2]{};
+  if (!project(centre_world, centre) || !project(probe_world, before) ||
+      !project(turned_world, after))
+    return false;
+  const double swept =
+      WrapAngle(std::atan2(static_cast<double>(after[1]) - centre[1],
+                           static_cast<double>(after[0]) - centre[0]) -
+                std::atan2(static_cast<double>(before[1]) - centre[1],
+                           static_cast<double>(before[0]) - centre[0]));
+  if (!(std::abs(swept) > 1e-6))
+    return false;
+  sense = swept > 0.0 ? 1.0 : -1.0;
+  return true;
+}
+
+// The unit direction from `point` toward the camera. The view ray through
+// the point is known up to sign; the camera side is where the projection
+// magnifies, so compare how far apart two points 1 cm apart land on screen
+// 20 cm either way along the ray.
+template <typename Project>
+bool TowardCamera(Project &&project, const Vec3d &point, Vec3d &toward) noexcept {
+  Vec3d ray;
+  double sense{};
+  if (!ViewRotationAxis(project, point, ray, sense))
+    return false;
+  Vec3d across = V3Cross(ray, std::abs(ray.z) < 0.9 ? Vec3d{0, 0, 1} : Vec3d{1, 0, 0});
+  across = V3Scale(across, 1.0 / V3Length(across));
+  const auto spread = [&](const double along) {
+    const Vec3d centre = V3Add(point, V3Scale(ray, along));
+    const Vec3d next = V3Add(centre, across);
+    const double a[3]{centre.x, centre.y, centre.z};
+    const double b[3]{next.x, next.y, next.z};
+    float pa[2]{};
+    float pb[2]{};
+    if (!project(a, pa) || !project(b, pb))
+      return -1.0;
+    return std::hypot(static_cast<double>(pb[0]) - pa[0], static_cast<double>(pb[1]) - pa[1]);
+  };
+  const double minus = spread(-20.0);
+  const double plus = spread(20.0);
+  if (!(minus > 0.0) || !(plus > 0.0) || minus == plus)
+    return false;
+  toward = plus > minus ? ray : V3Scale(ray, -1.0);
+  return true;
+}
+
+// Accumulates the cursor's angle around the pivot on screen, unwrapped so a
+// drag can go past half a turn. Near the pivot the angle is meaningless, so it
+// holds there. Returns true once `angle` holds a usable value.
+// The bone a drag of `joint` turns: its nearest ancestor that is not sitting
+// on the joint. Biped rigs stack bones -- twist bones on their limb, the
+// pelvis on the hip root -- and a pivot at the joint's own position has
+// nothing to swing. `distance2(a, b)` is the squared distance between two
+// bones. Returns -1 when every ancestor coincides (or there is none).
+template <typename Distance2>
+std::int32_t ResolveDragPivot(const std::vector<std::int32_t> &parents,
+                              const std::uint32_t joint, Distance2 &&distance2) noexcept {
+  constexpr double kCoincident2 = 0.1 * 0.1;  // cm
+  const auto count = static_cast<std::uint32_t>(parents.size());
+  if (joint >= count)
+    return -1;
+  std::int32_t pivot = parents[joint];
+  // Bounded by the bone count, so a malformed hierarchy with a cycle ends.
+  for (std::uint32_t step{}; step != count; ++step) {
+    if (pivot < 0 || static_cast<std::uint32_t>(pivot) >= count)
+      return -1;
+    if (distance2(joint, static_cast<std::uint32_t>(pivot)) >= kCoincident2)
+      return pivot;
+    pivot = parents[static_cast<std::size_t>(pivot)];
+  }
+  return -1;
+}
+
+// Which bones the "body only" overlay hides: hair, clothing and ornaments, by
+// the same name rules the accessory physics uses to find them, plus every bone
+// hanging below one (a chain's helper bones do not always carry the keyword).
+// Twist, finger, IK and tail bones are not secondary and stay visible. Returns
+// the number hidden; with no names loaded nothing is hidden.
+// Bones that exist for the engine, not the body: IK and foot-placement
+// targets and weapon sockets hang off the root beside Bip001 (root_foot,
+// foot_l, hand_r, wq_root_L, P_wq_R), virtual bones are named "VB ...", and
+// Bip001-PropN are the hand prop mounts. Dragging them moves nothing visible.
+bool IsControlBone(const std::string_view name, const std::int32_t parent,
+                   const std::vector<std::string> &names) {
+  if (name.rfind("VB ", 0) == 0)
+    return true;
+  const auto low = better_pose::secondary::Lower(name);
+  if (low.rfind("bip001-prop", 0) == 0)
+    return true;
+  // A direct child of the skeleton root other than the Bip001 rig itself.
+  if (parent >= 0 && static_cast<std::size_t>(parent) < names.size()) {
+    const auto parent_low = better_pose::secondary::Lower(names[static_cast<std::size_t>(parent)]);
+    if (parent_low == "root" && low.rfind("bip001", 0) != 0)
+      return true;
+  }
+  return false;
+}
+
+// Facial rig bones under the head: mouth, lips, teeth, eyebrows, eyelids,
+// eyeballs, cheeks. Real joints, but ~50 of them crowd the face into a blob.
+bool IsFaceBone(const std::string_view name) {
+  const auto low = better_pose::secondary::Lower(name);
+  for (const char *key : {"mouth", "zuiba", "yachi", "lip", "eyebrow", "eyelid", "eyeco",
+                          "eyeball", "lianjia", "tongue", "jaw"})
+    if (low.find(key) != std::string::npos)
+      return true;
+  return false;
+}
+
+std::uint32_t BuildOverlayHiddenMask(const std::vector<std::string> &names,
+                                     const std::vector<std::int32_t> &parents,
+                                     std::vector<std::uint8_t> &hidden,
+                                     const bool hide_face = true) {
+  const auto count = static_cast<std::uint32_t>(parents.size());
+  hidden.assign(count, 0);
+  if (names.size() != count)
+    return 0;
+  std::vector<std::uint8_t> own(count, 0);
+  for (std::uint32_t bone{}; bone != count; ++bone)
+    own[bone] = better_pose::secondary::IsSecondary(names[bone]) ||
+                        better_pose::secondary::IsOrnament(names[bone]) ||
+                        IsControlBone(names[bone], parents[bone], names) ||
+                        (hide_face && IsFaceBone(names[bone]))
+                    ? 1
+                    : 0;
+  std::uint32_t total{};
+  for (std::uint32_t bone{}; bone != count; ++bone) {
+    // Walk up until a secondary ancestor or the root; bounded against cycles.
+    std::int32_t at = static_cast<std::int32_t>(bone);
+    for (std::uint32_t step{}; step <= count && at >= 0 &&
+                               static_cast<std::uint32_t>(at) < count;
+         ++step) {
+      if (own[static_cast<std::size_t>(at)] != 0) {
+        hidden[bone] = 1;
+        ++total;
+        break;
+      }
+      at = parents[static_cast<std::size_t>(at)];
+    }
+  }
+  return total;
+}
+
+// How many bones hang below each bone. Used to break ties between joints that
+// land on the same pixel: the limb bone carrying the rest of the chain is the
+// one worth grabbing, not a twist, helper or IK bone stacked on it. Walking up
+// from every bone is bounded by the bone count, so a cycle cannot hang it.
+void CountDescendants(const std::vector<std::int32_t> &parents,
+                      std::vector<std::uint32_t> &descendants) noexcept {
+  const auto count = static_cast<std::uint32_t>(parents.size());
+  descendants.assign(count, 0);
+  for (std::uint32_t bone{}; bone != count; ++bone) {
+    std::int32_t parent = parents[bone];
+    for (std::uint32_t step{}; step != count && parent >= 0 &&
+                               static_cast<std::uint32_t>(parent) < count;
+         ++step) {
+      ++descendants[static_cast<std::size_t>(parent)];
+      parent = parents[static_cast<std::size_t>(parent)];
+    }
+  }
+}
+
+// The joint under the cursor. Every joint within `radius` is a candidate; the
+// ones within `stack` pixels of the nearest count as one stacked point, and of
+// those the bone with the most descendants wins (then the nearer, then the
+// lower index). The result is the same every frame, however the projection of
+// coincident bones jitters by a fraction of a pixel.
+std::uint32_t PickOverlayJoint(const std::vector<std::array<float, 2>> &screen,
+                               const std::vector<std::uint8_t> &valid,
+                               const std::vector<std::uint32_t> &weight, const float x,
+                               const float y, const float radius, const float stack) noexcept {
+  constexpr std::uint32_t kNone = (std::numeric_limits<std::uint32_t>::max)();
+  const std::size_t count = (std::min)({screen.size(), valid.size(), weight.size()});
+  float nearest2 = radius * radius;
+  bool any = false;
+  for (std::size_t bone{}; bone != count; ++bone) {
+    if (valid[bone] == 0)
+      continue;
+    const float dx = screen[bone][0] - x;
+    const float dy = screen[bone][1] - y;
+    const float distance2 = dx * dx + dy * dy;
+    if (distance2 <= nearest2) {
+      nearest2 = distance2;
+      any = true;
+    }
+  }
+  if (!any)
+    return kNone;
+  const float limit = std::sqrt(nearest2) + stack;
+  const float limit2 = limit * limit;
+  std::uint32_t best = kNone;
+  float best2{};
+  for (std::size_t bone{}; bone != count; ++bone) {
+    if (valid[bone] == 0)
+      continue;
+    const float dx = screen[bone][0] - x;
+    const float dy = screen[bone][1] - y;
+    const float distance2 = dx * dx + dy * dy;
+    if (distance2 > limit2)
+      continue;
+    if (best == kNone || weight[bone] > weight[best] ||
+        (weight[bone] == weight[best] && distance2 < best2)) {
+      best = static_cast<std::uint32_t>(bone);
+      best2 = distance2;
+    }
+  }
+  return best;
+}
+
+bool AdvanceDragAngle(const float pivot[2], const float cursor[2], bool &ready,
+                      double &last_raw, double &angle) noexcept {
+  constexpr double kMinimumRadius = 8.0;  // pixels
+  const double dx = static_cast<double>(cursor[0]) - pivot[0];
+  const double dy = static_cast<double>(cursor[1]) - pivot[1];
+  if (dx * dx + dy * dy < kMinimumRadius * kMinimumRadius)
+    return ready;
+  const double raw = std::atan2(dy, dx);
+  if (!ready) {
+    ready = true;
+    last_raw = raw;
+    return true;
+  }
+  angle += WrapAngle(raw - last_raw);
+  last_raw = raw;
+  return true;
+}
+
+// The pose model is local = offset * base, component = parent * local. Giving
+// the bone an extra world rotation R therefore needs offset' = P^-1 R P offset,
+// with P the world rotation of the bone's parent.
+Quatd ApplyWorldRotationToOffset(const Quatd &parent_world, const Quatd &world_rotation,
+                                 const Quatd &offset) noexcept {
+  return QuatNormalize(QuatMultiply(
+      QuatMultiply(QuatMultiply(QuatConjugate(parent_world), world_rotation),
+                   parent_world),
+      offset));
+}
+
+// The shortest rotation taking direction `from` onto direction `to`.
+Quatd QuatFromTo(const Vec3d &from, const Vec3d &to) noexcept {
+  const double lf = V3Length(from);
+  const double lt = V3Length(to);
+  if (!(lf > 1e-12) || !(lt > 1e-12))
+    return Quatd{};
+  const Vec3d a = V3Scale(from, 1.0 / lf);
+  const Vec3d b = V3Scale(to, 1.0 / lt);
+  const double d = V3Dot(a, b);
+  if (d < -0.999999) {
+    // Opposite: any axis perpendicular to `a` works.
+    Vec3d axis = V3Cross(a, std::abs(a.x) < 0.9 ? Vec3d{1, 0, 0} : Vec3d{0, 1, 0});
+    axis = V3Scale(axis, 1.0 / V3Length(axis));
+    return Quatd{axis.x, axis.y, axis.z, 0.0};
+  }
+  const Vec3d c = V3Cross(a, b);
+  return QuatNormalize(Quatd{c.x, c.y, c.z, 1.0 + d});
+}
+
+// The joints a drag moves by two-bone IK: hands and feet, which sit below a
+// hinge (forearm, calf). Fingers, toes and helper bones stay one-bone drags.
+bool IsIkEndBone(std::string_view name) {
+  const auto low = better_pose::secondary::Lower(name);
+  for (const char *skip : {"finger", "toe", "twist", "adjust", "ik", "nub", "prop"})
+    if (low.find(skip) != std::string::npos)
+      return false;
+  return low.find("hand") != std::string::npos || low.find("foot") != std::string::npos;
+}
+
+// Two-bone IK in world space. Given the root, middle and end joints at the
+// press and a target for the end, returns the world rotations to add to the
+// root bone and (after the root's) to the middle bone. The bend stays in the
+// plane the limb already bends in, so an elbow keeps pointing where it
+// pointed; the reach is clamped just short of straight so the knee never
+// snaps through. Bone lengths are kept exactly.
+struct TwoBoneRotations {
+  Quatd root;
+  Quatd mid;  // applied after `root`, about the middle joint
+};
+
+TwoBoneRotations SolveTwoBone(const Vec3d &root, const Vec3d &mid, const Vec3d &end,
+                              const Vec3d &target) noexcept {
+  TwoBoneRotations out;
+  const Vec3d upper = V3Sub(mid, root);
+  const Vec3d lower = V3Sub(end, mid);
+  const double a = V3Length(upper);
+  const double b = V3Length(lower);
+  const Vec3d reach = V3Sub(end, root);
+  Vec3d wanted = V3Sub(target, root);
+  double want = V3Length(wanted);
+  if (!(a > 1e-6) || !(b > 1e-6) || !(want > 1e-6))
+    return out;
+  // Clamp between fully folded and almost straight.
+  const double minimum = std::abs(a - b) + 1e-3;
+  const double maximum = (a + b) * 0.9995;
+  const double length = std::clamp(want, minimum, maximum);
+  wanted = V3Scale(wanted, length / want);
+  want = length;
+  const Vec3d direction = V3Scale(wanted, 1.0 / want);
+
+  // The bend direction: which way the middle joint sticks out from the line
+  // root-to-end. Keeping it is what keeps an elbow pointing where it pointed.
+  const auto perpendicular = [](const Vec3d &v, const Vec3d &unit) {
+    return V3Sub(v, V3Scale(unit, V3Dot(v, unit)));
+  };
+  Vec3d bend{};
+  const double reach_length = V3Length(reach);
+  if (reach_length > 1e-6)
+    bend = perpendicular(upper, V3Scale(reach, 1.0 / reach_length));
+  bend = perpendicular(bend, direction);
+  if (V3Length(bend) < 1e-3 * a)  // straight limb: bend the way the upper bone leans
+    bend = perpendicular(upper, direction);
+  if (V3Length(bend) < 1e-6 * a)  // and failing that, any way at all
+    bend = perpendicular(std::abs(direction.z) < 0.9 ? Vec3d{0, 0, 1} : Vec3d{1, 0, 0},
+                         direction);
+  bend = V3Scale(bend, 1.0 / V3Length(bend));
+
+  // Law of cosines: where the middle joint must sit for the two lengths.
+  const double cos_root = std::clamp((a * a + want * want - b * b) / (2.0 * a * want), -1.0, 1.0);
+  const double sin_root = std::sqrt((std::max)(0.0, 1.0 - cos_root * cos_root));
+  const Vec3d new_upper =
+      V3Add(V3Scale(direction, a * cos_root), V3Scale(bend, a * sin_root));
+
+  // Shortest-arc rotations add no twist about the bones themselves.
+  out.root = QuatFromTo(upper, new_upper);
+  const Vec3d carried_lower = QuatRotateVector(out.root, lower);
+  out.mid = QuatFromTo(carried_lower, V3Sub(wanted, new_upper));
+  return out;
+}
+
+void ClearOverlayScreen(Context &context) noexcept {
+  if (!context.overlay_published)
+    return;
+  std::lock_guard<std::mutex> lock(context.overlay_mutex);
+  context.overlay_screen_joints.clear();
+  context.overlay_screen_valid.clear();
+  context.overlay_screen_weight.clear();
+  context.overlay_joint_world.clear();
+  context.overlay_component_world_valid = false;
+  context.overlay_published = false;
+}
+
+// Game thread. K2_GetComponentToWorld is looked up once, then retried only
+// every few seconds if the object registry was not ready yet.
+bool ReadMeshComponentToWorld(Context &context, const std::uintptr_t mesh,
+                              Transformd &world) noexcept {
+  if (context.overlay_component_transform_function == 0) {
+    if (context.overlay_resolve_cooldown != 0) {
+      --context.overlay_resolve_cooldown;
+      return false;
+    }
+    std::uintptr_t function{};
+    if (!FindObjectAddressByPath(context, kFunctionSceneGetComponentTransformPath,
+                                 function) ||
+        function == 0) {
+      context.overlay_resolve_cooldown = kOverlayResolveRetryFrames;
+      return false;
+    }
+    context.overlay_component_transform_function = function;
+  }
+  std::uintptr_t vtable{};
+  std::uintptr_t process_event{};
+  if (!Read(context, mesh, vtable) || vtable == 0 ||
+      !Read(context,
+            vtable + static_cast<std::uint64_t>(kProcessEventVtableSlot) *
+                        sizeof(void *),
+            process_event) ||
+      process_event == 0)
+    return false;
+  std::array<std::uint8_t, sizeof(PackedTransform)> parameters{};
+  PackedTransform packed{};
+  if (!CallResolvedUFunction(mesh, context.overlay_component_transform_function,
+                             process_event, parameters.data(), parameters.size(),
+                             &packed))
+    return false;
+  world = UnpackTransform(packed);
+  const double values[]{world.rotation.x, world.rotation.y, world.rotation.z,
+                        world.rotation.w, world.translation.x,
+                        world.translation.y, world.translation.z,
+                        world.scale.x, world.scale.y, world.scale.z};
+  return std::all_of(std::begin(values), std::end(values),
+                     [](const double value) { return std::isfinite(value); });
+}
+
+Transformd OverlayJointWorld(const Context &context, const Transformd &component_world,
+                             const std::uint32_t bone) noexcept {
+  PackedTransform packed{};
+  std::memcpy(&packed,
+              context.overlay_raw_pose.data() + static_cast<std::size_t>(bone) * kTransformSize,
+              sizeof(packed));
+  return TransformMultiply(component_world, UnpackTransform(packed));
+}
+
+// Joint limits for a ball joint (shoulder, hip): with the switch on, pull an
+// offset the drag produced back inside the bone's range. Anything that is not
+// a ball joint, or with the switch off, passes through untouched.
+Quatd LimitBallOffset(Context &context, const std::uint32_t bone, const Quatd &offset) noexcept {
+  if (!context.overlay_limits_enabled.load(std::memory_order_acquire) ||
+      bone >= context.bone_names.size())
+    return offset;
+  const auto ball = better_pose::limits::BallFor(context.bone_names[bone]);
+  if (!ball.valid)
+    return offset;
+  std::array<double, 4> base{0.0, 0.0, 0.0, 1.0};
+  {
+    std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+    if (bone >= context.pose_base_locals.size())
+      return offset;
+    const auto &raw = context.pose_base_locals[bone];
+    base = {raw[0], raw[1], raw[2], raw[3]};
+  }
+  const auto limited = better_pose::limits::ClampBall(
+      ball, better_pose::limits::Normalize(base), {offset.x, offset.y, offset.z, offset.w});
+  return Quatd{limited[0], limited[1], limited[2], limited[3]};
+}
+
+void WriteDragAngles(Context &context, const std::uint32_t bone,
+                     const std::array<double, 3> &angles) noexcept {
+  std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+  if (bone >= context.bone_angles.size())
+    context.bone_angles.resize(static_cast<std::size_t>(bone) + 1);
+  context.bone_angles[bone] = angles;
+}
+
+// Game thread, inside the AHUD callback, after this frame's joints were read
+// and projected. Dragging a joint rotates its parent bone (the pivot) so the
+// joint follows the cursor; the pose override then applies the new angle on
+// the next mesh tick. Motion playback owns the pose, so no drag while loaded.
+void StepSkeletonDrag(Context &context, const AnomalyUe5AhudFrameV1 *frame,
+                      const Transformd &component_world, const std::uint32_t count,
+                      const std::vector<std::array<float, 2>> &screen,
+                      const std::vector<std::uint8_t> &valid) noexcept {
+  auto &drag = context.overlay_drag;
+  if (context.overlay_drag_cancel.exchange(false, std::memory_order_acq_rel) &&
+      drag.valid) {
+    WriteDragAngles(context, drag.pivot, drag.start_angles);
+    if (drag.ik)
+      WriteDragAngles(context, drag.root, drag.root_start_angles);
+    drag.valid = false;
+    context.pose_settings_dirty.store(true, std::memory_order_release);
+  }
+  // Draw refreshes the tick every frame of a drag; it stops running when the
+  // plugin window closes, and a drag without its mouse owner has ended.
+  const bool owner_alive =
+      GetTickCount64() - context.overlay_hover_tick.load(std::memory_order_acquire) < 250U;
+  const std::uint32_t joint = owner_alive
+                                  ? context.overlay_drag_joint.load(std::memory_order_acquire)
+                                  : kOverlayNoBone;
+  const std::uint32_t generation =
+      context.overlay_drag_generation.load(std::memory_order_acquire);
+  if (joint == kOverlayNoBone ||
+      context.motion_loaded.load(std::memory_order_acquire)) {
+    if (drag.valid) {
+      drag.valid = false;
+      context.pose_settings_dirty.store(true, std::memory_order_release);  // drag finished
+    }
+    return;
+  }
+  const auto project = [frame](const double world[3], float out[2]) {
+    double depth{};
+    return frame->project(frame->user, world, out, &depth) != 0 && depth > 0.0 &&
+           std::isfinite(out[0]) && std::isfinite(out[1]);
+  };
+  const auto &parents = context.bone_parents;
+  if (!drag.valid || drag.generation != generation) {
+    // One start per press: a start that failed (joint off screen, twist bone)
+    // is not retried later against a pose that may already have moved.
+    if (drag.generation == generation)
+      return;
+    drag.valid = false;
+    drag.generation = generation;
+    const auto fail = [&](const char *reason) {
+      LogDiagnostic(context, std::string("betterpose joint drag not started: ") + reason +
+                                 " joint=" + std::to_string(joint));
+    };
+    if (joint >= count || valid[joint] == 0 || parents.size() != count)
+      return fail("joint unavailable");
+    const std::int32_t pivot = ResolveDragPivot(
+        parents, joint, [&](const std::uint32_t a, const std::uint32_t b) {
+          const Vec3d pa = OverlayJointWorld(context, component_world, a).translation;
+          const Vec3d pb = OverlayJointWorld(context, component_world, b).translation;
+          return (pa.x - pb.x) * (pa.x - pb.x) + (pa.y - pb.y) * (pa.y - pb.y) +
+                 (pa.z - pb.z) * (pa.z - pb.z);
+        });
+    if (pivot < 0)
+      return fail("no ancestor away from the joint");
+    const Transformd pivot_world =
+        OverlayJointWorld(context, component_world, static_cast<std::uint32_t>(pivot));
+    const Transformd joint_world = OverlayJointWorld(context, component_world, joint);
+    const std::int32_t grandparent = parents[static_cast<std::size_t>(pivot)];
+    const Quatd parent_rotation =
+        grandparent >= 0 && static_cast<std::uint32_t>(grandparent) < count
+            ? OverlayJointWorld(context, component_world,
+                                static_cast<std::uint32_t>(grandparent))
+                  .rotation
+            : component_world.rotation;
+    const Vec3d offset{joint_world.translation.x - pivot_world.translation.x,
+                       joint_world.translation.y - pivot_world.translation.y,
+                       joint_world.translation.z - pivot_world.translation.z};
+    std::array<double, 3> start_angles{};
+    {
+      std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+      if (static_cast<std::size_t>(pivot) < context.bone_angles.size())
+        start_angles = context.bone_angles[static_cast<std::size_t>(pivot)];
+    }
+    const Quatd start_offset =
+        RotatorToQuat(start_angles[0], start_angles[1], start_angles[2]);
+    drag.pivot = static_cast<std::uint32_t>(pivot);
+    drag.pivot_world = {pivot_world.translation.x, pivot_world.translation.y,
+                        pivot_world.translation.z};
+    drag.joint_offset = {offset.x, offset.y, offset.z};
+    drag.parent_world = {parent_rotation.x, parent_rotation.y, parent_rotation.z,
+                         parent_rotation.w};
+    drag.start_offset = {start_offset.x, start_offset.y, start_offset.z, start_offset.w};
+    drag.start_angles = start_angles;
+    drag.start_screen = screen[joint];
+    Vec3d axis;
+    double sense{};
+    if (valid[static_cast<std::size_t>(pivot)] == 0)
+      return fail("pivot off screen");
+    if (!ViewRotationAxis(project, pivot_world.translation, axis, sense))
+      return fail("view axis unavailable");
+    drag.axis = {axis.x * sense, axis.y * sense, axis.z * sense};
+    drag.pivot_screen = screen[static_cast<std::size_t>(pivot)];
+
+    // Hands and feet drag the whole limb: the forearm/calf is `pivot`, the
+    // upper arm/thigh above it the IK root. Anything else stays one-bone.
+    drag.ik = false;
+    if (context.overlay_ik_enabled.load(std::memory_order_acquire) &&
+        joint < context.bone_names.size() && IsIkEndBone(context.bone_names[joint])) {
+      const std::int32_t root = ResolveDragPivot(
+          parents, static_cast<std::uint32_t>(pivot),
+          [&](const std::uint32_t a, const std::uint32_t b) {
+            const Vec3d pa = OverlayJointWorld(context, component_world, a).translation;
+            const Vec3d pb = OverlayJointWorld(context, component_world, b).translation;
+            return V3Dot(V3Sub(pa, pb), V3Sub(pa, pb));
+          });
+      Vec3d end_axis;
+      double end_sense{};
+      Vec3d right;
+      Vec3d down;
+      if (root >= 0 &&
+          ViewRotationAxis(project, joint_world.translation, end_axis, end_sense) &&
+          ViewPlaneBasis(project, joint_world.translation, end_axis, right, down)) {
+        const auto root_bone = static_cast<std::uint32_t>(root);
+        const Transformd root_world = OverlayJointWorld(context, component_world, root_bone);
+        const std::int32_t root_parent = parents[root_bone];
+        const Quatd root_parent_rotation =
+            root_parent >= 0 && static_cast<std::uint32_t>(root_parent) < count
+                ? OverlayJointWorld(context, component_world,
+                                    static_cast<std::uint32_t>(root_parent))
+                      .rotation
+                : component_world.rotation;
+        std::array<double, 3> root_angles{};
+        {
+          std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+          if (root_bone < context.bone_angles.size())
+            root_angles = context.bone_angles[root_bone];
+        }
+        const Quatd root_offset = RotatorToQuat(root_angles[0], root_angles[1], root_angles[2]);
+        drag.root = root_bone;
+        drag.root_world = {root_world.translation.x, root_world.translation.y,
+                           root_world.translation.z};
+        drag.mid_world = drag.pivot_world;
+        drag.end_world = {joint_world.translation.x, joint_world.translation.y,
+                          joint_world.translation.z};
+        drag.root_parent_world = {root_parent_rotation.x, root_parent_rotation.y,
+                                  root_parent_rotation.z, root_parent_rotation.w};
+        drag.root_start_offset = {root_offset.x, root_offset.y, root_offset.z, root_offset.w};
+        drag.root_start_angles = root_angles;
+        drag.plane_right = {right.x, right.y, right.z};
+        drag.plane_down = {down.x, down.y, down.z};
+        drag.ik = true;
+      }
+    }
+    // Depth: the direction toward the camera at the joint is minus the view
+    // ray (ViewRotationAxis measured `sense` against the screen, so recover
+    // the ray sign from where a point in front of the joint projects). A
+    // one-bone drag turns about the axis perpendicular to the bone and the
+    // view ray, which is the rotation that moves the joint most in depth.
+    {
+      drag.toward_camera = {0.0, 0.0, 0.0};
+      drag.depth_axis = {0.0, 0.0, 0.0};
+      Vec3d toward;
+      if (TowardCamera(project, joint_world.translation, toward)) {
+        drag.toward_camera = {toward.x, toward.y, toward.z};
+        Vec3d depth_axis = V3Cross(offset, toward);
+        const double length = V3Length(depth_axis);
+        if (length > 1e-9) {
+          depth_axis = V3Scale(depth_axis, 1.0 / length);
+          drag.depth_axis = {depth_axis.x, depth_axis.y, depth_axis.z};
+        }
+      }
+    }
+    drag.twist = context.overlay_drag_twist.load(std::memory_order_acquire);
+    if (drag.twist)
+      drag.ik = false;  // twist is always the one bone
+
+    // Joint limits: a hinge pivot (finger joints past the root) only bends
+    // about its own measured axis, within its range (joint_limits.hpp). The
+    // current offset is split into that bend and everything else, which is
+    // kept as it is while the drag changes only the bend.
+    drag.hinge = false;
+    drag.limb_hinge = false;
+    // An IK drag's middle bone (elbow/knee) with limits on: only the range is
+    // enforced (the solver already bends in its plane).
+    if (context.overlay_limits_enabled.load(std::memory_order_acquire) && drag.ik &&
+        drag.pivot < context.bone_names.size()) {
+      const auto limit = better_pose::limits::LimitFor(context.bone_names[drag.pivot]);
+      std::array<double, 4> base_rotation{0.0, 0.0, 0.0, 1.0};
+      bool have_base = false;
+      {
+        std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+        if (drag.pivot < context.pose_base_locals.size()) {
+          const auto &raw = context.pose_base_locals[drag.pivot];
+          base_rotation = {raw[0], raw[1], raw[2], raw[3]};
+          have_base = true;
+        }
+      }
+      if (limit.kind == better_pose::limits::Kind::Hinge && have_base) {
+        drag.limb_hinge = true;
+        drag.hinge_rest_base = better_pose::limits::Normalize(base_rotation);
+        drag.hinge_limit_axis = limit.axis;
+        drag.hinge_sign = limit.sign;
+        drag.hinge_minimum = limit.minimum;
+        drag.hinge_maximum = limit.maximum;
+      }
+    }
+    if (context.overlay_limits_enabled.load(std::memory_order_acquire) && !drag.ik &&
+        !drag.twist && drag.pivot < context.bone_names.size()) {
+      const auto limit = better_pose::limits::LimitFor(context.bone_names[drag.pivot]);
+      std::array<double, 4> base_rotation{0.0, 0.0, 0.0, 1.0};
+      bool have_base = false;
+      {
+        std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+        if (drag.pivot < context.pose_base_locals.size()) {
+          const auto &raw = context.pose_base_locals[drag.pivot];
+          base_rotation = {raw[0], raw[1], raw[2], raw[3]};
+          have_base = true;
+        }
+      }
+      if (limit.kind == better_pose::limits::Kind::Hinge && have_base) {
+        const auto base = better_pose::limits::Normalize(base_rotation);
+        const auto split = better_pose::limits::SplitBend(
+            limit, base, {start_offset.x, start_offset.y, start_offset.z, start_offset.w});
+        // The hinge in world space, for choosing which screen sweep bends.
+        std::array<double, 3> unit{0.0, 0.0, 0.0};
+        unit[static_cast<std::size_t>(limit.axis)] = 1.0;
+        const Quatd base_q{base[0], base[1], base[2], base[3]};
+        const Quatd parent_q{drag.parent_world[0], drag.parent_world[1], drag.parent_world[2],
+                             drag.parent_world[3]};
+        const Vec3d axis_world = QuatRotateVector(
+            parent_q, QuatRotateVector(QuatMultiply(start_offset, base_q),
+                                       Vec3d{unit[0], unit[1], unit[2]}));
+        drag.hinge = true;
+        drag.hinge_axis_world = {axis_world.x, axis_world.y, axis_world.z};
+        drag.hinge_base = split.rest;
+        drag.hinge_start_bend = split.bend_degrees;
+        drag.hinge_limit_axis = limit.axis;
+        drag.hinge_sign = limit.sign;
+        drag.hinge_minimum = limit.minimum;
+        drag.hinge_maximum = limit.maximum;
+        drag.hinge_rest_base = base;
+      }
+    }
+    // The reference is where the joint was at the press, so the bone only
+    // turns once the cursor sweeps around the pivot.
+    drag.angle_ready = false;
+    drag.angle = 0.0;
+    static_cast<void>(AdvanceDragAngle(drag.pivot_screen.data(), drag.start_screen.data(),
+                                       drag.angle_ready, drag.last_raw, drag.angle));
+    drag.valid = true;
+    // The sliders now show the bone the drag edits.
+    context.requested_bone_index.store(drag.pivot, std::memory_order_release);
+    context.pose_override_enabled.store(true, std::memory_order_release);
+  }
+
+  const double wheel_notches =
+      static_cast<double>(context.overlay_drag_wheel.load(std::memory_order_acquire)) / 120.0;
+
+  if (drag.twist) {
+    // Right drag: horizontal cursor travel twists the bone about its own
+    // axis, 0.5 degree per pixel (a 360 px swipe is half a turn).
+    constexpr double kTwistRadiansPerPixel = 0.5 * 3.14159265358979323846 / 180.0;
+    const double dx = context.overlay_drag_delta_x.load(std::memory_order_acquire);
+    const Vec3d bone{drag.joint_offset[0], drag.joint_offset[1], drag.joint_offset[2]};
+    const double length = V3Length(bone);
+    if (!(length > 1e-6))
+      return;
+    const Vec3d axis = V3Scale(bone, dx * kTwistRadiansPerPixel / length);
+    const Quatd parent_world{drag.parent_world[0], drag.parent_world[1],
+                             drag.parent_world[2], drag.parent_world[3]};
+    const Quatd start_offset{drag.start_offset[0], drag.start_offset[1],
+                             drag.start_offset[2], drag.start_offset[3]};
+    const Quatd next = ApplyWorldRotationToOffset(
+        parent_world, QuatFromRotationVector({axis.x, axis.y, axis.z}), start_offset);
+    WriteDragAngles(context, drag.pivot, QuatToRotator(LimitBallOffset(context, drag.pivot, next)));
+    return;
+  }
+
+  if (drag.ik) {
+    // Wheel: 5 cm per notch toward (+) or away from (-) the camera.
+    constexpr double kDepthCmPerNotch = 5.0;
+    const double dx = context.overlay_drag_delta_x.load(std::memory_order_acquire);
+    const double dy = context.overlay_drag_delta_y.load(std::memory_order_acquire);
+    const Vec3d end{drag.end_world[0], drag.end_world[1], drag.end_world[2]};
+    const Vec3d toward{drag.toward_camera[0], drag.toward_camera[1], drag.toward_camera[2]};
+    const Vec3d target = V3Add(
+        V3Add(end, V3Scale(toward, wheel_notches * kDepthCmPerNotch)),
+        V3Add(V3Scale(Vec3d{drag.plane_right[0], drag.plane_right[1], drag.plane_right[2]}, dx),
+              V3Scale(Vec3d{drag.plane_down[0], drag.plane_down[1], drag.plane_down[2]}, dy)));
+    const TwoBoneRotations turn = SolveTwoBone(
+        Vec3d{drag.root_world[0], drag.root_world[1], drag.root_world[2]},
+        Vec3d{drag.mid_world[0], drag.mid_world[1], drag.mid_world[2]}, end, target);
+    const Quatd root_parent{drag.root_parent_world[0], drag.root_parent_world[1],
+                            drag.root_parent_world[2], drag.root_parent_world[3]};
+    const Quatd root_offset{drag.root_start_offset[0], drag.root_start_offset[1],
+                            drag.root_start_offset[2], drag.root_start_offset[3]};
+    const Quatd mid_parent{drag.parent_world[0], drag.parent_world[1], drag.parent_world[2],
+                           drag.parent_world[3]};
+    const Quatd mid_offset{drag.start_offset[0], drag.start_offset[1], drag.start_offset[2],
+                           drag.start_offset[3]};
+    // The middle bone's parent has itself turned by the root rotation.
+    const Quatd moved_mid_parent = QuatNormalize(QuatMultiply(turn.root, mid_parent));
+    const Quatd next_root = ApplyWorldRotationToOffset(root_parent, turn.root, root_offset);
+    Quatd next_mid = ApplyWorldRotationToOffset(moved_mid_parent, turn.mid, mid_offset);
+    // Joint limits: the solver keeps the bend plane it started in, so the
+    // elbow/knee already only bends; what it cannot know is the range. The
+    // bend is read off the solved offset and clamped (a knee dragged past
+    // straight would fold backwards otherwise). A clamp leaves the hand short
+    // of the cursor -- the limb cannot reach it -- rather than breaking it.
+    if (drag.limb_hinge) {
+      better_pose::limits::Limit limit;
+      limit.kind = better_pose::limits::Kind::Hinge;
+      limit.axis = drag.hinge_limit_axis;
+      limit.sign = drag.hinge_sign;
+      limit.minimum = drag.hinge_minimum;
+      limit.maximum = drag.hinge_maximum;
+      const auto split = better_pose::limits::SplitBend(
+          limit, drag.hinge_rest_base, {next_mid.x, next_mid.y, next_mid.z, next_mid.w});
+      if (split.bend_degrees < limit.minimum || split.bend_degrees > limit.maximum) {
+        const auto clamped = better_pose::limits::ComposeBend(limit, drag.hinge_rest_base,
+                                                              split.rest, split.bend_degrees);
+        next_mid = Quatd{clamped[0], clamped[1], clamped[2], clamped[3]};
+      }
+    }
+    // The shoulder/hip is clamped too. The solve is not redone around the
+    // clamp, so a limited shoulder leaves the hand off the cursor -- the
+    // pose the arm cannot reach -- instead of bending the elbow to make up.
+    WriteDragAngles(context, drag.root,
+                    QuatToRotator(LimitBallOffset(context, drag.root, next_root)));
+    WriteDragAngles(context, drag.pivot, QuatToRotator(next_mid));
+    return;
+  }
+
+  const float cursor[2]{
+      drag.start_screen[0] + context.overlay_drag_delta_x.load(std::memory_order_acquire),
+      drag.start_screen[1] + context.overlay_drag_delta_y.load(std::memory_order_acquire)};
+  // A wheel-only drag never moves the cursor far enough for an angle; still
+  // apply the depth part.
+  const bool have_angle = AdvanceDragAngle(drag.pivot_screen.data(), cursor, drag.angle_ready,
+                                           drag.last_raw, drag.angle);
+  if (!have_angle && wheel_notches == 0.0)
+    return;
+  const Quatd parent_world{drag.parent_world[0], drag.parent_world[1],
+                           drag.parent_world[2], drag.parent_world[3]};
+  const Quatd start_offset{drag.start_offset[0], drag.start_offset[1],
+                           drag.start_offset[2], drag.start_offset[3]};
+  // Wheel: 10 degrees per notch, swinging the joint toward the camera.
+  constexpr double kDepthRadiansPerNotch = 10.0 * 3.14159265358979323846 / 180.0;
+  const double swing = have_angle ? drag.angle : 0.0;
+  const double depth = wheel_notches * kDepthRadiansPerNotch;
+  if (drag.hinge) {
+    // Only the part of the drag about the hinge bends it. The screen sweep
+    // turns about the view ray: its share on the hinge is the cosine between
+    // the two, so a finger seen side-on (hinge toward the camera) bends 1:1
+    // with the sweep and one seen edge-on barely moves -- there the wheel,
+    // turning about the axis across the bone and the ray, takes over with
+    // its own share. Sideways motion is simply dropped.
+    constexpr double kDegrees = 180.0 / 3.14159265358979323846;
+    const Vec3d hinge_world{drag.hinge_axis_world[0], drag.hinge_axis_world[1],
+                            drag.hinge_axis_world[2]};
+    const double sweep_share =
+        V3Dot(Vec3d{drag.axis[0], drag.axis[1], drag.axis[2]}, hinge_world);
+    const double wheel_share =
+        V3Dot(Vec3d{drag.depth_axis[0], drag.depth_axis[1], drag.depth_axis[2]}, hinge_world);
+    // Rotation about the hinge's +axis, in world; bending is `hinge_sign` of it.
+    const double about_axis = swing * sweep_share + depth * wheel_share;
+    better_pose::limits::Limit limit;
+    limit.kind = better_pose::limits::Kind::Hinge;
+    limit.axis = drag.hinge_limit_axis;
+    limit.sign = drag.hinge_sign;
+    limit.minimum = drag.hinge_minimum;
+    limit.maximum = drag.hinge_maximum;
+    const double bend = drag.hinge_start_bend + about_axis * drag.hinge_sign * kDegrees;
+    const auto offset = better_pose::limits::ComposeBend(limit, drag.hinge_rest_base,
+                                                         drag.hinge_base, bend);
+    WriteDragAngles(context, drag.pivot,
+                    QuatToRotator(Quatd{offset[0], offset[1], offset[2], offset[3]}));
+    return;
+  }
+  const Quatd screen_turn = QuatFromRotationVector(
+      {drag.axis[0] * swing, drag.axis[1] * swing, drag.axis[2] * swing});
+  const Quatd depth_turn = QuatFromRotationVector(
+      {drag.depth_axis[0] * depth, drag.depth_axis[1] * depth, drag.depth_axis[2] * depth});
+  // Depth first (about the bone's axis at the press), then the screen swing.
+  const Quatd world_rotation = QuatNormalize(QuatMultiply(screen_turn, depth_turn));
+  const Quatd next = LimitBallOffset(
+      context, drag.pivot, ApplyWorldRotationToOffset(parent_world, world_rotation, start_offset));
+  WriteDragAngles(context, drag.pivot, QuatToRotator(next));
+}
+
+// A filled disc as horizontal strips: AHUD has rects and lines but no circle.
+// The strips never overlap, so a translucent fill blends exactly once. Each
+// row is {top offset from the centre, height, half width}.
+struct DiscRow {
+  float top;
+  float height;
+  float half_width;
+};
+
+std::vector<DiscRow> DiscRows(const float radius, const float step) {
+  std::vector<DiscRow> rows;
+  if (!(radius > 0.0F) || !(step > 0.0F))
+    return rows;
+  for (float top = -radius; top < radius; top += step) {
+    const float height = (std::min)(step, radius - top);
+    const float middle = top + height * 0.5F;
+    const float half = std::sqrt((std::max)(0.0F, radius * radius - middle * middle));
+    if (half > 0.25F)
+      rows.push_back({top, height, half});
+  }
+  return rows;
+}
+
+// How finely a marker is built, from its radius. Every rect and line is one
+// UFunction call through ProcessEvent, so the counts are kept to what the eye
+// can tell apart: 5 fill strips (3 below 5 px) and one ring segment per
+// ~4.5 px of circumference, between 8 and 16 -- the ring then strays from a
+// true circle by under 0.4 px, and it hides the steps the coarse fill leaves
+// at the rim. At the default 7 px that is 16 calls a joint (was 24).
+struct CircleDetail {
+  float strip;
+  int segments;
+};
+
+CircleDetail CircleDetailFor(const float radius) noexcept {
+  CircleDetail detail;
+  detail.strip = (std::max)(2.0F, radius * 0.4F);
+  const int segments = static_cast<int>(std::ceil(2.0F * 3.14159265F * radius / 4.5F));
+  detail.segments = std::clamp(segments, 8, 16);
+  return detail;
+}
+
+// A joint marker: translucent fill, a ring round it and a solid centre, so it
+// reads on bright and dark scenery alike. `ring` 0 skips the ring.
+void DrawOverlayCircle(const AnomalyUe5AhudFrameV1 *frame, const float x, const float y,
+                       const float radius, const std::uint32_t fill, const std::uint32_t ring,
+                       const float ring_thickness, const std::uint32_t centre) noexcept {
+  const CircleDetail detail = CircleDetailFor(radius);
+  for (const auto &row : DiscRows(radius, detail.strip))
+    frame->draw_rect(frame->user, x - row.half_width, y + row.top, row.half_width * 2.0F,
+                     row.height, fill);
+  if (ring != 0) {
+    const int kSegments = detail.segments;
+    const float kStep = 2.0F * 3.14159265F / static_cast<float>(kSegments);
+    float px = x + radius;
+    float py = y;
+    for (int segment = 1; segment <= kSegments; ++segment) {
+      const float nx = x + radius * std::cos(kStep * static_cast<float>(segment));
+      const float ny = y + radius * std::sin(kStep * static_cast<float>(segment));
+      frame->draw_line(frame->user, px, py, nx, ny, ring, ring_thickness);
+      px = nx;
+      py = ny;
+    }
+  }
+  if (centre != 0)
+    frame->draw_rect(frame->user, x - 1.0F, y - 1.0F, 2.0F, 2.0F, centre);
+}
+
+// A joint's world position, for focusing the pose camera on it. Render
+// thread: reads the component-space pose through the memory service, and the
+// mesh transform the overlay cached from the game thread on its last frame.
+bool JointWorldPosition(Context &context, const std::uint32_t bone,
+                        std::array<double, 3> &point) noexcept {
+  std::lock_guard<std::mutex> lock(context.overlay_mutex);
+  if (!context.overlay_component_world_valid || bone >= context.overlay_joint_world.size())
+    return false;
+  point = context.overlay_joint_world[bone];
+  return std::isfinite(point[0]) && std::isfinite(point[1]) && std::isfinite(point[2]);
+}
+
+// The orbit's pan wants the focal length in canvas pixels: how far a 1 cm
+// step across the view at 100 cm lands on screen. Measured through the AHUD
+// projection (which already sees the pose camera), whether or not the
+// skeleton overlay is drawn.
+void MeasureOrbitFocal(Context &context, const AnomalyUe5AhudFrameV1 *frame) noexcept {
+  if (!context.orbit_enabled.load(std::memory_order_acquire))
+    return;
+  better_pose::orbit::View view;
+  {
+    std::lock_guard<std::mutex> lock(context.orbit_mutex);
+    if (!context.orbit_initialized.load(std::memory_order_acquire))
+      return;
+    view = better_pose::orbit::ViewOf(context.orbit);
+  }
+  const auto forward = better_pose::orbit::Forward(view.rotation[0], view.rotation[1]);
+  const double yaw = view.rotation[1] / better_pose::orbit::kDegrees;
+  const double a[3]{view.location[0] + forward[0] * 100.0, view.location[1] + forward[1] * 100.0,
+                    view.location[2] + forward[2] * 100.0};
+  const double b[3]{a[0] - std::sin(yaw), a[1] + std::cos(yaw), a[2]};
+  float pa[2]{};
+  float pb[2]{};
+  double depth{};
+  if (frame->project(frame->user, a, pa, &depth) == 0 ||
+      frame->project(frame->user, b, pb, &depth) == 0)
+    return;
+  const double pixels =
+      std::hypot(static_cast<double>(pb[0]) - pa[0], static_cast<double>(pb[1]) - pa[1]);
+  if (std::isfinite(pixels) && pixels > 0.0)
+    context.orbit_focal_pixels.store(pixels * 100.0, std::memory_order_release);
+}
+
+void ANOMALY_CALL DrawSkeletonOverlay(void *user,
+                                      const AnomalyUe5AhudFrameV1 *frame) noexcept {
+  auto *context = static_cast<Context *>(user);
+  if (context == nullptr)
+    return;
+  try {
+    if (AhudFrameReady(frame))
+      MeasureOrbitFocal(*context, frame);
+    if (!context->skeleton_overlay_enabled.load(std::memory_order_acquire) ||
+        !AhudFrameReady(frame)) {
+      ClearOverlayScreen(*context);
+      return;
+    }
+    const std::uintptr_t mesh = context->runtime.mesh;
+    const std::uintptr_t pose = context->runtime.component_space_data;
+    const std::uint32_t count = context->runtime.component_space_count;
+    Transformd component_world;
+    if (mesh == 0 || pose == 0 || count == 0 || count > kMaximumBoneIndex + 1U ||
+        !CoreReady(context->core) ||
+        !ReadMeshComponentToWorld(*context, mesh, component_world)) {
+      ClearOverlayScreen(*context);
+      return;
+    }
+    auto &raw = context->overlay_raw_pose;
+    raw.resize(static_cast<std::size_t>(count) * kTransformSize);
+    AnomalyMutableByteSpanV1 span{raw.data(), raw.size()};
+    if (context->core->read_memory(context->core->user, pose, span).code !=
+        ANOMALY_STATUS_V1_OK) {
+      ClearOverlayScreen(*context);
+      return;
+    }
+
+    auto &screen = context->overlay_frame_joints;
+    auto &valid = context->overlay_frame_valid;
+    auto &world_points = context->overlay_frame_world;
+    screen.assign(count, {0.0F, 0.0F});
+    valid.assign(count, 0);
+    world_points.assign(count, {0.0, 0.0, 0.0});
+    const float width = static_cast<float>(frame->viewport_width);
+    const float height = static_cast<float>(frame->viewport_height);
+    constexpr float kMargin = 64.0F;
+    for (std::uint32_t bone{}; bone != count; ++bone) {
+      PackedTransform packed{};
+      std::memcpy(&packed, raw.data() + static_cast<std::size_t>(bone) * kTransformSize,
+                  sizeof(packed));
+      const Transformd joint = TransformMultiply(component_world, UnpackTransform(packed));
+      const double world[3]{joint.translation.x, joint.translation.y,
+                            joint.translation.z};
+      world_points[bone] = {world[0], world[1], world[2]};
+      float projected[2]{};
+      double depth{};
+      if (frame->project(frame->user, world, projected, &depth) == 0 ||
+          !(depth > 0.0) || !std::isfinite(projected[0]) ||
+          !std::isfinite(projected[1]) || projected[0] < -kMargin ||
+          projected[1] < -kMargin || projected[0] > width + kMargin ||
+          projected[1] > height + kMargin)
+        continue;
+      screen[bone] = {projected[0], projected[1]};
+      valid[bone] = 1;
+    }
+
+    // The drag needs every joint (a hidden bone can still be the pivot's
+    // parent), so the body-only mask applies after it, to drawing and picking.
+    StepSkeletonDrag(*context, frame, component_world, count, screen, valid);
+    if (context->overlay_body_only.load(std::memory_order_acquire)) {
+      const bool parents_ready = context->bone_parents.size() == count;
+      const bool hide_face = !context->overlay_show_face.load(std::memory_order_acquire);
+      if (context->overlay_hidden_mesh != mesh ||
+          context->overlay_hidden_names != context->bone_names.size() ||
+          context->overlay_hidden.size() != count ||
+          context->overlay_hidden_parents != parents_ready ||
+          context->overlay_hidden_face != hide_face) {
+        context->overlay_hidden_parents = parents_ready;
+        context->overlay_hidden_face = hide_face;
+        context->overlay_hidden_total = BuildOverlayHiddenMask(
+            context->bone_names, context->bone_parents.size() == count
+                                     ? context->bone_parents
+                                     : std::vector<std::int32_t>(count, -1),
+            context->overlay_hidden, hide_face);
+        context->overlay_hidden_mesh = mesh;
+        context->overlay_hidden_names = context->bone_names.size();
+      }
+      if (context->overlay_hidden.size() == count)
+        for (std::uint32_t bone{}; bone != count; ++bone)
+          if (context->overlay_hidden[bone] != 0)
+            valid[bone] = 0;
+      context->overlay_hidden_count.store(context->overlay_hidden_total,
+                                          std::memory_order_release);
+    } else {
+      context->overlay_hidden_count.store(0, std::memory_order_release);
+    }
+
+    // Bones first, joints on top, the hovered and selected joints last.
+    const auto &parents = context->bone_parents;
+    for (std::uint32_t bone{}; bone != count; ++bone) {
+      if (valid[bone] == 0 || bone >= parents.size())
+        continue;
+      const std::int32_t parent = parents[bone];
+      if (parent < 0 || static_cast<std::uint32_t>(parent) >= count ||
+          valid[static_cast<std::size_t>(parent)] == 0)
+        continue;
+      const auto &from = screen[static_cast<std::size_t>(parent)];
+      frame->draw_line(frame->user, from[0], from[1], screen[bone][0],
+                       screen[bone][1], kOverlayLineColor, 1.5F);
+    }
+    const std::uint32_t selected =
+        context->requested_bone_index.load(std::memory_order_acquire);
+    const bool hover_fresh =
+        GetTickCount64() - context->overlay_hover_tick.load(std::memory_order_acquire) <
+        250U;
+    const std::uint32_t hovered =
+        hover_fresh ? context->overlay_hover_index.load(std::memory_order_acquire)
+                    : kOverlayNoBone;
+    const float radius = std::clamp(
+        context->overlay_joint_radius.load(std::memory_order_acquire), kOverlayMinimumRadius,
+        kOverlayMaximumRadius);
+    const float big = radius + 3.0F;
+    for (std::uint32_t bone{}; bone != count; ++bone) {
+      if (valid[bone] == 0 || bone == selected || bone == hovered)
+        continue;
+      DrawOverlayCircle(frame, screen[bone][0], screen[bone][1], radius, kOverlayJointFill,
+                        kOverlayJointRing, 1.0F, kOverlayJointCentre);
+    }
+    if (hovered < count && valid[hovered] != 0 && hovered != selected)
+      DrawOverlayCircle(frame, screen[hovered][0], screen[hovered][1], big, kOverlayHoverFill,
+                        kOverlayHoverColor, 2.0F, kOverlayHoverColor);
+    if (selected < count && valid[selected] != 0)
+      DrawOverlayCircle(frame, screen[selected][0], screen[selected][1], big,
+                        kOverlaySelectedFill, kOverlaySelectedColor, 2.0F,
+                        kOverlaySelectedColor);
+    // While dragging: the grabbed joint in orange, and a thin line to the
+    // cursor so an unreachable target is visibly unreachable.
+    const auto &drag = context->overlay_drag;
+    const std::uint32_t dragged =
+        context->overlay_drag_joint.load(std::memory_order_acquire);
+    if (drag.valid && dragged < count && valid[dragged] != 0) {
+      const float target_x =
+          drag.start_screen[0] + context->overlay_drag_delta_x.load(std::memory_order_acquire);
+      const float target_y =
+          drag.start_screen[1] + context->overlay_drag_delta_y.load(std::memory_order_acquire);
+      frame->draw_line(frame->user, screen[dragged][0], screen[dragged][1], target_x,
+                       target_y, kOverlayHoverColor, 1.0F);
+      DrawOverlayCircle(frame, screen[dragged][0], screen[dragged][1], big, kOverlayHoverFill,
+                        kOverlayHoverColor, 2.0F, kOverlayHoverColor);
+    }
+
+    auto &weight = context->overlay_frame_weight;
+    if (parents.size() == count)
+      CountDescendants(parents, weight);
+    else
+      weight.assign(count, 0);
+    std::lock_guard<std::mutex> lock(context->overlay_mutex);
+    context->overlay_screen_joints.swap(screen);
+    context->overlay_screen_valid.swap(valid);
+    context->overlay_screen_weight.swap(weight);
+    context->overlay_joint_world.swap(world_points);
+    context->overlay_component_world_valid = true;
+    context->overlay_viewport_width = width;
+    context->overlay_viewport_height = height;
+    context->overlay_published = true;
+  } catch (...) {
+    // The callback must not throw into the host; drop this frame's overlay.
+  }
+}
+
+bool SubscribeSkeletonOverlay(Context &context) noexcept {
+  if (!AhudReady(context.ahud) || context.ahud_subscription.id != 0)
+    return context.ahud_subscription.id != 0;
+  AnomalyGenerationHandleV1 handle{};
+  const auto status = context.ahud->subscribe(context.ahud->user,
+                                              DrawSkeletonOverlay, &context, &handle);
+  if (status.code != ANOMALY_STATUS_V1_OK || handle.id == 0)
+    return false;
+  context.ahud_subscription = handle;
+  return true;
+}
+
+void UnsubscribeSkeletonOverlay(Context &context) noexcept {
+  if (context.ahud_subscription.id == 0)
+    return;
+  const auto handle = context.ahud_subscription;
+  context.ahud_subscription = {};
+  // A successful unsubscribe drains a callback already in flight, so the
+  // context stays valid for it.
+  if (AhudReady(context.ahud))
+    static_cast<void>(context.ahud->unsubscribe(context.ahud->user, handle));
+  std::lock_guard<std::mutex> lock(context.overlay_mutex);
+  context.overlay_screen_joints.clear();
+  context.overlay_screen_valid.clear();
+  context.overlay_published = false;
+}
+
+// Render thread, inside Draw. Hover highlights the joint nearest the cursor;
+// a fresh left press on it selects that joint. Picking only happens while the
+// host menu owns the cursor and the cursor is not over any ImGui window, so
+// clicks meant for the game or for a panel never change the selection.
+void UpdateSkeletonOverlayPicking(Context &context,
+                                  const AnomalyUiServiceV1 *ui) noexcept {
+  const auto clear_hover = [&] {
+    context.overlay_hover_index.store(kOverlayNoBone, std::memory_order_release);
+  };
+  const auto drop_mouse = [&] {
+    clear_hover();
+    context.overlay_mouse_was_down = false;
+    context.overlay_right_was_down = false;
+    context.overlay_drag_joint.store(kOverlayNoBone, std::memory_order_release);
+    context.overlay_dragging = false;
+    context.overlay_press_joint = kOverlayNoBone;
+  };
+  if (!context.skeleton_overlay_enabled.load(std::memory_order_acquire) ||
+      !InputReady(context.input)) {
+    drop_mouse();
+    return;
+  }
+  AnomalyInputSnapshotV1 input{};
+  input.struct_size = sizeof(input);
+  if (context.input->snapshot(context.input->user, &input).code !=
+      ANOMALY_STATUS_V1_OK) {
+    drop_mouse();
+    return;
+  }
+  const bool left_down = (input.mouse_buttons & 1U) != 0;
+  const bool left_pressed = left_down && !context.overlay_mouse_was_down;
+  context.overlay_mouse_was_down = left_down;
+  const bool right_down = (input.mouse_buttons & 2U) != 0;
+  const bool right_pressed = right_down && !context.overlay_right_was_down;
+  context.overlay_right_was_down = right_down;
+
+  const bool menu_owns_mouse =
+      (input.capture_flags & ANOMALY_INPUT_CAPTURE_V1_MOUSE) != 0;
+  const auto end_drag = [&] {
+    context.overlay_drag_joint.store(kOverlayNoBone, std::memory_order_release);
+    context.overlay_dragging = false;
+    context.overlay_press_joint = kOverlayNoBone;
+  };
+  // A drag lasts while the button that started it is held (left swings,
+  // right twists). Pressing the other button cancels it and puts the bones
+  // back where they were.
+  if (context.overlay_press_joint != kOverlayNoBone) {
+    const bool held = context.overlay_press_right ? right_down : left_down;
+    const bool other_pressed = context.overlay_press_right ? left_pressed : right_pressed;
+    if (!held || !menu_owns_mouse || other_pressed) {
+      if (context.overlay_dragging && other_pressed)
+        context.overlay_drag_cancel.store(true, std::memory_order_release);
+      end_drag();
+      // The cancelling click must not also start a new pick below.
+      if (other_pressed) {
+        clear_hover();
+        return;
+      }
+    }
+  }
+  const bool pressed = left_pressed || right_pressed;
+  const bool press_right = right_pressed && !left_pressed;
+  const bool can_frame_state =
+      HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::frame_state)>(
+          ui, offsetof(AnomalyUiServiceV1, frame_state)) &&
+      ui->frame_state != nullptr;
+  const bool over_ui =
+      can_frame_state &&
+      (ui->frame_state(ui->user) & ANOMALY_UI_FRAME_V1_WANT_CAPTURE_MOUSE) != 0;
+  // The panel check only gates starting a pick: a drag that began on the
+  // canvas keeps going when the cursor passes over a window.
+  if (!menu_owns_mouse ||
+      (over_ui && context.overlay_press_joint == kOverlayNoBone)) {
+    clear_hover();
+    return;
+  }
+
+  // The input snapshot is in window client pixels; the AHUD canvas may be a
+  // different resolution (render scale), so map one onto the other.
+  float mouse_x = input.mouse_x;
+  float mouse_y = input.mouse_y;
+  std::lock_guard<std::mutex> lock(context.overlay_mutex);
+  if (context.overlay_screen_joints.empty()) {
+    clear_hover();
+    end_drag();
+    return;
+  }
+  if (HWND window = FindWindowW(L"UnrealWindow", nullptr); window != nullptr) {
+    RECT client{};
+    if (GetClientRect(window, &client) != FALSE && client.right > 0 &&
+        client.bottom > 0 && context.overlay_viewport_width > 0.0F &&
+        context.overlay_viewport_height > 0.0F) {
+      mouse_x *= context.overlay_viewport_width / static_cast<float>(client.right);
+      mouse_y *= context.overlay_viewport_height / static_cast<float>(client.bottom);
+    }
+  }
+  if (context.overlay_press_joint != kOverlayNoBone) {
+    const float dx = mouse_x - context.overlay_press_x;
+    const float dy = mouse_y - context.overlay_press_y;
+    // A few pixels of slack so a plain click never nudges the pose.
+    constexpr float kDragThreshold = 4.0F;
+    if (!context.overlay_dragging && dx * dx + dy * dy >= kDragThreshold * kDragThreshold &&
+        !context.motion_loaded.load(std::memory_order_acquire)) {
+      context.overlay_dragging = true;
+      context.overlay_drag_generation.fetch_add(1, std::memory_order_acq_rel);
+      context.overlay_drag_joint.store(context.overlay_press_joint,
+                                       std::memory_order_release);
+    }
+    // The wheel counts even before the cursor moves: scroll-only depth edits.
+    if (input.mouse_wheel != 0 && !context.overlay_press_right &&
+        !context.motion_loaded.load(std::memory_order_acquire)) {
+      if (!context.overlay_dragging) {
+        context.overlay_dragging = true;
+        context.overlay_drag_generation.fetch_add(1, std::memory_order_acq_rel);
+        context.overlay_drag_joint.store(context.overlay_press_joint,
+                                         std::memory_order_release);
+      }
+      context.overlay_drag_wheel.fetch_add(input.mouse_wheel, std::memory_order_acq_rel);
+    }
+    context.overlay_drag_delta_x.store(dx, std::memory_order_release);
+    context.overlay_drag_delta_y.store(dy, std::memory_order_release);
+    context.overlay_hover_index.store(context.overlay_press_joint, std::memory_order_release);
+    context.overlay_hover_tick.store(GetTickCount64(), std::memory_order_release);
+    return;
+  }
+  // Stateless on purpose: the pick used to prefer the current selection, but a
+  // drag moves the selection to the pivot, so the same spot could resolve to a
+  // different stacked bone on the next press.
+  constexpr float kStackPixels = 3.0F;
+  // A click anywhere on the drawn circle picks it: never smaller than the
+  // old 12 px, and a few pixels beyond the marker's own edge.
+  const float pick_radius = (std::max)(
+      kOverlayPickRadius,
+      std::clamp(context.overlay_joint_radius.load(std::memory_order_acquire),
+                 kOverlayMinimumRadius, kOverlayMaximumRadius) +
+          4.0F);
+  const std::uint32_t nearest = PickOverlayJoint(
+      context.overlay_screen_joints, context.overlay_screen_valid,
+      context.overlay_screen_weight, mouse_x, mouse_y, pick_radius, kStackPixels);
+  context.overlay_hover_index.store(nearest, std::memory_order_release);
+  context.overlay_hover_tick.store(GetTickCount64(), std::memory_order_release);
+  if (pressed && !over_ui && nearest != kOverlayNoBone) {
+    context.requested_bone_index.store(nearest, std::memory_order_release);
+    context.overlay_press_joint = nearest;
+    context.overlay_press_x = mouse_x;
+    context.overlay_press_y = mouse_y;
+    context.overlay_drag_delta_x.store(0.0F, std::memory_order_release);
+    context.overlay_drag_delta_y.store(0.0F, std::memory_order_release);
+    context.overlay_drag_wheel.store(0, std::memory_order_release);
+    context.overlay_press_right = press_right;
+    context.overlay_drag_twist.store(press_right, std::memory_order_release);
+  }
+}
+
+// Render thread, inside Draw, after the joint picker. With the pose camera on,
+// the mouse over empty scene (no panel under it, no joint under it, no joint
+// drag running) drives the orbit: right drag rotates, middle drag pans, the
+// wheel zooms. Every one is a mouse message the host keeps from the game while
+// the menu is open, so nothing here can make the character move.
+void UpdateOrbitCameraInput(Context &context, const AnomalyUiServiceV1 *ui) noexcept {
+  if (!context.orbit_enabled.load(std::memory_order_acquire) || !InputReady(context.input)) {
+    context.orbit_right_dragging = false;
+    context.orbit_middle_was_down = false;
+    return;
+  }
+  AnomalyInputSnapshotV1 input{};
+  input.struct_size = sizeof(input);
+  if (context.input->snapshot(context.input->user, &input).code != ANOMALY_STATUS_V1_OK)
+    return;
+  const bool menu_owns_mouse = (input.capture_flags & ANOMALY_INPUT_CAPTURE_V1_MOUSE) != 0;
+  const bool right_down = (input.mouse_buttons & 2U) != 0;
+  const bool middle_down = (input.mouse_buttons & 4U) != 0;
+  // In AHUD canvas pixels, like the picker, so the pan matches the projection.
+  float x = input.mouse_x;
+  float y = input.mouse_y;
+  {
+    std::lock_guard<std::mutex> lock(context.overlay_mutex);
+    if (HWND window = FindWindowW(L"UnrealWindow", nullptr); window != nullptr) {
+      RECT client{};
+      if (GetClientRect(window, &client) != FALSE && client.right > 0 && client.bottom > 0 &&
+          context.overlay_viewport_width > 0.0F && context.overlay_viewport_height > 0.0F) {
+        x *= context.overlay_viewport_width / static_cast<float>(client.right);
+        y *= context.overlay_viewport_height / static_cast<float>(client.bottom);
+      }
+    }
+  }
+  const bool over_ui =
+      HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::frame_state)>(
+          ui, offsetof(AnomalyUiServiceV1, frame_state)) &&
+      ui->frame_state != nullptr &&
+      (ui->frame_state(ui->user) & ANOMALY_UI_FRAME_V1_WANT_CAPTURE_MOUSE) != 0;
+  // A joint under the cursor, or a joint drag, owns the mouse instead.
+  const bool joint_busy =
+      context.overlay_press_joint != kOverlayNoBone ||
+      (context.skeleton_overlay_enabled.load(std::memory_order_acquire) &&
+       context.overlay_hover_index.load(std::memory_order_acquire) != kOverlayNoBone);
+  const bool free = menu_owns_mouse && !over_ui && !joint_busy;
+
+  const float dx = x - context.orbit_last_x;
+  const float dy = y - context.orbit_last_y;
+  const bool was_rotating = context.orbit_right_dragging;
+  const bool was_panning = context.orbit_middle_was_down;
+  // Start only on empty scene; once started, keep going until release even
+  // over a panel or a joint.
+  if (!right_down || !menu_owns_mouse)
+    context.orbit_right_dragging = false;
+  else if (!was_rotating && free)
+    context.orbit_right_dragging = true;
+  if (!middle_down || !menu_owns_mouse)
+    context.orbit_middle_was_down = false;
+  else if (!was_panning && free)
+    context.orbit_middle_was_down = true;
+
+  {
+    std::lock_guard<std::mutex> lock(context.orbit_mutex);
+    if (context.orbit_initialized.load(std::memory_order_acquire)) {
+      if (was_rotating && context.orbit_right_dragging)
+        better_pose::orbit::Rotate(context.orbit, dx, dy);
+      if (was_panning && context.orbit_middle_was_down)
+        better_pose::orbit::Pan(context.orbit, dx, dy,
+                                context.orbit_focal_pixels.load(std::memory_order_acquire));
+      if (input.mouse_wheel != 0 && free)
+        better_pose::orbit::Zoom(context.orbit, static_cast<double>(input.mouse_wheel));
+    }
+  }
+  context.orbit_last_x = x;
+  context.orbit_last_y = y;
+}
+
+// Render thread, inside Draw. Keeps an edit open while the left mouse button
+// is down (a slider or a joint being dragged) and turns Ctrl+Z / Ctrl+Y (and
+// Ctrl+Shift+Z) into undo/redo requests, on the press only. The keys are
+// ignored while a text field wants the keyboard, so Ctrl+Z inside the file
+// name box stays the text box's.
+void UpdatePoseHistoryInput(Context &context, const AnomalyUiServiceV1 *ui) noexcept {
+  if (!InputReady(context.input)) {
+    context.pose_edit_held.store(false, std::memory_order_release);
+    return;
+  }
+  AnomalyInputSnapshotV1 input{};
+  input.struct_size = sizeof(input);
+  if (context.input->snapshot(context.input->user, &input).code != ANOMALY_STATUS_V1_OK) {
+    context.pose_edit_held.store(false, std::memory_order_release);
+    return;
+  }
+  const bool menu_owns_mouse = (input.capture_flags & ANOMALY_INPUT_CAPTURE_V1_MOUSE) != 0;
+  context.pose_edit_held.store(menu_owns_mouse && (input.mouse_buttons & 3U) != 0,
+                               std::memory_order_release);
+  const auto key_down = [&](const std::uint32_t key) {
+    return key < 256U && (input.keys[key / 8U] & (1U << (key % 8U))) != 0;
+  };
+  const bool control = (input.modifiers & ANOMALY_INPUT_MODIFIER_V1_CONTROL) != 0;
+  const bool shift = (input.modifiers & ANOMALY_INPUT_MODIFIER_V1_SHIFT) != 0;
+  const bool typing =
+      HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::frame_state)>(
+          ui, offsetof(AnomalyUiServiceV1, frame_state)) &&
+      ui->frame_state != nullptr &&
+      (ui->frame_state(ui->user) &
+       (ANOMALY_UI_FRAME_V1_WANT_TEXT_INPUT)) != 0;
+  const bool undo_down = menu_owns_mouse && control && !shift && key_down('Z');
+  const bool redo_down =
+      menu_owns_mouse && control && (key_down('Y') || (shift && key_down('Z')));
+  // The shortcut goes to the page on screen: expressions on the expression
+  // page (they are not tied to motion playback), the pose everywhere else.
+  const bool expression = context.expression_page_active.load(std::memory_order_acquire);
+  if (!typing && (expression || !context.motion_loaded.load(std::memory_order_acquire))) {
+    auto &request = expression ? context.morph_history_request : context.pose_history_request;
+    if (undo_down && !context.pose_undo_key_was_down)
+      request.store(1, std::memory_order_release);
+    if (redo_down && !context.pose_redo_key_was_down)
+      request.store(2, std::memory_order_release);
+  }
+  context.pose_undo_key_was_down = undo_down;
+  context.pose_redo_key_was_down = redo_down;
+}
+
+bool MirrorPose(Context &context, const int request) noexcept {
+  try {
+    using namespace better_pose::mirror;
+    if (!CapturePoseBase(context))
+      return false;
+    const auto count = context.pose_base_locals.size();
+    if (count == 0 || context.bone_names.size() != count || context.bone_parents.size() != count)
+      return false;
+    std::vector<Quat> base(count);
+    std::vector<Transformd> locals(count);
+    std::vector<std::array<double, 3>> angles;
+    {
+      std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+      if (context.pose_base_locals.size() != count)
+        return false;
+      for (std::size_t bone{}; bone != count; ++bone) {
+        const auto &raw = context.pose_base_locals[bone];
+        base[bone] = Normalize({raw[0], raw[1], raw[2], raw[3]});
+        locals[bone].rotation = Quatd{base[bone][0], base[bone][1], base[bone][2], base[bone][3]};
+        locals[bone].translation = Vec3d{raw[4], raw[5], raw[6]};
+        locals[bone].scale = Vec3d{raw[8], raw[9], raw[10]};
+      }
+      angles = context.bone_angles;
+    }
+    angles.resize((std::max)(angles.size(), count), {0.0, 0.0, 0.0});
+    // The rig from the rest pose: component frames and positions.
+    std::vector<Transformd> components(count);
+    std::vector<std::uint8_t> marks(count, 0);
+    for (std::uint32_t bone{}; bone != count; ++bone)
+      static_cast<void>(
+          ComputeBoneComponent(bone, locals, context.bone_parents, components, marks));
+    std::vector<Quat> rest(count);
+    std::vector<Vec> positions(count);
+    for (std::size_t bone{}; bone != count; ++bone) {
+      const auto &c = components[bone];
+      rest[bone] = Normalize({c.rotation.x, c.rotation.y, c.rotation.z, c.rotation.w});
+      positions[bone] = {c.translation.x, c.translation.y, c.translation.z};
+    }
+    const auto partner = Partners(context.bone_names);
+    const Rig rig = BuildRig(rest, positions, context.bone_parents, partner, context.bone_names);
+    if (!rig.valid)
+      return false;
+    // Finals, mirrored, back to offsets.
+    std::vector<Quat> finals(count);
+    for (std::size_t bone{}; bone != count; ++bone) {
+      const Quatd offset = RotatorToQuat(angles[bone][0], angles[bone][1], angles[bone][2]);
+      finals[bone] = Multiply({offset.x, offset.y, offset.z, offset.w}, base[bone]);
+    }
+    const Operation operation = request == 2   ? Operation::LeftToRight
+                                : request == 3 ? Operation::RightToLeft
+                                               : Operation::Flip;
+    const auto mirrored =
+        Apply(rig, context.bone_parents, partner, context.bone_names, finals, operation);
+    std::vector<std::array<double, 3>> next = angles;
+    for (std::size_t bone{}; bone != count; ++bone) {
+      if (Distance(mirrored[bone], finals[bone]) < 1e-12)
+        continue;  // untouched: keep the exact slider values
+      const Quat offset = Normalize(Multiply(mirrored[bone], Conjugate(base[bone])));
+      auto rotator = QuatToRotator(Quatd{offset[0], offset[1], offset[2], offset[3]});
+      // Snap the float noise of an identity offset back to a clean zero.
+      for (auto &value : rotator)
+        if (std::abs(value) < 1e-6)
+          value = 0.0;
+      next[bone] = rotator;
+    }
+    {
+      std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+      context.bone_angles = std::move(next);
+    }
+    // The body offset: a flip reflects it; copying one side onto the other
+    // leaves where the body stands alone.
+    if (operation == Operation::Flip) {
+      Vec offset{};
+      for (std::size_t axis{}; axis != 3; ++axis)
+        offset[axis] = context.requested_root_offset[axis].load(std::memory_order_acquire);
+      const Vec reflected = ReflectLateral(rig, offset);
+      for (std::size_t axis{}; axis != 3; ++axis)
+        context.requested_root_offset[axis].store(std::abs(reflected[axis]) < 1e-9 ? 0.0
+                                                                                   : reflected[axis],
+                                                  std::memory_order_release);
+    }
+    context.pose_override_enabled.store(true, std::memory_order_release);
+    context.pose_settings_dirty.store(true, std::memory_order_release);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
+                                  void **plugin_context) {
+  if (host == nullptr || plugin_context == nullptr)
+    return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+  *plugin_context = nullptr;
+  auto *context = new (std::nothrow) Context();
+  if (context == nullptr)
+    return Status(ANOMALY_STATUS_V1_FAILED);
+  context->host = host;
+  context->localizer = anomaly::plugins::Localizer(host);
+  context->core = Query<AnomalyCoreServiceV1>(host, ANOMALY_CORE_SERVICE_V1_ID,
+                                              ANOMALY_CORE_SERVICE_V1_VERSION);
+  context->signature =
+      Query<AnomalySignatureServiceV1>(host, ANOMALY_SIGNATURE_SERVICE_V1_ID,
+                                       ANOMALY_SIGNATURE_SERVICE_V1_VERSION);
+  context->names =
+      Query<AnomalyUe5NamesServiceV1>(host, ANOMALY_UE5_NAMES_SERVICE_V1_ID,
+                                      ANOMALY_UE5_NAMES_SERVICE_V1_VERSION);
+  context->objects =
+      Query<AnomalyUe5ObjectsServiceV1>(host, ANOMALY_UE5_OBJECTS_SERVICE_V1_ID,
+                                        ANOMALY_UE5_OBJECTS_SERVICE_V1_VERSION);
+  context->ui = Query<AnomalyUiServiceV1>(host, ANOMALY_UI_SERVICE_V1_ID,
+                                          ANOMALY_UI_SERVICE_V1_VERSION);
+  context->hook = Query<AnomalyHookServiceV1>(host, ANOMALY_HOOK_SERVICE_V1_ID,
+                                              ANOMALY_HOOK_SERVICE_V1_VERSION);
+  context->config = Query<AnomalyConfigServiceV1>(host,
+                                                  ANOMALY_CONFIG_SERVICE_V1_ID,
+                                                  ANOMALY_CONFIG_SERVICE_V1_VERSION);
+  context->storage =
+      Query<AnomalyStorageServiceV1>(host, ANOMALY_STORAGE_SERVICE_V1_ID,
+                                     ANOMALY_STORAGE_SERVICE_V1_VERSION);
+  context->scheduler =
+      Query<AnomalySchedulerServiceV1>(host, ANOMALY_SCHEDULER_SERVICE_V1_ID,
+                                       ANOMALY_SCHEDULER_SERVICE_V1_VERSION);
+  if (!SchedulerReady(context->scheduler))
+    context->scheduler = nullptr;
+  context->ahud = Query<AnomalyUe5AhudServiceV1>(
+      host, ANOMALY_UE5_AHUD_SERVICE_V1_ID, ANOMALY_UE5_AHUD_SERVICE_V1_VERSION);
+  if (!AhudReady(context->ahud))
+    context->ahud = nullptr;
+  context->input = Query<AnomalyInputServiceV1>(
+      host, ANOMALY_INPUT_SERVICE_V1_ID, ANOMALY_INPUT_SERVICE_V1_VERSION);
+  if (!InputReady(context->input))
+    context->input = nullptr;
+  if (!CoreReady(context->core) || !SignatureReady(context->signature) ||
+      !NamesReady(context->names) ||
+      !ObjectsReady(context->objects) ||
+      !UiReady(context->ui) || !HookReady(context->hook) ||
+      !ConfigReady(context->config) || !StorageReady(context->storage)) {
+    delete context;
+    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                  "required plugin services are unavailable");
+  }
+  const auto schema_status = context->config->register_schema(
+      context->config->user, anomaly::sdk::StringView(kPoseSettingsSchemaId),
+      kPoseSettingsSchemaVersion, Bytes(kPoseSettingsSchema),
+      &context->settings_schema);
+  if (schema_status.code != ANOMALY_STATUS_V1_OK ||
+      context->settings_schema.id == 0 || !LoadPoseSettings(*context)) {
+    delete context;
+    return Status(ANOMALY_STATUS_V1_FAILED,
+                  "character pose settings are invalid");
+  }
+  *plugin_context = context;
+  return anomaly::sdk::Ok();
+}
+
+AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
+  auto *context = static_cast<Context *>(plugin_context);
+  if (context == nullptr)
+    return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+  if (!ResolveGWorld(*context)) {
+    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                  "GWorld discovery signature is unavailable");
+  }
+  UpdateRuntime(*context, 0.0);
+  context->reflection_action_requested.store(5, std::memory_order_release);
+  // Optional: without the AHUD the skeleton overlay is simply unavailable.
+  if (!SubscribeSkeletonOverlay(*context) && context->ahud != nullptr)
+    LogDiagnostic(*context, "betterpose skeleton overlay: AHUD subscription failed");
+  return anomaly::sdk::Ok();
+}
+
+AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
+  auto *context = static_cast<Context *>(plugin_context);
+  if (context == nullptr)
+    return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+  // First: the overlay callback reads runtime, which is reset below.
+  UnsubscribeSkeletonOverlay(*context);
+  // The hook is released below; drop the pose camera with it so a reload
+  // starts from the game's own view.
+  context->orbit_enabled.store(false, std::memory_order_release);
+  context->orbit_initialized.store(false, std::memory_order_release);
+  static_cast<void>(ReleasePoseTickHook(*context));
+  static_cast<void>(ReleaseCameraPovHook(*context));
+  RestoreAll(*context);
+  g_active.store(nullptr, std::memory_order_release);
+  context->runtime = RuntimeState{};
+  RenderSnapshot empty{};
+  std::scoped_lock lock(context->state_mutex);
+  context->snapshot = empty;
+  return anomaly::sdk::Ok();
+}
+
+void ANOMALY_CALL Unload(void *plugin_context) {
+  auto *context = static_cast<Context *>(plugin_context);
+  if (context == nullptr)
+    return;
+  // Release the music device with the plugin: MCI aliases outlive a hot reload, so leaving this
+  // to the static destructor alone makes the next load fail with "alias already in use". The device
+  // belongs to the tick thread, so this also asks it to close; `open` already retries with a
+  // numbered alias when a previous instance still holds the name.
+  {
+    std::lock_guard<std::mutex> lock(g_music_mutex);
+    g_music_request_close = true;
+    if (g_music.opened())
+      g_music.Close();
+    g_music_request_path.clear();
+    g_music_name.clear();
+    g_music_paired_for.clear();  // a reload should auto-pair again
+  }
+  g_music_opened.store(false, std::memory_order_release);
+  static_cast<void>(Stop(context, 0));
+  if (context->settings_schema.id != 0 && ConfigReady(context->config)) {
+    static_cast<void>(context->config->unregister_schema(
+        context->config->user, context->settings_schema));
+  }
+  context->settings_schema = {};
+  delete context;
+}
+
+void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) {
+  auto *context = static_cast<Context *>(plugin_context);
+  if (context == nullptr)
+    return;
+  try {
+    UpdateRuntime(*context, delta_seconds);
+  } catch (...) {
+    RestoreAll(*context);
+    PublishSnapshot(*context, "update failed; overrides restored");
+  }
+}
+
+bool ReadCurrentBoneTranslation(Context &context,
+                                const RenderSnapshot &snapshot,
+                                const std::uint32_t bone,
+                                std::array<double, 3> &translation) noexcept {
+  translation = {0.0, 0.0, 0.0};
+  if (!CoreReady(context.core) || snapshot.component_space_data == 0 ||
+      bone >= snapshot.component_space_count)
+    return false;
+  std::uintptr_t transform{};
+  if (!AddAddress(snapshot.component_space_data,
+                  static_cast<std::uint64_t>(bone) * kTransformSize,
+                  transform) ||
+      !AddAddress(transform, kTransformTranslationOffset, transform))
+    return false;
+  return Read(context, transform, translation);
+}
+
+void ANOMALY_CALL Draw(void *plugin_context, const AnomalyUiServiceV1 *ui) {
+  auto *context = static_cast<Context *>(plugin_context);
+  if (context == nullptr || !UiReady(ui))
+    return;
+
+  UpdateSkeletonOverlayPicking(*context, ui);
+  UpdateOrbitCameraInput(*context, ui);
+  UpdatePoseHistoryInput(*context, ui);
+
+  RenderSnapshot snapshot{};
+  {
+    std::scoped_lock lock(context->state_mutex);
+    snapshot = context->snapshot;
+  }
+
+  const std::string title =
+      context->localizer.Text("window.title", "Character Pose");
+  int open = 1;
+  ui->set_next_window_size(ui->user, 380.0F, 0.0F, 4U);
+  const int visible = ui->begin_window(
+      ui->user, anomaly::sdk::StringView(title), &open, 0);
+  if (visible == 0) {
+    ui->end_window(ui->user);
+    return;
+  }
+
+  const std::string status_label =
+      context->localizer.Text("status", "Status");
+  const std::string status_text = status_label + ": " + snapshot.status.data();
+  ui->text(ui->user, anomaly::sdk::StringView(status_text));
+
+  const std::string character_line =
+      "Character " + Hex(snapshot.character) + "  Mesh " + Hex(snapshot.mesh);
+  ui->text(ui->user, anomaly::sdk::StringView(character_line));
+  const std::string anim_line = "AnimInstance " + Hex(snapshot.anim_instance) +
+                                "  Mode " + std::to_string(snapshot.animation_mode);
+  ui->text(ui->user, anomaly::sdk::StringView(anim_line));
+  const std::string pose_line =
+      "Bones " + std::to_string(snapshot.bone_space_count) + " / Component " +
+      std::to_string(snapshot.component_space_count);
+  ui->text(ui->user, anomaly::sdk::StringView(pose_line));
+
+  ui->separator(ui->user);
+
+  const std::string action_label =
+      context->localizer.Text("action.status", "Action");
+  const std::string action_text =
+      action_label + ": " + std::string(snapshot.reflection_status.data());
+  ui->text(ui->user, anomaly::sdk::StringView(action_text));
+  const std::string refresh_anim_label =
+      context->localizer.Text("action.refresh_anim", "Refresh Anim");
+  if (ui->button(ui->user, anomaly::sdk::StringView(refresh_anim_label), 80.0F,
+                 0.0F) != 0)
+    context->reflection_action_requested.store(4, std::memory_order_release);
+  ui->same_line(ui->user, 0.0F, 6.0F);
+  const std::string load_bones_label =
+      context->localizer.Text("action.load_bones", "Load Bones");
+  if (ui->button(ui->user, anomaly::sdk::StringView(load_bones_label), 80.0F,
+                 0.0F) != 0)
+    context->reflection_action_requested.store(6, std::memory_order_release);
+
+  // Two pages: the MMD motion player and the joint-pose tool. Tab containers
+  // are tail members of the UI service, so a host that predates them keeps the
+  // single scrolling page.
+  const bool can_tabs =
+      HasField<AnomalyUiServiceV1,
+               decltype(AnomalyUiServiceV1::begin_tab_bar)>(
+          ui, offsetof(AnomalyUiServiceV1, begin_tab_bar)) &&
+      HasField<AnomalyUiServiceV1,
+               decltype(AnomalyUiServiceV1::begin_tab_item)>(
+          ui, offsetof(AnomalyUiServiceV1, begin_tab_item)) &&
+      HasField<AnomalyUiServiceV1,
+               decltype(AnomalyUiServiceV1::end_tab_item)>(
+          ui, offsetof(AnomalyUiServiceV1, end_tab_item)) &&
+      HasField<AnomalyUiServiceV1,
+               decltype(AnomalyUiServiceV1::end_tab_bar)>(
+          ui, offsetof(AnomalyUiServiceV1, end_tab_bar));
+  const std::string mmd_tab_label =
+      context->localizer.Text("tab.mmd", "MMD motion");
+  const std::string pose_tab_label =
+      context->localizer.Text("tab.pose", "Joint pose");
+  const bool use_tabs =
+      can_tabs &&
+      ui->begin_tab_bar(ui->user,
+                        anomaly::sdk::StringView("better-pose-pages"), 0U) != 0;
+  // The motion page is first, so it is the one the panel opens on.
+  const bool mmd_page =
+      !use_tabs ||
+      ui->begin_tab_item(ui->user, anomaly::sdk::StringView(mmd_tab_label),
+                         nullptr, 0U, 1) != 0;
+  if (mmd_page) {
+    // --- MMD motion playback -------------------------------------------------
+    const std::string motion_convert_label =
+        context->localizer.Text("motion.convert", "Convert VMD and load");
+    if (ui->button(ui->user, anomaly::sdk::StringView(motion_convert_label), 110.0F,
+                   0.0F) != 0) {
+      // One click from here: pick the VMD, export this character's skeleton on the game
+      // thread, convert with the shipped reference bone table, then load the result.
+      const auto selected = ChooseFile(context->motion_file, FileKind::Vmd);
+      if (selected) {
+        const std::string file_utf8 = WideToUtf8(selected->native());
+        if (!file_utf8.empty()) {
+          context->motion_file = file_utf8;
+          context->pose_file_action_requested.store(5, std::memory_order_release);
+        }
+      }
+    }  ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string motion_load_label =
+        context->localizer.Text("motion.load", "Load motion");
+    if (ui->button(ui->user, anomaly::sdk::StringView(motion_load_label), 100.0F,
+                   0.0F) != 0) {
+      // Two kinds of file answer to this button. A source VMD is converted again -- a converted
+      // document is built against *this* character's skeleton, so after a character switch the
+      // cached file has the right bone names but the wrong rest pose. An already-converted
+      // document is loaded as it is, which is also how a conversion made elsewhere (or with
+      // another reference model) gets played without redoing it here.
+      if (context->motion_file.empty()) {
+        const auto selected = ChooseFile(context->motion_file, FileKind::Motion);
+        if (selected) {
+          const std::string file_utf8 = WideToUtf8(selected->native());
+          if (!file_utf8.empty())
+            context->motion_file = file_utf8;
+        }
+      }
+      if (!context->motion_file.empty())
+        context->pose_file_action_requested.store(
+            PathIsConvertedMotion(context->motion_file) ? 4 : 5, std::memory_order_release);
+    }
+
+    const bool motion_loaded =
+        context->motion_loaded.load(std::memory_order_acquire);
+    const bool motion_playing =
+        context->motion_playing.load(std::memory_order_acquire);
+    const std::string motion_play_label = context->localizer.Text(
+        motion_playing ? "motion.pause" : "motion.play",
+        motion_playing ? "Pause" : "Play");
+    if (ui->button(ui->user, anomaly::sdk::StringView(motion_play_label), 60.0F,
+                   0.0F) != 0)
+      context->motion_playing.store(!motion_playing, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string motion_stop_label =
+        context->localizer.Text("motion.stop", "Stop");
+    if (ui->button(ui->user, anomaly::sdk::StringView(motion_stop_label), 55.0F,
+                   0.0F) != 0) {
+      context->motion_playing.store(false, std::memory_order_release);
+      context->motion_seek.store(0.0, std::memory_order_release);
+    }
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string motion_unload_label =
+        context->localizer.Text("motion.unload", "Unload");
+    if (ui->button(ui->user, anomaly::sdk::StringView(motion_unload_label), 70.0F,
+                   0.0F) != 0) {
+      UnloadMotion(*context);
+      // Unloading hands the pose back to the game. Without this refresh the
+      // character keeps the last driven frame, because nothing re-evaluates the
+      // animation once the plugin stops writing the bone buffers.
+      context->reflection_action_requested.store(4, std::memory_order_release);
+    }
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    int motion_loop = context->motion_loop.load(std::memory_order_acquire) ? 1 : 0;
+    const std::string motion_loop_label =
+        context->localizer.Text("motion.loop", "Loop");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(motion_loop_label),
+                     &motion_loop) != 0)
+      context->motion_loop.store(motion_loop != 0, std::memory_order_release);
+    int motion_root =
+        context->motion_apply_root.load(std::memory_order_acquire) ? 1 : 0;
+    const std::string motion_root_label =
+        context->localizer.Text("motion.root", "Root motion");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(motion_root_label),
+                     &motion_root) != 0)
+      context->motion_apply_root.store(motion_root != 0, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    int motion_planar = context->motion_lock_planar.load(std::memory_order_acquire) ? 1 : 0;
+    const std::string motion_planar_label =
+        context->localizer.Text("motion.planar", "Lock planar motion");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(motion_planar_label), &motion_planar) != 0)
+      context->motion_lock_planar.store(motion_planar != 0, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    int motion_ref = context->motion_reference_unity.load(std::memory_order_acquire) ? 1 : 0;
+    const std::string motion_ref_label =
+        context->localizer.Text("motion.ref", "Unity Miku reference");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(motion_ref_label), &motion_ref) != 0)
+      context->motion_reference_unity.store(motion_ref != 0, std::memory_order_release);
+
+    // Music: pick a track and it follows the motion's own transport and playhead, so judging sync
+    // needs no manual transport (which only fought the follower). MP3/WAV go through the system
+    // codecs (MCI), nothing is shipped, and the game's own audio is untouched. Mute keeps the
+    // playhead running so unmuting stays in sync.
+    {
+      // The device belongs to the game tick thread (see StepMusic), because MCI does not share a
+      // device between threads. Everything here is a request or a display of published state -- this
+      // panel never issues a command itself.
+      const std::string music_pick_label =
+          context->localizer.Text("music.pick", "Load music");
+      if (ui->button(ui->user, anomaly::sdk::StringView(music_pick_label), 90.0F, 0.0F) != 0) {
+        const auto selected = ChooseFile(context->motion_file, FileKind::Audio);
+        if (selected.has_value()) {
+          std::lock_guard<std::mutex> lock(g_music_mutex);
+          g_music_request_path = WideToUtf8(selected->wstring());
+          g_music_paired_for = context->motion_file;  // do not also auto-pair over this choice
+        }
+      }
+      ui->same_line(ui->user, 0.0F, 6.0F);
+      int music_mute = g_music_muted.load(std::memory_order_acquire) ? 1 : 0;
+      const std::string music_mute_label = context->localizer.Text("music.mute", "Mute music");
+      if (ui->checkbox(ui->user, anomaly::sdk::StringView(music_mute_label), &music_mute) != 0) {
+        std::lock_guard<std::mutex> lock(g_music_mutex);
+        g_music_request_mute = music_mute != 0;
+        g_music_request_mute_pending = true;
+      }
+      ui->same_line(ui->user, 0.0F, 6.0F);
+      float music_volume =
+          static_cast<float>(g_music_volume.load(std::memory_order_acquire));
+      const std::string music_volume_label =
+          context->localizer.Text("music.volume", "Volume");
+      if (ui->slider_float(ui->user, anomaly::sdk::StringView(music_volume_label),
+                           &music_volume, 0.0F, 100.0F) != 0) {
+        g_music_request_volume.store(static_cast<int>(music_volume + 0.5F),
+                                     std::memory_order_release);
+        g_music_request_volume_pending.store(true, std::memory_order_release);
+        context->pose_settings_dirty.store(true, std::memory_order_release);
+      }
+      {
+        // Published by the tick: name, position, length, error. No MCI call ever happens here.
+        std::string name;
+        std::string error;
+        {
+          std::lock_guard<std::mutex> lock(g_music_mutex);
+          name = g_music_name;
+          error = g_music_error;
+        }
+        const bool opened = g_music_opened.load(std::memory_order_acquire);
+        const double position = g_music_position.load(std::memory_order_acquire);
+        const double length = g_music_length.load(std::memory_order_acquire);
+        if (opened) {
+          char line[192]{};
+          std::snprintf(line, sizeof(line), "%s  %d:%04.1f / %d:%04.1f%s", name.c_str(),
+                        static_cast<int>(position / 60.0), position - 60.0 * (position / 60.0),
+                        static_cast<int>(length / 60.0), length - 60.0 * (length / 60.0),
+                        error.empty() ? "" : "  (error: see log)");
+          ui->text(ui->user, anomaly::sdk::StringView(std::string(line)));
+        } else if (!error.empty()) {
+          ui->text(ui->user,
+                   anomaly::sdk::StringView(context->localizer.Text("music.error", "music") +
+                                            ": " + error));
+        }
+      }
+    }
+
+    // The motion's progress bar sits with the track it follows rather than at the bottom of the panel:
+    // moving either one alone is what made "the music and the bar" hard to use together.
+    float motion_time = static_cast<float>(
+        context->motion_display_seconds.load(std::memory_order_acquire));
+    float motion_duration = 0.0F;
+    {
+      std::lock_guard<std::mutex> lock(context->motion_mutex);
+      motion_duration = static_cast<float>(MotionDuration(context->motion));
+    }
+    if (motion_duration <= 0.0F)
+      motion_duration = 1.0F;
+    if (motion_time > motion_duration)
+      motion_time = motion_duration;
+    const std::string motion_time_label =
+        context->localizer.Text("motion.time", "Time (s)");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(motion_time_label),
+                         &motion_time, 0.0F, motion_duration) != 0)
+      context->motion_seek.store(static_cast<double>(motion_time),
+                                 std::memory_order_release);
+    if (motion_loaded) {
+      const std::string motion_status(context->motion_status.data());
+      ui->text(ui->user, anomaly::sdk::StringView(motion_status));
+    }
+
+    // Camera VMD: load the file, then report the key range and the frame the motion is on. The
+    // camera itself is driven by the view-point hook below (ported from the free-camera plugin),
+    // which reads this track from the render thread.
+    {
+      const std::string camera_pick_label =
+          context->localizer.Text("camera.pick", "Load camera VMD");
+      if (ui->button(ui->user, anomaly::sdk::StringView(camera_pick_label), 110.0F, 0.0F) != 0) {
+        const auto selected = ChooseFile(context->camera_file, FileKind::Vmd);
+        if (selected.has_value()) {
+          std::ifstream file(selected->wstring().c_str(), std::ios::binary);
+          std::string error = "could not open the file";
+          if (file) {
+            std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                                            std::istreambuf_iterator<char>());
+            std::lock_guard<std::mutex> lock(context->camera_mutex);
+            if (context->camera.Load(bytes, WideToUtf8(selected->wstring()), &error)) {
+              context->camera_file = WideToUtf8(selected->wstring());
+              context->camera_loaded.store(true, std::memory_order_release);
+            } else {
+              context->camera_loaded.store(false, std::memory_order_release);
+            }
+          }
+          // Remember the choice: the next plugin (re)load restores it instead of asking again.
+          context->pose_settings_dirty.store(true, std::memory_order_release);
+          if (!context->camera_loaded.load(std::memory_order_acquire))
+            LogDiagnostic(*context, "betterpose camera vmd failed (" +
+                                        WideToUtf8(selected->wstring()) + "): " + error);
+        }
+      }
+      ui->same_line(ui->user, 0.0F, 6.0F);
+      int camera_enabled =
+          context->camera_enabled.load(std::memory_order_acquire) ? 1 : 0;
+      const std::string camera_enable_label =
+          context->localizer.Text("camera.enable", "Drive camera");
+      if (ui->checkbox(ui->user, anomaly::sdk::StringView(camera_enable_label),
+                       &camera_enabled) != 0) {
+        context->camera_enabled.store(camera_enabled != 0, std::memory_order_release);
+        context->pose_settings_dirty.store(true, std::memory_order_release);
+      }
+      ui->same_line(ui->user, 0.0F, 6.0F);
+      int camera_follow = context->camera_follow.load(std::memory_order_acquire) ? 1 : 0;
+      const std::string camera_follow_label =
+          context->localizer.Text("camera.follow", "Follow the character");
+      if (ui->checkbox(ui->user, anomaly::sdk::StringView(camera_follow_label),
+                       &camera_follow) != 0) {
+        context->camera_follow.store(camera_follow != 0, std::memory_order_release);
+        context->pose_settings_dirty.store(true, std::memory_order_release);
+      }
+      if (camera_follow != 0) {
+        // Only the two numbers the mode needs: distance back along the anchored direction, height
+        // above the character's feet. The aim (their chest) is taken from the character itself.
+        float follow_distance = static_cast<float>(
+            context->camera_follow_distance_cm.load(std::memory_order_acquire));
+        const std::string follow_distance_label =
+            context->localizer.Text("camera.follow_distance", "Follow distance (cm)");
+        if (ui->slider_float(ui->user, anomaly::sdk::StringView(follow_distance_label),
+                             &follow_distance, 100.0F, 1500.0F) != 0) {
+          context->camera_follow_distance_cm.store(static_cast<double>(follow_distance),
+                                                   std::memory_order_release);
+          context->pose_settings_dirty.store(true, std::memory_order_release);
+        }
+        float follow_height = static_cast<float>(
+            context->camera_follow_height_cm.load(std::memory_order_acquire));
+        const std::string follow_height_label =
+            context->localizer.Text("camera.follow_height", "Follow height (cm)");
+        if (ui->slider_float(ui->user, anomaly::sdk::StringView(follow_height_label),
+                             &follow_height, 0.0F, 300.0F) != 0) {
+          context->camera_follow_height_cm.store(static_cast<double>(follow_height),
+                                                 std::memory_order_release);
+          context->pose_settings_dirty.store(true, std::memory_order_release);
+        }
+        int follow_vertical =
+            context->camera_follow_vertical.load(std::memory_order_acquire) ? 1 : 0;
+        const std::string follow_vertical_label =
+            context->localizer.Text("camera.follow_vertical", "Height follows the character");
+        if (ui->checkbox(ui->user, anomaly::sdk::StringView(follow_vertical_label),
+                         &follow_vertical) != 0) {
+          context->camera_follow_vertical.store(follow_vertical != 0,
+                                               std::memory_order_release);
+          context->pose_settings_dirty.store(true, std::memory_order_release);
+        }
+      }
+      // The state line shows whenever a mode is on, even with no file: follow mode needs no file, and
+      // "why is nothing happening" has to be answerable from the panel.
+      if (context->camera_loaded.load(std::memory_order_acquire) || camera_follow != 0 ||
+          camera_enabled != 0) {
+        std::size_t count = 0;
+        double first = 0.0;
+        double last = 0.0;
+        std::string name;
+        if (context->camera_loaded.load(std::memory_order_acquire)) {
+          std::lock_guard<std::mutex> lock(context->camera_mutex);
+          count = context->camera.keys.size();
+          first = context->camera.first_frame;
+          last = context->camera.last_frame;
+          name = context->camera.file;
+        }
+        const double frame = context->camera_frame.load(std::memory_order_acquire);
+        // How far the dance has actually moved the character: this is the number the follow camera
+        // tracks, so it is the one to watch when asking "why is the shot not following".
+        double offset_cm = 0.0;
+        if (camera_follow != 0) {
+          const double dx =
+              context->motion_applied_offset[0].load(std::memory_order_acquire);
+          const double dy =
+              context->motion_applied_offset[1].load(std::memory_order_acquire);
+          offset_cm = std::sqrt(dx * dx + dy * dy);
+        }
+        std::string state;
+        if (camera_follow != 0)
+          state = context->localizer.Text("camera.state.following",
+                                          "following (the file above is ignored)");
+        else if (!motion_playing)
+          state = context->localizer.Text("camera.state.off", "off until the motion plays");
+        else if (camera_enabled != 0) {
+          if (!context->camera_manager_resolved.load(std::memory_order_acquire))
+            state = context->localizer.Text("camera.state.no_camera", "no view camera");
+          else if (!context->camera_hook_ready.load(std::memory_order_acquire))
+            state = context->localizer.Text("camera.state.no_hook", "no accessor hook");
+          else if (!context->camera_anchored.load(std::memory_order_acquire))
+            state = context->localizer.Text("camera.state.waiting",
+                                            "waiting for the first frame");
+          else
+            state = context->localizer.Text("camera.state.driving", "driving");
+        }
+        char line[320]{};
+        if (camera_follow != 0)
+          std::snprintf(line, sizeof(line), "%s  |  %s %.0f cm",
+                        context->localizer.Text("camera.state.follow_mode", "follow mode").c_str(),
+                        context->localizer
+                            .Text("camera.state.displaced", "the dance has moved them")
+                            .c_str(),
+                        offset_cm);
+        else if (name.empty())
+          std::snprintf(line, sizeof(line), "%s  %s",
+                        context->localizer.Text("camera.state.no_file", "no camera VMD loaded")
+                            .c_str(),
+                        state.c_str());
+        else
+          std::snprintf(line, sizeof(line), "%s  %zu keys  f%.0f..%.0f  now f%.0f  %s",
+                        name.substr(name.find_last_of("\\/") + 1).c_str(), count, first, last,
+                        frame, state.c_str());
+        ui->text(ui->user, anomaly::sdk::StringView(std::string(line)));
+      }
+    }
+    if (use_tabs)
+      ui->end_tab_item(ui->user);
+  }
+
+  const bool pose_page =
+      !use_tabs ||
+      ui->begin_tab_item(ui->user, anomaly::sdk::StringView(pose_tab_label),
+                         nullptr, 0U, 1) != 0;
+  if (pose_page) {
+    int freeze = context->freeze_enabled.load(std::memory_order_acquire) ? 1 : 0;
+    const std::string freeze_label =
+        context->localizer.Text("freeze", "Pause animation");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(freeze_label), &freeze) !=
+        0) {
+      context->freeze_enabled.store(freeze != 0, std::memory_order_release);
+    }
+
+    int rate_enabled =
+        context->rate_override_enabled.load(std::memory_order_acquire) ? 1 : 0;
+    float rate = context->requested_rate_scale.load(std::memory_order_acquire);
+    const std::string rate_toggle =
+        context->localizer.Text("rate.toggle", "Override animation rate");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(rate_toggle),
+                     &rate_enabled) != 0) {
+      context->rate_override_enabled.store(rate_enabled != 0,
+                                           std::memory_order_release);
+    }
+    const std::string rate_label =
+        context->localizer.Text("rate", "Rate scale");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(rate_label), &rate,
+                         0.0F, 3.0F) != 0) {
+      context->requested_rate_scale.store(rate, std::memory_order_release);
+    }
+
+    ui->separator(ui->user);
+
+    int pose_enabled =
+        context->pose_override_enabled.load(std::memory_order_acquire) ? 1 : 0;
+    const std::string pose_toggle =
+        context->localizer.Text("pose.toggle", "Override joint pose");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(pose_toggle),
+                     &pose_enabled) != 0) {
+      context->pose_override_enabled.store(pose_enabled != 0,
+                                           std::memory_order_release);
+    }
+
+    // Pose camera: mouse-only orbit, independent of the skeleton overlay.
+    if (context->input != nullptr) {
+      int orbit = context->orbit_enabled.load(std::memory_order_acquire) ? 1 : 0;
+      const std::string orbit_label =
+          context->localizer.Text("pose.camera.orbit", "Pose camera");
+      if (ui->checkbox(ui->user, anomaly::sdk::StringView(orbit_label), &orbit) != 0) {
+        // Every switch-on starts again from the game's current view.
+        if (orbit != 0)
+          context->orbit_initialized.store(false, std::memory_order_release);
+        context->orbit_enabled.store(orbit != 0, std::memory_order_release);
+      }
+      if (orbit != 0) {
+        ui->same_line(ui->user, 0.0F, 12.0F);
+        const std::uint32_t selected =
+            context->requested_bone_index.load(std::memory_order_acquire);
+        const std::string focus_label =
+            context->localizer.Text("pose.camera.focus", "Focus selected joint");
+        if (ui->button(ui->user, anomaly::sdk::StringView(focus_label), 0.0F, 0.0F) != 0) {
+          std::array<double, 3> point{};
+          if (JointWorldPosition(*context, selected, point)) {
+            std::lock_guard<std::mutex> lock(context->orbit_mutex);
+            context->orbit_focus_target = point;
+            context->orbit_focus_requested.store(true, std::memory_order_release);
+          }
+        }
+        ui->same_line(ui->user, 0.0F, 6.0F);
+        const std::string reset_label =
+            context->localizer.Label("pose.camera.reset", "Reset view", "pose-camera-reset");
+        if (ui->button(ui->user, anomaly::sdk::StringView(reset_label), 0.0F, 0.0F) != 0)
+          context->orbit_initialized.store(false, std::memory_order_release);
+        const std::string orbit_hint = context->localizer.Text(
+            "pose.camera.hint",
+            "Empty scene: right drag orbits, middle drag pans, wheel zooms.");
+        ui->text(ui->user, anomaly::sdk::StringView(orbit_hint));
+
+        // Lens. 0 means "the game's own"; the slider starts from the game's
+        // value, read by the detour the first frame the pose camera drives.
+        const float game_fov = context->orbit_game_fov.load(std::memory_order_acquire);
+        const float current = context->orbit_fov.load(std::memory_order_acquire);
+        float fov = current >= better_pose::orbit::kMinimumFov
+                        ? current
+                        : std::clamp(game_fov > 0.0F ? game_fov : 80.0F,
+                                     better_pose::orbit::kMinimumFov,
+                                     better_pose::orbit::kMaximumFov);
+        const std::string fov_label = context->localizer.Text("pose.camera.fov", "Field of view");
+        if (ui->slider_float(ui->user, anomaly::sdk::StringView(fov_label), &fov,
+                             better_pose::orbit::kMinimumFov,
+                             better_pose::orbit::kMaximumFov) != 0) {
+          fov = std::clamp(fov, better_pose::orbit::kMinimumFov, better_pose::orbit::kMaximumFov);
+          context->orbit_fov.store(fov, std::memory_order_release);
+        }
+        ui->same_line(ui->user, 0.0F, 4.0F);
+        const std::string fov_reset =
+            context->localizer.Label("pose.camera.fov.reset", "Game", "pose-camera-fov-reset");
+        if (ui->button(ui->user, anomaly::sdk::StringView(fov_reset), 42.0F, 0.0F) != 0) {
+          context->orbit_fov.store(0.0F, std::memory_order_release);
+          context->orbit_fov_restore.store(true, std::memory_order_release);
+        }
+      }
+    }
+
+    if (context->ahud != nullptr) {
+      int overlay_enabled =
+          context->skeleton_overlay_enabled.load(std::memory_order_acquire) ? 1 : 0;
+      const std::string overlay_toggle =
+          context->localizer.Text("pose.skeleton.overlay", "Show skeleton");
+      if (ui->checkbox(ui->user, anomaly::sdk::StringView(overlay_toggle),
+                       &overlay_enabled) != 0) {
+        context->skeleton_overlay_enabled.store(overlay_enabled != 0,
+                                                std::memory_order_release);
+      }
+      if (overlay_enabled != 0) {
+        ui->same_line(ui->user, 0.0F, 12.0F);
+        int body_only = context->overlay_body_only.load(std::memory_order_acquire) ? 1 : 0;
+        const std::string body_only_label =
+            context->localizer.Text("pose.skeleton.body_only", "Body only");
+        if (ui->checkbox(ui->user, anomaly::sdk::StringView(body_only_label), &body_only) != 0)
+          context->overlay_body_only.store(body_only != 0, std::memory_order_release);
+        const std::uint32_t hidden =
+            context->overlay_hidden_count.load(std::memory_order_acquire);
+        if (body_only != 0 && hidden != 0) {
+          ui->same_line(ui->user, 0.0F, 6.0F);
+          const std::string hidden_line =
+              context->localizer.Text("pose.skeleton.hidden", "hidden") + " " +
+              std::to_string(hidden);
+          ui->text(ui->user, anomaly::sdk::StringView(hidden_line));
+        }
+        if (body_only != 0) {
+          int face = context->overlay_show_face.load(std::memory_order_acquire) ? 1 : 0;
+          const std::string face_label =
+              context->localizer.Text("pose.skeleton.face", "Show face bones");
+          if (ui->checkbox(ui->user, anomaly::sdk::StringView(face_label), &face) != 0)
+            context->overlay_show_face.store(face != 0, std::memory_order_release);
+          ui->same_line(ui->user, 0.0F, 12.0F);
+        }
+        float joint_radius = context->overlay_joint_radius.load(std::memory_order_acquire);
+        const std::string radius_label =
+            context->localizer.Text("pose.skeleton.size", "Joint size");
+        if (ui->slider_float(ui->user, anomaly::sdk::StringView(radius_label), &joint_radius,
+                             kOverlayMinimumRadius, kOverlayMaximumRadius) != 0)
+          context->overlay_joint_radius.store(
+              std::clamp(joint_radius, kOverlayMinimumRadius, kOverlayMaximumRadius),
+              std::memory_order_release);
+        int ik = context->overlay_ik_enabled.load(std::memory_order_acquire) ? 1 : 0;
+        const std::string ik_label =
+            context->localizer.Text("pose.skeleton.ik", "Limb IK (hands, feet)");
+        if (ui->checkbox(ui->user, anomaly::sdk::StringView(ik_label), &ik) != 0)
+          context->overlay_ik_enabled.store(ik != 0, std::memory_order_release);
+        ui->same_line(ui->user, 0.0F, 12.0F);
+        int limits = context->overlay_limits_enabled.load(std::memory_order_acquire) ? 1 : 0;
+        const std::string limits_label = context->localizer.Text(
+            "pose.skeleton.limits", "Joint limits (fingers, elbows, knees, shoulders, hips)");
+        if (ui->checkbox(ui->user, anomaly::sdk::StringView(limits_label), &limits) != 0)
+          context->overlay_limits_enabled.store(limits != 0, std::memory_order_release);
+      }
+      if (overlay_enabled != 0 && context->input != nullptr) {
+        const std::string overlay_hint = context->localizer.Text(
+            "pose.skeleton.overlay.hint",
+            "Click a joint to select it. Left drag swings its parent bone (hands and feet "
+            "move the limb with IK); scroll while dragging to push it toward or away from "
+            "the camera. Right drag left/right twists the bone. The other button cancels. "
+            "Not while an MMD motion is loaded.");
+        ui->text(ui->user, anomaly::sdk::StringView(overlay_hint));
+      }
+    }
+
+    auto bone = context->requested_bone_index.load(std::memory_order_acquire);
+    std::string selected_name = "None";
+    if (bone < snapshot.bone_names.size())
+      selected_name = snapshot.bone_names[bone];
+    const std::string selected_label =
+        context->localizer.Text("pose.bone.selected", "Selected bone");
+    const std::string selected_line =
+        selected_label + ": " + std::to_string(bone) + " " + selected_name;
+    ui->text(ui->user, anomaly::sdk::StringView(selected_line));
+    const std::string pose_status_line = std::string(snapshot.pose_status.data());
+    ui->text(ui->user, anomaly::sdk::StringView(pose_status_line));
+
+    float pitch = 0.0F;
+    float yaw = 0.0F;
+    float roll = 0.0F;
+    {
+      std::lock_guard<std::mutex> lock(context->pose_angles_mutex);
+      if (bone < context->bone_angles.size()) {
+        pitch = static_cast<float>(context->bone_angles[bone][0]);
+        yaw = static_cast<float>(context->bone_angles[bone][1]);
+        roll = static_cast<float>(context->bone_angles[bone][2]);
+      }
+    }
+
+    bool apply_pose_now = false;
+    const auto changed_angle = [&]() {
+      context->pose_override_enabled.store(true, std::memory_order_release);
+      context->pose_settings_dirty.store(true, std::memory_order_release);
+      {
+        std::lock_guard<std::mutex> lock(context->pose_angles_mutex);
+        if (bone >= context->bone_angles.size())
+          context->bone_angles.resize(static_cast<std::size_t>(bone) + 1);
+        context->bone_angles[bone] = {pitch, yaw, roll};
+      }
+      apply_pose_now = true;
+    };
+
+    float root_x = static_cast<float>(
+        context->requested_root_offset[0].load(std::memory_order_acquire));
+    float root_y = static_cast<float>(
+        context->requested_root_offset[1].load(std::memory_order_acquire));
+    float root_z = static_cast<float>(
+        context->requested_root_offset[2].load(std::memory_order_acquire));
+    const auto changed_root_offset = [&]() {
+      context->pose_override_enabled.store(true, std::memory_order_release);
+      context->pose_settings_dirty.store(true, std::memory_order_release);
+      context->requested_root_offset[0].store(root_x, std::memory_order_release);
+      context->requested_root_offset[1].store(root_y, std::memory_order_release);
+      context->requested_root_offset[2].store(root_z, std::memory_order_release);
+      apply_pose_now = true;
+    };
+
+    const std::string pitch_label =
+        context->localizer.Text("pose.pitch", "Pitch");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(pitch_label), &pitch,
+                         -180.0F, 180.0F) != 0)
+      changed_angle();
+    ui->same_line(ui->user, 0.0F, 4.0F);
+    const std::string pitch_reset =
+        context->localizer.Label("pose.reset.pitch", "重置", "reset-pitch");
+    if (ui->button(ui->user, anomaly::sdk::StringView(pitch_reset), 42.0F,
+                   0.0F) != 0) {
+      pitch = 0.0F;
+      changed_angle();
+    }
+
+    const std::string yaw_label =
+        context->localizer.Text("pose.yaw", "Yaw");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(yaw_label), &yaw,
+                         -180.0F, 180.0F) != 0)
+      changed_angle();
+    ui->same_line(ui->user, 0.0F, 4.0F);
+    const std::string yaw_reset =
+        context->localizer.Label("pose.reset.yaw", "重置", "reset-yaw");
+    if (ui->button(ui->user, anomaly::sdk::StringView(yaw_reset), 42.0F,
+                   0.0F) != 0) {
+      yaw = 0.0F;
+      changed_angle();
+    }
+
+    const std::string roll_label =
+        context->localizer.Text("pose.roll", "Roll");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(roll_label), &roll,
+                         -180.0F, 180.0F) != 0)
+      changed_angle();
+    ui->same_line(ui->user, 0.0F, 4.0F);
+    const std::string roll_reset =
+        context->localizer.Label("pose.reset.roll", "重置", "reset-roll");
+    if (ui->button(ui->user, anomaly::sdk::StringView(roll_reset), 42.0F,
+                   0.0F) != 0) {
+      roll = 0.0F;
+      changed_angle();
+    }
+
+    ui->separator(ui->user);
+    const std::string body_x_label =
+        context->localizer.Text("pose.body.x", "X");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(body_x_label),
+                         &root_x, -1000.0F, 1000.0F) != 0)
+      changed_root_offset();
+    ui->same_line(ui->user, 0.0F, 4.0F);
+    const std::string body_x_reset =
+        context->localizer.Label("pose.reset.body.x", "重置", "reset-body-x");
+    if (ui->button(ui->user, anomaly::sdk::StringView(body_x_reset), 42.0F,
+                   0.0F) != 0) {
+      root_x = 0.0F;
+      changed_root_offset();
+    }
+
+    const std::string body_y_label =
+        context->localizer.Text("pose.body.y", "Y");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(body_y_label),
+                         &root_y, -1000.0F, 1000.0F) != 0)
+      changed_root_offset();
+    ui->same_line(ui->user, 0.0F, 4.0F);
+    const std::string body_y_reset =
+        context->localizer.Label("pose.reset.body.y", "重置", "reset-body-y");
+    if (ui->button(ui->user, anomaly::sdk::StringView(body_y_reset), 42.0F,
+                   0.0F) != 0) {
+      root_y = 0.0F;
+      changed_root_offset();
+    }
+
+    const std::string body_z_label =
+        context->localizer.Text("pose.body.z", "Z");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView(body_z_label),
+                         &root_z, -1000.0F, 1000.0F) != 0)
+      changed_root_offset();
+    ui->same_line(ui->user, 0.0F, 4.0F);
+    const std::string body_z_reset =
+        context->localizer.Label("pose.reset.body.z", "重置", "reset-body-z");
+    if (ui->button(ui->user, anomaly::sdk::StringView(body_z_reset), 42.0F,
+                   0.0F) != 0) {
+      root_z = 0.0F;
+      changed_root_offset();
+    }
+
+    if (apply_pose_now)
+      ApplyPoseOverridesDirect(*context);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string reset_label =
+        context->localizer.Text("pose.reset", "Reset All");
+    const bool can_confirm_popup =
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::open_popup)>(
+            ui, offsetof(AnomalyUiServiceV1, open_popup)) &&
+        ui->open_popup != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_popup_modal)>(
+            ui, offsetof(AnomalyUiServiceV1, begin_popup_modal)) &&
+        ui->begin_popup_modal != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_popup)>(
+            ui, offsetof(AnomalyUiServiceV1, end_popup)) &&
+        ui->end_popup != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::close_current_popup)>(
+            ui, offsetof(AnomalyUiServiceV1, close_current_popup)) &&
+        ui->close_current_popup != nullptr;
+    if (ui->button(ui->user, anomaly::sdk::StringView(reset_label), 70.0F,
+                   0.0F) != 0) {
+      if (can_confirm_popup)
+        ui->open_popup(ui->user, anomaly::sdk::StringView("pose-reset-confirm"));
+      else
+        context->pose_reset_requested.store(true, std::memory_order_release);
+    }
+
+    // Undo / redo. Disabled while a motion is loaded: it owns the pose.
+    const bool history_open = !context->motion_loaded.load(std::memory_order_acquire);
+    const std::uint32_t undo_count = context->pose_undo_count.load(std::memory_order_acquire);
+    const std::uint32_t redo_count = context->pose_redo_count.load(std::memory_order_acquire);
+    const bool can_enable =
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::button_enabled)>(
+            ui, offsetof(AnomalyUiServiceV1, button_enabled)) &&
+        ui->button_enabled != nullptr;
+    // `width` 0 sizes the button to its text.
+    const auto history_button = [&](const std::string &label, const bool enabled,
+                                    const float width = 84.0F) {
+      return can_enable ? ui->button_enabled(ui->user, anomaly::sdk::StringView(label), width,
+                                             0.0F, enabled ? 1 : 0) != 0 && enabled
+                        : ui->button(ui->user, anomaly::sdk::StringView(label), width, 0.0F) !=
+                                  0 &&
+                              enabled;
+    };
+    const std::string undo_label =
+        context->localizer.Text("pose.undo", "Undo") + " (" + std::to_string(undo_count) + ")##pose-undo";
+    const std::string redo_label =
+        context->localizer.Text("pose.redo", "Redo") + " (" + std::to_string(redo_count) + ")##pose-redo";
+    if (history_button(undo_label, history_open && undo_count != 0))
+      context->pose_history_request.store(1, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    if (history_button(redo_label, history_open && redo_count != 0))
+      context->pose_history_request.store(2, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string history_hint =
+        context->localizer.Text("pose.history.hint", "Ctrl+Z / Ctrl+Y");
+    ui->text(ui->user, anomaly::sdk::StringView(history_hint));
+
+    // Mirror: whole pose, or one side copied onto the other. Undo reverts it.
+    const auto mirror_button = [&](const char *key, const char *fallback, const char *id,
+                                   const int request) {
+      const std::string label = context->localizer.Label(key, fallback, id);
+      if (history_button(label, history_open, 0.0F))
+        context->pose_mirror_request.store(request, std::memory_order_release);
+    };
+    mirror_button("pose.mirror.flip", "Flip left and right", "pose-mirror-flip", 1);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    mirror_button("pose.mirror.left_to_right", "Copy left to right", "pose-mirror-l2r", 2);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    mirror_button("pose.mirror.right_to_left", "Copy right to left", "pose-mirror-r2l", 3);
+
+    ui->separator(ui->user);
+
+    // File: name, folder, export, import -- above the bone list.
+    if (context->pose_export_name[0] == '\0') {
+      std::snprintf(context->pose_export_name.data(), context->pose_export_name.size(),
+                  "pose.json");
+    }
+    ui->text(ui->user, anomaly::sdk::StringView(context->localizer.Text("pose.file.name", "File name")));
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    ui->input_text(ui->user, anomaly::sdk::StringView("##pose-export-name"),
+                   context->pose_export_name.data(),
+                   context->pose_export_name.size(), 0);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string choose_folder_label =
+        context->localizer.Text("pose.choose.folder", "Choose folder");
+    if (ui->button(ui->user, anomaly::sdk::StringView(choose_folder_label), 90.0F,
+                   0.0F) != 0) {
+      const auto selected = ChooseFolder(context->pose_export_folder);
+      if (selected) {
+        const std::string folder_utf8 = WideToUtf8(selected->native());
+        if (!folder_utf8.empty())
+          context->pose_export_folder = folder_utf8;
+      }
+    }
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string export_label =
+        context->localizer.Text("pose.export", "Export");
+    if (ui->button(ui->user, anomaly::sdk::StringView(export_label), 60.0F,
+                   0.0F) != 0)
+      context->pose_file_action_requested.store(1, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string export_skeleton_label =
+        context->localizer.Text("pose.export.skeleton", "Export Skeleton");
+    if (ui->button(ui->user, anomaly::sdk::StringView(export_skeleton_label), 110.0F,
+                   0.0F) != 0)
+      context->pose_file_action_requested.store(3, std::memory_order_release);
+
+    ui->text(ui->user, anomaly::sdk::StringView(context->localizer.Text("pose.import.file", "Import file")));
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string choose_file_label =
+        context->localizer.Text("pose.choose.file", "Choose file");
+    if (ui->button(ui->user, anomaly::sdk::StringView(choose_file_label), 90.0F,
+                   0.0F) != 0) {
+      const auto selected = ChooseFile(context->pose_import_file);
+      if (selected) {
+        const std::string file_utf8 = WideToUtf8(selected->native());
+        if (!file_utf8.empty())
+          context->pose_import_file = file_utf8;
+      }
+    }
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string import_label =
+        context->localizer.Text("pose.import", "Import");
+    if (ui->button(ui->user, anomaly::sdk::StringView(import_label), 60.0F,
+                   0.0F) != 0)
+      context->pose_file_action_requested.store(2, std::memory_order_release);
+
+    ui->separator(ui->user);
+
+    const bool can_text_input =
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::input_text)>(
+            ui, offsetof(AnomalyUiServiceV1, input_text)) &&
+        ui->input_text != nullptr;
+    const bool can_bone_list =
+        can_text_input &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_child)>(
+            ui, offsetof(AnomalyUiServiceV1, begin_child)) &&
+        ui->begin_child != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_child)>(
+            ui, offsetof(AnomalyUiServiceV1, end_child)) &&
+        ui->end_child != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::filter_match)>(
+            ui, offsetof(AnomalyUiServiceV1, filter_match)) &&
+        ui->filter_match != nullptr;
+
+    if (can_bone_list) {
+      const std::string filter_label =
+          context->localizer.Text("pose.filter", "Bone filter");
+      static_cast<void>(ui->input_text(
+          ui->user, anomaly::sdk::StringView(filter_label),
+          context->bone_filter.data(), context->bone_filter.size(),
+          ANOMALY_UI_TEXT_INPUT_V1_NONE));
+
+      const auto set_filter = [&](const char *value) {
+        std::snprintf(context->bone_filter.data(), context->bone_filter.size(),
+                      "%s", value);
+      };
+      int quick_button_index = 0;
+      const auto quick_button = [&](const char *value, const std::string &label) {
+        if (ui->button(ui->user, anomaly::sdk::StringView(label), 56.0F, 0.0F) != 0)
+          set_filter(value);
+        ++quick_button_index;
+        if (quick_button_index % 6 != 0)
+          ui->same_line(ui->user, 0.0F, 4.0F);
+      };
+      quick_button("arm", context->localizer.Text("filter.arm", "Arm"));
+      quick_button("forearm", context->localizer.Text("filter.elbow", "Elbow"));
+      quick_button("hand", context->localizer.Text("filter.hand", "Hand"));
+      quick_button("thigh", context->localizer.Text("filter.thigh", "Thigh"));
+      quick_button("calf", context->localizer.Text("filter.knee", "Knee"));
+      quick_button("foot", context->localizer.Text("filter.foot", "Foot"));
+      quick_button("clavicle", context->localizer.Text("filter.shoulder", "Shoulder"));
+      quick_button("neck", context->localizer.Text("filter.neck", "Neck"));
+      quick_button("head", context->localizer.Text("filter.head", "Head"));
+      quick_button("spine", context->localizer.Text("filter.spine", "Spine"));
+      quick_button("pelvis", context->localizer.Text("filter.pelvis", "Pelvis"));
+      quick_button("", context->localizer.Text("filter.all", "All"));
+
+      // The host pushes its Child stack entry when `begin_child` is called, whether or not ImGui
+      // culled the child, so `end_child` has to be called either way: skipping it when the child is
+      // scrolled out of view leaves the stack unbalanced and the host faults the whole plugin.
+      const int bone_child_open =
+          ui->begin_child(ui->user, anomaly::sdk::StringView("bone-list"), 0.0F, 240.0F, 0U);
+      if (bone_child_open != 0) {
+        if (snapshot.bone_names.empty()) {
+          const std::string empty_label = context->localizer.Text(
+              "pose.bones.empty", "Bone names not loaded; press Load Bones.");
+          ui->text(ui->user, anomaly::sdk::StringView(empty_label));
+        } else {
+          const std::string_view filter(context->bone_filter.data());
+          for (std::size_t index{}; index != snapshot.bone_names.size(); ++index) {
+            if (ui->filter_match(ui->user, anomaly::sdk::StringView(filter),
+                                 anomaly::sdk::StringView(
+                                     snapshot.bone_names[index])) == 0)
+              continue;
+            const std::string bone_item =
+                std::to_string(index) + " " + snapshot.bone_names[index];
+            if (ui->button(ui->user, anomaly::sdk::StringView(bone_item), 0.0F,
+                           0.0F) != 0) {
+              context->requested_bone_index.store(
+                  static_cast<std::uint32_t>(index), std::memory_order_release);
+            }
+          }
+        }
+      }
+      ui->end_child(ui->user);
+    } else {
+      const std::string bone_label =
+          context->localizer.Text("pose.bone", "Bone index");
+      double bone_value = static_cast<double>(bone);
+      if (ui->input_double(ui->user, anomaly::sdk::StringView(bone_label),
+                           &bone_value, 1.0, 8.0) != 0) {
+        if (bone_value < 0.0)
+          bone_value = 0.0;
+        if (bone_value > static_cast<double>(kMaximumBoneIndex))
+          bone_value = static_cast<double>(kMaximumBoneIndex);
+        context->requested_bone_index.store(
+            static_cast<std::uint32_t>(bone_value), std::memory_order_release);
+      }
+    }
+
+
+    if (can_confirm_popup) {
+      int confirm_open = 1;
+      const std::string confirm_id = "pose-reset-confirm";
+      if (ui->begin_popup_modal(ui->user, anomaly::sdk::StringView(confirm_id),
+                                &confirm_open, 0U) != 0) {
+        const std::string confirm_text = context->localizer.Text(
+            "pose.reset.confirm", "Reset all bone and body offsets?");
+        ui->text(ui->user, anomaly::sdk::StringView(confirm_text));
+        const std::string confirm_yes =
+            context->localizer.Text("pose.reset.confirm.yes", "Reset");
+        if (ui->button(ui->user, anomaly::sdk::StringView(confirm_yes), 90.0F,
+                       0.0F) != 0) {
+          context->pose_reset_requested.store(true, std::memory_order_release);
+          ui->close_current_popup(ui->user);
+        }
+        ui->same_line(ui->user, 0.0F, 6.0F);
+        const std::string confirm_cancel =
+            context->localizer.Text("pose.reset.confirm.cancel", "Cancel");
+        if (ui->button(ui->user, anomaly::sdk::StringView(confirm_cancel), 90.0F,
+                       0.0F) != 0)
+          ui->close_current_popup(ui->user);
+        ui->end_popup(ui->user);
+      }
+    }
+
+    if (!snapshot.pose_available) {
+      const std::string warning = context->localizer.Text(
+          "pose.unavailable", "Pose edit is inactive until the authoritative bone-space pose buffer is populated.");
+      ui->text(ui->user, anomaly::sdk::StringView(warning));
+    }
+    if (use_tabs)
+      ui->end_tab_item(ui->user);
+  }
+
+  // --- Expression: morph targets ---------------------------------------------
+  const std::string expression_tab_label =
+      context->localizer.Text("tab.expression", "Expression");
+  const bool expression_page =
+      !use_tabs ||
+      ui->begin_tab_item(ui->user, anomaly::sdk::StringView(expression_tab_label), nullptr, 0U,
+                         1) != 0;
+  // Without tabs every section is on one page; Ctrl+Z then stays with the pose.
+  context->expression_page_active.store(use_tabs && expression_page, std::memory_order_release);
+  if (expression_page) {
+    const bool can_list =
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::input_text)>(
+            ui, offsetof(AnomalyUiServiceV1, input_text)) &&
+        ui->input_text != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_child)>(
+            ui, offsetof(AnomalyUiServiceV1, begin_child)) &&
+        ui->begin_child != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_child)>(
+            ui, offsetof(AnomalyUiServiceV1, end_child)) &&
+        ui->end_child != nullptr &&
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::filter_match)>(
+            ui, offsetof(AnomalyUiServiceV1, filter_match)) &&
+        ui->filter_match != nullptr;
+
+    // The file dialog is modal and pumps messages for as long as it is open,
+    // so it runs after the lock below is released: the game thread keeps
+    // writing the expression meanwhile.
+    bool import_requested = false;
+    bool folder_requested = false;
+    {
+    std::lock_guard<std::mutex> lock(context->morph_mutex);
+    auto &catalog = context->morph_catalog;
+    auto &weights = context->morph_weights;
+    const std::size_t driven = weights.DrivenCount();
+    const std::string summary =
+        context->localizer.Text("morph.count", "Morph targets") + ": " +
+        std::to_string(catalog.entries.size()) + "   " +
+        context->localizer.Text("morph.driven", "set by you") + ": " + std::to_string(driven);
+    ui->text(ui->user, anomaly::sdk::StringView(summary));
+    // The loaded MMD motion's facial keys: on by default, a hand-set morph
+    // always wins over the motion.
+    int motion_expression =
+        context->motion_expression_enabled.load(std::memory_order_acquire) ? 1 : 0;
+    const std::string motion_expression_label = context->localizer.Text(
+        "morph.motion", "Play the MMD motion's expressions");
+    if (ui->checkbox(ui->user, anomaly::sdk::StringView(motion_expression_label),
+                     &motion_expression) != 0)
+      context->motion_expression_enabled.store(motion_expression != 0,
+                                               std::memory_order_release);
+    const std::uint32_t mapped = context->motion_morph_mapped.load(std::memory_order_acquire);
+    const std::uint32_t total = context->motion_morph_total.load(std::memory_order_acquire);
+    if (context->motion_loaded.load(std::memory_order_acquire) && total != 0) {
+      ui->same_line(ui->user, 0.0F, 8.0F);
+      const std::array<std::string_view, 2> counts{std::to_string(mapped),
+                                                   std::to_string(total)};
+      const std::string mapped_line = context->localizer.Format(
+          "morph.motion.mapped", "{0}/{1} MMD morphs mapped",
+          std::span<const std::string_view>(counts.data(), counts.size()));
+      ui->text(ui->user, anomaly::sdk::StringView(mapped_line));
+    }
+    if (!context->morph_status.empty())
+      ui->text(ui->user, anomaly::sdk::StringView(context->localizer.Text(
+                             "morph.none", "No morph targets on this character.")));
+    const std::string release_label =
+        context->localizer.Label("morph.release_all", "Give all back to the game",
+                                 "morph-release-all");
+    if (ui->button(ui->user, anomaly::sdk::StringView(release_label), 0.0F, 0.0F) != 0)
+      context->morph_release_all.store(true, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string rescan_label =
+        context->localizer.Label("morph.rescan", "Reload list", "morph-rescan");
+    if (ui->button(ui->user, anomaly::sdk::StringView(rescan_label), 0.0F, 0.0F) != 0)
+      context->morph_rescan_requested.store(true, std::memory_order_release);
+    const std::string hint = context->localizer.Text(
+        "morph.hint",
+        "Dragging a slider takes that morph over from the game; the reset button hands it back.");
+    ui->text(ui->user, anomaly::sdk::StringView(hint));
+
+    // Undo/redo: the expression's own history.
+    const std::uint32_t morph_undo = context->morph_undo_count.load(std::memory_order_acquire);
+    const std::uint32_t morph_redo = context->morph_redo_count.load(std::memory_order_acquire);
+    const bool can_enable_button =
+        HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::button_enabled)>(
+            ui, offsetof(AnomalyUiServiceV1, button_enabled)) &&
+        ui->button_enabled != nullptr;
+    const auto morph_button = [&](const std::string &label, const bool enabled) {
+      return can_enable_button
+                 ? ui->button_enabled(ui->user, anomaly::sdk::StringView(label), 84.0F, 0.0F,
+                                      enabled ? 1 : 0) != 0 && enabled
+                 : ui->button(ui->user, anomaly::sdk::StringView(label), 84.0F, 0.0F) != 0 &&
+                       enabled;
+    };
+    const std::string morph_undo_label = context->localizer.Text("pose.undo", "Undo") + " (" +
+                                         std::to_string(morph_undo) + ")##morph-undo";
+    const std::string morph_redo_label = context->localizer.Text("pose.redo", "Redo") + " (" +
+                                         std::to_string(morph_redo) + ")##morph-redo";
+    if (morph_button(morph_undo_label, morph_undo != 0))
+      context->morph_history_request.store(1, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    if (morph_button(morph_redo_label, morph_redo != 0))
+      context->morph_history_request.store(2, std::memory_order_release);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    ui->text(ui->user, anomaly::sdk::StringView(
+                           context->localizer.Text("pose.history.hint", "Ctrl+Z / Ctrl+Y")));
+
+    // Expression file. The folder is the one chosen on the pose page.
+    if (context->morph_export_name[0] == '\0')
+      std::snprintf(context->morph_export_name.data(), context->morph_export_name.size(),
+                    "expression.json");
+    ui->text(ui->user,
+             anomaly::sdk::StringView(context->localizer.Text("pose.file.name", "File name")));
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    ui->input_text(ui->user, anomaly::sdk::StringView("##morph-export-name"),
+                   context->morph_export_name.data(), context->morph_export_name.size(), 0);
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string morph_folder_label =
+        context->localizer.Label("pose.choose.folder", "Choose folder", "morph-choose-folder");
+    if (ui->button(ui->user, anomaly::sdk::StringView(morph_folder_label), 90.0F, 0.0F) != 0)
+      folder_requested = true;
+    ui->same_line(ui->user, 0.0F, 6.0F);
+    const std::string morph_export_label =
+        context->localizer.Label("morph.export", "Export expression", "morph-export");
+    if (ui->button(ui->user, anomaly::sdk::StringView(morph_export_label), 0.0F, 0.0F) != 0)
+      context->morph_file_request.store(1, std::memory_order_release);
+    const std::string morph_import_label =
+        context->localizer.Label("morph.import", "Import expression", "morph-import");
+    if (ui->button(ui->user, anomaly::sdk::StringView(morph_import_label), 0.0F, 0.0F) != 0)
+      import_requested = true;
+    if (!context->morph_file_status.empty()) {
+      ui->same_line(ui->user, 0.0F, 8.0F);
+      ui->text(ui->user, anomaly::sdk::StringView(context->morph_file_status));
+    }
+    ui->separator(ui->user);
+
+    if (can_list && !catalog.entries.empty()) {
+      const std::string filter_label = context->localizer.Text("morph.filter", "Search");
+      static_cast<void>(ui->input_text(ui->user, anomaly::sdk::StringView(filter_label),
+                                       context->morph_filter.data(), context->morph_filter.size(),
+                                       ANOMALY_UI_TEXT_INPUT_V1_NONE));
+      // Same rule as the bone list: end_child is called whether or not the
+      // child is visible, or the host's child stack goes out of balance.
+      const int morph_list_open = ui->begin_child(
+          ui->user, anomaly::sdk::StringView("morph-list"), 0.0F, 420.0F, 0U);
+      if (morph_list_open != 0) {
+        const std::string_view filter(context->morph_filter.data());
+        auto current = better_pose::morph::Group::Count;
+        for (const std::uint32_t index : catalog.order) {
+          const auto &entry = catalog.entries[index];
+          if (!filter.empty() &&
+              ui->filter_match(ui->user, anomaly::sdk::StringView(filter),
+                               anomaly::sdk::StringView(entry.name)) == 0)
+            continue;
+          if (entry.group != current) {
+            current = entry.group;
+            const auto group = static_cast<std::size_t>(current);
+            const std::string heading =
+                context->localizer.Text(better_pose::morph::kGroupKeys[group],
+                                        better_pose::morph::kGroupNames[group]) +
+                " (" + std::to_string(catalog.CountIn(current)) + ")";
+            ui->separator(ui->user);
+            ui->text(ui->user, anomaly::sdk::StringView(heading));
+          }
+          float value = weights.value[index];
+          const bool is_driven = weights.driven[index] != 0;
+          const std::string label = (is_driven ? "* " : "  ") + entry.name + "###morph-" +
+                                    std::to_string(index);
+          if (ui->slider_float(ui->user, anomaly::sdk::StringView(label), &value, 0.0F, 1.0F) !=
+              0)
+            weights.Set(index, value);
+          if (is_driven) {
+            ui->same_line(ui->user, 0.0F, 4.0F);
+            const std::string reset = context->localizer.Label(
+                "morph.reset", "Reset", "morph-reset-" + std::to_string(index));
+            if (ui->button(ui->user, anomaly::sdk::StringView(reset), 0.0F, 0.0F) != 0)
+              weights.Release(index);
+          }
+        }
+      }
+      ui->end_child(ui->user);
+    }
+    }  // morph_mutex
+    if (folder_requested) {
+      const auto selected = ChooseFolder(context->pose_export_folder);
+      if (selected) {
+        const std::string folder_utf8 = WideToUtf8(selected->native());
+        if (!folder_utf8.empty())
+          context->pose_export_folder = folder_utf8;
+      }
+    }
+    if (import_requested) {
+      const auto selected = ChooseFile(context->pose_export_folder);
+      if (selected) {
+        {
+          std::lock_guard<std::mutex> lock(context->morph_mutex);
+          context->morph_import_path = selected->native();
+        }
+        context->morph_file_request.store(2, std::memory_order_release);
+      }
+    }
+    if (use_tabs)
+      ui->end_tab_item(ui->user);
+  }
+
+  if (use_tabs)
+    ui->end_tab_bar(ui->user);
+
+  ui->end_window(ui->user);
+}
+
+}  // namespace
+
+ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL
+AnomalyPluginEntryV1(AnomalyPluginDescriptorV1 *descriptor) {
+  if (descriptor == nullptr || descriptor->struct_size < sizeof(*descriptor))
+    return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+  *descriptor = {sizeof(*descriptor),
+                 ANOMALY_PLUGIN_API_V1_MAJOR,
+                 ANOMALY_PLUGIN_API_V1_MINOR,
+                 anomaly::sdk::StringView("anomaly.builtin.better-pose"),
+                 anomaly::sdk::StringView("Better Pose"),
+                 anomaly::sdk::StringView("Anomaly"),
+                 anomaly::sdk::StringView("1.0.0"),
+                 Load,
+                 Start,
+                 Stop,
+                 Unload,
+                 Update,
+                 Draw};
+  return anomaly::sdk::Ok();
+}
