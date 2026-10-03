@@ -7553,10 +7553,12 @@ struct Ue5NteAdapter::State {
             // Tokky's target build reads the active movement component from the vehicle
             // instance and uses its validated base torque as the speed-mutation baseline.
             std::uintptr_t movement_component{};
-            if (ReadPointerAt(*memory, current_vehicle_object, 0x378, movement_component)) {
+            if (ReadPointerAt(*memory, current_vehicle_object,
+                    Layout(profile, "vehicle.movementComponent"), movement_component)) {
                 vehicle_base_movement_component = movement_component;
                 float torque{};
-                if (ReadValue(*memory, movement_component + 0xA38U, torque) &&
+                if (ReadValue(*memory, movement_component +
+                        Layout(profile, "vehicle.maxEngineTorque"), torque) &&
                     std::isfinite(torque)) {
                     vehicle_base_engine_torque = torque;
                     vehicle_base_engine_torque_valid = true;
