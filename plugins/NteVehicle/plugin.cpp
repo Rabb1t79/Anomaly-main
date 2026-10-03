@@ -92,6 +92,10 @@ void Draw() {
 
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
         DrawText("当前没有检测到正在驾驶的载具。");
+        // Summon is independent of whether the player is already driving a vehicle.
+        if (ui->button(ui->user, anomaly::sdk::StringView("召唤载具"), 0.0F, 0.0F)) {
+            g_context.summon.store(true, std::memory_order_release);
+        }
     } else {
         const std::string speed = "当前速度：" + std::to_string(snap.speed_kmh) + " km/h";
         DrawText(speed);
@@ -109,10 +113,6 @@ void Draw() {
         if (ui->button(ui->user, anomaly::sdk::StringView("恢复 1.0x"), 0.0F, 0.0F)) {
             g_context.reset.store(true, std::memory_order_release);
         }
-        if (ui->button(ui->user, anomaly::sdk::StringView("召唤载具"), 0.0F, 0.0F)) {
-            g_context.summon.store(true, std::memory_order_release);
-        }
-
         const std::string friction_text = std::string("车轮摩擦：") + (friction ? "开启" : "关闭");
         DrawText(friction_text);
         if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F)) {
