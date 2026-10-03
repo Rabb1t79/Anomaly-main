@@ -234,7 +234,8 @@ void ANOMALY_CALL DrawCallback(void* plugin_context, const AnomalyUiServiceV1*) 
 
 } // namespace
 
-// The plugin consumes only the public Host vehicle ABI; UE objects never cross this boundary.\nANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
+// The plugin consumes only the public Host vehicle ABI; UE objects never cross this boundary.
+ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     AnomalyPluginDescriptorV1* descriptor) {
     if (!descriptor || descriptor->struct_size < sizeof(*descriptor)) {
         return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
