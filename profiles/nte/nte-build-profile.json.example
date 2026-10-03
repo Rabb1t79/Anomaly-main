@@ -6,111 +6,341 @@
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01",
-      "resolve": { "kind": "rip-rel32", "offset": 3, "instructionSize": 7 },
-      "validators": ["readable", "world-shape-v1"],
-      "requiredBy": ["anomaly.ue5.world", "anomaly.ue5.actors", "anomaly.nte.session", "anomaly.nte.player", "anomaly.nte.player-esp", "anomaly.nte.entities", "anomaly.nte.map-landmarks", "anomaly.nte.navigation", "anomaly.nte.pickup"]
+      "resolve": {
+        "kind": "rip-rel32",
+        "offset": 3,
+        "instructionSize": 7
+      },
+      "validators": [
+        "readable",
+        "world-shape-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.world",
+        "anomaly.ue5.actors",
+        "anomaly.nte.session",
+        "anomaly.nte.player",
+        "anomaly.nte.player-esp",
+        "anomaly.nte.entities",
+        "anomaly.nte.map-landmarks",
+        "anomaly.nte.navigation",
+        "anomaly.nte.pickup"
+      ]
     },
     "ue5.GObjects": {
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "48 8B 05 ?? ?? ?? ?? 48 8B 0C C8 48 8B 04 D1",
-      "resolve": { "kind": "rip-rel32", "offset": 3, "instructionSize": 7 },
-      "validators": ["readable", "object-registry-v1"],
-      "requiredBy": ["anomaly.ue5.objects", "anomaly.ue5.functions", "anomaly.nte.map-landmarks", "anomaly.nte.navigation", "anomaly.nte.pickup"]
+      "resolve": {
+        "kind": "rip-rel32",
+        "offset": 3,
+        "instructionSize": 7
+      },
+      "validators": [
+        "readable",
+        "object-registry-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.objects",
+        "anomaly.ue5.functions",
+        "anomaly.nte.map-landmarks",
+        "anomaly.nte.navigation",
+        "anomaly.nte.pickup"
+      ]
     },
     "ue5.FNamePool": {
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "FNAME_POOL_PATTERN",
-      "resolve": { "kind": "rip-rel32", "offset": 3, "instructionSize": 7 },
-      "validators": ["readable", "name-pool-v1"],
-      "requiredBy": ["anomaly.ue5.names", "anomaly.ue5.actors", "anomaly.ue5.functions", "anomaly.nte.map-landmarks", "anomaly.nte.navigation", "anomaly.nte.pickup"]
+      "resolve": {
+        "kind": "rip-rel32",
+        "offset": 3,
+        "instructionSize": 7
+      },
+      "validators": [
+        "readable",
+        "name-pool-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.names",
+        "anomaly.ue5.actors",
+        "anomaly.ue5.functions",
+        "anomaly.nte.map-landmarks",
+        "anomaly.nte.navigation",
+        "anomaly.nte.pickup"
+      ]
     },
     "ue5.StaticFindObject": {
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "STATIC_FIND_OBJECT_PATTERN",
-      "resolve": { "kind": "direct" },
-      "validators": ["address-in-module", "executable"],
-      "requiredBy": ["anomaly.ue5.objects", "anomaly.nte.map-landmarks"]
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.objects",
+        "anomaly.nte.map-landmarks"
+      ]
     },
     "ue5.GameTick": {
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "GAME_TICK_PATTERN",
-      "resolve": { "kind": "direct" },
-      "validators": ["address-in-module", "tick-anchor-v1"],
-      "requiredBy": ["anomaly.ue5.framework", "anomaly.ue5.actors", "anomaly.ue5.functions", "anomaly.nte.map-landmarks", "anomaly.nte.navigation", "anomaly.nte.pickup"]
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "tick-anchor-v1"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.framework",
+        "anomaly.ue5.actors",
+        "anomaly.ue5.functions",
+        "anomaly.nte.map-landmarks",
+        "anomaly.nte.navigation",
+        "anomaly.nte.pickup"
+      ]
     },
     "ue5.ProcessEvent": {
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "PROCESS_EVENT_PATTERN",
-      "resolve": { "kind": "direct" },
-      "validators": ["address-in-module", "executable"],
-      "requiredBy": ["anomaly.ue5.ahud", "anomaly.nte.map-landmarks", "anomaly.nte.navigation", "anomaly.nte.pickup"]
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.ahud",
+        "anomaly.nte.map-landmarks",
+        "anomaly.nte.navigation",
+        "anomaly.nte.pickup"
+      ]
     },
     "nte.ClientIgnoreGameAndUiInput": {
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "CLIENT_IGNORE_GAME_AND_UI_INPUT_PATTERN",
-      "resolve": { "kind": "direct" },
-      "validators": ["address-in-module", "executable"],
-      "requiredBy": ["anomaly.nte.navigation"]
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.nte.navigation"
+      ]
     },
     "ue5.AActorProcessEvent": {
       "module": "HTGame.exe",
       "section": ".text",
       "pattern": "ACTOR_PROCESS_EVENT_PATTERN",
-      "resolve": { "kind": "direct" },
-      "validators": ["address-in-module", "executable"],
-      "requiredBy": ["anomaly.ue5.ahud"]
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.ue5.ahud"
+      ]
     }
   },
   "features": {
-    "ue5.framework": ["ue5.GameTick"],
-    "ue5.world": ["ue5.GWorld", "ue5.GameTick"],
-    "ue5.names": ["ue5.FNamePool"],
-    "ue5.objects": ["ue5.GObjects", "ue5.GameTick"],
-    "ue5.object-find": ["ue5.StaticFindObject"],
-    "ue5.actors": ["ue5.GWorld", "ue5.GameTick", "ue5.FNamePool"],
-    "ue5.functions": ["ue5.GObjects", "ue5.GameTick", "ue5.FNamePool"],
-    "ue5.process-event": ["ue5.ProcessEvent"],
-    "ue5.actor-process-event": ["ue5.AActorProcessEvent"],
-    "ue5.ahud": ["ue5.ProcessEvent"],
-    "nte.session": ["ue5.GWorld", "ue5.GameTick"],
-    "nte.player": ["ue5.GWorld", "ue5.GameTick"],
-    "nte.map-landmarks": ["ue5.GameTick", "ue5.FNamePool", "ue5.GObjects", "ue5.ProcessEvent", "ue5.StaticFindObject"],
-    "nte.navigation": ["ue5.GWorld", "ue5.GameTick", "ue5.FNamePool", "ue5.GObjects", "ue5.ProcessEvent", "nte.ClientIgnoreGameAndUiInput"],
-    "nte.player-esp": ["ue5.GWorld", "ue5.GameTick"],
-    "nte.entities": ["ue5.GWorld", "ue5.GameTick"],
-    "nte.pickup": ["ue5.GWorld", "ue5.GameTick", "ue5.FNamePool", "ue5.GObjects", "ue5.ProcessEvent"]
+    "ue5.framework": [
+      "ue5.GameTick"
+    ],
+    "ue5.world": [
+      "ue5.GWorld",
+      "ue5.GameTick"
+    ],
+    "ue5.names": [
+      "ue5.FNamePool"
+    ],
+    "ue5.objects": [
+      "ue5.GObjects",
+      "ue5.GameTick"
+    ],
+    "ue5.object-find": [
+      "ue5.StaticFindObject"
+    ],
+    "ue5.actors": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool"
+    ],
+    "ue5.functions": [
+      "ue5.GObjects",
+      "ue5.GameTick",
+      "ue5.FNamePool"
+    ],
+    "ue5.process-event": [
+      "ue5.ProcessEvent"
+    ],
+    "ue5.actor-process-event": [
+      "ue5.AActorProcessEvent"
+    ],
+    "ue5.ahud": [
+      "ue5.ProcessEvent"
+    ],
+    "nte.session": [
+      "ue5.GWorld",
+      "ue5.GameTick"
+    ],
+    "nte.player": [
+      "ue5.GWorld",
+      "ue5.GameTick"
+    ],
+    "nte.map-landmarks": [
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent",
+      "ue5.StaticFindObject"
+    ],
+    "nte.navigation": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent",
+      "nte.ClientIgnoreGameAndUiInput"
+    ],
+    "nte.player-esp": [
+      "ue5.GWorld",
+      "ue5.GameTick"
+    ],
+    "nte.entities": [
+      "ue5.GWorld",
+      "ue5.GameTick"
+    ],
+    "nte.pickup": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent"
+    ],
+    "nte.vehicle": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent"
+    ]
   },
-  "optionalFeatures": ["ue5.actors", "ue5.functions", "ue5.object-find", "ue5.process-event", "ue5.actor-process-event", "ue5.ahud", "nte.player-esp", "nte.map-landmarks", "nte.navigation", "nte.pickup"],
+  "optionalFeatures": [
+    "ue5.actors",
+    "ue5.functions",
+    "ue5.object-find",
+    "ue5.process-event",
+    "ue5.actor-process-event",
+    "ue5.ahud",
+    "nte.player-esp",
+    "nte.map-landmarks",
+    "nte.navigation",
+    "nte.pickup",
+    "nte.vehicle"
+  ],
   "featureLayoutValidators": {
-    "ue5.actors": ["ue5-actors-reflection-v1"],
-    "ue5.functions": ["ue5-functions-reflection-v1"],
-    "ue5.object-find": ["ue5-static-find-object-abi-v1"],
-    "ue5.process-event": ["ue5-process-event-abi-v1"],
-    "ue5.actor-process-event": ["ue5-actor-process-event-abi-v1"],
-    "ue5.ahud": ["ue5-ahud-reflection-v1"],
-    "nte.player": ["nte-player-layout-v1"],
-    "nte.player-esp": ["nte-player-esp-layout-v1"],
-    "nte.map-landmarks": ["nte-map-landmarks-layout-v1"],
-    "nte.navigation": ["nte-navigation-layout-v1", "nte-navigation-input-abi-v1"],
-    "nte.entities": ["nte-entities-layout-v1"],
-    "nte.pickup": ["nte-pickup-layout-v1"]
+    "ue5.actors": [
+      "ue5-actors-reflection-v1"
+    ],
+    "ue5.functions": [
+      "ue5-functions-reflection-v1"
+    ],
+    "ue5.object-find": [
+      "ue5-static-find-object-abi-v1"
+    ],
+    "ue5.process-event": [
+      "ue5-process-event-abi-v1"
+    ],
+    "ue5.actor-process-event": [
+      "ue5-actor-process-event-abi-v1"
+    ],
+    "ue5.ahud": [
+      "ue5-ahud-reflection-v1"
+    ],
+    "nte.player": [
+      "nte-player-layout-v1"
+    ],
+    "nte.player-esp": [
+      "nte-player-esp-layout-v1"
+    ],
+    "nte.map-landmarks": [
+      "nte-map-landmarks-layout-v1"
+    ],
+    "nte.navigation": [
+      "nte-navigation-layout-v1",
+      "nte-navigation-input-abi-v1"
+    ],
+    "nte.entities": [
+      "nte-entities-layout-v1"
+    ],
+    "nte.pickup": [
+      "nte-pickup-layout-v1"
+    ],
+    "nte.vehicle": [
+      "nte-vehicle-layout-v1"
+    ]
   },
   "featureDependencies": {
-    "ue5.actors": ["ue5.world", "ue5.names"],
-    "ue5.functions": ["ue5.objects", "ue5.names"],
-    "ue5.object-find": ["ue5.objects"],
-    "ue5.actor-process-event": ["ue5.process-event"],
-    "ue5.ahud": ["ue5.functions", "ue5.process-event"],
-    "nte.player-esp": ["nte.player"],
-    "nte.map-landmarks": ["nte.player", "ue5.names", "ue5.objects", "ue5.object-find", "ue5.process-event"],
-    "nte.navigation": ["nte.player", "ue5.names", "ue5.objects", "ue5.process-event"],
-    "nte.pickup": ["nte.player", "nte.entities", "ue5.names", "ue5.objects", "ue5.process-event"]
+    "ue5.actors": [
+      "ue5.world",
+      "ue5.names"
+    ],
+    "ue5.functions": [
+      "ue5.objects",
+      "ue5.names"
+    ],
+    "ue5.object-find": [
+      "ue5.objects"
+    ],
+    "ue5.actor-process-event": [
+      "ue5.process-event"
+    ],
+    "ue5.ahud": [
+      "ue5.functions",
+      "ue5.process-event"
+    ],
+    "nte.player-esp": [
+      "nte.player"
+    ],
+    "nte.map-landmarks": [
+      "nte.player",
+      "ue5.names",
+      "ue5.objects",
+      "ue5.object-find",
+      "ue5.process-event"
+    ],
+    "nte.navigation": [
+      "nte.player",
+      "ue5.names",
+      "ue5.objects",
+      "ue5.process-event"
+    ],
+    "nte.pickup": [
+      "nte.player",
+      "nte.entities",
+      "ue5.names",
+      "ue5.objects",
+      "ue5.process-event"
+    ],
+    "nte.vehicle": [
+      "nte.player",
+      "ue5.names",
+      "ue5.objects",
+      "ue5.process-event"
+    ]
   },
   "layout": {
     "world.gameInstance": 560,
@@ -247,6 +477,8 @@
     "pickup.entries.array": 8,
     "pickup.entries.maximumChoices": 8,
     "pickup.interactEntryStride": 360,
-    "pickup.interactEntryIndex": 0
+    "pickup.interactEntryIndex": 0,
+    "vehicle.movementComponent": 888,
+    "vehicle.maxEngineTorque": 2616
   }
 }
