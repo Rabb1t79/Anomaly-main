@@ -757,6 +757,10 @@ struct Ue5NteAdapter::State {
         bool attempted{};
     } vehicle_bindings;
     std::uintptr_t current_vehicle_object{};
+    // Host-only state for Tokky's validated SetMaxEngineTorque mutation path.
+    std::uintptr_t vehicle_base_movement_component{};
+    float vehicle_base_engine_torque{};
+    bool vehicle_base_engine_torque_valid{};
     float vehicle_top_speed_ratio{1.0F};
     bool vehicle_wheel_friction_enabled{true};
     float vehicle_speed_kmh{};
@@ -7518,6 +7522,13 @@ struct Ue5NteAdapter::State {
             if (vehicle_bindings.speed_kmh.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", vehicle_outers, "FloatReturn", vehicle_bindings.speed_kmh));
             }
+            // Tokky's speed mutation is a reflected SetMaxEngineTorque call on the
+            // active ChaosWheeledVehicleMovementComponent.
+            if (vehicle_bindings.set_top_speed_ratio.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked(
+                    "SetMaxEngineTorque", vehicle_outers, "FloatInput",
+                    vehicle_bindings.set_top_speed_ratio));
+            }
             if (vehicle_bindings.summon_vehicle.function == 0) {
                 static constexpr std::array<std::string_view, 2> summon_outers{
                     "HTPlayerController", "HTPlayerCharacter"};
@@ -7539,6 +7550,18 @@ struct Ue5NteAdapter::State {
                 return false;
             }
             current_vehicle_object = vehicle;
+            // Tokky's target build reads the active movement component from the vehicle
+            // instance and uses its validated base torque as the speed-mutation baseline.
+            std::uintptr_t movement_component{};
+            if (ReadPointerAt(*memory, current_vehicle_object, 0x378, movement_component)) {
+                vehicle_base_movement_component = movement_component;
+                float torque{};
+                if (ReadValue(*memory, movement_component + 0xA38U, torque) &&
+                    std::isfinite(torque)) {
+                    vehicle_base_engine_torque = torque;
+                    vehicle_base_engine_torque_valid = true;
+                }
+            }
             vehicle_valid = true;
             if (vehicle_bindings.speed_kmh.function != 0) {
                 alignas(8) std::array<std::uint8_t, 8> speed_bytes{};
@@ -7599,13 +7622,25 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
-        static constexpr std::array<std::string_view, 3> top_speed_path{
-            "Vehicle", "SetTopSpeedRatio", "Base"};
-        std::uintptr_t top_speed_address{};
-        if (!ResolveVehicleFloatPathLocked(current_vehicle_object, top_speed_path, top_speed_address))
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "Vehicle.SetTopSpeedRatio.Base was not validated");
-        if (!memory->Write(top_speed_address, &ratio, sizeof(ratio)))
-            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle speed ratio write failed");
+        // Tokky multiplies the original movement-component torque and sends the
+        // resulting float through SetMaxEngineTorque; do not accumulate ratios.
+        if (!vehicle_base_engine_torque_valid || vehicle_base_movement_component == 0 ||
+            vehicle_bindings.set_top_speed_ratio.function == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "Tokky SetMaxEngineTorque ABI or torque baseline is unavailable");
+        }
+        const float torque = vehicle_base_engine_torque * ratio;
+        std::array<std::uint8_t, 4> parameters{};
+        std::memcpy(parameters.data() +
+                vehicle_bindings.set_top_speed_ratio.parameter_offset,
+            &torque, sizeof(torque));
+        if (!InvokeProcessEventGuarded(process_event_invoker,
+                vehicle_base_movement_component,
+                vehicle_bindings.set_top_speed_ratio.function,
+                parameters.data(), parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetMaxEngineTorque ProcessEvent failed");
+        }
         vehicle_top_speed_ratio = ratio;
         return anomaly::sdk::Ok();
     }
