@@ -424,12 +424,12 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (ui->set_next_window_size != nullptr) {
         ui->set_next_window_size(ui->user, 430.0F, 0.0F, 4U);
     }
-    if (!ui->begin_window(
-            ui->user, anomaly::sdk::StringView("自动攻击录制/重放"), &open, 0)) {
-        return;
-    }
-
-    ui->text(ui->user, anomaly::sdk::StringView(context->status));
+    // begin_window/end_window are always paired. The host UI follows ImGui's
+    // Begin/End rule: End is required even when Begin returns false.
+    const int window_visible = ui->begin_window(
+        ui->user, anomaly::sdk::StringView("自动攻击录制/重放"), &open, 0);
+    if (window_visible != 0) {
+        ui->text(ui->user, anomaly::sdk::StringView(context->status));
 
     if (ui->separator != nullptr) ui->separator(ui->user);
 
@@ -478,7 +478,13 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         }
     }
 
-    ui->end_window(ui->user);
+        ui->end_window(ui->user);
+    }
+
+    // end_window must also be called when begin_window returned false.
+    if (window_visible == 0) {
+        ui->end_window(ui->user);
+    }
 }
 
 }  // namespace
