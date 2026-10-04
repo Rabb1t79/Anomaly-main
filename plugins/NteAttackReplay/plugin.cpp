@@ -1,3 +1,4 @@
+// Record the first player->target DAMAGE event; normal attacks do not require a skill.
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
