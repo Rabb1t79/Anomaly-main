@@ -369,7 +369,6 @@ bool ReplayOnce(Context& context) {
     return true;
 }
 
-void ANOMALY_CALL LoadDummy() {}
 
 AnomalyStatusV1 ANOMALY_CALL Load(
     const AnomalyHostApiV1* host, void** plugin_context) {
@@ -451,7 +450,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     if (!ReplayOnce(*context)) {
         context->replaying = false;
-        context->status = "重放失败：当前技能已不可用";
+        context->status = context->captured_has_skill\n            ? "重放失败：当前技能已不可用"\n            : "已记录普通攻击，但当前 ABI 没有直接注入普通攻击事件的接口";
         ArmForNextAttack(*context);
         return;
     }
