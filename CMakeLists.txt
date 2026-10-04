@@ -1310,6 +1310,11 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/CloneEnter/manifest.json
         PACKAGE_NAME CloneEnter
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/CloneEnter")
+    anomaly_add_plugin(anomaly_builtin_nte_attack_replay
+        SOURCES plugins/NteAttackReplay/plugin.cpp
+        MANIFEST plugins/NteAttackReplay/manifest.json
+        PACKAGE_NAME NteAttackReplay
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteAttackReplay")
 
     anomaly_add_plugin(anomaly_builtin_nte_free_fly
         SOURCES plugins/NteFreeFly/plugin.cpp
@@ -1386,7 +1391,8 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_fake_uid anomaly_builtin_camera_tools
         anomaly_builtin_camera_blur_fix anomaly_builtin_better_pose
         anomaly_builtin_wallet_collector anomaly_builtin_box_auto anomaly_builtin_combat_box
-        anomaly_builtin_clone_enter anomaly_builtin_nte_quick_ultimate
+        anomaly_builtin_clone_enter anomaly_builtin_nte_attack_replay
+        anomaly_builtin_nte_quick_ultimate
         anomaly_builtin_nte_free_fly anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader)
     if(ANOMALY_BUILD_TEST_PLUGINS)
@@ -1456,6 +1462,7 @@ anomaly_stage_platform_preview_plugin(anomaly_builtin_wallet_collector WalletCol
 anomaly_stage_platform_preview_plugin(anomaly_builtin_box_auto BoxAuto)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_combat_box CombatBox)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_clone_enter CloneEnter)
+anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_attack_replay NteAttackReplay)
 anomaly_stage_platform_preview_plugin(
     anomaly_builtin_nte_quick_ultimate QuickUltimate)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_free_fly NteFreeFly)
