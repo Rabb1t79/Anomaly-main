@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <initializer_list>
@@ -7989,6 +7990,8 @@ struct Ue5NteAdapter::State {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle snapshot must run on Game thread");
         std::scoped_lock lock(mutex);
+        static_cast<void>(ApplySummonedVehicleLocked(
+            tick_sequence.load(std::memory_order_acquire)));
         if (!RefreshVehicleLocked()) {
             *snapshot = {sizeof(*snapshot), 0, {}, 0.0, vehicle_top_speed_ratio, vehicle_wheel_friction_enabled ? 1u : 0u};
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "current driving vehicle is unavailable");
