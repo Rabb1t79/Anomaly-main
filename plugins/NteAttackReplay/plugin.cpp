@@ -168,7 +168,7 @@ void UpdateSkillCandidate(Context& context) {
     if (!SkillsReady(context.skills)) return;
 
     AnomalyNteSkillFrameV1 frame{};
-    frame.size = sizeof(frame);
+    frame.struct_size = sizeof(frame);
     if (context.skills->frame(context.skills->user, &frame).code != ANOMALY_STATUS_V1_OK ||
         frame.character.id == 0) {
         return;
@@ -176,11 +176,12 @@ void UpdateSkillCandidate(Context& context) {
 
     std::array<AnomalyNteSkillSnapshotV1, ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> skills{};
     AnomalyNteSkillPageRequestV1 request{};
-    request.size = sizeof(request);
+    request.struct_size = sizeof(request);
     request.generation = frame.generation;
     request.offset = 0;
     request.capacity = static_cast<uint32_t>(skills.size());
-    AnomalyNteSkillPageResultV1 result{sizeof(result)};
+    AnomalyNteSkillPageResultV1 result{};
+    result.struct_size = sizeof(result);
 
     if (context.skills->page(
             context.skills->user, &request, skills.data(), &result).code !=
@@ -226,7 +227,8 @@ bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) 
 
     // A handle from the capture can remain valid through the replay. Check it first.
     if (context.skills->snapshot_by_handle != nullptr && context.captured_skill.id != 0) {
-        AnomalyNteSkillSnapshotV1 snapshot{sizeof(snapshot)};
+        AnomalyNteSkillSnapshotV1 snapshot{};
+        snapshot.struct_size = sizeof(snapshot);
         if (context.skills->snapshot_by_handle(
                 context.skills->user, context.captured_skill, &snapshot).code ==
             ANOMALY_STATUS_V1_OK) {
@@ -240,18 +242,19 @@ bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) 
     // Character/skill generations may refresh after the original attack. In that case,
     // remap by ability class and input id instead of using a stale opaque handle.
     AnomalyNteSkillFrameV1 frame{};
-    frame.size = sizeof(frame);
+    frame.struct_size = sizeof(frame);
     if (context.skills->frame(context.skills->user, &frame).code != ANOMALY_STATUS_V1_OK) {
         return false;
     }
 
     std::array<AnomalyNteSkillSnapshotV1, ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> skills{};
     AnomalyNteSkillPageRequestV1 request{};
-    request.size = sizeof(request);
+    request.struct_size = sizeof(request);
     request.generation = frame.generation;
     request.offset = 0;
     request.capacity = static_cast<uint32_t>(skills.size());
-    AnomalyNteSkillPageResultV1 result{sizeof(result)};
+    AnomalyNteSkillPageResultV1 result{};
+    result.struct_size = sizeof(result);
     if (context.skills->page(
             context.skills->user, &request, skills.data(), &result).code !=
         ANOMALY_STATUS_V1_OK) {
@@ -310,7 +313,8 @@ void ArmForNextAttack(Context& context) {
 bool CaptureNextAttack(Context& context) {
     if (!CombatReady(context.combat)) return false;
 
-    AnomalyNteCombatantSnapshotV1 combatant{sizeof(combatant)};
+    AnomalyNteCombatantSnapshotV1 combatant{};
+    combatant.struct_size = sizeof(combatant);
     if (context.combat->current_combatant(
             context.combat->user, &combatant).code != ANOMALY_STATUS_V1_OK ||
         combatant.character.id == 0) {
@@ -324,7 +328,8 @@ bool CaptureNextAttack(Context& context) {
     UpdateSkillCandidate(context);
 
     for (uint32_t i = 0; i < 16; ++i) {
-        AnomalyNteCombatEventV1 event{sizeof(event)};
+        AnomalyNteCombatEventV1 event{};
+        event.struct_size = sizeof(event);
         const auto status = context.combat->next_event(
             context.combat->user, context.combat_cursor, &event);
         if (status.code == ANOMALY_STATUS_V1_NOT_FOUND) {
@@ -364,12 +369,13 @@ bool CaptureNextAttack(Context& context) {
         if (!context.captured_damage_source_name.empty() &&
             SkillsReady(context.skills)) {
             AnomalyNteSkillFrameV1 frame{};
-    frame.size = sizeof(frame);
+    frame.struct_size = sizeof(frame);
             std::array<AnomalyNteSkillSnapshotV1,
                        ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> source_skills{};
             AnomalyNteSkillPageRequestV1 request{};
-    request.size = sizeof(request);
-            AnomalyNteSkillPageResultV1 result{sizeof(result)};
+    request.struct_size = sizeof(request);
+            AnomalyNteSkillPageResultV1 result{};
+    result.struct_size = sizeof(result);
             if (context.skills->frame(context.skills->user, &frame).code ==
                 ANOMALY_STATUS_V1_OK) {
                 request.generation = frame.generation;
@@ -444,7 +450,8 @@ ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* a
         return ReplayCallResult::NoSkill;
     }
 
-    AnomalyNteCombatantSnapshotV1 combatant{sizeof(combatant)};
+    AnomalyNteCombatantSnapshotV1 combatant{};
+    combatant.struct_size = sizeof(combatant);
     if (context.combat->current_combatant(
             context.combat->user, &combatant).code != ANOMALY_STATUS_V1_OK ||
         combatant.character.id == 0 || combatant.world.id == 0) {
@@ -457,12 +464,14 @@ ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* a
     AnomalyGenerationHandleV1 skill{};
     if (!ResolveReplaySkill(context, &skill)) return ReplayCallResult::NoSkill;
 
-    AnomalyNteSkillInvocationRequestV1 request{sizeof(request)};
+    AnomalyNteSkillInvocationRequestV1 request{};
+    request.struct_size = sizeof(request);
     request.world = context.world;
     request.character = context.character;
     request.skill = skill;
 
-    AnomalyNteSkillInvocationResultV1 result{sizeof(result)};
+    AnomalyNteSkillInvocationResultV1 result{};
+    result.struct_size = sizeof(result);
     const auto status = context.invocation->activate(
         context.invocation->user, &request, &result);
     if (status_code != nullptr) *status_code = status.code;
