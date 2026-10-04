@@ -741,12 +741,17 @@ struct Ue5NteAdapter::State {
         bool combat_event_bindings_attempted{};
     } combat_skill_discovery;
 
+    enum class VehicleReceiverKind : std::uint8_t {
+        Controller,
+        Pawn,
+    };
     struct VehicleFunctionBinding {
         std::uintptr_t function{};
         std::uint16_t parms_size{};
         std::uint16_t parameter_offset{};
         std::uint16_t return_offset{};
         bool has_return{};
+        VehicleReceiverKind receiver{VehicleReceiverKind::Controller};
     };
     enum class VehicleSummonParameterKind : std::uint8_t {
         None, NoArgs, FString, FName, Int32
@@ -756,6 +761,7 @@ struct Ue5NteAdapter::State {
         std::uint16_t parms_size{};
         std::uint16_t parameter_offset{};
         VehicleSummonParameterKind parameter_kind{VehicleSummonParameterKind::None};
+        VehicleReceiverKind receiver{VehicleReceiverKind::Controller};
     };
     struct VehicleOwnerBinding {
         std::uintptr_t function{};
@@ -781,6 +787,8 @@ struct Ue5NteAdapter::State {
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
+    std::uint32_t vehicle_function_discovery_next_index{};
+    bool vehicle_function_discovery_complete{};
     std::uintptr_t current_vehicle_object{};
     std::uintptr_t vehicle_base_movement_component{};
     float vehicle_base_engine_torque{};
@@ -792,7 +800,10 @@ struct Ue5NteAdapter::State {
 
     std::vector<std::string> vehicle_ids;
     std::string selected_vehicle_id{"Vehicle007"};
+    std::uintptr_t vehicle_data_table{};
+    std::uint64_t vehicle_data_table_generation{};
     std::uint64_t vehicle_catalog_generation{};
+    std::uint64_t vehicle_catalog_next_retry_sequence{};
     bool vehicle_catalog_attempted{};
     struct PendingVehicleSummon {
         bool active{};
@@ -2533,6 +2544,16 @@ struct Ue5NteAdapter::State {
         map_landmark_catalog.reset();
         map_landmark_next_refresh_sequence = 0;
         navigation = {};
+        vehicle_bindings = {};
+        vehicle_function_discovery_next_index = 0;
+        vehicle_function_discovery_complete = false;
+        vehicle_data_table = 0;
+        vehicle_data_table_generation = 0;
+        vehicle_catalog_generation = 0;
+        vehicle_catalog_next_retry_sequence = 0;
+        vehicle_catalog_attempted = false;
+        vehicle_ids.clear();
+        selected_vehicle_id = "Vehicle007";
         pickup_sequence = 0;
         InvalidatePickupLocked(ANOMALY_STATUS_V1_UNAVAILABLE);
         if (ui_buttons != nullptr) ui_buttons->Invalidate(ANOMALY_STATUS_V1_UNAVAILABLE);
@@ -7534,9 +7555,92 @@ struct Ue5NteAdapter::State {
             std::uintptr_t function{};
             if (FindExactObjectLocked(path.c_str(), function) &&
                 BuildVehicleBindingLocked(function, name, mode, binding)) {
+                binding.receiver = outer == "HTPlayerCharacter"
+                    ? VehicleReceiverKind::Pawn
+                    : VehicleReceiverKind::Controller;
                 return true;
             }
         }
+        return false;
+    }
+
+    [[nodiscard]] bool VehicleClassNameMatchesLocked(
+        std::uintptr_t class_object,
+        const std::string_view expected) const noexcept {
+        for (std::size_t depth{}; class_object != 0 && depth < 64; ++depth) {
+            std::string name;
+            if (!ReadReflectedObjectNameLocked(class_object, name)) return false;
+            if (name == expected) return true;
+            std::uintptr_t next{};
+            if (!ReadNullablePointerAt(
+                    *memory, class_object,
+                    Layout(profile, "ustruct.superStruct"), next) ||
+                next == class_object) {
+                return false;
+            }
+            class_object = next;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool FindVehicleFunctionByScanLocked(
+        const std::span<const std::string_view> names,
+        const std::span<const std::string_view> receiver_bases,
+        const std::string_view mode,
+        VehicleFunctionBinding& binding) {
+        if (object_registry.items == 0 || object_registry.count == 0 ||
+            vehicle_function_discovery_complete) {
+            return false;
+        }
+
+        constexpr std::uint32_t kDiscoveryBatch = 4096;
+        const auto end = (std::min)(
+            object_registry.count,
+            vehicle_function_discovery_next_index + kDiscoveryBatch);
+        for (std::uint32_t index = vehicle_function_discovery_next_index;
+             index < end; ++index) {
+            std::uintptr_t object{};
+            std::uint32_t serial{};
+            if (!ReadObjectSlot(*memory, object_registry, index, object, serial) || object == 0) {
+                continue;
+            }
+
+            std::string object_name;
+            if (!ReadReflectedObjectNameLocked(object, object_name) ||
+                std::ranges::find(names, object_name) == names.end()) {
+                continue;
+            }
+
+            std::uintptr_t outer{};
+            if (!ReadPointerAt(
+                    *memory, object, Layout(profile, "object.outer"), outer)) {
+                continue;
+            }
+            std::string outer_name;
+            if (!ReadReflectedObjectNameLocked(outer, outer_name)) continue;
+
+            bool allowed_outer = false;
+            for (const auto base : receiver_bases) {
+                if (outer_name == base || VehicleClassNameMatchesLocked(outer, base)) {
+                    allowed_outer = true;
+                    break;
+                }
+            }
+            if (!allowed_outer) continue;
+
+            VehicleFunctionBinding candidate{};
+            if (!BuildVehicleBindingLocked(object, object_name, mode, candidate)) continue;
+            candidate.receiver =
+                VehicleClassNameMatchesLocked(outer, "HTPlayerCharacter")
+                    ? VehicleReceiverKind::Pawn
+                    : VehicleReceiverKind::Controller;
+            binding = candidate;
+            vehicle_function_discovery_next_index = index + 1U;
+            return true;
+        }
+
+        vehicle_function_discovery_next_index = end;
+        vehicle_function_discovery_complete = end >= object_registry.count;
         return false;
     }
 
@@ -7714,78 +7818,144 @@ struct Ue5NteAdapter::State {
         return false;
     }
 
-    void BuildVehicleCatalogLocked() noexcept {
-        if (vehicle_catalog_attempted &&
-            vehicle_catalog_generation == object_generation) return;
-        vehicle_catalog_attempted = true;
-        vehicle_catalog_generation = object_generation;
-        vehicle_ids.clear();
-
-        const auto* names = Symbol("ue5.FNamePool");
-        if (!names || !names->Available()) return;
-        const auto blocks_offset = Layout(profile, "names.blocksOffset");
-        const auto block_bits = Layout(profile, "names.blockBits", 16);
-        const auto entry_stride = Layout(profile, "names.entryStride", 2);
-        const auto length_shift = Layout(profile, "names.headerLengthShift", 6);
-        if (blocks_offset < 0 || block_bits <= 0 || block_bits >= 31 || entry_stride <= 0 ||
-            length_shift <= 0 || length_shift >= 16) return;
-
-        const std::uint64_t entries_per_block = std::uint64_t{1} << block_bits;
-        auto block_at = [&](std::uint32_t block_index, std::uintptr_t& block) {
-            std::int64_t slot_offset{};
-            std::uintptr_t block_slot{};
-            return AddLayoutOffset(blocks_offset,
-                       static_cast<std::int64_t>(block_index) * sizeof(std::uintptr_t), slot_offset) &&
-                AddAddress(names->address, slot_offset, block_slot) &&
-                ReadValue(*memory, block_slot, block) && block != 0;
-        };
-
-        std::uint32_t newest_block{};
-        bool found{};
-        for (std::uint32_t block_index = kMaximumNameBlocks; block_index-- > 0;) {
-            std::uintptr_t block{};
-            if (block_at(block_index, block)) {
-                newest_block = block_index; found = true; break;
-            }
+    [[nodiscard]] bool FindVehicleDataTableLocked(
+        std::uintptr_t& table) noexcept {
+        table = 0;
+        if (vehicle_data_table != 0 &&
+            vehicle_data_table_generation == object_generation) {
+            table = vehicle_data_table;
+            return true;
         }
-        if (!found) return;
 
-        std::unordered_set<std::string> seen;
-        const std::uint32_t lowest = newest_block >= kMaximumScannedNameBlocks
-            ? newest_block - kMaximumScannedNameBlocks + 1U : 0U;
-        for (std::uint32_t block_index = newest_block;; --block_index) {
-            std::uintptr_t block{};
-            if (!block_at(block_index, block)) {
-                if (block_index == lowest) break;
+        vehicle_data_table = 0;
+        vehicle_data_table_generation = object_generation;
+        if (object_registry.items == 0 || object_registry.count == 0) return false;
+
+        std::uintptr_t fallback{};
+        for (std::uint32_t index{}; index < object_registry.count; ++index) {
+            std::uintptr_t object{};
+            std::uint32_t serial{};
+            if (!ReadObjectSlot(*memory, object_registry, index, object, serial) || object == 0) {
                 continue;
             }
-            std::uint64_t entries = entries_per_block;
-            if (block_index == newest_block) {
-                entries = 0;
-                for (std::uint64_t entry_index = entries_per_block; entry_index-- > 0;) {
-                    std::uintptr_t entry{};
-                    if (!AddAddress(block, static_cast<std::int64_t>(entry_index * entry_stride), entry)) break;
-                    std::uint16_t header{};
-                    if (!ReadValue(*memory, entry, header)) break;
-                    if (header != 0) { entries = entry_index + 1U; break; }
-                }
+
+            std::string object_name;
+            if (!ReadReflectedObjectNameLocked(object, object_name)) continue;
+
+            std::uintptr_t class_object{};
+            if (!ReadPointerAt(
+                    *memory, object, Layout(profile, "object.class"), class_object)) {
+                continue;
             }
-            for (std::uint64_t entry_index = entries; entry_index-- > 0;) {
-                std::uintptr_t entry{};
-                if (!AddAddress(block, static_cast<std::int64_t>(entry_index * entry_stride), entry)) break;
-                std::uint16_t header{};
-                if (!ReadValue(*memory, entry, header)) break;
-                const std::size_t length = static_cast<std::size_t>(header >> length_shift);
-                if (length == 0 || length > 128) continue;
-                std::string value(length, '\0');
-                if (!memory->Read(entry + sizeof(header), value.data(), value.size())) break;
-                if (!ContainsVehicleName(value) || value.size() > ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES) continue;
-                if (value.size() >= 2 && value.ends_with("_C")) continue;
-                if (seen.insert(value).second) vehicle_ids.push_back(std::move(value));
+            std::string class_name;
+            if (!ReadReflectedObjectNameLocked(class_object, class_name) ||
+                class_name != "DataTable") {
+                continue;
             }
-            if (block_index == lowest) break;
+
+            std::uintptr_t row_struct{};
+            if (!ReadPointerAt(
+                    *memory, object, Layout(profile, "dataTable.rowStruct", -1), row_struct)) {
+                continue;
+            }
+            std::string row_struct_name;
+            if (!ReadReflectedObjectNameLocked(row_struct, row_struct_name)) continue;
+
+            const bool exact_name =
+                object_name == "DT_VehicleData" || object_name == "DT_vehicledata";
+            if (exact_name && ContainsVehicleName(row_struct_name)) {
+                table = object;
+                vehicle_data_table = object;
+                return true;
+            }
+            if (fallback == 0 && exact_name) fallback = object;
+
+            if (fallback == 0 &&
+                ContainsVehicleName(object_name) &&
+                ContainsVehicleName(row_struct_name)) {
+                fallback = object;
+            }
         }
-        std::ranges::sort(vehicle_ids);
+
+        if (fallback != 0) {
+            table = fallback;
+            vehicle_data_table = fallback;
+            return true;
+        }
+        return false;
+    }
+
+    void BuildVehicleCatalogLocked() noexcept {
+        const auto sequence = tick_sequence.load(std::memory_order_relaxed);
+        if (vehicle_catalog_attempted &&
+            vehicle_catalog_generation == object_generation &&
+            sequence < vehicle_catalog_next_retry_sequence) {
+            return;
+        }
+
+        vehicle_catalog_attempted = true;
+        vehicle_catalog_generation = object_generation;
+        vehicle_catalog_next_retry_sequence = sequence + 120U;
+        vehicle_ids.clear();
+
+        std::uintptr_t table{};
+        if (!FindVehicleDataTableLocked(table)) return;
+
+        const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
+        SparseMapView map;
+        if (row_map_offset < 0 ||
+            !ReadSparseMapViewLocked(
+                table + static_cast<std::uintptr_t>(row_map_offset), map) ||
+            map.num <= 0) {
+            return;
+        }
+
+        const auto element_bytes = static_cast<std::size_t>(map.num) *
+            static_cast<std::size_t>(map.stride);
+        if (element_bytes == 0 || element_bytes > 1024U * 1024U) return;
+
+        std::vector<std::uint8_t> elements(element_bytes);
+        if (!memory->Read(map.data, elements.data(), elements.size())) return;
+
+        std::unordered_set<std::string> seen;
+        seen.reserve(static_cast<std::size_t>(map.num - map.num_free));
+
+        for (std::int32_t slot{}; slot < map.num; ++slot) {
+            const auto unsigned_slot = static_cast<std::uint32_t>(slot);
+            if ((map.flags[static_cast<std::size_t>(unsigned_slot) / 32U] &
+                    (1U << (unsigned_slot & 31U))) == 0) {
+                continue;
+            }
+
+            const auto* element = elements.data() +
+                static_cast<std::size_t>(slot) * static_cast<std::size_t>(map.stride);
+            std::uint32_t comparison_index{};
+            std::uint32_t number{};
+            std::uintptr_t row{};
+            std::memcpy(&comparison_index, element, sizeof(comparison_index));
+            std::memcpy(
+                &number, element + sizeof(comparison_index), sizeof(number));
+            std::memcpy(
+                &row, element + static_cast<std::size_t>(map.row_offset), sizeof(row));
+            if (row == 0) continue;
+
+            std::string row_name;
+            if (!ResolveFNameLocked(comparison_index, number, row_name) ||
+                row_name.empty() ||
+                row_name.size() > ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES ||
+                !ContainsVehicleName(row_name)) {
+                continue;
+            }
+            if (seen.insert(row_name).second) {
+                vehicle_ids.push_back(std::move(row_name));
+            }
+        }
+
+        if (!vehicle_ids.empty()) {
+            // This is the real DT_VehicleData row order; do not replace it with
+            // an unrelated global FNamePool enumeration.
+            vehicle_catalog_next_retry_sequence = sequence + 3600U;
+        }
     }
 
     bool ApplySummonedVehicleLocked(const std::uint64_t sequence) noexcept {
@@ -7882,13 +8052,30 @@ struct Ue5NteAdapter::State {
                 "HTPlayerController", "HTPlayerCharacter"};
             static constexpr std::array<std::string_view, 3> vehicle_outers{
                 "HTWheeledVehicle", "HTWheeledVehicleDrivable", "HTVehicleMovementComponent"};
-            if (vehicle_bindings.current_vehicle.function == 0 &&
-                !FindVehicleFunctionLocked("BP_GetCurrentDriveVehicle", controller_outers, "ObjectReturn",
-                    vehicle_bindings.current_vehicle)) {
-                static constexpr std::array<std::string_view, 2> fallback{
+            if (vehicle_bindings.current_vehicle.function == 0) {
+                static constexpr std::array<std::string_view, 2> receiver_outers{
                     "HTPlayerController", "HTPlayerCharacter"};
-                if (!FindVehicleFunctionLocked("BP_GetCurrentDirvingVehicle", fallback, "ObjectReturn",
-                        vehicle_bindings.current_vehicle)) return false;
+                if (!FindVehicleFunctionLocked(
+                        "BP_GetCurrentDriveVehicle", receiver_outers, "ObjectReturn",
+                        vehicle_bindings.current_vehicle) &&
+                    !FindVehicleFunctionLocked(
+                        "BP_GetCurrentDirvingVehicle", receiver_outers, "ObjectReturn",
+                        vehicle_bindings.current_vehicle) &&
+                    !FindVehicleFunctionLocked(
+                        "GetCurrentDrivingVehicle", receiver_outers, "ObjectReturn",
+                        vehicle_bindings.current_vehicle) &&
+                    !FindVehicleFunctionLocked(
+                        "GetCurrentVehicle", receiver_outers, "ObjectReturn",
+                        vehicle_bindings.current_vehicle)) {
+                    static constexpr std::array<std::string_view, 4> names{
+                        "BP_GetCurrentDriveVehicle",
+                        "BP_GetCurrentDirvingVehicle",
+                        "GetCurrentDrivingVehicle",
+                        "GetCurrentVehicle"};
+                    static_cast<void>(FindVehicleFunctionByScanLocked(
+                        names, receiver_outers, "ObjectReturn",
+                        vehicle_bindings.current_vehicle));
+                }
             }
             if (vehicle_bindings.speed_kmh.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", vehicle_outers, "FloatReturn", vehicle_bindings.speed_kmh));
@@ -7904,11 +8091,101 @@ struct Ue5NteAdapter::State {
             if (vehicle_bindings.set_wheel_friction.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("SetEnableWheelFriction", vehicle_outers, "BoolInput", vehicle_bindings.set_wheel_friction));
             }
-            alignas(8) std::array<std::uint8_t, 8> out{};
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                    vehicle_bindings.current_vehicle.function, out.data(), out.size())) return false;
             std::uintptr_t vehicle{};
-            std::memcpy(&vehicle, out.data() + vehicle_bindings.current_vehicle.return_offset, sizeof(vehicle));
+            if (vehicle_bindings.current_vehicle.function != 0) {
+                alignas(8) std::array<std::uint8_t, 8> out{};
+                const auto receiver = vehicle_bindings.current_vehicle.receiver ==
+                    VehicleReceiverKind::Pawn ? player_pawn : player_controller;
+                if (receiver != 0 &&
+                    InvokeProcessEventGuarded(
+                        process_event_invoker, receiver,
+                        vehicle_bindings.current_vehicle.function,
+                        out.data(), out.size())) {
+                    std::memcpy(
+                        &vehicle,
+                        out.data() + vehicle_bindings.current_vehicle.return_offset,
+                        sizeof(vehicle));
+                }
+            }
+
+            if (vehicle == 0 || !ReadableRange(*memory, vehicle, 0x20U)) {
+                // Reflection differs between builds. Fall back to the actor that contains the
+                // local player or explicitly reports the local PlayerController/Pawn as Owner.
+                const auto sequence = tick_sequence.load(std::memory_order_relaxed);
+                if (actor_frame_cache == nullptr ||
+                    actor_world_generation != world_generation ||
+                    actor_frame_cache->sequence < sequence) {
+                    RefreshActors(sequence);
+                }
+
+                double best_score = -1.0;
+                std::uintptr_t best_actor{};
+                if (actor_frame_cache) {
+                    for (const auto& entity : actor_frame_cache->entities) {
+                        const auto class_it =
+                            actor_frame_cache->class_names.find(entity.class_id);
+                        if (class_it == actor_frame_cache->class_names.end() ||
+                            !ContainsVehicleName(class_it->second) ||
+                            entity.actor == 0) {
+                            continue;
+                        }
+
+                        const double dx =
+                            entity.bounds_center[0] - player_position[0];
+                        const double dy =
+                            entity.bounds_center[1] - player_position[1];
+                        const double dz =
+                            entity.bounds_center[2] - player_position[2];
+                        const double distance = std::sqrt(
+                            dx * dx + dy * dy + dz * dz);
+                        if (distance > 900.0) continue;
+
+                        double score = 1800.0 - distance;
+                        const bool contains_player =
+                            player_position[0] >= entity.bounds_center[0] -
+                                entity.bounds_extent[0] - 120.0 &&
+                            player_position[0] <= entity.bounds_center[0] +
+                                entity.bounds_extent[0] + 120.0 &&
+                            player_position[1] >= entity.bounds_center[1] -
+                                entity.bounds_extent[1] - 120.0 &&
+                            player_position[1] <= entity.bounds_center[1] +
+                                entity.bounds_extent[1] + 120.0 &&
+                            player_position[2] >= entity.bounds_center[2] -
+                                entity.bounds_extent[2] - 160.0 &&
+                            player_position[2] <= entity.bounds_center[2] +
+                                entity.bounds_extent[2] + 160.0;
+                        if (contains_player) score += 4000.0;
+
+                        ReflectedPropertyInfo owner_property;
+                        if (entity.class_object != 0 &&
+                            FindReflectedPropertyLocked(
+                                entity.class_object, "Owner", owner_property, true) &&
+                            owner_property.type == "ObjectProperty" &&
+                            owner_property.element_size == 8 &&
+                            owner_property.offset >= 0) {
+                            std::uintptr_t owner{};
+                            if (ReadValue(
+                                    *memory,
+                                    entity.actor +
+                                        static_cast<std::uintptr_t>(owner_property.offset),
+                                    owner)) {
+                                if (owner == player_controller) score += 10000.0;
+                                else if (owner == player_pawn) score += 8500.0;
+                            }
+                        }
+
+                        if (score > best_score) {
+                            best_score = score;
+                            best_actor = entity.actor;
+                        }
+                    }
+                }
+
+                if (best_actor != 0 && best_score >= 1800.0) {
+                    vehicle = best_actor;
+                }
+            }
+
             if (vehicle == 0 || !ReadableRange(*memory, vehicle, 0x20U)) {
                 vehicle_valid = false;
                 current_vehicle_object = 0;
@@ -8021,6 +8298,37 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    AnomalyStatusV1 VehicleCurrentClassName(
+        char* destination, std::size_t* inout_size) noexcept {
+        if (inout_size == nullptr) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(
+                ANOMALY_STATUS_V1_FAILED,
+                "vehicle class name must be read on Game thread");
+        }
+        std::scoped_lock lock(mutex);
+        if (!RefreshVehicleLocked() || current_vehicle_object == 0) {
+            return Status(
+                ANOMALY_STATUS_V1_NOT_FOUND,
+                "current driving vehicle is unavailable");
+        }
+
+        std::uintptr_t class_object{};
+        if (!ReadPointerAt(
+                *memory, current_vehicle_object,
+                Layout(profile, "object.class"), class_object)) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle class is unreadable");
+        }
+        std::string class_name;
+        if (!ReadReflectedObjectNameLocked(class_object, class_name) ||
+            class_name.empty()) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle class name is unreadable");
+        }
+        return CopyString(class_name, destination, inout_size);
+    }
+
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
@@ -8088,8 +8396,14 @@ struct Ue5NteAdapter::State {
         }
 
         const auto& binding = vehicle_bindings.summon_vehicle;
+        const auto summon_receiver = binding.receiver == VehicleReceiverKind::Pawn
+            ? player_pawn : player_controller;
+        if (summon_receiver == 0) {
+            pending_vehicle_summon.active = false;
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "local player receiver is unavailable");
+        }
         if (binding.parameter_kind == VehicleSummonParameterKind::NoArgs) {
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+            if (!InvokeProcessEventGuarded(process_event_invoker, summon_receiver,
                     binding.function, nullptr, 0)) {
                 pending_vehicle_summon.active = false;
                 return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
@@ -8142,7 +8456,7 @@ struct Ue5NteAdapter::State {
                 pending_vehicle_summon.active = false;
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "unsupported summon parameter ABI");
             }
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+            if (!InvokeProcessEventGuarded(process_event_invoker, summon_receiver,
                     binding.function, parameters.data(), binding.parms_size)) {
                 pending_vehicle_summon.active = false;
                 return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
@@ -13339,7 +13653,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteVehicleServiceV1), ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk,
-            VehicleIdCountThunk, VehicleIdAtThunk, SetSummonVehicleIdThunk};
+            VehicleIdCountThunk, VehicleIdAtThunk, SetSummonVehicleIdThunk,
+            VehicleCurrentClassNameThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -13706,6 +14021,14 @@ private:
         void* user, AnomalyStringViewV1 id) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->SetSummonVehicleId(id) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCurrentClassNameThunk(
+        void* user, char* destination, std::size_t* inout_size) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleCurrentClassName(destination, inout_size)
+            : StoppedStatus();
     }
 
 
