@@ -30,10 +30,12 @@ struct Context final {
     // These identify the skill that was active around the captured damage event.
     AnomalyGenerationHandleV1 captured_skill{};
     AnomalyGenerationHandleV1 captured_ability{};
+    AnomalyGenerationHandleV1 captured_target{};
     int32_t captured_input_id{-1};
     uint64_t captured_damage_sequence{};
     uint64_t captured_tick_sequence{};
     std::string captured_ability_path;
+    std::string captured_target_path;
 
     bool enabled{};
     bool captured{};
@@ -225,10 +227,12 @@ void ArmForNextAttack(Context& context) {
     context.replay_done = 0;
     context.captured_skill = {};
     context.captured_ability = {};
+    context.captured_target = {};
     context.captured_input_id = -1;
     context.captured_damage_sequence = 0;
     context.captured_tick_sequence = 0;
     context.captured_ability_path.clear();
+    context.captured_target_path.clear();
     context.status = "自动等待玩家下一次攻击";
 
     // Starting at the current tail prevents an old combat event from being mistaken
@@ -272,15 +276,35 @@ bool CaptureNextAttack(Context& context) {
         context.combat_cursor = event.sequence;
 
         if (event.kind != ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE ||
-            !SameHandle(event.source, combatant.character)) {
+            !SameHandle(event.source, combatant.character) ||
+            event.target.id == 0 || SameHandle(event.target, combatant.character)) {
             continue;
         }
 
         context.captured = true;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
+        context.captured_target = event.target;
         context.captured_ability_path =
             ReadAbilityPath(context.skills, context.captured_ability);
+        if (context.combat->participant_path_utf8 != nullptr) {
+            size_t size = 0;
+            const auto sizing = context.combat->participant_path_utf8(
+                context.combat->user, event.target, nullptr, &size);
+            if (sizing.code == ANOMALY_STATUS_V1_BUFFER_TOO_SMALL && size != 0) {
+                context.captured_target_path.resize(size);
+                if (context.combat->participant_path_utf8(
+                        context.combat->user, event.target,
+                        context.captured_target_path.data(), &size).code == ANOMALY_STATUS_V1_OK) {
+                    if (!context.captured_target_path.empty() &&
+                        context.captured_target_path.back() == '\\0') {
+                        context.captured_target_path.pop_back();
+                    }
+                } else {
+                    context.captured_target_path.clear();
+                }
+            }
+        }
         context.status = "已自动捕获下一次玩家攻击";
         return true;
     }
@@ -470,8 +494,12 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (context->captured) {
         ui->text(ui->user, anomaly::sdk::StringView(
             context->captured_ability_path.empty()
-                ? "已捕获攻击动作"
+                ? "已捕获玩家→目标的攻击/伤害事件"
                 : context->captured_ability_path));
+        if (!context->captured_target_path.empty()) {
+            ui->text(ui->user, anomaly::sdk::StringView(
+                "目标：" + context->captured_target_path));
+        }
         const std::string progress =
             "进度：" + std::to_string(context->replay_done) + "/" +
             std::to_string(context->replay_count);
