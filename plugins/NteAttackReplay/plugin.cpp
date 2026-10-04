@@ -323,7 +323,7 @@ bool CaptureNextAttack(Context& context) {
                         context.combat->user, event.target,
                         context.captured_target_path.data(), &size).code == ANOMALY_STATUS_V1_OK) {
                     if (!context.captured_target_path.empty() &&
-                        context.captured_target_path.back() == '\\0') {
+                        context.captured_target_path.back() == '\0') {
                         context.captured_target_path.pop_back();
                     }
                 } else {
@@ -449,7 +449,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     if (!ReplayOnce(*context)) {
         context->replaying = false;
-        context->status = context->captured_has_skill\n            ? "重放失败：当前技能已不可用"\n            : "已记录普通攻击，但当前 ABI 没有直接注入普通攻击事件的接口";
+        context->status = context->captured_has_skill
+            ? "重放失败：当前技能已不可用"
+            : "已记录普通攻击，但当前 ABI 没有直接注入普通攻击事件的接口";
         ArmForNextAttack(*context);
         return;
     }
