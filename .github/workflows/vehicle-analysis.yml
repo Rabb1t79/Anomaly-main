@@ -9,22 +9,16 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
+        with: {lfs: true}
       - name: Extract Tokky strings
         shell: pwsh
         run: |
-          python - <<'PY'
-          import pathlib,re
-          p=pathlib.Path('Tokky-NTE.dll').read_bytes()
-          strings=re.findall(rb'[ -~]{6,}',p)
-          keys=[b'SafeSetVehicleTransform',b'BeginDeferredActorSpawnFromClass',b'FinishSpawningActor',b'LoadClassAsset_Blocking',b'ReSetupEngineAndTransmission',b'SetDelayedVelocityRestore',b'GetActorForwardVector',b'K2_GetActorLocation',b'Player',b'SetOwner',b'Owner',b'Instigator',b'GetAllActorsOfClass']
-          with open('tokky_keys.txt','w') as f:
-            for s in strings:
-              if any(k.lower() in s.lower() for k in keys): f.write(s.decode('ascii','ignore')+'\n')
-          PY
+          $p=[IO.File]::ReadAllBytes('Tokky-NTE.dll')
+          $keys=@('SafeSetVehicleTransform','BeginDeferredActorSpawnFromClass','FinishSpawningActor','LoadClassAsset_Blocking','ReSetupEngineAndTransmission','SetDelayedVelocityRestore','GetActorForwardVector','K2_GetActorLocation','SetOwner','GetOwner','Instigator','GetAllActorsOfClass','VehicleDataAsset','SummonVehicleTemplateMap')
+          $out=New-Object Text.StringBuilder
+          $cur=New-Object Text.StringBuilder
+          foreach($b in $p){ if($b -ge 32 -and $b -le 126){[void]$cur.Append([char]$b)} else { if($cur.Length -ge 6){$s=$cur.ToString(); foreach($k in $keys){if($s.ToLower().Contains($k.ToLower())){[void]$out.AppendLine($s);break}}};$cur.Clear()} }
+          Set-Content tokky_keys.txt $out.ToString()
           Get-Content tokky_keys.txt
       - uses: actions/upload-artifact@v4
-        with:
-          name: tokky-analysis
-          path: tokky_keys.txt
+        with: {name: tokky-analysis, path: tokky_keys.txt}
