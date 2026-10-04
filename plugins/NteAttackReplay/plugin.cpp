@@ -252,7 +252,7 @@ void ArmForNextAttack(Context& context) {
     context.captured_has_skill = false;
     context.captured_ability_path.clear();
     context.captured_target_path.clear();
-    context.status = "自动等待玩家下一次攻击";
+    context.status = context.enabled ? "自动等待玩家下一次攻击" : "自动记录中：重放功能未启用";
 
     // Starting at the current tail prevents an old combat event from being mistaken
     // for the next attack after a world change or plugin restart.
@@ -430,8 +430,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
 
-    if (!context->enabled) return;
-
+    // Recording is always active. The enable switch only gates replay actions.
     if (!context->captured && !context->replaying) {
         CaptureNextAttack(*context);
     }
@@ -500,7 +499,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         }
 
         ui->text(ui->user, anomaly::sdk::StringView(
-            context->enabled ? context->status : "已禁用：不会记录或重放攻击"));
+            context->enabled ? context->status : "自动记录中：重放功能未启用"));
 
         if (ui->separator != nullptr) ui->separator(ui->user);
 
@@ -536,7 +535,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             "无需手动录制：插件自动等待下一次玩家攻击"));
     }
 
-    if (!context->replaying && context->captured) {
+    if (context->enabled && !context->replaying && context->captured) {
         if (ui->button(
                 ui->user, anomaly::sdk::StringView("开始重放"), 0.0F, 0.0F) != 0) {
             context->replay_done = 0;
