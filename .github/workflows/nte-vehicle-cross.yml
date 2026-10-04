@@ -1,0 +1,48 @@
+name: nte-vehicle-cross
+
+on:
+  push:
+    branches:
+      - nte-vehicle-final-20261004
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Windows cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 cmake
+
+      - name: Configure NTE Vehicle plugin
+        run: |
+          cmake -S plugins/NteVehicle -B .build/nte-vehicle-mingw \
+            -G Ninja \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build NTE Vehicle plugin
+        run: |
+          cmake --build .build/nte-vehicle-mingw --parallel
+          out="$GITHUB_WORKSPACE/dist/NteVehicle-0.7.0-windows-x64"
+          mkdir -p "$out"
+          cp .build/nte-vehicle-mingw/plugin.dll "$out/plugin.dll"
+          cp plugins/NteVehicle/manifest.json "$out/manifest.json"
+          test -f "$out/plugin.dll"
+          test -f "$out/manifest.json"
+          test "$(find "$out" -maxdepth 1 -type f | wc -l)" -eq 2
+          test "$(find "$out" -maxdepth 1 -type f -printf '%f\\n' | sort | tr '\\n' ' ')" = "manifest.json plugin.dll "
+          (cd dist && zip -j "NteVehicle-0.7.0-windows-x64.zip" "NteVehicle-0.7.0-windows-x64/plugin.dll" "NteVehicle-0.7.0-windows-x64/manifest.json")
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteVehicle-0.7.0-windows-x64
+          path: dist/NteVehicle-0.7.0-windows-x64.zip
+          if-no-files-found: error
