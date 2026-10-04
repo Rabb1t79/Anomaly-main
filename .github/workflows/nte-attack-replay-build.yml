@@ -1,0 +1,37 @@
+name: nte-attack-replay-build
+
+on:
+  push:
+    branches:
+      - feature/nte-attack-replay
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-vs2022
+
+      - name: Build attack replay plugin
+        shell: pwsh
+        run: cmake --build --preset windows-relwithdebinfo --target anomaly_builtin_nte_attack_replay --parallel
+
+      - name: Verify package
+        shell: pwsh
+        run: |
+          $dir = ".build/windows-vs2022/package/NteAttackReplay"
+          if (!(Test-Path "$dir/plugin.dll")) { throw "plugin.dll was not produced" }
+          if (!(Test-Path "$dir/manifest.json")) { throw "manifest.json was not produced" }
+          Get-Item "$dir/plugin.dll", "$dir/manifest.json" | Format-List FullName,Length
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-1.1.0
+          path: .build/windows-vs2022/package/NteAttackReplay
+          if-no-files-found: error
