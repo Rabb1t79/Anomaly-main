@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <new>
 #include <cstring>
 #include <string>
 #include <string_view>
