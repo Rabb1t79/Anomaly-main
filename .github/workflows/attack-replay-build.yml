@@ -32,7 +32,8 @@ jobs:
         shell: pwsh
         run: |
           $b="$env:GITHUB_WORKSPACE\.build\attack-replay"
-          cmake --build $b --config Release --parallel
+          cmake --build $b --config Release --parallel 2>&1 | Tee-Object "$env:GITHUB_WORKSPACE\build.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\dist\NteAttackReplay-1.1.0-windows-x64" | Out-Null
           Copy-Item "$b\Release\plugin.dll" "$env:GITHUB_WORKSPACE\dist\NteAttackReplay-1.1.0-windows-x64\plugin.dll"
           Copy-Item "$env:GITHUB_WORKSPACE\plugins\NteAttackReplay\manifest.json" "$env:GITHUB_WORKSPACE\dist\NteAttackReplay-1.1.0-windows-x64\manifest.json"
@@ -43,3 +44,11 @@ jobs:
           name: NteAttackReplay-1.1.0-windows-x64
           path: dist/NteAttackReplay-1.1.0-windows-x64.zip
           if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-build-log
+          path: build.log
+          if-no-files-found: warn
