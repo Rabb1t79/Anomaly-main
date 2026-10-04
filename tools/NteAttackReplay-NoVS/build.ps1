@@ -1,6 +1,6 @@
 param(
     [string]$SdkRoot = "",
-    [string]$LlvmRoot = "",
+    [string]$LlvmRoot = "I:\llvm-mingw-20260922-msvcrt-x86_64",
     [string]$CMake = "",
     [string]$Generator = "MinGW Makefiles"
 )
@@ -19,39 +19,23 @@ function Find-Existing([string[]]$Candidates) {
     return ""
 }
 
-if (-not $CMake) { $CMake = (Get-Command cmake -ErrorAction SilentlyContinue).Source }
+if (-not $CMake) {
+    $cmakeCommand = Get-Command cmake.exe -ErrorAction SilentlyContinue
+    if ($cmakeCommand) { $CMake = $cmakeCommand.Source }
+}
 if (-not $CMake) {
     $CMake = Find-Existing @(
         (Join-Path $RepoRoot "cmake\bin\cmake.exe"),
-        "C:\Program Files\CMake\bin\cmake.exe")
+        "C:\Program Files\CMake\bin\cmake.exe"
+    )
 }
-if (-not $CMake) { throw "找不到 cmake.exe，请用 -CMake 指定。" }
+if (-not $CMake) { throw "cmake.exe not found. Use -CMake to specify it." }
 
-if (-not $LlvmRoot) {
-    $LlvmRoot = Find-Existing @(
-        (Join-Path $RepoRoot "llvm-mingw"),
-        (Join-Path $RepoRoot "third_party\llvm-mingw"),
-        "I:\llvm-mingw",
-        "I:\tools\llvm-mingw",
-        "C:\llvm-mingw")
-}
-$Clang = ""
-$Clangxx = ""
-if ($LlvmRoot) {
-    $Clang = Join-Path $LlvmRoot "bin\clang.exe"
-    $Clangxx = Join-Path $LlvmRoot "bin\clang++.exe"
-}
-if (-not (Test-Path $Clangxx)) {
-    $x = Get-Command clang++.exe -ErrorAction SilentlyContinue
-    if ($x) { $Clangxx = $x.Source }
-}
-if (-not (Test-Path $Clang)) {
-    $x = Get-Command clang.exe -ErrorAction SilentlyContinue
-    if ($x) { $Clang = $x.Source }
-}
-if (-not (Test-Path $Clangxx) -or -not (Test-Path $Clang)) {
-    throw "找不到 LLVM/Clang，请用 -LlvmRoot 指向 llvm-mingw 根目录。"
-}
+$LlvmRoot = Find-Existing @($LlvmRoot)
+if (-not $LlvmRoot) { throw "LLVM MinGW not found at I:\llvm-mingw-20260922-msvcrt-x86_64." }
+$Clang = Join-Path $LlvmRoot "bin\clang.exe"
+$Clangxx = Join-Path $LlvmRoot "bin\clang++.exe"
+if (-not (Test-Path $Clang) -or -not (Test-Path $Clangxx)) { throw "clang.exe or clang++.exe is missing from the selected LLVM MinGW directory." }
 
 if (-not $SdkRoot) {
     $SdkRoot = Find-Existing @(
@@ -59,12 +43,12 @@ if (-not $SdkRoot) {
         (Join-Path $RepoRoot "AnomalySDK"),
         (Join-Path $RepoRoot "out\sdk"),
         "I:\AnomalySDK",
-        "I:\AnomalyRuntimeProfiler\AnomalySDK")
+        "I:\AnomalyRuntimeProfiler\AnomalySDK"
+    )
 }
-if (-not $SdkRoot) { throw "找不到 AnomalySDK，请用 -SdkRoot 指定。" }
-
+if (-not $SdkRoot) { throw "AnomalySDK not found. Use -SdkRoot to specify the SDK root." }
 $SdkConfig = Get-ChildItem -Path $SdkRoot -Recurse -Filter "AnomalySDKConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $SdkConfig) { throw "SDK 内找不到 AnomalySDKConfig.cmake。" }
+if (-not $SdkConfig) { throw "AnomalySDKConfig.cmake was not found inside the SDK root." }
 $SdkPrefix = $SdkConfig.Directory.Parent.Parent.Parent.FullName
 
 Write-Host "NTE Attack Replay NoVS build"
@@ -76,28 +60,30 @@ Write-Host "SDK  : $SdkPrefix"
 if (Test-Path $BuildRoot) { Remove-Item $BuildRoot -Recurse -Force }
 if (Test-Path $PackageRoot) { Remove-Item $PackageRoot -Recurse -Force }
 New-Item -ItemType Directory -Force $BuildRoot | Out-Null
-
 $env:CC = $Clang
 $env:CXX = $Clangxx
 $env:LLVM_MINGW_ROOT = $LlvmRoot
-
 $Toolchain = Join-Path $ToolRoot "llvm-mingw-toolchain.cmake"
-& $CMake -S $ToolRoot -B $BuildRoot -G $Generator "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" "-DCMAKE_PREFIX_PATH=$SdkPrefix" "-DAnomalySDK_DIR=$($SdkConfig.Directory.FullName)" "-DANOMALY_SOURCE_ROOT=$RepoRoot"
-if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败。" }
-
+$CMakeArgs = @(
+    "-S", $ToolRoot,
+    "-B", $BuildRoot,
+    "-G", $Generator,
+    "-DCMAKE_TOOLCHAIN_FILE=$Toolchain",
+    "-DCMAKE_PREFIX_PATH=$SdkPrefix",
+    "-DAnomalySDK_DIR=$($SdkConfig.Directory.FullName)",
+    "-DANOMALY_SOURCE_ROOT=$RepoRoot"
+)
+& $CMake @CMakeArgs
+if ($LASTEXITCODE -ne 0) { throw "CMake configure failed." }
 & $CMake --build $BuildRoot --config Release --target anomaly_nte_attack_replay --parallel
-if ($LASTEXITCODE -ne 0) { throw "NTE Attack Replay 编译失败。" }
-
-if (-not (Test-Path (Join-Path $PackageRoot "plugin.dll"))) {
-    throw "编译命令成功，但没有找到 plugin.dll。"
-}
-
+if ($LASTEXITCODE -ne 0) { throw "NTE Attack Replay build failed." }
+$PluginDll = Join-Path $BuildRoot "plugin.dll"
+if (-not (Test-Path $PluginDll)) { throw "Build completed but plugin.dll was not found at $PluginDll." }
+New-Item -ItemType Directory -Force $PackageRoot | Out-Null
+Copy-Item $PluginDll (Join-Path $PackageRoot "plugin.dll") -Force
 Copy-Item (Join-Path $RepoRoot "plugins\NteAttackReplay\manifest.json") (Join-Path $PackageRoot "manifest.json") -Force
 $Locale = Join-Path $RepoRoot "plugins\NteAttackReplay\locales"
-if (Test-Path $Locale) {
-    Copy-Item $Locale (Join-Path $PackageRoot "locales") -Recurse -Force
-}
-
+if (Test-Path $Locale) { Copy-Item $Locale (Join-Path $PackageRoot "locales") -Recurse -Force }
 Write-Host ""
 Write-Host "BUILD OK"
 Write-Host "Package: $PackageRoot"
