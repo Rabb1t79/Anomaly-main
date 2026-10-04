@@ -756,6 +756,15 @@ struct Ue5NteAdapter::State {
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
+    struct VehicleCatalogEntry {
+        std::string id;
+        std::uintptr_t row{};
+        std::uintptr_t table{};
+    };
+    std::vector<VehicleCatalogEntry> vehicle_catalog;
+    std::string selected_vehicle_id;
+    std::uint64_t vehicle_catalog_generation{};
+    std::uint64_t vehicle_catalog_sequence{};
     std::uintptr_t current_vehicle_object{};
     // Host-only state for Tokky's validated SetMaxEngineTorque mutation path.
     std::uintptr_t vehicle_base_movement_component{};
@@ -7587,7 +7596,307 @@ struct Ue5NteAdapter::State {
         }
     }
 
-    AnomalyStatusV1 VehicleSnapshot(AnomalyNteVehicleSnapshotV1* snapshot) noexcept {
+    static std::string VehicleLower(std::string value) {
+        for (char& c : value) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+        return value;
+    }
+
+    bool FindVehicleClassFromObjectLocked(
+        std::uintptr_t object, std::uintptr_t& vehicle_class, std::uint32_t depth = 0) const noexcept {
+        vehicle_class = 0;
+        if (object == 0 || depth > 2) return false;
+        std::uintptr_t object_class{};
+        std::string class_name;
+        if (!ReadPointerAt(*memory, object, Layout(profile, "object.class"), object_class) ||
+            !ReadReflectedObjectNameLocked(object_class, class_name)) return false;
+        const std::string lc = VehicleLower(class_name);
+        if (lc == "class" || lc == "blueprintgeneratedclass") {
+            vehicle_class = object;
+            return true;
+        }
+        std::uintptr_t property{};
+        std::size_t count{};
+        // For a UObject/data asset, follow only semantically interesting object/class
+        // properties. This avoids treating arbitrary references as vehicle classes.
+        if (!ReadPointerAt(*memory, object_class, Layout(profile, "ustruct.propertyLink"), property))
+            return false;
+        while (property != 0 && count++ < 128) {
+            ReflectedPropertyInfo info;
+            if (!ReadReflectedPropertyLocked(property, info)) break;
+            const std::string n = VehicleLower(info.name);
+            if ((n.find("vehicle") != std::string::npos || n.find("class") != std::string::npos ||
+                 n.find("blueprint") != std::string::npos) &&
+                (info.type == "ObjectProperty" || info.type == "ClassProperty") &&
+                info.offset >= 0 && info.element_size == 8) {
+                std::uintptr_t candidate{};
+                if (ReadValue(*memory, object + static_cast<std::uintptr_t>(info.offset), candidate) &&
+                    candidate != 0 && FindVehicleClassFromObjectLocked(candidate, vehicle_class, depth + 1))
+                    return true;
+            }
+            property = info.next;
+        }
+        return false;
+    }
+
+    bool RefreshVehicleCatalogLocked() noexcept {
+        try {
+            if (vehicle_catalog_generation == object_generation && !vehicle_catalog.empty()) return true;
+            vehicle_catalog.clear();
+            if (object_registry.items == 0 || object_registry.count == 0) return false;
+            for (std::uint32_t index{}; index < object_registry.count; ++index) {
+                std::uintptr_t object{};
+                std::uint32_t serial{};
+                if (!ReadObjectSlot(*memory, object_registry, index, object, serial) || object == 0) continue;
+                std::string object_name;
+                std::uintptr_t object_class{};
+                std::string class_name;
+                if (!ReadReflectedObjectNameLocked(object, object_name) ||
+                    VehicleLower(object_name).find("vehicle") == std::string::npos ||
+                    !ReadPointerAt(*memory, object, Layout(profile, "object.class"), object_class) ||
+                    !ReadReflectedObjectNameLocked(object_class, class_name) ||
+                    VehicleLower(class_name) != "datatable") continue;
+                std::uintptr_t row_map{};
+                if (!AddAddress(object, Layout(profile, "dataTable.rowMap"), row_map)) continue;
+                std::uintptr_t data{};
+                std::int32_t count{}, capacity{};
+                if (!ReadValue(*memory, row_map + Layout(profile, "dataTable.rowMapData"), data) ||
+                    !ReadValue(*memory, row_map + Layout(profile, "dataTable.rowMapNum"), count) ||
+                    !ReadValue(*memory, row_map + Layout(profile, "dataTable.rowMapMax"), capacity) ||
+                    data == 0 || count <= 0 || count > 4096 || capacity < count) continue;
+                const auto stride = Layout(profile, "dataTable.rowMapElementStride", 24);
+                const auto row_offset = Layout(profile, "dataTable.rowMapRowOffset", 8);
+                for (std::int32_t row_index{}; row_index < count; ++row_index) {
+                    const std::uintptr_t entry = data +
+                        static_cast<std::uintptr_t>(row_index) * static_cast<std::uintptr_t>(stride);
+                    std::uint32_t comparison_index{}, number{};
+                    std::uintptr_t row{};
+                    if (!ReadValue(*memory, entry, comparison_index) ||
+                        !ReadValue(*memory, entry + 4, number) ||
+                        !ReadValue(*memory, entry + static_cast<std::uintptr_t>(row_offset), row) ||
+                        row == 0 || comparison_index == 0) continue;
+                    std::string id = ResolveNameSnapshotLocked(comparison_index);
+                    if (number != 0) id += "_" + std::to_string(number - 1U);
+                    if (!id.empty()) vehicle_catalog.push_back({std::move(id), row, object});
+                }
+            }
+            std::sort(vehicle_catalog.begin(), vehicle_catalog.end(),
+                [](const VehicleCatalogEntry& a, const VehicleCatalogEntry& b) { return a.id < b.id; });
+            vehicle_catalog.erase(std::unique(vehicle_catalog.begin(), vehicle_catalog.end(),
+                [](const VehicleCatalogEntry& a, const VehicleCatalogEntry& b) { return a.id == b.id; }),
+                vehicle_catalog.end());
+            vehicle_catalog_generation = object_generation;
+            ++vehicle_catalog_sequence;
+            if (selected_vehicle_id.empty() && !vehicle_catalog.empty())
+                selected_vehicle_id = vehicle_catalog.front().id;
+            if (!selected_vehicle_id.empty() &&
+                std::none_of(vehicle_catalog.begin(), vehicle_catalog.end(),
+                    [&](const VehicleCatalogEntry& e) { return e.id == selected_vehicle_id; }))
+                selected_vehicle_id.clear();
+            return !vehicle_catalog.empty();
+        } catch (...) {
+            vehicle_catalog.clear();
+            return false;
+        }
+    }
+
+    bool ResolveSelectedVehicleClassLocked(std::uintptr_t& vehicle_class) noexcept {
+        vehicle_class = 0;
+        if (!RefreshVehicleCatalogLocked() || selected_vehicle_id.empty()) return false;
+        const auto it = std::find_if(vehicle_catalog.begin(), vehicle_catalog.end(),
+            [&](const VehicleCatalogEntry& e) { return e.id == selected_vehicle_id; });
+        if (it == vehicle_catalog.end()) return false;
+        std::uintptr_t row_struct{};
+        std::uintptr_t property{};
+        if (!ReadPointerAt(*memory, it->table, Layout(profile, "dataTable.rowStruct"), row_struct) ||
+            !ReadPointerAt(*memory, row_struct, Layout(profile, "ustruct.propertyLink"), property))
+            return false;
+        std::size_t count{};
+        while (property != 0 && count++ < 128) {
+            ReflectedPropertyInfo info;
+            if (!ReadReflectedPropertyLocked(property, info)) break;
+            const std::string n = VehicleLower(info.name);
+            if ((n.find("vehicle") != std::string::npos || n.find("class") != std::string::npos ||
+                 n.find("asset") != std::string::npos) &&
+                (info.type == "ObjectProperty" || info.type == "ClassProperty") &&
+                info.offset >= 0 && info.element_size == 8) {
+                std::uintptr_t candidate{};
+                if (ReadValue(*memory, it->row + static_cast<std::uintptr_t>(info.offset), candidate) &&
+                    candidate != 0 && FindVehicleClassFromObjectLocked(candidate, vehicle_class))
+                    return true;
+            }
+            property = info.next;
+        }
+        return false;
+    }
+
+    bool BuildVehicleTransformLocked(
+        const std::array<double, 3>& location,
+        std::vector<std::uint8_t>& transform) const noexcept {
+        transform.assign(0x60, 0);
+        const double rotation[4]{0.0, 0.0, 0.0, 1.0};
+        const double scale[4]{1.0, 1.0, 1.0, 0.0};
+        std::memcpy(transform.data(), rotation, sizeof(rotation));
+        std::memcpy(transform.data() + 0x20, location.data(), sizeof(double) * 3);
+        std::memcpy(transform.data() + 0x40, scale, sizeof(scale));
+        return true;
+    }
+
+    bool InvokeStaticSpawnLocked(
+        std::string_view name,
+        const std::vector<std::uint8_t>& transform,
+        std::uintptr_t actor_class,
+        std::uintptr_t actor,
+        std::uintptr_t owner,
+        std::uintptr_t& result) noexcept {
+        result = 0;
+        std::wstring path = L"/Script/Engine.GameplayStatics.";
+        for (const char c : name) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+        std::uintptr_t function{}, library_class{}, receiver{};
+        if (!FindExactObjectLocked(path.c_str(), function) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), library_class) ||
+            !ReadPointerAt(*memory, library_class, Layout(profile, "uclass.classDefaultObject"), receiver))
+            return false;
+        std::uint16_t parms_size{}, return_offset{};
+        std::uint8_t num_parms{};
+        std::uintptr_t property{};
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "ustruct.propertyLink"), property) ||
+            parms_size > 4096 || num_parms > 16) return false;
+        std::vector<std::uint8_t> parameters(parms_size);
+        std::size_t seen{};
+        while (property != 0 && seen++ < num_parms + 2U) {
+            ReflectedPropertyInfo info;
+            if (!ReadReflectedPropertyLocked(property, info) ||
+                info.offset < 0 || info.element_size <= 0) return false;
+            const std::size_t offset = static_cast<std::size_t>(info.offset);
+            if (offset + static_cast<std::size_t>(info.element_size) > parameters.size()) return false;
+            const std::string n = VehicleLower(info.name);
+            if (n.find("worldcontextobject") != std::string::npos && info.element_size == 8)
+                std::memcpy(parameters.data() + offset, &player_controller, 8);
+            else if (n == "actorclass" && info.element_size == 8)
+                std::memcpy(parameters.data() + offset, &actor_class, 8);
+            else if (n.find("spawntransform") != std::string::npos &&
+                     info.element_size == transform.size())
+                std::memcpy(parameters.data() + offset, transform.data(), transform.size());
+            else if (n.find("collisionhandlingoverride") != std::string::npos && info.element_size >= 1)
+                parameters[offset] = 1;
+            else if (n == "owner" && info.element_size == 8)
+                std::memcpy(parameters.data() + offset, &owner, 8);
+            else if (n.find("transformscalemethod") != std::string::npos && info.element_size >= 1)
+                parameters[offset] = 0;
+            else if (n == "actor" && info.element_size == 8)
+                std::memcpy(parameters.data() + offset, &actor, 8);
+            property = info.next;
+        }
+        if (!InvokeProcessEventGuarded(process_event_invoker, receiver, function,
+                parameters.data(), parameters.size())) return false;
+        if (return_offset != 0xFFFFu && static_cast<std::size_t>(return_offset) + 8 <= parameters.size())
+            std::memcpy(&result, parameters.data() + return_offset, 8);
+        return true;
+    }
+
+    AnomalyStatusV1 VehicleSummon() noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle summon must run on Game thread");
+        std::scoped_lock lock(mutex);
+        if (!NteVehicleProfileAvailable() || player_controller == 0 || player_pawn == 0 ||
+            !process_event_invoker)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle summon host state is unavailable");
+        if (!RefreshVehicleCatalogLocked() || selected_vehicle_id.empty())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "Vehicle table is unavailable or no vehicle is selected");
+        std::uintptr_t actor_class{};
+        if (!ResolveSelectedVehicleClassLocked(actor_class))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "selected Vehicle row has no validated actor class");
+        std::uintptr_t root{};
+        std::array<double, 3> player_location{};
+        if (!ReadPointerAt(*memory, player_pawn, Layout(profile, "actor.rootComponent"), root) ||
+            !ReadValue(*memory, root + Layout(profile, "sceneComponent.location"), player_location) ||
+            !std::all_of(player_location.begin(), player_location.end(),
+                [](double v) { return std::isfinite(v) && std::abs(v) < 50000000.0; }))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "player location is unavailable");
+        const std::array<double, 3> spawn_location{
+            player_location[0] - 2000.0,
+            player_location[1] + 2000.0,
+            player_location[2] + 2000.0};
+        std::vector<std::uint8_t> transform;
+        if (!BuildVehicleTransformLocked(spawn_location, transform))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle spawn transform construction failed");
+        std::uintptr_t spawned{};
+        if (!InvokeStaticSpawnLocked("BeginDeferredActorSpawnFromClass", transform,
+                actor_class, 0, player_controller, spawned) || spawned == 0)
+            return Status(ANOMALY_STATUS_V1_FAILED, "Tokky-compatible deferred vehicle spawn failed");
+        std::uintptr_t finished{};
+        if (!InvokeStaticSpawnLocked("FinishSpawningActor", transform,
+                actor_class, spawned, player_controller, finished))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle FinishSpawningActor failed");
+        if (finished != 0) spawned = finished;
+        std::uintptr_t set_owner{};
+        if (FindExactObjectLocked(L"/Script/Engine.Actor.SetOwner", set_owner)) {
+            std::uint16_t size{};
+            std::uint8_t num{};
+            std::uintptr_t property{};
+            if (ReadValue(*memory, set_owner + Layout(profile, "ufunction.parmsSize"), size) &&
+                ReadValue(*memory, set_owner + Layout(profile, "ufunction.numParms"), num) &&
+                ReadPointerAt(*memory, set_owner, Layout(profile, "ustruct.propertyLink"), property) &&
+                num == 1 && size >= 8) {
+                ReflectedPropertyInfo info;
+                if (ReadReflectedPropertyLocked(property, info) && info.offset >= 0 && info.element_size == 8) {
+                    std::vector<std::uint8_t> p(size);
+                    std::memcpy(p.data() + info.offset, &player_controller, 8);
+                    if (!InvokeProcessEventGuarded(process_event_invoker, spawned, set_owner, p.data(), p.size()))
+                        return Status(ANOMALY_STATUS_V1_FAILED, "vehicle owner assignment failed");
+                }
+            }
+        }
+        std::string spawned_class_name;
+        std::uintptr_t spawned_class{};
+        if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class) ||
+            !ReadReflectedObjectNameLocked(spawned_class, spawned_class_name) ||
+            VehicleLower(spawned_class_name).find("vehicle") == std::string::npos)
+            return Status(ANOMALY_STATUS_V1_FAILED, "spawned object did not validate as a Vehicle actor");
+        current_vehicle_object = spawned;
+        vehicle_valid = true;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleIdCount(std::uint32_t* count) noexcept {
+        if (!count) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle catalog must run on Game thread");
+        std::scoped_lock lock(mutex);
+        if (!RefreshVehicleCatalogLocked()) { *count = 0; return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "Vehicle data table is unavailable"); }
+        *count = static_cast<std::uint32_t>((std::min)(vehicle_catalog.size(), std::size_t{4096}));
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleIdAt(std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        if (!inout_size) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle catalog must run on Game thread");
+        std::scoped_lock lock(mutex);
+        if (!RefreshVehicleCatalogLocked() || index >= vehicle_catalog.size())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle id not found");
+        return CopyString(vehicle_catalog[index].id, destination, inout_size);
+    }
+
+    AnomalyStatusV1 VehicleSetSummonVehicleId(AnomalyStringViewV1 id) noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle selection must run on Game thread");
+        std::scoped_lock lock(mutex);
+        const std::string value(id.data ? id.data : "", id.size);
+        if (!RefreshVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "Vehicle data table is unavailable");
+        const auto it = std::find_if(vehicle_catalog.begin(), vehicle_catalog.end(),
+            [&](const VehicleCatalogEntry& e) { return e.id == value; });
+        if (it == vehicle_catalog.end())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle id is not in Vehicle table");
+        selected_vehicle_id = value;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+        AnomalyStatusV1 VehicleSnapshot(AnomalyNteVehicleSnapshotV1* snapshot) noexcept {
         if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot))
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
@@ -12866,7 +13175,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
         vehicle_service = {
             sizeof(AnomalyNteVehicleServiceV1), ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
-            VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk};
+            VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk,
+            VehicleIdCountThunk, VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -13215,6 +13525,24 @@ private:
     static AnomalyStatusV1 ANOMALY_CALL VehicleSummonThunk(void* user) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSummon() : StoppedStatus();
+    }
+    
+    static AnomalyStatusV1 ANOMALY_CALL VehicleIdCountThunk(
+        void* user, std::uint32_t* count) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleIdCount(count) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleIdAtThunk(
+        void* user, std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleIdAt(index, destination, inout_size) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetSummonVehicleIdThunk(
+        void* user, AnomalyStringViewV1 id) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetSummonVehicleId(id) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
