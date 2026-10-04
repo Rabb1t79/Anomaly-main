@@ -7618,7 +7618,7 @@ struct Ue5NteAdapter::State {
         snapshot->speed_kmh = vehicle_speed_kmh;
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
-        return anomaly::sdk::Ok();
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
@@ -7649,19 +7649,38 @@ struct Ue5NteAdapter::State {
                 "SetMaxEngineTorque ProcessEvent failed");
         }
         vehicle_top_speed_ratio = ratio;
-        return anomaly::sdk::Ok();
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 VehicleSummon() noexcept {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle summon must run on Game thread");
         std::scoped_lock lock(mutex);
-        if (!RefreshVehicleLocked() || vehicle_bindings.summon_vehicle.function == 0)
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "TestSummonVehicle/CheatSpawnVehicle zero-arg binding is not validated");
+        // Summoning is intentionally independent of the currently driven vehicle.
+        // Only the validated player controller and reflected zero-argument summon function
+        // are required; this keeps the summon path usable while the player is on foot.
+        if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle summon host state is unavailable");
+        if (vehicle_bindings.object_generation != object_generation) {
+            vehicle_bindings = {};
+            vehicle_bindings.object_generation = object_generation;
+        }
+        if (vehicle_bindings.summon_vehicle.function == 0) {
+            static constexpr std::array<std::string_view, 2> summon_outers{
+                "HTPlayerController", "HTPlayerCharacter"};
+            if (!FindVehicleFunctionLocked(
+                    "TestSummonVehicle", summon_outers, "NoArgs", vehicle_bindings.summon_vehicle)) {
+                static_cast<void>(FindVehicleFunctionLocked(
+                    "CheatSpawnVehicle", summon_outers, "NoArgs", vehicle_bindings.summon_vehicle));
+            }
+        }
+        if (vehicle_bindings.summon_vehicle.function == 0)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "TestSummonVehicle/CheatSpawnVehicle zero-arg binding is not validated");
         if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
                 vehicle_bindings.summon_vehicle.function, nullptr, 0))
             return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
-        return anomaly::sdk::Ok();
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 VehicleSetWheelFriction(bool enabled) noexcept {
@@ -7676,7 +7695,7 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.set_wheel_friction.function, parameters.data(), parameters.size()))
             return Status(ANOMALY_STATUS_V1_FAILED, "SetEnableWheelFriction ProcessEvent failed");
         vehicle_wheel_friction_enabled = enabled;
-        return anomaly::sdk::Ok();
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 VehicleReset() noexcept {
@@ -13173,29 +13192,29 @@ private:
     static AnomalyStatusV1 ANOMALY_CALL VehicleSnapshotThunk(
         void* user, AnomalyNteVehicleSnapshotV1* snapshot) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSnapshot(snapshot) : StoppedStatus();
+        return lease ? static_cast<State*>(lease.User())->VehicleSnapshot(snapshot) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetTopSpeedRatioThunk(
         void* user, float ratio) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSetTopSpeedRatio(ratio) : StoppedStatus();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetTopSpeedRatio(ratio) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetWheelFrictionThunk(
         void* user, std::uint32_t enabled) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSetWheelFriction(enabled != 0) : StoppedStatus();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetWheelFriction(enabled != 0) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleResetThunk(void* user) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleReset() : StoppedStatus();
+        return lease ? static_cast<State*>(lease.User())->VehicleReset() : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSummonThunk(void* user) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::VehicleSummon() : StoppedStatus();
+        return lease ? static_cast<State*>(lease.User())->VehicleSummon() : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
