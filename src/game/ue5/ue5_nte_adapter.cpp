@@ -7443,6 +7443,8 @@ struct Ue5NteAdapter::State {
             const bool float_return = mode == "FloatReturn";
             const bool float_input = mode == "FloatInput";
             const bool bool_input = mode == "BoolInput";
+            const bool object_input = mode == "ObjectInput";
+            const bool transform_input = mode == "TransformInput";
             const bool no_args = mode == "NoArgs";
             if (no_args) {
                 if (num_parms != 0 || parms_size != 0 || return_offset != 0xFFFFu || property != 0) return false;
@@ -7451,8 +7453,8 @@ struct Ue5NteAdapter::State {
             } else if (object_return || float_return) {
                 const std::uint16_t expected_size = object_return ? 8u : 4u;
                 if (num_parms != 1 || parms_size != expected_size || return_offset == 0xFFFFu) return false;
-            } else if (float_input || bool_input) {
-                const std::uint16_t expected_size = float_input ? 4u : 1u;
+            } else if (float_input || bool_input || object_input || transform_input) {
+                const std::uint16_t expected_size = float_input ? 4u : bool_input ? 1u : object_input ? 8u : 48u;
                 if (num_parms != 1 || parms_size != expected_size || return_offset != 0xFFFFu) return false;
             } else {
                 return false;
@@ -7470,7 +7472,9 @@ struct Ue5NteAdapter::State {
                 static_cast<std::uint16_t>(info.offset) == return_offset;
             const bool expected_input =
                 (float_input && info.type == "FloatProperty" && info.element_size == 4) ||
-                (bool_input && info.type == "BoolProperty" && info.element_size == 1);
+                (bool_input && info.type == "BoolProperty" && info.element_size == 1) ||
+                (object_input && info.type == "ObjectProperty" && info.element_size == 8) ||
+                (transform_input && info.type == "StructProperty" && info.element_size >= 48);
             if (!expected_return && !expected_input) return false;
             binding = {function, parms_size,
                 static_cast<std::uint16_t>(info.offset), return_offset,
@@ -7651,6 +7655,27 @@ struct Ue5NteAdapter::State {
         vehicle_top_speed_ratio = ratio;
         return Status(ANOMALY_STATUS_V1_OK);
     }
+
+    std::uint64_t VehicleCatalogGeneration() noexcept {
+        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked(); return vehicle_catalog_generation;
+    }
+    std::uint32_t VehicleCatalogCount() noexcept {
+        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked(); return static_cast<std::uint32_t>(vehicle_catalog.size());
+    }
+    AnomalyStatusV1 VehicleCatalogAt(std::uint64_t generation, std::uint32_t index, AnomalyNteVehicleCatalogEntryV1* entry) noexcept {
+        if (!entry || entry->struct_size < sizeof(*entry)) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked();
+        if (generation != vehicle_catalog_generation || index >= vehicle_catalog.size()) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog entry is stale");
+        entry->struct_size = sizeof(*entry); entry->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
+        if (!ObjectHandleLocked(vehicle_catalog[index].object, entry->object)) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle object is stale");
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+    AnomalyStatusV1 VehicleCatalogName(std::uint64_t generation, std::uint32_t index, char* destination, std::size_t* size) noexcept {
+        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked();
+        if (generation != vehicle_catalog_generation || index >= vehicle_catalog.size()) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog entry is stale");
+        return CopyString(vehicle_catalog[index].name, destination, size);
+    }
+    AnomalyStatusV1 VehicleLastSummon(char* destination, std::size_t* size) noexcept { std::scoped_lock lock(mutex); return CopyString(vehicle_last_summon, destination, size); }
 
     AnomalyStatusV1 VehicleSummon() noexcept {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
@@ -12866,7 +12891,9 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
         vehicle_service = {
             sizeof(AnomalyNteVehicleServiceV1), ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
-            VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk};
+            VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk,
+            VehicleCatalogGenerationThunk, VehicleCatalogCountThunk, VehicleCatalogAtThunk,
+            VehicleCatalogNameThunk, VehicleSummonSelectedThunk, VehicleLastSummonThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -13216,6 +13243,12 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSummon() : StoppedStatus();
     }
+    static std::uint64_t ANOMALY_CALL VehicleCatalogGenerationThunk(void* user) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogGeneration() : 0; }
+    static std::uint32_t ANOMALY_CALL VehicleCatalogCountThunk(void* user) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogCount() : 0; }
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogAtThunk(void* user, std::uint64_t generation, std::uint32_t index, AnomalyNteVehicleCatalogEntryV1* entry) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogAt(generation,index,entry) : StoppedStatus(); }
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogNameThunk(void* user, std::uint64_t generation, std::uint32_t index, char* destination, std::size_t* size) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogName(generation,index,destination,size) : StoppedStatus(); }
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSummonSelectedThunk(void* user, AnomalyStringViewV1 selection) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleSummonSelected(selection) : StoppedStatus(); }
+    static AnomalyStatusV1 ANOMALY_CALL VehicleLastSummonThunk(void* user, char* destination, std::size_t* size) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleLastSummon(destination,size) : StoppedStatus(); }
 
     static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
         void* user,
