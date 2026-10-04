@@ -432,6 +432,8 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     context->replay_rate = 2.0;
     context->replay_done = 0;
     context->replaying = false;
+    context->replay_requested.store(false, std::memory_order_release);
+    context->stop_requested.store(false, std::memory_order_release);
     ArmForNextAttack(*context);
     return anomaly::sdk::Ok();
 }
@@ -548,7 +550,8 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
                         : "已启用重放：自动等待下一次攻击";
                 } else {
                     // Disabling replay must not stop recording or discard a captured attack.
-                    context->replaying = false;
+                    // Draw is Render-domain code; disable replay through the Game-domain request.
+                    context->stop_requested.store(true, std::memory_order_release);
                     context->status = context->captured
                         ? "自动记录中：重放功能未启用（已保留当前捕获）"
                         : "自动记录中：重放功能未启用";
