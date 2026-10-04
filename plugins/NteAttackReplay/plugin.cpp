@@ -489,11 +489,16 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             if (next_enabled != context->enabled) {
                 context->enabled = next_enabled;
                 if (context->enabled) {
-                    ArmForNextAttack(*context);
+                    // Enabling replay must not reset or interrupt the always-on recorder.
+                    context->status = context->captured
+                        ? "已启用重放：已保留当前自动捕获"
+                        : "已启用重放：自动等待下一次攻击";
                 } else {
+                    // Disabling replay must not stop recording or discard a captured attack.
                     context->replaying = false;
-                    context->captured = false;
-                    context->status = "已禁用";
+                    context->status = context->captured
+                        ? "自动记录中：重放功能未启用（已保留当前捕获）"
+                        : "自动记录中：重放功能未启用";
                 }
             }
         }
