@@ -244,7 +244,8 @@ bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) 
     }
 
     std::array<AnomalyNteSkillSnapshotV1, ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> skills{};
-    AnomalyNteSkillPageRequestV1 request{sizeof(request)};
+    AnomalyNteSkillPageRequestV1 request{};
+    request.size = sizeof(request);
     request.generation = frame.generation;
     request.offset = 0;
     request.capacity = static_cast<uint32_t>(skills.size());
@@ -363,7 +364,8 @@ bool CaptureNextAttack(Context& context) {
             AnomalyNteSkillFrameV1 frame{sizeof(frame)};
             std::array<AnomalyNteSkillSnapshotV1,
                        ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> source_skills{};
-            AnomalyNteSkillPageRequestV1 request{sizeof(request)};
+            AnomalyNteSkillPageRequestV1 request{};
+    request.size = sizeof(request);
             AnomalyNteSkillPageResultV1 result{sizeof(result)};
             if (context.skills->frame(context.skills->user, &frame).code ==
                 ANOMALY_STATUS_V1_OK) {
