@@ -12,9 +12,20 @@ jobs:
       - name: Extract Tokky and dump vehicle strings
         shell: pwsh
         run: |
-          function Extract($file,$out,$keys){$p=[IO.File]::ReadAllBytes($file);$sb=New-Object Text.StringBuilder;$cur=New-Object Text.StringBuilder;foreach($b in $p){if($b -ge 32 -and $b -le 126){[void]$cur.Append([char]$b)}else{if($cur.Length -ge 6){$s=$cur.ToString();foreach($k in $keys){if($s.ToLower().Contains($k.ToLower())){[void]$sb.AppendLine($s);break}}};$cur.Clear()}};Set-Content $out $sb.ToString()}
-          Extract 'Tokky-NTE.dll' 'tokky_keys.txt' @('SafeSetVehicleTransform','BeginDeferredActorSpawnFromClass','FinishSpawningActor','LoadClassAsset_Blocking','ReSetupEngineAndTransmission','SetDelayedVelocityRestore','GetActorForwardVector','K2_GetActorLocation','SetOwner','GetOwner','Instigator','GetAllActorsOfClass','VehicleDataAsset','SummonVehicleTemplateMap')
-          Extract 'HTGame_dump.exe' 'dump_vehicle_keys.txt' @('HTVehicleDataAsset','SummonVehicleTemplateMap','DT_VehicleData','VehicleData','Vehicle007','Vehicle001','Vehicle002','Vehicle003','Vehicle004','Vehicle005','Vehicle006','Vehicle008','Vehicle009','Vehicle010','Vehicle011','Vehicle012','Vehicle013','Vehicle014','Vehicle015','Vehicle016','Vehicle017','Vehicle018','Vehicle019','Vehicle020','SetOwner','Owner','Instigator','Spawn')
+          @'
+          import re, pathlib
+          def extract(path, out, keys):
+              data=pathlib.Path(path).read_bytes()
+              rx=re.compile(rb'[ -~]{6,}')
+              with open(out,'w',encoding='utf-8') as f:
+                  for m in rx.finditer(data):
+                      s=m.group().decode('ascii','ignore')
+                      if any(k.lower() in s.lower() for k in keys):
+                          f.write(s+'\n')
+          extract('Tokky-NTE.dll','tokky_keys.txt',['SafeSetVehicleTransform','BeginDeferredActorSpawnFromClass','FinishSpawningActor','LoadClassAsset_Blocking','ReSetupEngineAndTransmission','SetDelayedVelocityRestore','GetActorForwardVector','K2_GetActorLocation','SetOwner','GetOwner','Instigator','GetAllActorsOfClass','VehicleDataAsset','SummonVehicleTemplateMap'])
+          extract('HTGame_dump.exe','dump_vehicle_keys.txt',['HTVehicleDataAsset','SummonVehicleTemplateMap','DT_VehicleData','VehicleData','Vehicle007','Vehicle001','Vehicle002','Vehicle003','Vehicle004','Vehicle005','Vehicle006','Vehicle008','Vehicle009','Vehicle010','Vehicle011','Vehicle012','Vehicle013','Vehicle014','Vehicle015','Vehicle016','Vehicle017','Vehicle018','Vehicle019','Vehicle020','SetOwner','Owner','Instigator','Spawn'])
+          '@ | Set-Content extract.py
+          python extract.py
           Write-Host '--- TOKKY ---'; Get-Content tokky_keys.txt
           Write-Host '--- DUMP ---'; Get-Content dump_vehicle_keys.txt | Select-Object -First 2000
       - uses: actions/upload-artifact@v4
