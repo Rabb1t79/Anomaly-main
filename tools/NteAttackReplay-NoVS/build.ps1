@@ -25,6 +25,7 @@ if (-not $CMake) {
 }
 if (-not $CMake) {
     $CMake = Find-Existing @(
+        "I:\AnomalyRuntimeProfiler\cmake\bin\cmake.exe",
         (Join-Path $RepoRoot "cmake\bin\cmake.exe"),
         "C:\Program Files\CMake\bin\cmake.exe"
     )
