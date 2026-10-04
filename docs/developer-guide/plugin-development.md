@@ -104,6 +104,9 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
 
 Render 回调必须保持为纯绘制路径。游戏语义服务查询、cursor 推进、分页、名称解析和统计应在 Game 域 `on_update` 完成，并转换为插件自有的不可变展示快照；`on_draw` 仅在短锁内复制快照，锁外调用 UI。[`nte_combat_demo`](../../examples/nte_combat_demo/plugin.cpp) 展示了该边界：新伤害到达时才解析来源与参与者，静止帧不会重复调用 NTE 服务。
 
+> [!IMPORTANT]
+> UI 的 `begin_* / end_*` 必须严格成对。调用 `begin_window()` 后，即使返回值为 0，也必须调用对应的 `end_window()`，不能直接 `return`。推荐统一使用 `anomaly::sdk::UiWindow` RAII 封装；其他 Begin/End API 也必须保证所有返回路径都执行对应 End。插件修改时不得破坏这个 UI 栈平衡契约。
+
 完整入口 / 描述符定义见 [生命周期与 Core 服务](../api-reference/lifecycle-and-core.md)。
 
 ## 4. 查询服务并优雅降级
