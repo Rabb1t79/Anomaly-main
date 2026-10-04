@@ -149,6 +149,12 @@ void UpdateSkillCandidate(Context& context) {
     context.last_skill_generation = frame.generation;
     context.last_skill_sequence = frame.sequence;
 
+    // Clear the previous candidate first. A normal attack must never inherit
+    // the skill handle from the preceding attack.
+    context.captured_skill = {};
+    context.captured_ability = {};
+    context.captured_input_id = -1;
+
     // Prefer an explicitly pressed skill, then an active skill. This creates a
     // deterministic correlation window around the next player damage event.
     const AnomalyNteSkillSnapshotV1* selected = nullptr;
