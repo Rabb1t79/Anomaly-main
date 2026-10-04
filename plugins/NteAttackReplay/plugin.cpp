@@ -167,7 +167,8 @@ std::string ReadAbilityDisplayName(
 void UpdateSkillCandidate(Context& context) {
     if (!SkillsReady(context.skills)) return;
 
-    AnomalyNteSkillFrameV1 frame{sizeof(frame)};
+    AnomalyNteSkillFrameV1 frame{};
+    frame.size = sizeof(frame);
     if (context.skills->frame(context.skills->user, &frame).code != ANOMALY_STATUS_V1_OK ||
         frame.character.id == 0) {
         return;
@@ -238,7 +239,8 @@ bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) 
 
     // Character/skill generations may refresh after the original attack. In that case,
     // remap by ability class and input id instead of using a stale opaque handle.
-    AnomalyNteSkillFrameV1 frame{sizeof(frame)};
+    AnomalyNteSkillFrameV1 frame{};
+    frame.size = sizeof(frame);
     if (context.skills->frame(context.skills->user, &frame).code != ANOMALY_STATUS_V1_OK) {
         return false;
     }
@@ -361,7 +363,8 @@ bool CaptureNextAttack(Context& context) {
             ReadDamageSourceName(context.combat, event.name_id);
         if (!context.captured_damage_source_name.empty() &&
             SkillsReady(context.skills)) {
-            AnomalyNteSkillFrameV1 frame{sizeof(frame)};
+            AnomalyNteSkillFrameV1 frame{};
+    frame.size = sizeof(frame);
             std::array<AnomalyNteSkillSnapshotV1,
                        ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> source_skills{};
             AnomalyNteSkillPageRequestV1 request{};
