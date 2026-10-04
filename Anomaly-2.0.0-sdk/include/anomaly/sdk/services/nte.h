@@ -446,6 +446,40 @@ typedef struct AnomalyNteActorsServiceV1 {
 
 // Combat snapshots are Host-cached. CHARACTER_EVENT damage is captured from
 // AHTAbilityCharacter::CharacterOnDamaged with participants and DamageGEDef.
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 1u
+
+typedef uint32_t AnomalyNteVehicleFlagsV1;
+#define ANOMALY_NTE_VEHICLE_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_SPEED (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO (1u << 2u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION (1u << 3u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON (1u << 4u)
+
+typedef struct AnomalyNteVehicleSnapshotV1 {
+    uint32_t struct_size; uint32_t flags; AnomalyGenerationHandleV1 vehicle;
+    double speed_kmh; float top_speed_ratio; uint32_t wheel_friction_enabled;
+} AnomalyNteVehicleSnapshotV1;
+
+typedef struct AnomalyNteVehicleCatalogEntryV1 {
+    uint32_t struct_size; uint32_t flags; AnomalyGenerationHandleV1 object;
+} AnomalyNteVehicleCatalogEntryV1;
+
+typedef struct AnomalyNteVehicleServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *snapshot)(void* user, AnomalyNteVehicleSnapshotV1* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *set_top_speed_ratio)(void* user, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *set_wheel_friction_enabled)(void* user, uint32_t enabled);
+    AnomalyStatusV1 (ANOMALY_CALL *reset)(void* user);
+    AnomalyStatusV1 (ANOMALY_CALL *summon_vehicle)(void* user);
+    uint64_t (ANOMALY_CALL *catalog_generation)(void* user);
+    uint32_t (ANOMALY_CALL *catalog_count)(void* user);
+    AnomalyStatusV1 (ANOMALY_CALL *catalog_at)(void* user, uint64_t generation, uint32_t index, AnomalyNteVehicleCatalogEntryV1* entry);
+    AnomalyStatusV1 (ANOMALY_CALL *catalog_name_utf8)(void* user, uint64_t generation, uint32_t index, char* destination, size_t* inout_size);
+    AnomalyStatusV1 (ANOMALY_CALL *summon_selected)(void* user, AnomalyStringViewV1 selection);
+    AnomalyStatusV1 (ANOMALY_CALL *last_summon_utf8)(void* user, char* destination, size_t* inout_size);
+} AnomalyNteVehicleServiceV1;
+
 typedef uint32_t AnomalyNteCombatantFlagsV1;
 #define ANOMALY_NTE_COMBATANT_V1_DEAD (1u << 0u)
 #define ANOMALY_NTE_COMBATANT_V1_VALID ANOMALY_NTE_SNAPSHOT_V1_VALID
