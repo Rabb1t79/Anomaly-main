@@ -12914,8 +12914,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteVehicleServiceV1), ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk,
-            VehicleCatalogGenerationThunk, VehicleCatalogCountThunk, VehicleCatalogAtThunk,
-            VehicleCatalogNameThunk, VehicleSummonSelectedThunk, VehicleLastSummonThunk};
+            VehicleIdCountThunk, VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -13265,12 +13264,9 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSummon() : StoppedStatus();
     }
-    static std::uint64_t ANOMALY_CALL VehicleCatalogGenerationThunk(void* user) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogGeneration() : 0; }
-    static std::uint32_t ANOMALY_CALL VehicleCatalogCountThunk(void* user) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogCount() : 0; }
-    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogAtThunk(void* user, std::uint64_t generation, std::uint32_t index, AnomalyNteVehicleCatalogEntryV1* entry) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogAt(generation,index,entry) : StoppedStatus(); }
-    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogNameThunk(void* user, std::uint64_t generation, std::uint32_t index, char* destination, std::size_t* size) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleCatalogName(generation,index,destination,size) : StoppedStatus(); }
-    static AnomalyStatusV1 ANOMALY_CALL VehicleSummonSelectedThunk(void* user, AnomalyStringViewV1 selection) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleSummonSelected(selection) : StoppedStatus(); }
-    static AnomalyStatusV1 ANOMALY_CALL VehicleLastSummonThunk(void* user, char* destination, std::size_t* size) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleLastSummon(destination,size) : StoppedStatus(); }
+    static AnomalyStatusV1 ANOMALY_CALL VehicleIdCountThunk(void* user, std::uint32_t* count) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleIdCount(count) : StoppedStatus(); }
+    static AnomalyStatusV1 ANOMALY_CALL VehicleIdAtThunk(void* user, std::uint32_t index, char* destination, std::size_t* size) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleIdAt(index,destination,size) : StoppedStatus(); }
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetSummonVehicleIdThunk(void* user, AnomalyStringViewV1 id) noexcept { auto lease=static_cast<SemanticServiceEndpoint*>(user)->Acquire(); return lease ? static_cast<State*>(lease.User())->VehicleSetSummonVehicleId(id) : StoppedStatus(); }
 
     static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
         void* user,
