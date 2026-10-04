@@ -86,7 +86,7 @@ $CMakeArgs = @(
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed." }
 & $CMake --build $BuildRoot --config Release --target anomaly_nte_attack_replay --parallel
 if ($LASTEXITCODE -ne 0) { throw "NTE Attack Replay build failed." }
-$PluginDll = Join-Path $BuildRoot "plugin.dll"
+$PluginDll = Join-Path $BuildRoot "package\NteAttackReplay\plugin.dll"
 if (-not (Test-Path $PluginDll)) { throw "Build completed but plugin.dll was not found at $PluginDll." }
 New-Item -ItemType Directory -Force $PackageRoot | Out-Null
 Copy-Item $PluginDll (Join-Path $PackageRoot "plugin.dll") -Force
