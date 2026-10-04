@@ -38,15 +38,16 @@ if (-not $LlvmRoot) {
 }
 $Clang = ""
 $Clangxx = ""
+$Make = ""
 if ($LlvmRoot) {
     $Clang = Join-Path $LlvmRoot "bin\clang.exe"
     $Clangxx = Join-Path $LlvmRoot "bin\clang++.exe"
-$Make = Join-Path $LlvmRoot "bin\mingw32-make.exe"
-if (-not (Test-Path $Make)) {
-    $makeCommand = Get-Command mingw32-make.exe -ErrorAction SilentlyContinue
-    if ($makeCommand) { $Make = $makeCommand.Source }
-}
-if (-not (Test-Path $Make)) { throw "mingw32-make.exe not found. MinGW Makefiles requires mingw32-make." }
+    $Make = Join-Path $LlvmRoot "bin\mingw32-make.exe"
+    if (-not (Test-Path $Make)) {
+        $makeCommand = Get-Command mingw32-make.exe -ErrorAction SilentlyContinue
+        if ($makeCommand) { $Make = $makeCommand.Source }
+    }
+    if (-not (Test-Path $Make)) { throw "mingw32-make.exe not found. MinGW Makefiles requires mingw32-make." }
 }
 if (-not (Test-Path $Clangxx)) {
     $x = Get-Command clang++.exe -ErrorAction SilentlyContinue
@@ -106,10 +107,14 @@ if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败。" }
 & $CMake --build $BuildRoot --config Release --target anomaly_nte_vehicle --parallel
 if ($LASTEXITCODE -ne 0) { throw "NTE Vehicle 编译失败。" }
 
-if (-not (Test-Path (Join-Path $PackageRoot "plugin.dll"))) {
-    throw "编译命令成功，但没有找到 plugin.dll。"
+# anomaly_add_plugin places the packaged DLL under the CMake package directory.
+$PluginDll = Join-Path $BuildRoot "package\NteVehicle\plugin.dll"
+if (-not (Test-Path $PluginDll)) {
+    throw "编译命令成功，但没有找到 plugin.dll：$PluginDll"
 }
 
+New-Item -ItemType Directory -Force $PackageRoot | Out-Null
+Copy-Item $PluginDll (Join-Path $PackageRoot "plugin.dll") -Force
 Copy-Item (Join-Path $RepoRoot "plugins\NteVehicle\manifest.json") (Join-Path $PackageRoot "manifest.json") -Force
 
 $Locale = Join-Path $RepoRoot "plugins\NteVehicle\locales"
