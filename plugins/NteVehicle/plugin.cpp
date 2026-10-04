@@ -126,7 +126,7 @@ void Draw() {
 
 void UpdateCatalog() {
     const auto* v = g_context.vehicle;
-    if (!v || !HasField(v, offsetof(AnomalyNteVehicleServiceV1, catalog_generation) + sizeof(v->catalog_generation)) ||
+    if (!v || v->struct_size < offsetof(AnomalyNteVehicleServiceV1, catalog_generation) + sizeof(v->catalog_generation) ||
         !v->catalog_generation || !v->catalog_count || !v->catalog_name_utf8) return;
     const auto generation = v->catalog_generation(v->user);
     const auto count = v->catalog_count(v->user);
@@ -195,7 +195,7 @@ void Update() {
         g_context.snapshot.friction = snapshot.wheel_friction_enabled != 0;
     } else g_context.snapshot.flags = 0;
 
-    if (HasField(g_context.vehicle, offsetof(AnomalyNteVehicleServiceV1, last_summon_utf8) + sizeof(g_context.vehicle->last_summon_utf8)) && g_context.vehicle->last_summon_utf8) {
+    if (g_context.vehicle->struct_size >= offsetof(AnomalyNteVehicleServiceV1, last_summon_utf8) + sizeof(g_context.vehicle->last_summon_utf8) && g_context.vehicle->last_summon_utf8) {
         char name[512]{}; std::size_t size = sizeof(name);
         if (g_context.vehicle->last_summon_utf8(g_context.vehicle->user, name, &size).code == ANOMALY_STATUS_V1_OK && name[0]) g_context.last_summon = name;
     }
