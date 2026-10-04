@@ -2,7 +2,7 @@ param(
     [string]$SdkRoot = "",
     [string]$LlvmRoot = "",
     [string]$CMake = "",
-    [string]$Generator = "Ninja"
+    [string]$Generator = "MinGW Makefiles"
 )
 
 $ErrorActionPreference = "Stop"
