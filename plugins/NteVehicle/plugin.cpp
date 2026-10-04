@@ -272,15 +272,11 @@ void Draw() {
     }
 
     int open = 1;
-    // UI contract: once begin_window() is called, end_window() is mandatory even
-    // when begin_window() returns 0. Keep the false-return path explicit so this
-    // lifecycle rule is impossible to miss during later UI changes.
-    const int window_visible = ui->begin_window(
-        ui->user, anomaly::sdk::StringView("NTE Vehicle"), &open, 0);
-    if (!window_visible) {
-        ui->end_window(ui->user);
-        return;
-    }
+    // Use the SDK's UiWindow RAII wrapper. Its destructor always calls
+    // end_window(), including when begin_window() returned 0.
+    anomaly::sdk::UiWindow window(
+        ui, "NTE Vehicle", &open, 0);
+    if (!window) return;
 
     Snapshot snapshot;
     std::string status;
