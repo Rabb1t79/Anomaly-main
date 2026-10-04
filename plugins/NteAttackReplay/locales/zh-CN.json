@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "locale": "zh-CN",
+  "messages": {
+    "window.title": "自动攻击录制/重放"
+  }
+}
