@@ -1,0 +1,26 @@
+name: nte-attack-replay-runner-probe
+
+on:
+  push:
+    branches:
+      - feature/nte-attack-replay
+
+jobs:
+  probe:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe runner
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force probe | Out-Null
+          "runner-ok" | Set-Content probe/result.txt
+          Get-Command cmake | Format-List
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-probe
+          path: probe/result.txt
+          if-no-files-found: error
