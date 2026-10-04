@@ -34,6 +34,12 @@ struct Context final {
     int32_t captured_input_id{-1};
     uint64_t captured_damage_sequence{};
     uint64_t captured_tick_sequence{};
+    int64_t captured_damage_value{};
+    int64_t captured_basic_value{};
+    int64_t captured_final_value{};
+    uint32_t captured_damage_type{};
+    uint32_t captured_reaction_type{};
+    bool captured_has_skill{};
     std::string captured_ability_path;
     std::string captured_target_path;
 
@@ -231,6 +237,12 @@ void ArmForNextAttack(Context& context) {
     context.captured_input_id = -1;
     context.captured_damage_sequence = 0;
     context.captured_tick_sequence = 0;
+    context.captured_damage_value = 0;
+    context.captured_basic_value = 0;
+    context.captured_final_value = 0;
+    context.captured_damage_type = 0;
+    context.captured_reaction_type = 0;
+    context.captured_has_skill = false;
     context.captured_ability_path.clear();
     context.captured_target_path.clear();
     context.status = "自动等待玩家下一次攻击";
@@ -276,6 +288,7 @@ bool CaptureNextAttack(Context& context) {
         context.combat_cursor = event.sequence;
 
         if (event.kind != ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE ||
+            !SameHandle(event.world, combatant.world) ||
             !SameHandle(event.source, combatant.character) ||
             event.target.id == 0 || SameHandle(event.target, combatant.character)) {
             continue;
@@ -284,6 +297,12 @@ bool CaptureNextAttack(Context& context) {
         context.captured = true;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
+        context.captured_damage_value = event.value;
+        context.captured_basic_value = event.basic_value;
+        context.captured_final_value = event.final_value;
+        context.captured_damage_type = event.damage_type;
+        context.captured_reaction_type = event.reaction_type;
+        context.captured_has_skill = context.captured_skill.id != 0;
         context.captured_target = event.target;
         context.captured_ability_path =
             ReadAbilityPath(context.skills, context.captured_ability);
@@ -305,14 +324,16 @@ bool CaptureNextAttack(Context& context) {
                 }
             }
         }
-        context.status = "已自动捕获下一次玩家攻击";
+        context.status = context.captured_has_skill
+            ? "已自动捕获：技能/普通攻击链的第一次伤害"
+            : "已自动捕获：普通攻击链的第一次伤害（未关联到可调用技能）";
         return true;
     }
     return false;
 }
 
 bool ReplayOnce(Context& context) {
-    if (!InvocationReady(context.invocation) || !context.captured) return false;
+    if (!InvocationReady(context.invocation) || !context.captured || !context.captured_has_skill) return false;
 
     AnomalyNteCombatantSnapshotV1 combatant{sizeof(combatant)};
     if (context.combat->current_combatant(
