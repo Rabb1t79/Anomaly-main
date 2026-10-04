@@ -96,8 +96,9 @@ std::string ReadAbilityPath(
     AnomalyGenerationHandleV1 ability) {
     if (skills == nullptr || skills->ability_path_utf8 == nullptr) return {};
     size_t size = 0;
-    if (skills->ability_path_utf8(skills->user, ability, nullptr, &size).code !=
-        ANOMALY_STATUS_V1_BUFFER_TOO_SMALL) {
+    const auto sizing = skills->ability_path_utf8(skills->user, ability, nullptr, &size);
+    if (sizing.code != ANOMALY_STATUS_V1_OK &&
+        sizing.code != ANOMALY_STATUS_V1_BUFFER_TOO_SMALL) {
         return {};
     }
     std::string result(size, '\0');
