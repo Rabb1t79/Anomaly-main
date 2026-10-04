@@ -258,6 +258,10 @@ bool CaptureNextAttack(Context& context) {
         const auto status = context.combat->next_event(
             context.combat->user, context.combat_cursor, &event);
         if (status.code == ANOMALY_STATUS_V1_NOT_FOUND) {
+            // A stale cursor can happen when the Host replaces the combat ring or world.
+            // Rebase to the current tail; old events must never be replayed as a new attack.
+            context.combat_cursor = context.combat->latest_event_sequence(
+                context.combat->user);
             return false;
         }
         if (status.code != ANOMALY_STATUS_V1_OK) {
