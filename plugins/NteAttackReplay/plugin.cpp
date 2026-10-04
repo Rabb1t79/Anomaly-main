@@ -35,6 +35,7 @@ struct Context final {
     uint64_t captured_tick_sequence{};
     std::string captured_ability_path;
 
+    bool enabled{};
     bool captured{};
     bool replaying{};
     uint32_t replay_count{10};
@@ -80,7 +81,7 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
                     decltype(AnomalyUiServiceV1::end_window)>(
                service, offsetof(AnomalyUiServiceV1, end_window)) &&
            service->begin_window != nullptr && service->end_window != nullptr &&
-           service->text != nullptr && service->button != nullptr &&
+           service->text != nullptr && service->checkbox != nullptr && service->button != nullptr &&
            service->input_uint32 != nullptr && service->input_double != nullptr;
 }
 
@@ -354,6 +355,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    context->enabled = false;
     context->replay_count = 10;
     context->replay_rate = 2.0;
     context->replay_done = 0;
@@ -376,6 +378,8 @@ void ANOMALY_CALL Unload(void* plugin_context) {
 void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
+
+    if (!context->enabled) return;
 
     if (!context->captured && !context->replaying) {
         CaptureNextAttack(*context);
@@ -429,9 +433,25 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     const int window_visible = ui->begin_window(
         ui->user, anomaly::sdk::StringView("自动攻击录制/重放"), &open, 0);
     if (window_visible != 0) {
-        ui->text(ui->user, anomaly::sdk::StringView(context->status));
+        int enabled = context->enabled ? 1 : 0;
+        if (ui->checkbox(ui->user, anomaly::sdk::StringView("[启用]"), &enabled) != 0) {
+            const bool next_enabled = enabled != 0;
+            if (next_enabled != context->enabled) {
+                context->enabled = next_enabled;
+                if (context->enabled) {
+                    ArmForNextAttack(*context);
+                } else {
+                    context->replaying = false;
+                    context->captured = false;
+                    context->status = "已禁用";
+                }
+            }
+        }
 
-    if (ui->separator != nullptr) ui->separator(ui->user);
+        ui->text(ui->user, anomaly::sdk::StringView(
+            context->enabled ? context->status : "已禁用：不会记录或重放攻击"));
+
+        if (ui->separator != nullptr) ui->separator(ui->user);
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
@@ -479,10 +499,8 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     }
 
         ui->end_window(ui->user);
-    }
-
-    // end_window must also be called when begin_window returned false.
-    if (window_visible == 0) {
+    } else {
+        // end_window must also be called when begin_window returned false.
         ui->end_window(ui->user);
     }
 }
