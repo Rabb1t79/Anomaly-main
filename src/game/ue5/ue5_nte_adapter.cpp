@@ -7833,23 +7833,49 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle FinishSpawningActor failed");
         if (finished != 0) spawned = finished;
         std::uintptr_t set_owner{};
-        if (FindExactObjectLocked(L"/Script/Engine.Actor.SetOwner", set_owner)) {
-            std::uint16_t size{};
-            std::uint8_t num{};
-            std::uintptr_t property{};
-            if (ReadValue(*memory, set_owner + Layout(profile, "ufunction.parmsSize"), size) &&
-                ReadValue(*memory, set_owner + Layout(profile, "ufunction.numParms"), num) &&
-                ReadPointerAt(*memory, set_owner, Layout(profile, "ustruct.propertyLink"), property) &&
-                num == 1 && size >= 8) {
-                ReflectedPropertyInfo info;
-                if (ReadReflectedPropertyLocked(property, info) && info.offset >= 0 && info.element_size == 8) {
-                    std::vector<std::uint8_t> p(size);
-                    std::memcpy(p.data() + info.offset, &player_controller, 8);
-                    if (!InvokeProcessEventGuarded(process_event_invoker, spawned, set_owner, p.data(), p.size()))
-                        return Status(ANOMALY_STATUS_V1_FAILED, "vehicle owner assignment failed");
-                }
-            }
-        }
+        if (!FindExactObjectLocked(L"/Script/Engine.Actor.SetOwner", set_owner))
+            return Status(ANOMALY_STATUS_V1_FAILED, "AActor::SetOwner was not validated");
+        std::uint16_t owner_size{};
+        std::uint8_t owner_num{};
+        std::uintptr_t owner_property{};
+        if (!ReadValue(*memory, set_owner + Layout(profile, "ufunction.parmsSize"), owner_size) ||
+            !ReadValue(*memory, set_owner + Layout(profile, "ufunction.numParms"), owner_num) ||
+            !ReadPointerAt(*memory, set_owner, Layout(profile, "ustruct.propertyLink"), owner_property) ||
+            owner_num != 1 || owner_size < 8)
+            return Status(ANOMALY_STATUS_V1_FAILED, "AActor::SetOwner reflection ABI is invalid");
+        ReflectedPropertyInfo owner_info;
+        if (!ReadReflectedPropertyLocked(owner_property, owner_info) ||
+            owner_info.offset < 0 || owner_info.element_size != 8)
+            return Status(ANOMALY_STATUS_V1_FAILED, "AActor::SetOwner parameter ABI is invalid");
+        std::vector<std::uint8_t> owner_parameters(owner_size);
+        std::memcpy(owner_parameters.data() + owner_info.offset, &player_controller, 8);
+        if (!InvokeProcessEventGuarded(process_event_invoker, spawned, set_owner,
+                owner_parameters.data(), owner_parameters.size()))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle owner assignment failed");
+
+        std::uintptr_t get_owner{};
+        if (!FindExactObjectLocked(L"/Script/Engine.Actor.GetOwner", get_owner))
+            return Status(ANOMALY_STATUS_V1_FAILED, "AActor::GetOwner was not validated");
+        std::uint16_t owner_out_size{}, owner_return_offset{};
+        std::uint8_t owner_out_num{};
+        std::uintptr_t owner_out_property{};
+        if (!ReadValue(*memory, get_owner + Layout(profile, "ufunction.parmsSize"), owner_out_size) ||
+            !ReadValue(*memory, get_owner + Layout(profile, "ufunction.numParms"), owner_out_num) ||
+            !ReadValue(*memory, get_owner + Layout(profile, "ufunction.returnValueOffset"), owner_return_offset) ||
+            !ReadPointerAt(*memory, get_owner, Layout(profile, "ustruct.propertyLink"), owner_out_property) ||
+            owner_out_num != 1 || owner_out_size < 8 || owner_return_offset == 0xFFFFu)
+            return Status(ANOMALY_STATUS_V1_FAILED, "AActor::GetOwner reflection ABI is invalid");
+        std::vector<std::uint8_t> owner_out(owner_out_size);
+        if (!InvokeProcessEventGuarded(process_event_invoker, spawned, get_owner,
+                owner_out.data(), owner_out.size()))
+            return Status(ANOMALY_STATUS_V1_FAILED, "AActor::GetOwner ProcessEvent failed");
+        std::uintptr_t verified_owner{};
+        if (static_cast<std::size_t>(owner_return_offset) + 8 > owner_out.size())
+            return Status(ANOMALY_STATUS_V1_FAILED, "AActor::GetOwner return offset is invalid");
+        std::memcpy(&verified_owner, owner_out.data() + owner_return_offset, 8);
+        if (verified_owner != player_controller)
+            return Status(ANOMALY_STATUS_V1_FAILED, "spawned vehicle Owner is not the current PlayerController");
+
         std::string spawned_class_name;
         std::uintptr_t spawned_class{};
         if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class) ||
