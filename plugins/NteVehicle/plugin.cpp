@@ -272,8 +272,23 @@ void Draw() {
     }
 
     int open = 1;
-    if (!ui->begin_window(
-            ui->user, anomaly::sdk::StringView("NTE Vehicle"), &open, 0)) {
+    // UI contract: once begin_window() is called, end_window() is mandatory even
+    // when begin_window() returns 0. RAII keeps that invariant true for every future
+    // early-return path in this draw function as well.
+    const int window_visible = ui->begin_window(
+        ui->user, anomaly::sdk::StringView("NTE Vehicle"), &open, 0);
+    struct EndWindowGuard final {
+        const AnomalyUiServiceV1* ui{};
+        ~EndWindowGuard() {
+            if (ui != nullptr && ui->end_window != nullptr) {
+                ui->end_window(ui->user);
+            }
+        }
+        EndWindowGuard(const EndWindowGuard&) = delete;
+        EndWindowGuard& operator=(const EndWindowGuard&) = delete;
+    } end_window_guard{ui};
+
+    if (!window_visible) {
         return;
     }
 
@@ -389,7 +404,6 @@ void Draw() {
         }
     }
 
-    ui->end_window(ui->user);
 }
 
 AnomalyStatusV1 ANOMALY_CALL Load(
