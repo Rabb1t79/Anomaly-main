@@ -7652,7 +7652,59 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
         // Tokky multiplies the original movement-component torque and sends the
         // resulting float through SetMaxEngineTorque; do not accumulate ratios.
-        if (!vehicle_base_engine_    void RefreshVehicleCatalogLocked() noexcept {
+        if (!vehicle_base_engine_torque_valid || vehicle_base_movement_component == 0 ||
+            vehicle_bindings.set_top_speed_ratio.function == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "Tokky SetMaxEngineTorque ABI or torque baseline is unavailable");
+        }
+        const float torque = vehicle_base_engine_torque * ratio;
+        std::array<std::uint8_t, 4> parameters{};
+        std::memcpy(parameters.data() +
+                vehicle_bindings.set_top_speed_ratio.parameter_offset,
+            &torque, sizeof(torque));
+        if (!InvokeProcessEventGuarded(process_event_invoker,
+                vehicle_base_movement_component,
+                vehicle_bindings.set_top_speed_ratio.function,
+                parameters.data(), parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetMaxEngineTorque ProcessEvent failed");
+        }
+        vehicle_top_speed_ratio = ratio;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleSummon() noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle summon must run on Game thread");
+        std::scoped_lock lock(mutex);
+        // Summoning is intentionally independent of the currently driven vehicle.
+        // Only the validated player controller and reflected zero-argument summon function
+        // are required; this keeps the summon path usable while the player is on foot.
+        if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle summon host state is unavailable");
+        if (vehicle_bindings.object_generation != object_generation) {
+            vehicle_bindings = {};
+            vehicle_bindings.object_generation = object_generation;
+        }
+        if (vehicle_bindings.summon_vehicle.function == 0) {
+            static constexpr std::array<std::string_view, 2> summon_outers{
+                "HTPlayerController", "HTPlayerCharacter"};
+            if (!FindVehicleFunctionLocked(
+                    "TestSummonVehicle", summon_outers, "NoArgs", vehicle_bindings.summon_vehicle)) {
+                static_cast<void>(FindVehicleFunctionLocked(
+                    "CheatSpawnVehicle", summon_outers, "NoArgs", vehicle_bindings.summon_vehicle));
+            }
+        }
+        if (vehicle_bindings.summon_vehicle.function == 0)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "TestSummonVehicle/CheatSpawnVehicle zero-arg binding is not validated");
+        if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+                vehicle_bindings.summon_vehicle.function, nullptr, 0))
+            return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    void RefreshVehicleCatalogLocked() noexcept {
         if (vehicle_catalog_generation == object_generation && !vehicle_catalog.empty()) return;
         vehicle_catalog.clear(); vehicle_catalog_generation = object_generation;
         if (object_registry.count == 0 || object_registry.count > 16U * 1024U * 1024U) return;
@@ -7676,10 +7728,8 @@ struct Ue5NteAdapter::State {
         std::string name; if (!function || !ReadReflectedObjectNameLocked(function,name)) return false;
         if ((begin && name!="BeginDeferredActorSpawnFromClass") || (!begin && name!="FinishSpawningActor")) return false;
         std::uintptr_t property{}, outer{}; std::uint8_t num_parms{}; std::uint16_t parms_size{}, return_offset{};
-        if (!ReadPointerAt(*memory,function,Layout(profile,"ustruct.propertyLink"),property) ||
-            !ReadPointerAt(*memory,function,Layout(profile,"object.outer"),outer) ||
-            !ReadValue(*memory,function+Layout(profile,"ufunction.numParms"),num_parms) ||
-            !ReadValue(*memory,function+Layout(profile,"ufunction.parmsSize"),parms_size) ||
+        if (!ReadPointerAt(*memory,function,Layout(profile,"ustruct.propertyLink"),property) || !ReadPointerAt(*memory,function,Layout(profile,"object.outer"),outer) ||
+            !ReadValue(*memory,function+Layout(profile,"ufunction.numParms"),num_parms) || !ReadValue(*memory,function+Layout(profile,"ufunction.parmsSize"),parms_size) ||
             !ReadValue(*memory,function+Layout(profile,"ufunction.returnValueOffset"),return_offset)) return false;
         VehicleSpawnBinding b{}; b.function=function; b.parms_size=parms_size; b.return_offset=return_offset;
         static_cast<void>(ReadPointerAt(*memory,outer,Layout(profile,"uclass.classDefaultObject"),b.receiver));
@@ -7694,9 +7744,9 @@ struct Ue5NteAdapter::State {
             else if(!begin&&info.name=="Actor"){if(info.type!="ObjectProperty"||info.element_size!=8)return false;b.actor_offset=off;}
             property=info.next;
         }
-        b.available=begin ? b.receiver && b.world_offset!=0xFFFFU&&b.class_offset!=0xFFFFU&&b.transform_offset!=0xFFFFU&&b.owner_offset!=0xFFFFU&&b.return_offset!=0xFFFFU
-                           : b.receiver && b.actor_offset!=0xFFFFU&&b.transform_offset!=0xFFFFU&&b.return_offset!=0xFFFFU;
-        if(!b.available || num_parms<2) return false; binding=b; return true;
+        b.available=begin ? b.receiver&&b.world_offset!=0xFFFFU&&b.class_offset!=0xFFFFU&&b.transform_offset!=0xFFFFU&&b.owner_offset!=0xFFFFU&&b.return_offset!=0xFFFFU
+                          : b.receiver&&b.actor_offset!=0xFFFFU&&b.transform_offset!=0xFFFFU&&b.return_offset!=0xFFFFU;
+        if(!b.available||num_parms<2)return false; binding=b; return true;
     }
 
     bool EnsureVehicleSpawnBindingsLocked(){
@@ -7733,78 +7783,11 @@ struct Ue5NteAdapter::State {
         std::string spawned_name;static_cast<void>(ReadReflectedObjectNameLocked(spawned,spawned_name));vehicle_last_summon=spawned_name.empty()?selected:spawned_name;return Status(ANOMALY_STATUS_V1_OK);
     }
 
-torque_valid || vehicle_base_movement_component == 0 ||
-            vehicle_bindings.set_top_speed_ratio.function == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "Tokky SetMaxEngineTorque ABI or torque baseline is unavailable");
-        }
-        const float torque = vehicle_base_engine_torque * ratio;
-        std::array<std::uint8_t, 4> parameters{};
-        std::memcpy(parameters.data() +
-                vehicle_bindings.set_top_speed_ratio.parameter_offset,
-            &torque, sizeof(torque));
-        if (!InvokeProcessEventGuarded(process_event_invoker,
-                vehicle_base_movement_component,
-                vehicle_bindings.set_top_speed_ratio.function,
-                parameters.data(), parameters.size())) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "SetMaxEngineTorque ProcessEvent failed");
-        }
-        vehicle_top_speed_ratio = ratio;
-        return Status(ANOMALY_STATUS_V1_OK);
-    }
-
-    std::uint64_t VehicleCatalogGeneration() noexcept {
-        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked(); return vehicle_catalog_generation;
-    }
-    std::uint32_t VehicleCatalogCount() noexcept {
-        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked(); return static_cast<std::uint32_t>(vehicle_catalog.size());
-    }
-    AnomalyStatusV1 VehicleCatalogAt(std::uint64_t generation, std::uint32_t index, AnomalyNteVehicleCatalogEntryV1* entry) noexcept {
-        if (!entry || entry->struct_size < sizeof(*entry)) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
-        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked();
-        if (generation != vehicle_catalog_generation || index >= vehicle_catalog.size()) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog entry is stale");
-        entry->struct_size = sizeof(*entry); entry->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
-        if (!ObjectHandleLocked(vehicle_catalog[index].object, entry->object)) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle object is stale");
-        return Status(ANOMALY_STATUS_V1_OK);
-    }
-    AnomalyStatusV1 VehicleCatalogName(std::uint64_t generation, std::uint32_t index, char* destination, std::size_t* size) noexcept {
-        std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked();
-        if (generation != vehicle_catalog_generation || index >= vehicle_catalog.size()) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog entry is stale");
-        return CopyString(vehicle_catalog[index].name, destination, size);
-    }
-    AnomalyStatusV1 VehicleLastSummon(char* destination, std::size_t* size) noexcept { std::scoped_lock lock(mutex); return CopyString(vehicle_last_summon, destination, size); }
-
-    AnomalyStatusV1 VehicleSummon() noexcept {
-        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
-            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle summon must run on Game thread");
-        std::scoped_lock lock(mutex);
-        // Summoning is intentionally independent of the currently driven vehicle.
-        // Only the validated player controller and reflected zero-argument summon function
-        // are required; this keeps the summon path usable while the player is on foot.
-        if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker)
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle summon host state is unavailable");
-        if (vehicle_bindings.object_generation != object_generation) {
-            vehicle_bindings = {};
-            vehicle_bindings.object_generation = object_generation;
-        }
-        if (vehicle_bindings.summon_vehicle.function == 0) {
-            static constexpr std::array<std::string_view, 2> summon_outers{
-                "HTPlayerController", "HTPlayerCharacter"};
-            if (!FindVehicleFunctionLocked(
-                    "TestSummonVehicle", summon_outers, "NoArgs", vehicle_bindings.summon_vehicle)) {
-                static_cast<void>(FindVehicleFunctionLocked(
-                    "CheatSpawnVehicle", summon_outers, "NoArgs", vehicle_bindings.summon_vehicle));
-            }
-        }
-        if (vehicle_bindings.summon_vehicle.function == 0)
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "TestSummonVehicle/CheatSpawnVehicle zero-arg binding is not validated");
-        if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                vehicle_bindings.summon_vehicle.function, nullptr, 0))
-            return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
-        return Status(ANOMALY_STATUS_V1_OK);
-    }
+    std::uint64_t VehicleCatalogGeneration() noexcept { std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked(); return vehicle_catalog_generation; }
+    std::uint32_t VehicleCatalogCount() noexcept { std::scoped_lock lock(mutex); RefreshVehicleCatalogLocked(); return static_cast<std::uint32_t>(vehicle_catalog.size()); }
+    AnomalyStatusV1 VehicleCatalogAt(std::uint64_t generation,std::uint32_t index,AnomalyNteVehicleCatalogEntryV1* entry) noexcept { if(!entry||entry->struct_size<sizeof(*entry))return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);std::scoped_lock lock(mutex);RefreshVehicleCatalogLocked();if(generation!=vehicle_catalog_generation||index>=vehicle_catalog.size())return Status(ANOMALY_STATUS_V1_NOT_FOUND,"vehicle catalog entry is stale");entry->struct_size=sizeof(*entry);entry->flags=ANOMALY_NTE_VEHICLE_V1_VALID;if(!ObjectHandleLocked(vehicle_catalog[index].object,entry->object))return Status(ANOMALY_STATUS_V1_NOT_FOUND,"vehicle object is stale");return Status(ANOMALY_STATUS_V1_OK); }
+    AnomalyStatusV1 VehicleCatalogName(std::uint64_t generation,std::uint32_t index,char* destination,std::size_t* size) noexcept { std::scoped_lock lock(mutex);RefreshVehicleCatalogLocked();if(generation!=vehicle_catalog_generation||index>=vehicle_catalog.size())return Status(ANOMALY_STATUS_V1_NOT_FOUND,"vehicle catalog entry is stale");return CopyString(vehicle_catalog[index].name,destination,size); }
+    AnomalyStatusV1 VehicleLastSummon(char* destination,std::size_t* size) noexcept { std::scoped_lock lock(mutex);return CopyString(vehicle_last_summon,destination,size); }
 
     AnomalyStatusV1 VehicleSetWheelFriction(bool enabled) noexcept {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
