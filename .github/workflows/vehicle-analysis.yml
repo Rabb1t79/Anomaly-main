@@ -1,0 +1,30 @@
+name: vehicle-analysis
+on:
+  push:
+    branches: [work/vehicle-final]
+permissions:
+  contents: read
+jobs:
+  analyze:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Extract Tokky strings
+        shell: pwsh
+        run: |
+          python - <<'PY'
+          import pathlib,re
+          p=pathlib.Path('Tokky-NTE.dll').read_bytes()
+          strings=re.findall(rb'[ -~]{6,}',p)
+          keys=[b'SafeSetVehicleTransform',b'BeginDeferredActorSpawnFromClass',b'FinishSpawningActor',b'LoadClassAsset_Blocking',b'ReSetupEngineAndTransmission',b'SetDelayedVelocityRestore',b'GetActorForwardVector',b'K2_GetActorLocation',b'Player',b'SetOwner',b'Owner',b'Instigator',b'GetAllActorsOfClass']
+          with open('tokky_keys.txt','w') as f:
+            for s in strings:
+              if any(k.lower() in s.lower() for k in keys): f.write(s.decode('ascii','ignore')+'\n')
+          PY
+          Get-Content tokky_keys.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tokky-analysis
+          path: tokky_keys.txt
