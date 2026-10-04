@@ -210,8 +210,8 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     if (!ui->begin_window || !ui->end_window || !ui->text || !ui->button || !ui->slider_float) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     if (!HasField(vehicle, offsetof(AnomalyNteVehicleServiceV1, summon_selected) + sizeof(vehicle->summon_selected)) || !vehicle->summon_selected)
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
-    g_context = {};
-    g_context.vehicle = vehicle; g_context.ui = ui; g_context.started.store(false, std::memory_order_release);
+    { std::scoped_lock lock(g_context.mutex); g_context.vehicle = vehicle; g_context.ui = ui; g_context.vehicles.clear(); g_context.catalog_generation = 0; g_context.selected_index = 0.0F; g_context.status.clear(); g_context.last_summon.clear(); g_context.speed_ratio = 1.0F; g_context.friction_enabled = true; }
+    g_context.apply_speed.store(false, std::memory_order_release); g_context.reset.store(false, std::memory_order_release); g_context.summon.store(false, std::memory_order_release); g_context.friction_toggle.store(false, std::memory_order_release); g_context.started.store(false, std::memory_order_release);
     g_context.speed_ratio = 1.0F; g_context.friction_enabled = true;
     g_context.status = "正在读取 NTE Vehicle 列表";
     *plugin_context = &g_context;
