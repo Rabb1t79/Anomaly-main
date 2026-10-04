@@ -3,13 +3,13 @@
 #include "anomaly/sdk/services/ui.h"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -25,7 +25,14 @@ struct Context {
     const AnomalyUiServiceV1* ui{};
     std::mutex mutex;
     Snapshot snapshot{};
-    std::string status{"正在读取游戏进程中的 Vehicle 载具数据"};
+    std::vector<std::string> vehicle_ids;
+    std::uint32_t selected_index{};
+    std::uint32_t requested_index{};
+    std::uint32_t catalog_retry_ticks{};
+    std::string selected_id;
+    std::string status{"正在读取 DT_VehicleData / Vehicle 数据表"};
+    std::atomic_bool catalog_refresh{};
+    std::atomic_bool selection_pending{};
     std::atomic_bool apply_speed{};
     std::atomic_bool reset{};
     std::atomic_bool summon{};
@@ -62,27 +69,108 @@ void SetStatus(std::string text) {
 }
 
 void DrawText(std::string_view text) {
-    if (g_context.ui && g_context.ui->text) {
+    if (g_context.ui && g_context.ui->text)
         g_context.ui->text(g_context.ui->user, anomaly::sdk::StringView(text));
+}
+
+bool CatalogApiReady() {
+    const auto* v = g_context.vehicle;
+    return v &&
+        HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::vehicle_id_count)>(
+                v, offsetof(AnomalyNteVehicleServiceV1, vehicle_id_count)) &&
+        HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::vehicle_id_at)>(
+                v, offsetof(AnomalyNteVehicleServiceV1, vehicle_id_at)) &&
+        HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::set_summon_vehicle_id)>(
+                v, offsetof(AnomalyNteVehicleServiceV1, set_summon_vehicle_id)) &&
+        v->vehicle_id_count && v->vehicle_id_at && v->set_summon_vehicle_id;
+}
+
+void RefreshCatalog() {
+    if (!CatalogApiReady()) {
+        SetStatus("Host 未提供 Vehicle catalog ABI");
+        return;
+    }
+    std::uint32_t count{};
+    const auto count_status = g_context.vehicle->vehicle_id_count(
+        g_context.vehicle->user, &count);
+    if (count_status.code != ANOMALY_STATUS_V1_OK) {
+        SetStatus("Vehicle 数据表尚未就绪，等待 Host 重试");
+        return;
+    }
+    count = (std::min)(count, 4096u);
+    std::vector<std::string> ids;
+    ids.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        std::size_t size{};
+        auto status = g_context.vehicle->vehicle_id_at(
+            g_context.vehicle->user, i, nullptr, &size);
+        if (status.code != ANOMALY_STATUS_V1_OK || size < 2 || size > 4097) continue;
+        std::string id(size, static_cast<char>(0));
+        status = g_context.vehicle->vehicle_id_at(
+            g_context.vehicle->user, i, id.data(), &size);
+        if (status.code != ANOMALY_STATUS_V1_OK || size < 2) continue;
+        id.resize(size - 1);
+        ids.push_back(std::move(id));
+    }
+    std::scoped_lock lock(g_context.mutex);
+    g_context.vehicle_ids = std::move(ids);
+    if (g_context.vehicle_ids.empty()) {
+        g_context.selected_index = 0;
+        g_context.selected_id.clear();
+        g_context.status = "未发现包含 Vehicle 的数据表条目";
+        return;
+    }
+    if (g_context.selected_index >= g_context.vehicle_ids.size())
+        g_context.selected_index = 0;
+    g_context.selected_id = g_context.vehicle_ids[g_context.selected_index];
+    g_context.status = "已读取 " + std::to_string(g_context.vehicle_ids.size()) +
+        " 个 Vehicle 条目";
+}
+
+void ApplySelection() {
+    if (!CatalogApiReady()) return;
+    std::string id;
+    {
+        std::scoped_lock lock(g_context.mutex);
+        if (g_context.requested_index >= g_context.vehicle_ids.size()) return;
+        id = g_context.vehicle_ids[g_context.requested_index];
+    }
+    const auto status = g_context.vehicle->set_summon_vehicle_id(
+        g_context.vehicle->user, anomaly::sdk::StringView(id));
+    if (status.code == ANOMALY_STATUS_V1_OK) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.selected_index = g_context.requested_index;
+        g_context.selected_id = id;
+        g_context.status = "已选择 Vehicle：" + id;
+    } else {
+        SetStatus("Vehicle 选择失败");
     }
 }
 
 void Draw() {
     const auto* ui = g_context.ui;
-    if (!ui || !ui->begin_window || !ui->end_window || !ui->text ||
-        !ui->button || !ui->slider_float) return;
+    if (!ui || !ui->begin_window || !ui->end_window || !ui->text || !ui->button) return;
 
     int open = 1;
     if (!ui->begin_window(ui->user, anomaly::sdk::StringView("NTE Vehicle"), &open, 0)) return;
 
     Snapshot snap;
     std::string status;
+    std::string selected;
+    std::size_t count{};
+    std::uint32_t index{};
     float ratio;
     bool friction;
     {
         std::scoped_lock lock(g_context.mutex);
         snap = g_context.snapshot;
         status = g_context.status;
+        selected = g_context.selected_id;
+        count = g_context.vehicle_ids.size();
+        index = g_context.selected_index;
         ratio = g_context.speed_ratio;
         friction = g_context.friction_enabled;
     }
@@ -90,33 +178,48 @@ void Draw() {
     DrawText("NTE 载具控制");
     DrawText(status);
 
-    if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
-        DrawText("当前没有检测到正在驾驶的载具。");
-        // Summon is independent of whether the player is already driving a vehicle.
-        if (ui->button(ui->user, anomaly::sdk::StringView("召唤载具"), 0.0F, 0.0F)) {
-            g_context.summon.store(true, std::memory_order_release);
-        }
-    } else {
-        const std::string speed = "当前速度：" + std::to_string(snap.speed_kmh) + " km/h";
-        DrawText(speed);
-
-        const std::string ratio_text = "最高速度倍率：" + std::to_string(snap.top_speed_ratio) + "x";
-        DrawText(ratio_text);
-        if (ui->slider_float(ui->user, anomaly::sdk::StringView("倍率"),
-                             &ratio, 0.05F, 20.0F)) {
+    if (count != 0) {
+        const std::string row = "Vehicle [" + std::to_string(index + 1) + "/" +
+            std::to_string(count) + "]：" + selected;
+        DrawText(row);
+        if (ui->button(ui->user, anomaly::sdk::StringView("上一个 Vehicle"), 0, 0)) {
             std::scoped_lock lock(g_context.mutex);
-            g_context.speed_ratio = ratio;
+            g_context.requested_index = index == 0
+                ? static_cast<std::uint32_t>(count - 1)
+                : index - 1;
+            g_context.selection_pending.store(true, std::memory_order_release);
         }
-        if (ui->button(ui->user, anomaly::sdk::StringView("应用速度倍率"), 0.0F, 0.0F)) {
-            g_context.apply_speed.store(true, std::memory_order_release);
+        if (ui->button(ui->user, anomaly::sdk::StringView("下一个 Vehicle"), 0, 0)) {
+            std::scoped_lock lock(g_context.mutex);
+            g_context.requested_index = static_cast<std::uint32_t>((index + 1) % count);
+            g_context.selection_pending.store(true, std::memory_order_release);
         }
-        if (ui->button(ui->user, anomaly::sdk::StringView("恢复 1.0x"), 0.0F, 0.0F)) {
-            g_context.reset.store(true, std::memory_order_release);
-        }
-        const std::string friction_text = std::string("车轮摩擦：") + (friction ? "开启" : "关闭");
-        DrawText(friction_text);
-        if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F)) {
-            g_context.friction_toggle.store(true, std::memory_order_release);
+        if (ui->button(ui->user, anomaly::sdk::StringView("重新读取 Vehicle 表"), 0, 0))
+            g_context.catalog_refresh.store(true, std::memory_order_release);
+        if (ui->button(ui->user, anomaly::sdk::StringView("召唤已选择载具"), 0, 0))
+            g_context.summon.store(true, std::memory_order_release);
+    } else {
+        if (ui->button(ui->user, anomaly::sdk::StringView("读取 Vehicle 表"), 0, 0))
+            g_context.catalog_refresh.store(true, std::memory_order_release);
+        DrawText("当前没有可选择的 Vehicle 条目。");
+    }
+
+    if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0) {
+        DrawText("当前驾驶载具速度：" + std::to_string(snap.speed_kmh) + " km/h");
+        DrawText("最高速度倍率：" + std::to_string(snap.top_speed_ratio) + "x");
+        if (ui->slider_float) {
+            if (ui->slider_float(ui->user, anomaly::sdk::StringView("倍率"),
+                                 &ratio, 0.05F, 20.0F)) {
+                std::scoped_lock lock(g_context.mutex);
+                g_context.speed_ratio = ratio;
+            }
+            if (ui->button(ui->user, anomaly::sdk::StringView("应用速度倍率"), 0, 0))
+                g_context.apply_speed.store(true, std::memory_order_release);
+            if (ui->button(ui->user, anomaly::sdk::StringView("恢复 1.0x"), 0, 0))
+                g_context.reset.store(true, std::memory_order_release);
+            DrawText(std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
+            if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0, 0))
+                g_context.friction_toggle.store(true, std::memory_order_release);
         }
     }
 
@@ -125,6 +228,31 @@ void Draw() {
 
 void Update() {
     if (!g_context.vehicle || !g_context.started.load(std::memory_order_acquire)) return;
+
+    const bool refresh_requested =
+        g_context.catalog_refresh.exchange(false, std::memory_order_acq_rel);
+    bool retry_catalog = false;
+    {
+        std::scoped_lock lock(g_context.mutex);
+        if (g_context.vehicle_ids.empty() && ++g_context.catalog_retry_ticks >= 120u) {
+            g_context.catalog_retry_ticks = 0;
+            retry_catalog = true;
+        } else if (!g_context.vehicle_ids.empty()) {
+            g_context.catalog_retry_ticks = 0;
+        }
+    }
+    if (refresh_requested || retry_catalog)
+        RefreshCatalog();
+
+    if (g_context.selection_pending.exchange(false, std::memory_order_acq_rel))
+        ApplySelection();
+
+    if (g_context.summon.exchange(false, std::memory_order_acq_rel)) {
+        const auto status = g_context.vehicle->summon_vehicle(g_context.vehicle->user);
+        SetStatus(status.code == ANOMALY_STATUS_V1_OK
+            ? "载具已生成，并已提交 Player Owner 归属"
+            : "载具生成失败");
+    }
 
     if (g_context.reset.exchange(false, std::memory_order_acq_rel)) {
         const auto status = g_context.vehicle->reset(g_context.vehicle->user);
@@ -140,11 +268,6 @@ void Update() {
         const auto status = g_context.vehicle->set_top_speed_ratio(
             g_context.vehicle->user, ratio);
         SetStatus(status.code == ANOMALY_STATUS_V1_OK ? "速度倍率已应用" : "速度倍率应用失败");
-    }
-
-    if (g_context.summon.exchange(false, std::memory_order_acq_rel)) {
-        const auto status = g_context.vehicle->summon_vehicle(g_context.vehicle->user);
-        SetStatus(status.code == ANOMALY_STATUS_V1_OK ? "召唤载具请求已发送" : "召唤载具不可用");
     }
 
     if (g_context.friction_toggle.exchange(false, std::memory_order_acq_rel)) {
@@ -186,21 +309,26 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     if (!vehicle || !ui) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     if (!vehicle->snapshot || !vehicle->set_top_speed_ratio || !vehicle->summon_vehicle ||
         !vehicle->set_wheel_friction_enabled || !vehicle->reset ||
-        !ui->begin_window || !ui->end_window || !ui->text ||
-        !ui->button || !ui->slider_float) {
+        !ui->begin_window || !ui->end_window || !ui->text || !ui->button) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
     g_context.vehicle = vehicle;
     g_context.ui = ui;
     g_context.started.store(false, std::memory_order_release);
+    g_context.catalog_refresh.store(true, std::memory_order_release);
+    g_context.selection_pending.store(false, std::memory_order_release);
+    g_context.catalog_retry_ticks = 0;
     g_context.apply_speed.store(false, std::memory_order_release);
     g_context.reset.store(false, std::memory_order_release);
     g_context.summon.store(false, std::memory_order_release);
     g_context.friction_toggle.store(false, std::memory_order_release);
+    g_context.vehicle_ids.clear();
+    g_context.selected_index = 0;
+    g_context.requested_index = 0;
+    g_context.selected_id.clear();
     g_context.speed_ratio = 1.0F;
     g_context.friction_enabled = true;
     g_context.snapshot = {};
-    g_context.status = "正在读取游戏进程中的 Vehicle 载具数据";
     *plugin_context = &g_context;
     return anomaly::sdk::Ok();
 }
@@ -208,6 +336,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (plugin_context != &g_context) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     g_context.started.store(true, std::memory_order_release);
+    g_context.catalog_refresh.store(true, std::memory_order_release);
     return anomaly::sdk::Ok();
 }
 
@@ -234,17 +363,14 @@ void ANOMALY_CALL DrawCallback(void* plugin_context, const AnomalyUiServiceV1*) 
 
 } // namespace
 
-// The plugin consumes only the public Host vehicle ABI; UE objects never cross this boundary.
 ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     AnomalyPluginDescriptorV1* descriptor) {
-    if (!descriptor || descriptor->struct_size < sizeof(*descriptor)) {
+    if (!descriptor || descriptor->struct_size < sizeof(*descriptor))
         return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
-    }
     *descriptor = {
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
-        anomaly::sdk::StringView("NTE Vehicle"),
-        anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("0.6.0"),
-        Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
+        anomaly::sdk::StringView("0.7.0"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
