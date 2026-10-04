@@ -7791,6 +7791,7 @@ struct Ue5NteAdapter::State {
     bool ApplySummonedVehicleLocked(const std::uint64_t sequence) noexcept {
         if (!pending_vehicle_summon.active) return false;
         if (!actor_frame_cache || actor_world_generation != world_generation ||
+            actor_frame_cache->sequence <= pending_vehicle_summon.request_sequence ||
             actor_frame_cache->sequence + 8 < sequence) {
             RefreshActors(sequence);
         }
