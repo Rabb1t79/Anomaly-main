@@ -36,6 +36,12 @@ $LlvmRoot = Find-Existing @($LlvmRoot)
 if (-not $LlvmRoot) { throw "LLVM MinGW not found at I:\llvm-mingw-20260922-msvcrt-x86_64." }
 $Clang = Join-Path $LlvmRoot "bin\clang.exe"
 $Clangxx = Join-Path $LlvmRoot "bin\clang++.exe"
+$Make = Join-Path $LlvmRoot "bin\mingw32-make.exe"
+if (-not (Test-Path $Make)) {
+    $makeCommand = Get-Command mingw32-make.exe -ErrorAction SilentlyContinue
+    if ($makeCommand) { $Make = $makeCommand.Source }
+}
+if (-not (Test-Path $Make)) { throw "mingw32-make.exe not found. MinGW Makefiles requires mingw32-make." }
 if (-not (Test-Path $Clang) -or -not (Test-Path $Clangxx)) { throw "clang.exe or clang++.exe is missing from the selected LLVM MinGW directory." }
 
 if (-not $SdkRoot) {
@@ -56,6 +62,7 @@ Write-Host "NTE Attack Replay NoVS build"
 Write-Host "Repo : $RepoRoot"
 Write-Host "CMake: $CMake"
 Write-Host "Clang: $Clangxx"
+Write-Host "Make : $Make"
 Write-Host "SDK  : $SdkPrefix"
 
 if (Test-Path $BuildRoot) { Remove-Item $BuildRoot -Recurse -Force }
@@ -70,6 +77,7 @@ $CMakeArgs = @(
     "-B", $BuildRoot,
     "-G", $Generator,
     "-DCMAKE_TOOLCHAIN_FILE=$Toolchain",
+    "-DCMAKE_MAKE_PROGRAM=$Make",
     "-DCMAKE_PREFIX_PATH=$SdkPrefix",
     "-DAnomalySDK_DIR=$($SdkConfig.Directory.FullName)",
     "-DANOMALY_SOURCE_ROOT=$RepoRoot"
