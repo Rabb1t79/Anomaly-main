@@ -21,22 +21,22 @@ jobs:
 
       - name: Build NTE Vehicle plugin
         run: |
-          mkdir -p .build/nte-vehicle-mingw dist/NteVehicle-0.8.0-windows-x64
+          mkdir -p .build/nte-vehicle-mingw dist/NteVehicle-0.8.1-windows-x64
           x86_64-w64-mingw32-g++ -std=c++20 -O2 -shared -static-libgcc -static-libstdc++ \
             -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX \
             -Iinclude plugins/NteVehicle/plugin.cpp \
             -o .build/nte-vehicle-mingw/plugin.dll
-          cp .build/nte-vehicle-mingw/plugin.dll dist/NteVehicle-0.8.0-windows-x64/plugin.dll
-          cp plugins/NteVehicle/manifest.json dist/NteVehicle-0.8.0-windows-x64/manifest.json
-          test -f dist/NteVehicle-0.8.0-windows-x64/plugin.dll
-          test -f dist/NteVehicle-0.8.0-windows-x64/manifest.json
-          test "$(find dist/NteVehicle-0.8.0-windows-x64 -maxdepth 1 -type f | wc -l)" -eq 2
-          test "$(find dist/NteVehicle-0.8.0-windows-x64 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = "manifest.json plugin.dll "
-          (cd dist && zip -j "NteVehicle-0.8.0-windows-x64.zip" "NteVehicle-0.8.0-windows-x64/plugin.dll" "NteVehicle-0.8.0-windows-x64/manifest.json")
+          cp .build/nte-vehicle-mingw/plugin.dll dist/NteVehicle-0.8.1-windows-x64/plugin.dll
+          cp plugins/NteVehicle/manifest.json dist/NteVehicle-0.8.1-windows-x64/manifest.json
+          test -f dist/NteVehicle-0.8.1-windows-x64/plugin.dll
+          test -f dist/NteVehicle-0.8.1-windows-x64/manifest.json
+          test "$(find dist/NteVehicle-0.8.1-windows-x64 -maxdepth 1 -type f | wc -l)" -eq 2
+          test "$(find dist/NteVehicle-0.8.1-windows-x64 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = "manifest.json plugin.dll "
+          (cd dist && zip -j "NteVehicle-0.8.1-windows-x64.zip" "NteVehicle-0.8.1-windows-x64/plugin.dll" "NteVehicle-0.8.1-windows-x64/manifest.json")
 
       - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:
-          name: NteVehicle-0.8.0-windows-x64
-          path: dist/NteVehicle-0.8.0-windows-x64.zip
+          name: NteVehicle-0.8.1-windows-x64
+          path: dist/NteVehicle-0.8.1-windows-x64.zip
           if-no-files-found: error
