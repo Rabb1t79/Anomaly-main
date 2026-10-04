@@ -17,14 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure Anomaly
-        shell: pwsh
-        run: cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
-
-      - name: Build Anomaly runtime
-        shell: pwsh
-        run: cmake --build --preset windows-relwithdebinfo --parallel
-
       - name: Configure NTE Vehicle
         shell: pwsh
         run: |
@@ -48,10 +40,14 @@ jobs:
         run: |
           $b = "$env:GITHUB_WORKSPACE\.build\nte-vehicle"
           cmake --build $b --config Release --parallel
-          New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64" | Out-Null
-          Copy-Item "$b\Release\plugin.dll" "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64\plugin.dll"
-          Copy-Item "$env:GITHUB_WORKSPACE\plugins\NteVehicle\manifest.json" "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64\manifest.json"
-          Compress-Archive -Path "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64\*" -DestinationPath "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64.zip" -Force
+          $out = "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item "$b\Release\plugin.dll" "$out\plugin.dll"
+          Copy-Item "$env:GITHUB_WORKSPACE\plugins\NteVehicle\manifest.json" "$out\manifest.json"
+          if (-not ((Get-ChildItem -LiteralPath $out -File).Name -contains "plugin.dll")) { throw "plugin.dll missing" }
+          if (-not ((Get-ChildItem -LiteralPath $out -File).Name -contains "manifest.json")) { throw "manifest.json missing" }
+          if ((Get-ChildItem -LiteralPath $out -File).Count -ne 2) { throw "Output folder must contain exactly plugin.dll and manifest.json" }
+          Compress-Archive -Path "$out\*" -DestinationPath "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64.zip" -Force
 
       - name: Upload plugin
         uses: actions/upload-artifact@v4
