@@ -86,11 +86,30 @@ $CMakeArgs = @(
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed." }
 & $CMake --build $BuildRoot --config Release --target anomaly_nte_attack_replay --parallel
 if ($LASTEXITCODE -ne 0) { throw "NTE Attack Replay build failed." }
+
 $PluginDll = Join-Path $BuildRoot "package\NteAttackReplay\plugin.dll"
 if (-not (Test-Path $PluginDll)) { throw "Build completed but plugin.dll was not found at $PluginDll." }
+
 New-Item -ItemType Directory -Force $PackageRoot | Out-Null
 Copy-Item $PluginDll (Join-Path $PackageRoot "plugin.dll") -Force
 Copy-Item (Join-Path $RepoRoot "plugins\NteAttackReplay\manifest.json") (Join-Path $PackageRoot "manifest.json") -Force
+
+# LLVM-MinGW links libc++ dynamically. Anomaly requires every non-system
+# native dependency to be a sibling private DLL inside the plugin package.
+$LlvmBin = Join-Path $LlvmRoot "bin"
+$RuntimeDlls = @(
+    "libc++.dll",
+    "libc++abi.dll",
+    "libunwind.dll"
+)
+foreach ($RuntimeName in $RuntimeDlls) {
+    $RuntimePath = Join-Path $LlvmBin $RuntimeName
+    if (Test-Path $RuntimePath) {
+        Copy-Item $RuntimePath (Join-Path $PackageRoot $RuntimeName) -Force
+        Write-Host "Runtime: $RuntimeName"
+    }
+}
+
 $Locale = Join-Path $RepoRoot "plugins\NteAttackReplay\locales"
 if (Test-Path $Locale) { Copy-Item $Locale (Join-Path $PackageRoot "locales") -Recurse -Force }
 Write-Host ""
