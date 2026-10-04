@@ -21,19 +21,7 @@ jobs:
         shell: pwsh
         run: |
           $b = "$env:GITHUB_WORKSPACE\.build\nte-vehicle"
-          $src = "$env:GITHUB_WORKSPACE\.build\nte-vehicle-src"
-          New-Item -ItemType Directory -Force $src | Out-Null
-          @"
-          cmake_minimum_required(VERSION 3.22)
-          project(NteVehicleStandalone LANGUAGES CXX)
-          set(CMAKE_CXX_STANDARD 20)
-          set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          add_library(nte_vehicle SHARED "${CMAKE_SOURCE_DIR}/../../plugins/NteVehicle/plugin.cpp")
-          target_include_directories(nte_vehicle PRIVATE "${CMAKE_SOURCE_DIR}/../../include")
-          target_compile_definitions(nte_vehicle PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-          set_target_properties(nte_vehicle PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
-          "@ | Set-Content -LiteralPath "$src\CMakeLists.txt" -Encoding UTF8
-          cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
+          cmake -S "$env:GITHUB_WORKSPACE\plugins\NteVehicle" -B $b -G "Visual Studio 17 2022" -A x64
 
       - name: Build NTE Vehicle
         shell: pwsh
