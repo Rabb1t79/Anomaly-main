@@ -14,25 +14,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure
-        shell: pwsh
-        run: cmake --preset windows-vs2022
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
-      - name: Build attack replay plugin
-        shell: pwsh
-        run: cmake --build --preset windows-relwithdebinfo --target anomaly_builtin_nte_attack_replay --parallel
+      - name: Compile plugin
+        shell: cmd
+        run: |
+          if not exist build mkdir build
+          cl /nologo /LD /EHsc /std:c++20 /W4 /permissive- /utf-8 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX /Iinclude plugins\NteAttackReplay\plugin.cpp /link /OUT:build\plugin.dll /EXPORT:AnomalyPluginEntryV1
+          if errorlevel 1 exit /b 1
 
-      - name: Verify package
+      - name: Stage package
         shell: pwsh
         run: |
-          $dir = ".build/windows-vs2022/package/NteAttackReplay"
-          if (!(Test-Path "$dir/plugin.dll")) { throw "plugin.dll was not produced" }
-          if (!(Test-Path "$dir/manifest.json")) { throw "manifest.json was not produced" }
-          Get-Item "$dir/plugin.dll", "$dir/manifest.json" | Format-List FullName,Length
+          New-Item -ItemType Directory -Force build\NteAttackReplay | Out-Null
+          Copy-Item build\plugin.dll build\NteAttackReplay\plugin.dll
+          Copy-Item plugins\NteAttackReplay\manifest.json build\NteAttackReplay\manifest.json
+          Copy-Item -Recurse plugins\NteAttackReplay\locales build\NteAttackReplay\locales
+          Get-Item build\NteAttackReplay\plugin.dll, build\NteAttackReplay\manifest.json | Format-List FullName,Length
 
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
         with:
           name: NteAttackReplay-1.1.0
-          path: .build/windows-vs2022/package/NteAttackReplay
+          path: build\NteAttackReplay
           if-no-files-found: error
