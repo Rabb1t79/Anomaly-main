@@ -2,23 +2,20 @@ name: vehicle-analysis
 on:
   push:
     branches: [work/vehicle-final]
-permissions:
-  contents: read
+permissions: {contents: read}
 jobs:
   analyze:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with: {lfs: true}
-      - name: Extract Tokky strings
+      - name: Extract Tokky and dump vehicle strings
         shell: pwsh
         run: |
-          $p=[IO.File]::ReadAllBytes('Tokky-NTE.dll')
-          $keys=@('SafeSetVehicleTransform','BeginDeferredActorSpawnFromClass','FinishSpawningActor','LoadClassAsset_Blocking','ReSetupEngineAndTransmission','SetDelayedVelocityRestore','GetActorForwardVector','K2_GetActorLocation','SetOwner','GetOwner','Instigator','GetAllActorsOfClass','VehicleDataAsset','SummonVehicleTemplateMap')
-          $out=New-Object Text.StringBuilder
-          $cur=New-Object Text.StringBuilder
-          foreach($b in $p){ if($b -ge 32 -and $b -le 126){[void]$cur.Append([char]$b)} else { if($cur.Length -ge 6){$s=$cur.ToString(); foreach($k in $keys){if($s.ToLower().Contains($k.ToLower())){[void]$out.AppendLine($s);break}}};$cur.Clear()} }
-          Set-Content tokky_keys.txt $out.ToString()
-          Get-Content tokky_keys.txt
+          function Extract($file,$out,$keys){$p=[IO.File]::ReadAllBytes($file);$sb=New-Object Text.StringBuilder;$cur=New-Object Text.StringBuilder;foreach($b in $p){if($b -ge 32 -and $b -le 126){[void]$cur.Append([char]$b)}else{if($cur.Length -ge 6){$s=$cur.ToString();foreach($k in $keys){if($s.ToLower().Contains($k.ToLower())){[void]$sb.AppendLine($s);break}}};$cur.Clear()}};Set-Content $out $sb.ToString()}
+          Extract 'Tokky-NTE.dll' 'tokky_keys.txt' @('SafeSetVehicleTransform','BeginDeferredActorSpawnFromClass','FinishSpawningActor','LoadClassAsset_Blocking','ReSetupEngineAndTransmission','SetDelayedVelocityRestore','GetActorForwardVector','K2_GetActorLocation','SetOwner','GetOwner','Instigator','GetAllActorsOfClass','VehicleDataAsset','SummonVehicleTemplateMap')
+          Extract 'HTGame_dump.exe' 'dump_vehicle_keys.txt' @('HTVehicleDataAsset','SummonVehicleTemplateMap','DT_VehicleData','VehicleData','Vehicle007','Vehicle001','Vehicle002','Vehicle003','Vehicle004','Vehicle005','Vehicle006','Vehicle008','Vehicle009','Vehicle010','Vehicle011','Vehicle012','Vehicle013','Vehicle014','Vehicle015','Vehicle016','Vehicle017','Vehicle018','Vehicle019','Vehicle020','SetOwner','Owner','Instigator','Spawn')
+          Write-Host '--- TOKKY ---'; Get-Content tokky_keys.txt
+          Write-Host '--- DUMP ---'; Get-Content dump_vehicle_keys.txt | Select-Object -First 2000
       - uses: actions/upload-artifact@v4
-        with: {name: tokky-analysis, path: tokky_keys.txt}
+        with: {name: tokky-analysis, path: '*.txt'}
