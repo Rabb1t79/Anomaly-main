@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         run: |
           cmake --build --preset windows-relwithdebinfo --target anomaly_builtin_nte_vehicle --parallel
-          $out = "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.8.0-windows-x64"
+          $out = "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.8.1-windows-x64"
           $src = "$env:GITHUB_WORKSPACE\.build\windows-vs2022\bin\RelWithDebInfo\builtin-plugins\NteVehicle"
           New-Item -ItemType Directory -Force $out | Out-Null
           Copy-Item "$src\plugin.dll" "$out\plugin.dll"
@@ -34,11 +34,11 @@ jobs:
           if (-not (Test-Path "$out\manifest.json")) { throw "manifest.json missing" }
           $files = Get-ChildItem -LiteralPath $out -File
           if ($files.Count -ne 2 -or ($files.Name -notcontains "plugin.dll") -or ($files.Name -notcontains "manifest.json")) { throw "Output folder must contain exactly plugin.dll and manifest.json" }
-          Compress-Archive -Path "$out\*" -DestinationPath "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.8.0-windows-x64.zip" -Force
+          Compress-Archive -Path "$out\*" -DestinationPath "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.8.1-windows-x64.zip" -Force
 
       - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:
-          name: NteVehicle-0.8.0-windows-x64
-          path: dist/NteVehicle-0.8.0-windows-x64.zip
+          name: NteVehicle-0.8.1-windows-x64
+          path: dist/NteVehicle-0.8.1-windows-x64.zip
           if-no-files-found: error
