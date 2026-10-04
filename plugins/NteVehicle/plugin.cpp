@@ -108,7 +108,7 @@ void RefreshCatalog() {
         auto status = g_context.vehicle->vehicle_id_at(
             g_context.vehicle->user, i, nullptr, &size);
         if (status.code != ANOMALY_STATUS_V1_OK || size < 2 || size > 4097) continue;
-        std::string id(size, '\0');
+        std::string id(size, static_cast<char>(0));
         status = g_context.vehicle->vehicle_id_at(
             g_context.vehicle->user, i, id.data(), &size);
         if (status.code != ANOMALY_STATUS_V1_OK || size < 2) continue;
