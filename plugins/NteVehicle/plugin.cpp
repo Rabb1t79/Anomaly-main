@@ -126,24 +126,19 @@ void Draw() {
 
 void UpdateCatalog() {
     const auto* v = g_context.vehicle;
-    if (!v || v->struct_size < offsetof(AnomalyNteVehicleServiceV1, catalog_generation) + sizeof(v->catalog_generation) ||
-        !v->catalog_generation || !v->catalog_count || !v->catalog_name_utf8) return;
-    const auto generation = v->catalog_generation(v->user);
-    const auto count = v->catalog_count(v->user);
-    std::vector<std::string> next;
-    next.reserve(count);
-    for (std::uint32_t i = 0; i < count; ++i) {
-        char name[512]{};
-        std::size_t size = sizeof(name);
-        const auto st = v->catalog_name_utf8(v->user, generation, i, name, &size);
-        if (st.code == ANOMALY_STATUS_V1_OK && name[0] != '\0') next.emplace_back(name);
+    if (!v || !v->vehicle_id_count || !v->vehicle_id_at) return;
+    std::uint32_t count{};
+    if (v->vehicle_id_count(v->user, &count).code != ANOMALY_STATUS_V1_OK) return;
+    std::vector<std::string> next; next.reserve(count);
+    for (std::uint32_t i=0;i<count;++i) {
+        char name[512]{}; std::size_t size=sizeof(name);
+        if (v->vehicle_id_at(v->user,i,name,&size).code==ANOMALY_STATUS_V1_OK && name[0]) next.emplace_back(name);
     }
     std::scoped_lock lock(g_context.mutex);
-    if (generation != g_context.catalog_generation || next != g_context.vehicles) {
-        g_context.catalog_generation = generation;
-        g_context.vehicles = std::move(next);
+    if (next != g_context.vehicles) {
+        g_context.vehicles=std::move(next);
         if (g_context.selected_index >= static_cast<float>(g_context.vehicles.size()))
-            g_context.selected_index = g_context.vehicles.empty() ? 0.0F : static_cast<float>(g_context.vehicles.size() - 1U);
+            g_context.selected_index=g_context.vehicles.empty()?0.0F:static_cast<float>(g_context.vehicles.size()-1U);
     }
 }
 
@@ -162,11 +157,12 @@ void Update() {
         }
         if (selected.empty()) {
             SetStatus("没有可召唤的 Vehicle");
-        } else if (g_context.vehicle->summon_selected) {
-            const auto st = g_context.vehicle->summon_selected(g_context.vehicle->user, anomaly::sdk::StringView(selected));
+        } else if (g_context.vehicle->set_summon_vehicle_id && g_context.vehicle->summon_vehicle) {
+            const auto set = g_context.vehicle->set_summon_vehicle_id(g_context.vehicle->user, anomaly::sdk::StringView(selected));
+            const auto st = set.code == ANOMALY_STATUS_V1_OK ? g_context.vehicle->summon_vehicle(g_context.vehicle->user) : set;
             SetStatus(st.code == ANOMALY_STATUS_V1_OK ? "车辆已按 Tokky 原生生成链创建" : std::string("车辆生成失败：") + (st.message.data ? std::string(st.message.data, st.message.size) : ""));
         } else {
-            SetStatus("当前 Host 没有新的车辆生成 ABI");
+            SetStatus("当前 Host 没有车辆选择/生成 ABI");
         }
     }
 
@@ -195,11 +191,7 @@ void Update() {
         g_context.snapshot.friction = snapshot.wheel_friction_enabled != 0;
     } else g_context.snapshot.flags = 0;
 
-    if (g_context.vehicle->struct_size >= offsetof(AnomalyNteVehicleServiceV1, last_summon_utf8) + sizeof(g_context.vehicle->last_summon_utf8) && g_context.vehicle->last_summon_utf8) {
-        char name[512]{}; std::size_t size = sizeof(name);
-        if (g_context.vehicle->last_summon_utf8(g_context.vehicle->user, name, &size).code == ANOMALY_STATUS_V1_OK && name[0]) g_context.last_summon = name;
-    }
-}
+
 
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (!host || !plugin_context) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -208,7 +200,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     if (!vehicle || !ui || !vehicle->snapshot || !vehicle->set_top_speed_ratio || !vehicle->summon_vehicle ||
         !vehicle->set_wheel_friction_enabled || !vehicle->reset) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     if (!ui->begin_window || !ui->end_window || !ui->text || !ui->button || !ui->slider_float) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
-    if (vehicle->struct_size < offsetof(AnomalyNteVehicleServiceV1, summon_selected) + sizeof(vehicle->summon_selected) || !vehicle->summon_selected)
+    if (!vehicle->vehicle_id_count || !vehicle->vehicle_id_at || !vehicle->set_summon_vehicle_id)
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     { std::scoped_lock lock(g_context.mutex); g_context.vehicle = vehicle; g_context.ui = ui; g_context.vehicles.clear(); g_context.catalog_generation = 0; g_context.selected_index = 0.0F; g_context.status.clear(); g_context.last_summon.clear(); g_context.speed_ratio = 1.0F; g_context.friction_enabled = true; }
     g_context.apply_speed.store(false, std::memory_order_release); g_context.reset.store(false, std::memory_order_release); g_context.summon.store(false, std::memory_order_release); g_context.friction_toggle.store(false, std::memory_order_release); g_context.started.store(false, std::memory_order_release);
