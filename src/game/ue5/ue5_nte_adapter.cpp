@@ -756,6 +756,23 @@ struct Ue5NteAdapter::State {
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
+    struct VehicleCatalogEntry { std::uintptr_t object{}; std::string name; std::string path; };
+    std::vector<VehicleCatalogEntry> vehicle_catalog;
+    std::uint64_t vehicle_catalog_generation{};
+    std::string vehicle_last_summon;
+    struct VehicleSpawnBinding {
+        std::uintptr_t function{}; std::uintptr_t receiver{};
+        std::uint16_t parms_size{}; std::uint16_t return_offset{0xFFFFU};
+        std::uint16_t world_offset{0xFFFFU}; std::uint16_t class_offset{0xFFFFU};
+        std::uint16_t transform_offset{0xFFFFU}; std::uint16_t collision_offset{0xFFFFU};
+        std::uint16_t owner_offset{0xFFFFU}; std::uint16_t scale_offset{0xFFFFU};
+        std::uint16_t actor_offset{0xFFFFU}; bool available{};
+    } vehicle_begin_spawn, vehicle_finish_spawn;
+    VehicleFunctionBinding vehicle_set_owner{};
+    VehicleFunctionBinding vehicle_set_instigator{};
+    VehicleFunctionBinding vehicle_safe_set_transform{};
+    VehicleFunctionBinding vehicle_reset_engine{};
+
     std::uintptr_t current_vehicle_object{};
     // Host-only state for Tokky's validated SetMaxEngineTorque mutation path.
     std::uintptr_t vehicle_base_movement_component{};
@@ -7635,7 +7652,88 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
         // Tokky multiplies the original movement-component torque and sends the
         // resulting float through SetMaxEngineTorque; do not accumulate ratios.
-        if (!vehicle_base_engine_torque_valid || vehicle_base_movement_component == 0 ||
+        if (!vehicle_base_engine_    void RefreshVehicleCatalogLocked() noexcept {
+        if (vehicle_catalog_generation == object_generation && !vehicle_catalog.empty()) return;
+        vehicle_catalog.clear(); vehicle_catalog_generation = object_generation;
+        if (object_registry.count == 0 || object_registry.count > 16U * 1024U * 1024U) return;
+        try {
+            std::unordered_set<std::string> seen;
+            for (std::uint32_t index=0; index<object_registry.count; ++index) {
+                std::uintptr_t object{}; std::uint32_t serial{};
+                if (!ReadObjectSlot(*memory, object_registry, index, object, serial) || object==0 || !ReadableRange(*memory, object, 0x20U)) continue;
+                std::string name; if (!ReadReflectedObjectNameLocked(object,name) || name.find("Vehicle")==std::string::npos) continue;
+                std::uintptr_t klass{}; if (!ReadPointerAt(*memory,object,Layout(profile,"object.class"),klass)) continue;
+                std::string class_name; if (!ReadReflectedObjectNameLocked(klass,class_name)) continue;
+                if (class_name!="Class" && class_name!="BlueprintGeneratedClass" && class_name.find("VehicleDataAsset")==std::string::npos) continue;
+                if (!seen.insert(name).second) continue;
+                vehicle_catalog.push_back({object,name,ObjectPathLocked(object)});
+            }
+            std::ranges::sort(vehicle_catalog,[](const auto&a,const auto&b){return a.name<b.name;});
+        } catch (...) { vehicle_catalog.clear(); }
+    }
+
+    bool BuildVehicleSpawnBindingLocked(std::uintptr_t function, bool begin, VehicleSpawnBinding& binding) const {
+        std::string name; if (!function || !ReadReflectedObjectNameLocked(function,name)) return false;
+        if ((begin && name!="BeginDeferredActorSpawnFromClass") || (!begin && name!="FinishSpawningActor")) return false;
+        std::uintptr_t property{}, outer{}; std::uint8_t num_parms{}; std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory,function,Layout(profile,"ustruct.propertyLink"),property) ||
+            !ReadPointerAt(*memory,function,Layout(profile,"object.outer"),outer) ||
+            !ReadValue(*memory,function+Layout(profile,"ufunction.numParms"),num_parms) ||
+            !ReadValue(*memory,function+Layout(profile,"ufunction.parmsSize"),parms_size) ||
+            !ReadValue(*memory,function+Layout(profile,"ufunction.returnValueOffset"),return_offset)) return false;
+        VehicleSpawnBinding b{}; b.function=function; b.parms_size=parms_size; b.return_offset=return_offset;
+        static_cast<void>(ReadPointerAt(*memory,outer,Layout(profile,"uclass.classDefaultObject"),b.receiver));
+        for(std::uint32_t n=0; property && n<32; ++n){ ReflectedPropertyInfo info; if(!ReadReflectedPropertyLocked(property,info)) return false; if(info.offset<0) return false; const auto off=static_cast<std::uint16_t>(info.offset);
+            if(info.name=="ReturnValue"){if(info.type!="ObjectProperty"||info.element_size!=8)return false;b.return_offset=off;}
+            else if(begin&&info.name=="WorldContextObject"){if(info.type!="ObjectProperty"||info.element_size!=8)return false;b.world_offset=off;}
+            else if(begin&&info.name=="ActorClass"){if((info.type!="ClassProperty"&&info.type!="ObjectProperty")||info.element_size!=8)return false;b.class_offset=off;}
+            else if(info.name=="SpawnTransform"){if(info.type!="StructProperty"||info.element_size<48)return false;b.transform_offset=off;}
+            else if(begin&&info.name=="CollisionHandlingOverride"){if(info.element_size!=1&&info.element_size!=4)return false;b.collision_offset=off;}
+            else if(begin&&info.name=="Owner"){if(info.type!="ObjectProperty"||info.element_size!=8)return false;b.owner_offset=off;}
+            else if(info.name=="TransformScaleMethod"){if(info.element_size!=1&&info.element_size!=4)return false;b.scale_offset=off;}
+            else if(!begin&&info.name=="Actor"){if(info.type!="ObjectProperty"||info.element_size!=8)return false;b.actor_offset=off;}
+            property=info.next;
+        }
+        b.available=begin ? b.receiver && b.world_offset!=0xFFFFU&&b.class_offset!=0xFFFFU&&b.transform_offset!=0xFFFFU&&b.owner_offset!=0xFFFFU&&b.return_offset!=0xFFFFU
+                           : b.receiver && b.actor_offset!=0xFFFFU&&b.transform_offset!=0xFFFFU&&b.return_offset!=0xFFFFU;
+        if(!b.available || num_parms<2) return false; binding=b; return true;
+    }
+
+    bool EnsureVehicleSpawnBindingsLocked(){
+        if(vehicle_begin_spawn.available&&vehicle_finish_spawn.available)return true;
+        std::uintptr_t begin{},finish{};
+        if(!FindExactObjectLocked(L"/Script/Engine.GameplayStatics.BeginDeferredActorSpawnFromClass",begin)||!BuildVehicleSpawnBindingLocked(begin,true,vehicle_begin_spawn))return false;
+        if(!FindExactObjectLocked(L"/Script/Engine.GameplayStatics.FinishSpawningActor",finish)||!BuildVehicleSpawnBindingLocked(finish,false,vehicle_finish_spawn))return false;
+        if(vehicle_set_owner.function==0){std::uintptr_t f{};if(FindExactObjectLocked(L"/Script/Engine.Actor.SetOwner",f))static_cast<void>(BuildVehicleBindingLocked(f,"SetOwner","ObjectInput",vehicle_set_owner));}
+        if(vehicle_set_instigator.function==0){std::uintptr_t f{};if(FindExactObjectLocked(L"/Script/Engine.Actor.SetInstigator",f))static_cast<void>(BuildVehicleBindingLocked(f,"SetInstigator","ObjectInput",vehicle_set_instigator));}
+        if(vehicle_safe_set_transform.function==0)static_cast<void>(FindVehicleFunctionLocked("SafeSetVehicleTransform",std::array<std::string_view,2>{"HTWheeledVehicle","HTWheeledVehicleDrivable"},"TransformInput",vehicle_safe_set_transform));
+        if(vehicle_reset_engine.function==0)static_cast<void>(FindVehicleFunctionLocked("ReSetupEngineAndTransmission",std::array<std::string_view,2>{"HTWheeledVehicle","HTWheeledVehicleDrivable"},"NoArgs",vehicle_reset_engine));
+        return true;
+    }
+
+    AnomalyStatusV1 VehicleSummonSelected(AnomalyStringViewV1 selection) noexcept {
+        if(GetCurrentThreadId()!=game_thread_id.load(std::memory_order_acquire))return Status(ANOMALY_STATUS_V1_FAILED,"vehicle summon must run on Game thread");
+        if(!selection.data||selection.size==0)return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,"vehicle selection is empty");
+        std::scoped_lock lock(mutex);
+        if(!NteVehicleProfileAvailable()||world_pointer==0||player_controller==0||player_pawn==0||!process_event_invoker||!memory)return Status(ANOMALY_STATUS_V1_UNAVAILABLE,"vehicle host state is unavailable");
+        RefreshVehicleCatalogLocked(); const std::string selected(selection.data,selection.size); auto it=std::ranges::find(vehicle_catalog,selected,&VehicleCatalogEntry::name);
+        if(it==vehicle_catalog.end())return Status(ANOMALY_STATUS_V1_NOT_FOUND,"vehicle selection not found");
+        if(!EnsureVehicleSpawnBindingsLocked())return Status(ANOMALY_STATUS_V1_UNAVAILABLE,"Tokky deferred spawn bindings unavailable");
+        std::array<std::uint8_t,48> transform{}; const float q[4]={0,0,0,1}; const float p[3]={static_cast<float>(player_position[0]-2000.0),static_cast<float>(player_position[1]+2000.0),static_cast<float>(player_position[2]+2000.0)}; const float sc[3]={1,1,1};
+        std::memcpy(transform.data(),q,16);std::memcpy(transform.data()+16,p,12);std::memcpy(transform.data()+32,sc,12);
+        std::vector<std::uint8_t> begin(vehicle_begin_spawn.parms_size);std::memcpy(begin.data()+vehicle_begin_spawn.world_offset,&world_pointer,8);std::memcpy(begin.data()+vehicle_begin_spawn.class_offset,&it->object,8);std::memcpy(begin.data()+vehicle_begin_spawn.transform_offset,transform.data(),48);if(vehicle_begin_spawn.collision_offset!=0xFFFFU)begin[vehicle_begin_spawn.collision_offset]=0;if(vehicle_begin_spawn.owner_offset!=0xFFFFU)std::memcpy(begin.data()+vehicle_begin_spawn.owner_offset,&player_controller,8);if(vehicle_begin_spawn.scale_offset!=0xFFFFU)begin[vehicle_begin_spawn.scale_offset]=0;
+        if(!InvokeProcessEventGuarded(process_event_invoker,vehicle_begin_spawn.receiver,vehicle_begin_spawn.function,begin.data(),begin.size())||vehicle_begin_spawn.return_offset+8>begin.size())return Status(ANOMALY_STATUS_V1_FAILED,"BeginDeferredActorSpawnFromClass failed");
+        std::uintptr_t spawned{};std::memcpy(&spawned,begin.data()+vehicle_begin_spawn.return_offset,8);if(!spawned||!ReadableRange(*memory,spawned,0x20U))return Status(ANOMALY_STATUS_V1_FAILED,"vehicle actor was not created");
+        std::vector<std::uint8_t> finish(vehicle_finish_spawn.parms_size);std::memcpy(finish.data()+vehicle_finish_spawn.actor_offset,&spawned,8);std::memcpy(finish.data()+vehicle_finish_spawn.transform_offset,transform.data(),48);if(vehicle_finish_spawn.scale_offset!=0xFFFFU)finish[vehicle_finish_spawn.scale_offset]=0;
+        if(!InvokeProcessEventGuarded(process_event_invoker,vehicle_finish_spawn.receiver,vehicle_finish_spawn.function,finish.data(),finish.size())||vehicle_finish_spawn.return_offset+8>finish.size())return Status(ANOMALY_STATUS_V1_FAILED,"FinishSpawningActor failed");std::memcpy(&spawned,finish.data()+vehicle_finish_spawn.return_offset,8);if(!spawned)return Status(ANOMALY_STATUS_V1_FAILED,"FinishSpawningActor returned null");
+        if(vehicle_set_owner.function){std::array<std::uint8_t,8> a{};std::memcpy(a.data()+vehicle_set_owner.parameter_offset,&player_controller,8);static_cast<void>(InvokeProcessEventGuarded(process_event_invoker,spawned,vehicle_set_owner.function,a.data(),a.size()));}
+        if(vehicle_set_instigator.function){std::array<std::uint8_t,8> a{};std::memcpy(a.data()+vehicle_set_instigator.parameter_offset,&player_pawn,8);static_cast<void>(InvokeProcessEventGuarded(process_event_invoker,spawned,vehicle_set_instigator.function,a.data(),a.size()));}
+        if(vehicle_safe_set_transform.function){std::array<std::uint8_t,48> a{};std::memcpy(a.data()+vehicle_safe_set_transform.parameter_offset,transform.data(),48);static_cast<void>(InvokeProcessEventGuarded(process_event_invoker,spawned,vehicle_safe_set_transform.function,a.data(),a.size()));}
+        if(vehicle_reset_engine.function)static_cast<void>(InvokeProcessEventGuarded(process_event_invoker,spawned,vehicle_reset_engine.function,nullptr,0));
+        std::string spawned_name;static_cast<void>(ReadReflectedObjectNameLocked(spawned,spawned_name));vehicle_last_summon=spawned_name.empty()?selected:spawned_name;return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+torque_valid || vehicle_base_movement_component == 0 ||
             vehicle_bindings.set_top_speed_ratio.function == 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "Tokky SetMaxEngineTorque ABI or torque baseline is unavailable");
