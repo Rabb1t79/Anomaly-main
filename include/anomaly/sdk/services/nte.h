@@ -334,6 +334,10 @@ typedef struct AnomalyNteVehicleServiceV1 {
         void* user, uint32_t index, char* destination, size_t* inout_size);
     AnomalyStatusV1 (ANOMALY_CALL *set_summon_vehicle_id)(
         void* user, AnomalyStringViewV1 vehicle_id);
+    // Optional append-only V1 extension. Returns the reflected class name of the
+    // current driving vehicle, for example BP_Vehicle_hight_C.
+    AnomalyStatusV1 (ANOMALY_CALL *current_vehicle_class_name_utf8)(
+        void* user, char* destination, size_t* inout_size);
 } AnomalyNteVehicleServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
