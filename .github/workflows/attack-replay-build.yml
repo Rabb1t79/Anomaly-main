@@ -1,0 +1,35 @@
+name: attack-replay-build
+
+on:
+  push:
+    branches:
+      - feature/nte-attack-replay
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
+      - name: Build
+        run: cmake --build --preset windows-relwithdebinfo --parallel --target anomaly_builtin_nte_attack_replay
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/NteAttackReplay | Out-Null
+          Copy-Item .build/windows-vs2022/RelWithDebInfo/plugin.dll dist/NteAttackReplay/plugin.dll
+          Copy-Item plugins/NteAttackReplay/manifest.json dist/NteAttackReplay/manifest.json
+          Compress-Archive -Path dist/NteAttackReplay/* -DestinationPath dist/NteAttackReplay.zip -Force
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-1.1.0-windows-x64
+          path: dist/NteAttackReplay.zip
+          if-no-files-found: error
