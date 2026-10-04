@@ -4,6 +4,7 @@
 #include "anomaly/sdk/services/ui.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -47,6 +48,10 @@ struct Context final {
     bool enabled{};
     bool captured{};
     bool replaying{};
+    // Draw runs in the Render domain. Replay/stop requests are posted atomically
+    // and executed by Update() in the Game callback domain required by the ABI.
+    std::atomic_bool replay_requested{false};
+    std::atomic_bool stop_requested{false};
     uint32_t replay_count{10};
     uint32_t replay_done{};
     double replay_rate{2.0};
@@ -339,21 +344,36 @@ bool CaptureNextAttack(Context& context) {
     return false;
 }
 
-bool ReplayOnce(Context& context) {
-    if (!InvocationReady(context.invocation) || !context.captured || !context.captured_has_skill) return false;
+enum class ReplayCallResult : uint32_t {
+    Success,
+    NoSkill,
+    InvalidState,
+    ServiceError,
+    Rejected,
+};
+
+ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
+    if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
+    if (accepted != nullptr) *accepted = 0;
+    if (!InvocationReady(context.invocation) || !context.captured) {
+        return ReplayCallResult::InvalidState;
+    }
+    if (!context.captured_has_skill) {
+        return ReplayCallResult::NoSkill;
+    }
 
     AnomalyNteCombatantSnapshotV1 combatant{sizeof(combatant)};
     if (context.combat->current_combatant(
             context.combat->user, &combatant).code != ANOMALY_STATUS_V1_OK ||
         combatant.character.id == 0 || combatant.world.id == 0) {
-        return false;
+        return ReplayCallResult::InvalidState;
     }
 
     context.world = combatant.world;
     context.character = combatant.character;
 
     AnomalyGenerationHandleV1 skill{};
-    if (!ResolveReplaySkill(context, &skill)) return false;
+    if (!ResolveReplaySkill(context, &skill)) return ReplayCallResult::NoSkill;
 
     AnomalyNteSkillInvocationRequestV1 request{sizeof(request)};
     request.world = context.world;
@@ -363,10 +383,11 @@ bool ReplayOnce(Context& context) {
     AnomalyNteSkillInvocationResultV1 result{sizeof(result)};
     const auto status = context.invocation->activate(
         context.invocation->user, &request, &result);
-    if (status.code != ANOMALY_STATUS_V1_OK || result.accepted == 0) {
-        return false;
-    }
-    return true;
+    if (status_code != nullptr) *status_code = status.code;
+    if (accepted != nullptr) *accepted = result.accepted;
+    if (status.code != ANOMALY_STATUS_V1_OK) return ReplayCallResult::ServiceError;
+    if (result.accepted == 0) return ReplayCallResult::Rejected;
+    return ReplayCallResult::Success;
 }
 
 
@@ -419,6 +440,8 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, uint32_t) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     context->replaying = false;
+    context->replay_requested.store(false, std::memory_order_release);
+    context->stop_requested.store(true, std::memory_order_release);
     return anomaly::sdk::Ok();
 }
 
@@ -435,6 +458,23 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         CaptureNextAttack(*context);
     }
 
+    if (context->stop_requested.exchange(false, std::memory_order_acq_rel)) {
+        context->replaying = false;
+        context->status = "已停止重放，继续自动记录";
+    }
+    if (context->replay_requested.exchange(false, std::memory_order_acq_rel)) {
+        if (context->enabled && context->captured && !context->replaying) {
+            context->replay_done = 0;
+            context->replaying = true;
+            context->next_replay = std::chrono::steady_clock::now();
+            context->status = "已提交重放，等待 Game 域执行";
+        } else {
+            context->status = context->captured
+                ? "无法开始重放：请先启用重放功能"
+                : "无法开始重放：当前没有已捕获攻击";
+        }
+    }
+
     if (!context->replaying) return;
 
     const auto now = std::chrono::steady_clock::now();
@@ -447,14 +487,25 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     if (now < context->next_replay) return;
 
-    if (!ReplayOnce(*context)) {
+    uint32_t replay_status = ANOMALY_STATUS_V1_OK;
+    uint32_t accepted = 0;
+    const ReplayCallResult replay_result =
+        ReplayOnce(*context, &replay_status, &accepted);
+    if (replay_result != ReplayCallResult::Success) {
         context->replaying = false;
-        context->status = context->captured_has_skill
-            ? "重放失败：当前技能已不可用"
-            : "已记录普通攻击，但当前 ABI 没有直接注入普通攻击事件的接口";
+        if (replay_result == ReplayCallResult::NoSkill) {
+            context->status = context->captured_has_skill
+                ? "重放失败：当前捕获技能句柄已失效或无法重新解析"
+                : "已记录普通攻击，但当前 ABI 没有直接注入普通攻击事件的接口";
+        } else if (replay_result == ReplayCallResult::Rejected) {
+            context->status = "重放被游戏拒绝：skill activate accepted=0";
+        } else {
+            context->status = "重放调用失败：ABI status=" + std::to_string(replay_status);
+        }
         ArmForNextAttack(*context);
         return;
     }
+    context->status = "游戏已接受技能激活请求（accepted=1）";
 
     ++context->replay_done;
     const double interval_seconds =
@@ -545,17 +596,15 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (context->enabled && !context->replaying && context->captured) {
         if (ui->button(
                 ui->user, anomaly::sdk::StringView("开始重放"), 0.0F, 0.0F) != 0) {
-            context->replay_done = 0;
-            context->replaying = true;
-            context->next_replay = std::chrono::steady_clock::now();
-            context->status = "正在重放";
+            // Draw only posts the request; Update() executes the skill activation in Game domain.
+            context->replay_requested.store(true, std::memory_order_release);
+            context->status = "已提交重放请求";
         }
     } else if (context->replaying) {
         if (ui->button(
                 ui->user, anomaly::sdk::StringView("停止重放"), 0.0F, 0.0F) != 0) {
-            context->replaying = false;
-            context->status = "已停止重放，继续自动等待下一次攻击";
-            ArmForNextAttack(*context);
+            // Draw only posts the stop request; Update() applies it in Game domain.
+            context->stop_requested.store(true, std::memory_order_release);
         }
     }
 
