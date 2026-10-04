@@ -476,7 +476,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.8.0"),
+        anomaly::sdk::StringView("0.8.1"),
         Load,
         Start,
         Stop,
