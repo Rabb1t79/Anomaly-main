@@ -866,7 +866,7 @@ AnomalyStatusV1 Status(const std::uint32_t code,
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField() 的实际功能是：调用 `anomaly::sdk::Host()`、`get()`。
+// 实现 HasField：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
 
 template <typename Service>
@@ -875,7 +875,7 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
   return anomaly::sdk::Host(host).Query<Service>(id, version).get();
 }
 
-// 中文说明：CoreReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyCoreServiceV1,
+// 检查核心服务是否同时提供读写游戏内存所需的 read_memory 和 write_memory 回调；结构体版本或字段长度不足、任一回调为空时返回 false，防止后续直接访问缺失 ABI 字段。
                   decltype(AnomalyCoreServiceV1::read_memory)>(
              service, offsetof(AnomalyCoreServiceV1, read_memory)) &&
          HasField<AnomalyCoreServiceV1,
@@ -884,13 +884,13 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
          service->read_memory != nullptr && service->write_memory != nullptr;
 }
 
-// 中文说明：SignatureReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalySignatureServiceV1,
+// 检查签名解析服务是否包含 resolve 回调；只有 ABI 字段存在且回调有效时，插件才继续使用签名解析定位运行时地址。
                   decltype(AnomalySignatureServiceV1::resolve)>(
              service, offsetof(AnomalySignatureServiceV1, resolve)) &&
          service->resolve != nullptr;
 }
 
-// 中文说明：UiReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUiServiceV1,
+// 检查 UI 服务是否提供窗口尺寸、窗口生命周期、文本、输入框、滑块、按钮和布局调用；缺少任一后续会使用的回调时拒绝进入 UI 绘制流程。
                   decltype(AnomalyUiServiceV1::input_double)>(
              service, offsetof(AnomalyUiServiceV1, input_double)) &&
          service->set_next_window_size != nullptr &&
@@ -901,14 +901,14 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
          service->same_line != nullptr;
 }
 
-// 中文说明：HookReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyHookServiceV1,
+// 检查 Hook 服务是否同时提供创建、释放以及回调开始/结束接口；这些回调缺失时无法安全建立或撤销插件使用的函数钩子。
                   decltype(AnomalyHookServiceV1::end_callback)>(
              service, offsetof(AnomalyHookServiceV1, end_callback)) &&
          service->create != nullptr && service->release != nullptr &&
          service->begin_callback != nullptr && service->end_callback != nullptr;
 }
 
-// 中文说明：ConfigReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyConfigServiceV1,
+// 检查配置服务是否提供注册、读取、原子写入和注销 schema 的完整回调集合；只有这些接口全部可用时才能保存或恢复 BetterPose 设置。
                   decltype(AnomalyConfigServiceV1::write_atomic)>(
              service, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
          service->register_schema != nullptr && service->read != nullptr &&
@@ -916,21 +916,21 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
          service->unregister_schema != nullptr;
 }
 
-// 中文说明：StorageReady()：直接在函数体内完成计算与状态处理。  return service != nullptr && service->read != nullptr &&
+// 检查存储服务是否提供 read 和 write_atomic；插件保存持久数据前必须确认这两个实际读写入口存在。
          service->write_atomic != nullptr;
 }
 
-// 中文说明：SchedulerReady()：直接在函数体内完成计算与状态处理。  return service != nullptr && service->schedule != nullptr;
+// 检查调度服务是否提供 schedule 回调；没有该回调就无法把需要延后的运行任务提交给 Anomaly 调度器。
 }
 
-// 中文说明：AhudReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5AhudServiceV1,
+// 检查 AHud 服务的版本和订阅/取消订阅回调是否可用；只有完整服务存在时才能注册插件的游戏内绘制回调。
                   decltype(AnomalyUe5AhudServiceV1::unsubscribe)>(
              service, offsetof(AnomalyUe5AhudServiceV1, unsubscribe)) &&
          service->service_version >= ANOMALY_UE5_AHUD_SERVICE_V1_VERSION &&
          service->subscribe != nullptr && service->unsubscribe != nullptr;
 }
 
-// 中文说明：AhudFrameReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5AhudFrameV1,
+// 检查当前 AHud 帧是否具有有效视口尺寸、project、draw_line 和 draw_rect；这些数据决定世界坐标投影和调试图形绘制能否安全执行。
                   decltype(AnomalyUe5AhudFrameV1::draw_rect)>(
              frame, offsetof(AnomalyUe5AhudFrameV1, draw_rect)) &&
          frame->viewport_width != 0 && frame->viewport_height != 0 &&
@@ -938,16 +938,16 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
          frame->draw_rect != nullptr;
 }
 
-// 中文说明：InputReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyInputServiceV1,
+// 检查输入服务是否提供 snapshot 回调；插件依赖该快照读取当前输入状态，因此缺少回调时不能继续处理输入。
                   decltype(AnomalyInputServiceV1::snapshot)>(
              service, offsetof(AnomalyInputServiceV1, snapshot)) &&
          service->snapshot != nullptr;
 }
 
-// 中文说明：Bytes()：直接在函数体内完成计算与状态处理。  return {reinterpret_cast<const std::uint8_t *>(value.data()), value.size()};
+// 实现 Bytes：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
 
-// 中文说明：EnsurePoseAngleCapacity()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+// 实现 EnsurePoseAngleCapacity：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const auto count = context.runtime.local_space_count;
   if (context.bone_angles.size() < count)
     context.bone_angles.resize(count);
@@ -1056,7 +1056,7 @@ bool ApplyPoseDocument(Context &context, const nlohmann::json &json,
 // used to ride along in the plugin's own saved settings, which meant a reload came back with
 // whatever shot was last picked -- including one picked for a different character or a different
 // scene. They are runtime state now: pick the file again when it is wanted.
-// 中文说明：BuildPoseDocument() 的实际功能是：调用 `lock()`、`size()`、`empty()`、`push_back()`、`std::move()`；并遍历集合元素、按条件分支处理。
+// 实现 BuildPoseDocument：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   auto bones = nlohmann::json::array();
   {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
@@ -1085,10 +1085,10 @@ bool ApplyPoseDocument(Context &context, const nlohmann::json &json,
   return root.dump();
 }
 
-// 中文说明：PoseProfilePath() 的实际功能是：调用 `BuildPoseDocument()`、`size()`、`write_atomic()`、`anomaly::sdk::StringView()`、`Bytes()`、`empty()`、`StorageReady()`；并按条件分支处理、返回成功/失败状态。
+// 实现 PoseProfilePath：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
 
-// 中文说明：PersistPoseSettings() 的实际功能是：调用 `BuildPoseDocument()`、`size()`、`write_atomic()`、`anomaly::sdk::StringView()`、`Bytes()`、`empty()`、`StorageReady()`、`PoseProfilePath()`；并按条件分支处理、返回成功/失败状态。
+// 实现 PersistPoseSettings：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return false;
   try {
     const std::string document = BuildPoseDocument(context);
@@ -1156,7 +1156,7 @@ int LoadCharacterPoseProfile(Context &context,
   context.requested_root_offset[2].store(0.0, std::memory_order_release);
 }
 
-// 中文说明：CapturePoseState() 的实际功能是：调用 `lock()`。
+// 实现 CapturePoseState：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     state.angles = context.bone_angles;
@@ -1190,7 +1190,7 @@ bool MirrorPose(Context &context, const int request) noexcept;
 
 // Game thread, every update: record settled edits, apply a posted undo/redo.
 // A different mesh (character switch) starts a fresh history.
-// 中文说明：StepPoseHistory() 的实际功能是：调用 `Reset()`、`CapturePoseState()`、`store()`、`exchange()`、`Undo()`、`Redo()`、`RestorePoseState()`、`Observe()`；并更新状态、保存结果或发布状态、按条件分支处理。
+// 实现 StepPoseHistory：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     const std::uint64_t now = GetTickCount64();
     if (context.pose_history_mesh != context.runtime.mesh) {
       context.pose_history_mesh = context.runtime.mesh;
@@ -1215,7 +1215,7 @@ bool MirrorPose(Context &context, const int request) noexcept;
   }
 }
 
-// 中文说明：LoadPoseSettings() 的实际功能是：调用 `read()`、`anomaly::sdk::StringView()`、`lock()`、`clear()`、`PersistPoseSettings()`、`document()`、`data()`、`size()`；并更新状态、保存结果或发布状态、按条件分支处理、返回成功/失败状态。
+// 实现 LoadPoseSettings：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return false;
   try {
     std::uint32_t version{};
@@ -1254,13 +1254,13 @@ bool MirrorPose(Context &context, const int request) noexcept;
     return false;
   }
 }
-// 中文说明：ObjectsReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5ObjectsServiceV1,
+// 检查 UE5 对象服务是否提供 find_exact；后续通过对象名查找目标 UObject 时必须先确认该回调存在。
                   decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
              service, offsetof(AnomalyUe5ObjectsServiceV1, find_exact)) &&
          service->find_exact != nullptr;
 }
 
-// 中文说明：NamesReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5NamesServiceV1,
+// 检查 UE5 名称服务是否提供 resolve_utf8；插件需要把运行时 FName 转成 UTF-8 文本时依赖该回调。
                   decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
              service, offsetof(AnomalyUe5NamesServiceV1, resolve_utf8)) &&
          service->resolve_utf8 != nullptr;
@@ -1275,7 +1275,7 @@ bool AddAddress(const std::uintptr_t base, const std::uint64_t offset,
 }
 
 template <typename T>
-// 中文说明：Read() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Read：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return false;
   AnomalyMutableByteSpanV1 destination{
       reinterpret_cast<std::uint8_t *>(&value), sizeof(value)};
@@ -1315,7 +1315,7 @@ bool ResolveSignature(Context &context, const std::string_view pattern,
          address != 0;
 }
 
-// 中文说明：ResolveGWorld() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ResolveGWorld：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::int32_t displacement{};
   if (!ResolveSignature(context, kGWorldPattern, instruction) ||
       !Read(context, instruction + kGWorldResolveOffset, displacement))
@@ -1328,7 +1328,7 @@ bool ResolveSignature(Context &context, const std::string_view pattern,
   return true;
 }
 
-// 中文说明：ResolveLocalCharacter() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ResolveLocalCharacter：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   context.runtime.mesh = 0;
   context.runtime.anim_instance = 0;
   std::uintptr_t world{};
@@ -1364,7 +1364,7 @@ bool ResolveSignature(Context &context, const std::string_view pattern,
   return true;
 }
 
-// 中文说明：ReadAnimationState() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ReadAnimationState：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (mesh == 0)
     return false;
   std::uint8_t animation_mode{};
@@ -1394,7 +1394,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return true;
 }
 
-// 中文说明：ReadPoseArrays() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ReadPoseArrays：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (mesh == 0)
     return false;
   std::uintptr_t bone_space_data{};
@@ -1433,7 +1433,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
       context.runtime.component_space_count);
 }
 
-// 中文说明：RestorePause()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
+// 实现 RestorePause：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!state.saved_pause || state.mesh == 0)
     return true;
   if (!Write(context, state.mesh + kMeshAnimationFlagsOffset,
@@ -1444,7 +1444,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return true;
 }
 
-// 中文说明：ApplyPause()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
+// 实现 ApplyPause：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (state.mesh == 0)
     return false;
   if (!enabled)
@@ -1463,7 +1463,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return true;
 }
 
-// 中文说明：RestoreRate()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
+// 实现 RestoreRate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!state.saved_rate || state.mesh == 0)
     return true;
   if (!Write(context, state.mesh + kMeshGlobalAnimRateScaleOffset,
@@ -1473,7 +1473,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return true;
 }
 
-// 中文说明：ApplyRate() 的实际功能是：调用 `Read()`；并读取、解析或查找数据、按条件分支处理、返回成功/失败状态。
+// 实现 ApplyRate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (state.mesh == 0)
     return false;
   if (!enabled)
@@ -1488,7 +1488,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return Write(context, state.mesh + kMeshGlobalAnimRateScaleOffset, value);
 }
 
-// 中文说明：RestoreRootMotion()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
+// 实现 RestoreRootMotion：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!state.saved_root_motion || state.character == 0)
     return true;
   if (!Write(context, state.character + kCharacterAnimRootMotionScaleOffset,
@@ -1517,7 +1517,7 @@ bool ApplyRootMotion(Context &context, const bool enabled,
                value);
 }
 
-// 中文说明：RestoreMultiThreadedUpdate() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理、返回成功/失败状态。
+// 实现 RestoreMultiThreadedUpdate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!state.saved_multi_threaded_update || state.anim_instance == 0)
     return true;
   if (state.multi_threaded_update_instance != state.anim_instance) {
@@ -1532,7 +1532,7 @@ bool ApplyRootMotion(Context &context, const bool enabled,
   return true;
 }
 
-// 中文说明：ApplyMultiThreadedUpdate()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
+// 实现 ApplyMultiThreadedUpdate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!enabled)
     return RestoreMultiThreadedUpdate(context);
   if (state.anim_instance == 0)
@@ -1557,7 +1557,7 @@ bool ApplyRootMotion(Context &context, const bool enabled,
                flags);
 }
 
-// 中文说明：RestorePose()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
+// 实现 RestorePose：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!state.saved_pose)
     return true;
   state.pose_descendants.clear();
@@ -1586,7 +1586,7 @@ bool ForceMeshObjectUpdate(Context &context,
   return Write(context, mesh + kMeshForceMeshObjectUpdateOffset, flags);
 }
 
-// 中文说明：ForcePoseMeshObjectUpdate() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ForcePoseMeshObjectUpdate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
 
 struct Vec3d {
@@ -1608,7 +1608,7 @@ struct Transformd {
   Vec3d scale{1.0, 1.0, 1.0};
 };
 
-// 中文说明：QuatMultiply()：直接在函数体内完成计算与状态处理。  Quatd out;
+// 实现 QuatMultiply：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   out.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
   out.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
   out.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
@@ -1616,7 +1616,7 @@ struct Transformd {
   return out;
 }
 
-// 中文说明：QuatRotateVector() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 QuatRotateVector：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const Vec3d uv{
       u.y * v.z - u.z * v.y,
       u.z * v.x - u.x * v.z,
@@ -1706,7 +1706,7 @@ struct PackedTransform {
 static_assert(sizeof(PackedTransform) == kTransformSize,
               "PackedTransform must match the game FTransform layout");
 
-// 中文说明：UnpackTransform() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 UnpackTransform：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   out.rotation =
       Quatd{source.rotation[0], source.rotation[1], source.rotation[2],
             source.rotation[3]};
@@ -1716,7 +1716,7 @@ static_assert(sizeof(PackedTransform) == kTransformSize,
   return out;
 }
 
-// 中文说明：PackTransform()：直接在函数体内完成计算与状态处理。  destination.rotation[0] = source.rotation.x;
+// 实现 PackTransform：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   destination.rotation[1] = source.rotation.y;
   destination.rotation[2] = source.rotation.z;
   destination.rotation[3] = source.rotation.w;
@@ -1763,7 +1763,7 @@ Transformd ComputeBoneComponent(
   return components[bone_index];
 }
 
-// 中文说明：ApplyPoseOverridesInTick()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
+// 实现 ApplyPoseOverridesInTick：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
       state.mesh == 0 || state.local_space_data == 0 || state.pose_data == 0 ||
       state.pose_component_data == 0 || state.local_space_count == 0 ||
@@ -1894,7 +1894,7 @@ bool ApplyPose(Context &context, const bool enabled, const std::uint32_t bone,
   return true;
 }
 
-// 中文说明：ResolvePoseTickTarget() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ResolvePoseTickTarget：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const auto mesh = context.runtime.mesh;
   if (mesh == 0)
     return false;
@@ -1955,7 +1955,7 @@ void DestroyPoseableAccessories(Context &context) noexcept;
 void DestroyStalePoseableComponent(Context &context,
                                    std::uintptr_t component) noexcept;
 
-// 中文说明：ReleasePoseTickHook() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理、返回成功/失败状态。
+// 实现 ReleasePoseTickHook：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return true;
   const auto status =
       context.hook->release(context.hook->user, context.tick_hook);
@@ -1969,7 +1969,7 @@ void DestroyStalePoseableComponent(Context &context,
   return true;
 }
 
-// 中文说明：EnsurePoseTickHook() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 EnsurePoseTickHook：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return false;
   std::uintptr_t target{};
   if (!ResolvePoseTickTarget(context, target))
@@ -2098,7 +2098,7 @@ using CameraPovFn = void *(ANOMALY_CALL *)(void *, void *, void *);
 void *ANOMALY_CALL CameraPovDetour(void *self, void *first, void *second) noexcept;
 
 // PlayerController -> camera manager, the offset the active Profile validates.
-// 中文说明：ResolveCameraManager() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ResolveCameraManager：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::uintptr_t world{};
   std::uintptr_t game_instance{};
   std::uintptr_t local_players{};
@@ -2182,7 +2182,7 @@ bool ResolveCameraPovTarget(Context &context, const std::uintptr_t manager,
   return false;
 }
 
-// 中文说明：RefreshCameraPovTarget() 的实际功能是：调用 `ResolveCameraManager()`、`store()`；并读取、解析或查找数据、按条件分支处理、返回成功/失败状态。
+// 实现 RefreshCameraPovTarget：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!ResolveCameraManager(context, manager)) {
     context.camera_manager.store(0, std::memory_order_release);
     context.camera_manager_resolved.store(false, std::memory_order_release);
@@ -2212,7 +2212,7 @@ bool ResolveCameraPovTarget(Context &context, const std::uintptr_t manager,
   return true;
 }
 
-// 中文说明：ReleaseCameraPovHook()：直接在函数体内完成计算与状态处理。  g_camera_pov.store(nullptr, std::memory_order_release);
+// 实现 ReleaseCameraPovHook：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   context.camera_manager.store(0, std::memory_order_release);
   context.camera_manager_resolved.store(false, std::memory_order_release);
   context.camera_hook_ready.store(false, std::memory_order_release);
@@ -2234,7 +2234,7 @@ bool ResolveCameraPovTarget(Context &context, const std::uintptr_t manager,
   return true;
 }
 
-// 中文说明：EnsureCameraPovHook()：直接在函数体内完成计算与状态处理。  if (!HookReady(context.hook) ||
+// 实现 EnsureCameraPovHook：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       !context.camera_manager_resolved.load(std::memory_order_acquire))
     return false;
   const std::uintptr_t target = context.camera_pov_resolved_target;
@@ -2277,13 +2277,13 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 
 // MMD (x, y, z) -> the rig's local axes, the mapping the motion retarget uses. The model faces
 // its own -Z, which lands on local +Y, so local +Y is "the way the character faces".
-// 中文说明：MmdToLocal()：直接在函数体内完成计算与状态处理。  local[0] = source[0];
+// 实现 MmdToLocal：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   local[1] = -source[2];
   local[2] = source[1];
 }
 
 // The character's feet and the middle of their bounding box, from the mesh's world bounds.
-// 中文说明：CharacterBounds() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 CharacterBounds：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::uintptr_t origin_address{};
   std::uintptr_t extent_address{};
   double origin[3]{};
@@ -2314,7 +2314,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 // x = 0 with pitch 0 while the character stood 11.5 km away. Only a reading taken near the
 // character is allowed to anchor the shot; the attempt is retried until one arrives, and the
 // distance test alone is enough, because a placeholder is nowhere near the character.
-// 中文说明：GameCameraReadingIsPlausible()：直接在函数体内完成计算与状态处理。  const double dx = centre[0] - location[0];
+// 实现 GameCameraReadingIsPlausible：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const double dy = centre[1] - location[1];
   const double dz = centre[2] - location[2];
   const double range = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -2325,7 +2325,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 // both converters bake): its x is the character's left, its y the way they walk, its z up, and it
 // is used as it arrives. Turning it a half turn first was tried and reverted: it pointed the
 // track shot's aim at a point mirrored through the character, which is a shot staring at scenery.
-// 中文说明：CameraUnitCm()：直接在函数体内完成计算与状态处理。  const double unit = context.mmd_unit_cm.load(std::memory_order_acquire);
+// 实现 CameraUnitCm：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return unit > 1e-6 ? unit : kCameraFallbackUnitCm;
 }
 
@@ -2517,7 +2517,7 @@ void DriveCameraTrack(Context &context, const double feet[3], const double centr
 
 // Rewrite the POV the view is built from. Patching the game's struct in place and returning its
 // pointer unchanged is deliberate -- handing back a substitute buffer is what crashed the game once.
-// 中文说明：CameraPovDetour() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 CameraPovDetour：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   AnomalyGenerationHandleV1 lease{};
   bool leased = false;
   CameraPovFn original = nullptr;
@@ -2744,7 +2744,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 // rewritten in place: the same edit the getter's output would have received, made where nothing
 // can run between this call and the view build to undo it, and with the pointer itself left
 // alone so the rest of the struct keeps whatever the engine put there.
-// 中文说明：ResolveGObjects() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ResolveGObjects：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::int32_t displacement{};
   if (!ResolveSignature(context, kGObjectsPattern, instruction) ||
       !Read(context, instruction + kGObjectsResolveOffset, displacement))
@@ -2758,7 +2758,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
   return true;
 }
 
-// 中文说明：RefreshObjectRegistry() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 RefreshObjectRegistry：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return true;
   if (context.g_objects_address == 0 && !ResolveGObjects(context))
     return false;
@@ -3044,7 +3044,7 @@ bool GetBoneIndexFName(Context &context,
   return true;
 }
 
-// 中文说明：RefreshBoneHierarchy() 的实际功能是：调用 `GetBoneNameFName()`、`GetParentBoneFName()`、`std::memcpy()`、`data()`、`ResolveName()`、`std::find()`、`begin()`、`end()`；并读取、解析或查找数据、遍历集合元素、按条件分支处理。
+// 实现 RefreshBoneHierarchy：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   context.bone_parents.assign(count, -1);
   if (context.bone_names.size() != count)
     return;
@@ -3068,7 +3068,7 @@ bool GetBoneIndexFName(Context &context,
   }
 }
 
-// 中文说明：RefreshBoneHierarchyDirect()：直接在函数体内完成计算与状态处理。  const auto count = context.runtime.local_space_count;
+// 实现 RefreshBoneHierarchyDirect：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (count == 0)
     return;
   if (context.bone_parents_ready &&
@@ -3153,7 +3153,7 @@ bool ApplyBoneRotationByName(Context &context, const std::uint32_t bone,
                               parameters.data(), parameters.size(), detail);
 }
 
-// 中文说明：ApplyPoseOverridesViaUFunction() 的实际功能是：调用 `lock()`、`size()`、`assign()`、`begin()`；并按条件分支处理。
+// 实现 ApplyPoseOverridesViaUFunction：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
       state.mesh == 0)
     return;
@@ -3176,7 +3176,7 @@ bool ApplyBoneRotationByName(Context &context, const std::uint32_t bone,
   static_cast<void>(ForcePoseMeshObjectUpdate(context));
 }
 
-// 中文说明：CapturePoseBase()：直接在函数体内完成计算与状态处理。  const auto mesh = context.runtime.mesh;
+// 实现 CapturePoseBase：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const auto data = context.runtime.local_space_data;
   const auto count = context.runtime.local_space_count;
   if (mesh == 0 || data == 0 || count == 0)
@@ -3199,7 +3199,7 @@ bool ApplyBoneRotationByName(Context &context, const std::uint32_t bone,
   return true;
 }
 
-// 中文说明：ApplyPoseOverridesDirect()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
+// 实现 ApplyPoseOverridesDirect：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
       state.mesh == 0 || state.local_space_data == 0 ||
       state.local_space_count == 0 || state.component_space_data == 0 ||
@@ -3292,7 +3292,7 @@ struct MotionSample {
   std::vector<std::array<double, 3>> offsets;
 };
 
-// 中文说明：MotionDuration()：直接在函数体内完成计算与状态处理。  if (motion.frame_count <= 1)
+// 实现 MotionDuration：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return 0.0;
   const double fps = motion.fps > 0.0 ? motion.fps : 30.0;
   return static_cast<double>(motion.frame_count - 1) / fps;
@@ -3301,7 +3301,7 @@ struct MotionSample {
 // Maps the file's bone names onto this skeleton's bone indices. Needs the bone
 // name table, which can only be read on the game thread, so this runs from
 // Update rather than from the loading task.
-// 中文说明：ResolveMotionIndices()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!context.motion_loaded.load(std::memory_order_acquire))
+// 实现 ResolveMotionIndices：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return false;
   std::lock_guard<std::mutex> lock(context.motion_mutex);
   auto &motion = context.motion;
@@ -3464,7 +3464,7 @@ bool SampleMotion(Context &context, const double seconds,
 // were stretched by that factor. The asset's own reference pose is preferred: it is the pose the
 // converter measured `mmdLegLength` against and it is readable before any motion has been applied,
 // which is the state a camera file is driven in on its own.
-// 中文说明：LiveLegLength()：直接在函数体内完成计算与状态处理。  static constexpr const char *kChain[] = {"Bip001-L-Calf", "Bip001-L-Foot"};
+// 实现 LiveLegLength：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   double total = 0.0;
   std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
   const std::vector<std::array<double, 12>> &source =
@@ -3487,7 +3487,7 @@ bool SampleMotion(Context &context, const double seconds,
 }
 
 
-// 中文说明：ApplyMotionPoseDirect()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
+// 实现 ApplyMotionPoseDirect：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (state.mesh == 0 || state.local_space_data == 0 ||
       state.local_space_count == 0 || state.component_space_data == 0 ||
       state.component_space_count != state.local_space_count)
@@ -3625,7 +3625,7 @@ bool SampleMotion(Context &context, const double seconds,
 // Walks the GObjects registry a slice at a time (never more than a fraction of a
 // tick) and collects every object whose class pointer equals our mesh's and
 // whose bone array holds the same bone count. Strictly read-only.
-// 中文说明：StepMeshScan() 的实际功能是：调用 `store()`；并按条件分支处理。
+// 实现 StepMeshScan：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return;
   if (context.runtime.mesh == 0) {
     context.mesh_scan_requested.store(false, std::memory_order_release);
@@ -3794,7 +3794,7 @@ bool SampleMotion(Context &context, const double seconds,
   }
 }
 
-// 中文说明：UnloadMotion() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 UnloadMotion：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   ++context.motion_load_epoch;
   context.motion_loaded.store(false, std::memory_order_release);
   context.motion_playing.store(false, std::memory_order_release);
@@ -4245,7 +4245,7 @@ bool DrivePoseableSocketPose(Context &context, Context::ExtraMesh &extra,
   return true;
 }
 
-// 中文说明：DestroyPoseableAccessories() 的实际功能是：调用 `CallVirtualUFunction()`、`data()`、`size()`；并按条件分支处理。
+// 实现 DestroyPoseableAccessories：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     if (extra.poseable_component == 0)
       continue;
     std::string detail;
@@ -4354,7 +4354,7 @@ bool ObjectAtIndex(Context &context, const std::uint32_t index,
          object != 0;
 }
 
-// 中文说明：ClassNameOf() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 ClassNameOf：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!Read(context, object + kObjectClassOffset, klass) || klass == 0)
     return {};
   const auto cached = context.mesh_scan_class_cache.find(klass);
@@ -4368,7 +4368,7 @@ bool ObjectAtIndex(Context &context, const std::uint32_t index,
   return name;
 }
 
-// 中文说明：ObjectNameOf()：直接在函数体内完成计算与状态处理。  std::uint32_t name_id{};
+// 实现 ObjectNameOf：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::string name;
   if (Read(context, object + kObjectNameOffset, name_id))
     static_cast<void>(ResolveName(context, name_id, name));
@@ -4515,10 +4515,10 @@ std::vector<Transformd> BindPoseTransforms(
   return out;
 }
 
-// 中文说明：QuatConjugate() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 QuatConjugate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
 
-// 中文说明：TransformInverse() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 TransformInverse：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   out.rotation = QuatConjugate(value.rotation);
   out.scale = Vec3d{value.scale.x != 0.0 ? 1.0 / value.scale.x : 1.0,
                     value.scale.y != 0.0 ? 1.0 / value.scale.y : 1.0,
@@ -4532,7 +4532,7 @@ std::vector<Transformd> BindPoseTransforms(
 }
 
 // Normalised-lerp quaternion blend: stable, and a lag only ever asks for small angles.
-// 中文说明：QuatBlend() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
+// 实现 QuatBlend：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   Quatd target = to;
   if (dot < 0.0) {                        // q and -q are the same rotation
     target = Quatd{-to.x, -to.y, -to.z, -to.w};
@@ -4553,7 +4553,7 @@ std::vector<Transformd> BindPoseTransforms(
 }
 
 // Lower-case alphanumeric words of a bone name, camelCase and digits split out.
-// 中文说明：NameTokens() 的实际功能是：调用 `empty()`、`push_back()`、`clear()`；并按条件分支处理。
+// 实现 NameTokens：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::string current;
   const auto flush = [&tokens, &current]() {
     if (!current.empty()) {
@@ -4587,7 +4587,7 @@ std::vector<Transformd> BindPoseTransforms(
 // to appear in the body name, digits have to appear *after* the words they qualify
 // (which is what keeps spine_01_adjust off Bip001-Spine2), and anatomical
 // Bip001-* bones win over helper bones. Returns kNoBone when nothing matches.
-// 中文说明：MatchBodyBone() 的实际功能是：调用 `NameTokens()`、`std::all_of()`、`begin()`、`end()`、`std::isdigit()`、`push_back()`；并遍历集合元素、按条件分支处理。
+// 实现 MatchBodyBone：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::vector<std::string> digits;
   for (auto &token : NameTokens(name)) {
     if (token == "adjust" || token == "position" || token == "root" ||
@@ -4759,7 +4759,7 @@ bool TryAssetReferencePose(Context &context,
 // Find the character's mesh asset and read its reference pose. Called by the
 // skeleton export (and driven from the mesh scan, which already walks every
 // object, so it can also succeed there).
-// 中文说明：FindReferencePose()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!context.ref_locals.empty())
+// 实现 FindReferencePose：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return true;
   context.ref_pose_object = 0;
   context.ref_pose_status = "mesh unavailable";
@@ -4832,7 +4832,7 @@ bool TryAssetReferencePose(Context &context,
 // candidate offset is only accepted when the index resolves through GObjects to
 // an object whose stored serial matches -- and when that holds for *every* probe
 // component at once, which random data never does.
-// 中文说明：StepAttachScan() 的实际功能是：调用 `RefreshObjectRegistry()`；并按条件分支处理。
+// 实现 StepAttachScan：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return;
   context.attach_scan_requested.store(false, std::memory_order_release);
   if (!RefreshObjectRegistry(context)) {
@@ -4942,7 +4942,7 @@ bool TryAssetReferencePose(Context &context,
 
 // Diagnostics go to the runtime log so they can be read without asking the user
 // to transcribe (and OCR) a status line.
-// 中文说明：LogDiagnostic()：直接在函数体内完成计算与状态处理。  if (context.core == nullptr || context.core->log == nullptr)
+// 实现 LogDiagnostic：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return;
   context.core->log(context.core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO,
                     anomaly::sdk::StringView(message));
@@ -4950,7 +4950,7 @@ bool TryAssetReferencePose(Context &context,
 
 
 
-// 中文说明：ResyncExtraMeshes()：直接在函数体内完成计算与状态处理。  // Log the *state* even when this returns early: a silent no-op is what made the
+// 实现 ResyncExtraMeshes：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   // previous test unreadable ("还是没有" told us nothing about which precondition
   // was missing).
   const std::uint32_t parent_offset = context.attach_parent_offset;
@@ -5004,7 +5004,7 @@ bool TryAssetReferencePose(Context &context,
   }
 }
 
-// 中文说明：BuildExtraMeshes() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
+// 实现 BuildExtraMeshes：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   // where the local character cannot be resolved, and a build that ran on such a
   // frame stored owner = 0 while clearing the pending flag, which disabled the
   // attach resync permanently.
@@ -5606,7 +5606,7 @@ void WriteExtraMeshes(Context &context,
   }
 }
 
-// 中文说明：RestoreExtraMeshes() 的实际功能是：调用 `empty()`、`WriteBytes()`、`data()`、`size()`；并更新状态、保存结果或发布状态、遍历集合元素、按条件分支处理。
+// 实现 RestoreExtraMeshes：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   DestroyPoseableAccessories(context);
   for (auto &extra : context.extra_meshes) {
     if (extra.buffers_modified && extra.component_space_data != 0 && !extra.saved_component.empty())
@@ -5622,7 +5622,7 @@ void WriteExtraMeshes(Context &context,
   return true;
 }
 
-// 中文说明：DropExtraMeshes()：直接在函数体内完成计算与状态处理。  // while our pose is still in place is what left a character stuck until a
+// 实现 DropExtraMeshes：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   // relog.
   static_cast<void>(RestoreExtraMeshes(context));
   std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
@@ -5655,7 +5655,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return true;
 }
 
-// 中文说明：MaybeRefreshBoneNames()：直接在函数体内完成计算与状态处理。  const auto mesh = context.runtime.mesh;
+// 实现 MaybeRefreshBoneNames：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const auto count = context.runtime.bone_space_count;
   if (mesh == 0 || count == 0)
     return;
@@ -5678,7 +5678,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   RefreshBoneHierarchy(context);
 }
 
-// 中文说明：ForcePoseCache() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理、返回成功/失败状态。
+// 实现 ForcePoseCache：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (context.runtime.mesh == 0) {
     detail = "local mesh is unavailable";
     return false;
@@ -5716,7 +5716,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return true;
 }
 
-// 中文说明：EnsurePoseForcedLod() 的实际功能是：调用 `CallVirtualUFunction()`；并按条件分支处理。
+// 实现 EnsurePoseForcedLod：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (state.mesh == 0)
     return false;
   if (!enabled) {
@@ -5724,7 +5724,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
       std::string detail;
       const std::int32_t original = state.original_forced_lod;
       if (CallVirtualUFunction(context, state.mesh, kFunctionSetForcedLodPath,
-// 中文说明：sizeof() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 sizeof：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
         state.saved_forced_lod = false;
         state.original_forced_lod = 0;
       }
@@ -5754,7 +5754,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return true;
 }
 
-// 中文说明：EnsurePoseAnimationMode() 的实际功能是：调用 `Write()`；并更新状态、保存结果或发布状态、按条件分支处理、返回成功/失败状态。
+// 实现 EnsurePoseAnimationMode：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (state.mesh == 0)
     return false;
   if (!enabled) {
@@ -5790,7 +5790,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   const SetAnimationModeParameters parameters{kAnimationModeCustom, 0};
   std::string detail;
   if (CallVirtualUFunction(context, state.mesh, kFunctionSetAnimationModePath,
-// 中文说明：sizeof()：直接在函数体内完成计算与状态处理。    state.animation_mode_applied = true;
+// 实现 sizeof：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return true;
   }
 
@@ -5804,11 +5804,11 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return true;
 }
 
-// 中文说明：SetReflectionStatus()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  std::scoped_lock lock(context.state_mutex);
+// 实现 SetReflectionStatus：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   context.reflection_status.assign(message.data(), message.size());
 }
 
-// 中文说明：Utf8ToWide() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Utf8ToWide：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     return {};
   const int required = MultiByteToWideChar(
@@ -5824,7 +5824,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return result;
 }
 
-// 中文说明：WideToUtf8() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 WideToUtf8：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     return {};
   const int required = WideCharToMultiByte(
@@ -5847,7 +5847,7 @@ public:
     if (SUCCEEDED(result_))
       CoUninitialize();
   }
-// 中文说明：Usable() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Usable：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   }
 private:
   HRESULT result_{};
@@ -5894,7 +5894,7 @@ enum class FileKind { Json, Vmd, Audio, Motion };
 
 // A chosen motion path is either a source VMD, which has to be converted, or a document that was
 // converted earlier, which must not go through the converter again.
-// 中文说明：PathIsConvertedMotion()：直接在函数体内完成计算与状态处理。  const std::size_t dot = path.find_last_of('.');
+// 实现 PathIsConvertedMotion：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (dot == std::string::npos)
     return false;
   std::string extension = path.substr(dot);
@@ -5998,7 +5998,7 @@ struct Mp3FrameTable {
   bool valid = false;
 
   // Linear inside a frame (24 ms at 48 kHz), which is finer than anything the device resolves.
-// 中文说明：TimeForByte()：直接在函数体内完成计算与状态处理。    if (!valid || byte.size() < 2)
+// 实现 TimeForByte：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return 0.0;
     if (offset <= static_cast<double>(byte.front()))
       return time.front();
@@ -6018,7 +6018,7 @@ struct Mp3FrameTable {
     return time[low] + fraction * (time[low + 1] - time[low]);
   }
 
-// 中文说明：ByteForTime()：直接在函数体内完成计算与状态处理。    if (!valid || byte.size() < 2)
+// 实现 ByteForTime：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return 0.0;
     if (seconds <= time.front())
       return static_cast<double>(byte.front());
@@ -6043,7 +6043,7 @@ struct Mp3FrameTable {
 // Walks the MPEG audio frames of an MP3. Layer III only, which is what every .mp3 in practice is; a
 // file that does not walk cleanly simply leaves the table invalid and the player stays on the
 // device's own clock, exactly as before.
-// 中文说明：BuildMp3FrameTable()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::error_code ec;
+// 实现 BuildMp3FrameTable：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const std::uintmax_t size = std::filesystem::file_size(path, ec);
   if (ec || size == 0 || size > kMp3MaxBytes)
     return false;
@@ -6122,7 +6122,7 @@ class MusicPlayer {
   MusicPlayer &operator=(const MusicPlayer &) = delete;
   ~MusicPlayer() { Close(); }
 
-// 中文说明：Open() 的实际功能是：调用 `std::filesystem::exists()`、`Set()`；并更新状态、保存结果或发布状态、按条件分支处理、返回成功/失败状态。
+// 实现 Open：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     std::error_code ec;
     const std::filesystem::path path = std::filesystem::path(Utf8ToWide(utf8_path));
     if (!std::filesystem::exists(path, ec) || ec) {
@@ -6197,7 +6197,7 @@ class MusicPlayer {
     return false;
   }
 
-// 中文说明：Close()：直接在函数体内完成计算与状态处理。    if (!alias_.empty()) {
+// 实现 Close：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       std::string ignored;
       static_cast<void>(Command(L"close " + Utf8ToWide(alias_), &ignored));
     }
@@ -6209,7 +6209,7 @@ class MusicPlayer {
     device_rate_ = 0.0;
   }
 
-// 中文说明：Play()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
+// 实现 Play：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return false;
     origin_true_seconds_ = 0.0;
     origin_device_ms_ = 0;
@@ -6218,7 +6218,7 @@ class MusicPlayer {
 
   // Restarting from a known time is one command; seeking a *playing* mpegvideo device repeatedly
   // is what made the track stutter and die, so re-syncs always go through this.
-// 中文说明：PlayFrom()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
+// 实现 PlayFrom：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return false;
     // `motion + lead` can land past the end of the track -- a 29.4 s song under a 29.4 s motion asks
     // for 29.55 s on the last frame, and a loop wrap asks again from the end -- and MCI answers that
@@ -6231,12 +6231,12 @@ class MusicPlayer {
     return Command(L"play " + Utf8ToWide(alias_) + L" from " + std::to_wstring(device_ms), error);
   }
 
-// 中文说明：Pause()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
+// 实现 Pause：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return false;
     return Command(L"pause " + Utf8ToWide(alias_), error);
   }
 
-// 中文说明：Stop()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
+// 实现 Stop：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return false;
     static_cast<void>(Command(L"stop " + Utf8ToWide(alias_), error));
     origin_true_seconds_ = 0.0;
@@ -6244,7 +6244,7 @@ class MusicPlayer {
     return Command(L"seek " + Utf8ToWide(alias_) + L" to start", error);
   }
 
-// 中文说明：Seek()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
+// 实现 Seek：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return false;
     const double position = ClampToTrack(seconds);
     const long long device_ms = DeviceMilliseconds(position);
@@ -6254,7 +6254,7 @@ class MusicPlayer {
   }
 
   // Muting instead of pausing keeps the playhead running, so unmuting stays in sync.
-// 中文说明：SetMuted()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。    if (alias_.empty())
+// 实现 SetMuted：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return false;
     if (!Command(L"setaudio " + Utf8ToWide(alias_) + (muted ? L" off" : L" on"), error))
       return false;
@@ -6266,7 +6266,7 @@ class MusicPlayer {
   // the DirectShow device reports it back through `status ... volume` (measured: 100 and
   // 1000 round-trip exactly). The value is kept even when no track is open, so the panel can
   // show it and the next Open re-applies it.
-// 中文说明：SetVolume()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。    const int clamped = (std::max)(0, (std::min)(100, percent));
+// 实现 SetVolume：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     volume_percent_ = clamped;
     if (alias_.empty())
       return true;
@@ -6274,8 +6274,8 @@ class MusicPlayer {
                        std::to_wstring(clamped * 10),
                    error);
   }
-// 中文说明：Volume() 的实际功能是：调用 `Position()`。
-// 中文说明：Position() 的实际功能是：调用 `return()`；并按条件分支处理。
+// 实现 Volume：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
+// 实现 Position：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     if (!Query(L"position", &milliseconds))
       return 0.0;
     const double seconds = static_cast<double>(milliseconds) / 1000.0;
@@ -6293,7 +6293,7 @@ class MusicPlayer {
     return seconds;
   }
 
-// 中文说明：Length() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Length：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return frame_table_.total_seconds;
     long long milliseconds{};
     if (!Query(L"length", &milliseconds))
@@ -6303,7 +6303,7 @@ class MusicPlayer {
 
   // Ask the device instead of remembering: when a track ends on its own (or anything else stops
   // it) a cached flag would keep the follower from ever restarting it.
-// 中文说明：playing()：直接在函数体内完成计算与状态处理。    wchar_t reply[32]{};
+// 实现 playing：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     if (alias_.empty())
       return false;
     const std::wstring command =
@@ -6313,18 +6313,18 @@ class MusicPlayer {
     return std::wstring(reply) == L"playing";
   }
 
-// 中文说明：opened() 的实际功能是：调用 `timing_note()`。
+// 实现 opened：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const std::string &timing_note() const { return timing_note_; }
 
  private:
-// 中文说明：Set()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。    if (error != nullptr)
+// 实现 Set：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       *error = text;
   }
 
   // A position for `play`/`seek`, expressed in the device's own time base. The device's clock and the
   // file's clock are the same thing on a CBR file and differ by the ratio of the two bitrates on one
   // whose header frame lies, which is exactly the case the frame table exists for (see Mp3FrameTable).
-// 中文说明：DeviceMilliseconds()：直接在函数体内完成计算与状态处理。    const double clamped = (std::max)(0.0, seconds);
+// 实现 DeviceMilliseconds：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     if (frame_table_.valid && device_rate_ > 0.0)
       return static_cast<long long>(frame_table_.ByteForTime(clamped) * 1000.0 / device_rate_);
     return static_cast<long long>(clamped * 1000.0);
@@ -6332,13 +6332,13 @@ class MusicPlayer {
 
   // MCI rejects a position at or past the end of the track ("the parameter is out of range for the
   // specified command"), so a request aimed there is pulled back to the last 50 ms.
-// 中文说明：ClampToTrack()：直接在函数体内完成计算与状态处理。    const double length = Length();
+// 实现 ClampToTrack：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     if (length > 0.1)
       return (std::max)(0.0, (std::min)(seconds, length - 0.05));
     return (std::max)(0.0, seconds);
   }
 
-// 中文说明：Command() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Command：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     const MCIERROR code = ::mciSendStringW(command.c_str(), reply, ARRAYSIZE(reply), nullptr);
     if (code == 0)
       return true;
@@ -6350,7 +6350,7 @@ class MusicPlayer {
     return false;
   }
 
-// 中文说明：Query() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Query：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       return false;
     wchar_t reply[64]{};
     const std::wstring command = std::wstring(L"status ") + Utf8ToWide(alias_) + L" " + what;
@@ -6439,7 +6439,7 @@ void PublishMusicState(const bool opened, const bool playing, const double posit
 // was corrected in one audible lurch the moment the panel was drawn. A stall now forces the
 // correction, and the drift threshold is small enough to catch the device-start offset that the
 // old 1.5 s window never saw.
-// 中文说明：StepMusic() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 StepMusic：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   // short, so the next tick gets through).
   std::unique_lock<std::mutex> lock(g_music_mutex, std::try_to_lock);
   if (!lock.owns_lock())
@@ -6603,7 +6603,7 @@ void PublishMusicState(const bool opened, const bool playing, const double posit
 // A track sitting next to the motion is almost always the right one, so offer it: the exact
 // basename first, then the same basename ignoring spaces (motions and songs are often named
 // "爱言叶4.vmd" / "爱言叶4 .mp3").
-// 中文说明：FindSiblingAudio()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::error_code ec;
+// 实现 FindSiblingAudio：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const std::filesystem::path motion = std::filesystem::path(Utf8ToWide(motion_path));
   const std::filesystem::path folder = motion.parent_path();
   if (folder.empty() || !std::filesystem::is_directory(folder, ec) || ec)
@@ -6662,7 +6662,7 @@ struct PoseFileTaskData final {
 
 // Directory the plugin's own DLL lives in: the reference MMD bone table is shipped next
 // to it, and the plugin has no other way to find its own files.
-// 中文说明：ModuleDirectory()：直接在函数体内完成计算与状态处理。  HMODULE module{};
+// 实现 ModuleDirectory：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                           reinterpret_cast<LPCWSTR>(&ModuleDirectory), &module) ||
@@ -6686,14 +6686,14 @@ struct PoseFileTaskData final {
   return WideToUtf8(buffer.substr(0, slash));
 }
 
-// 中文说明：ReferenceBoneTablePath()：直接在函数体内完成计算与状态处理。  const std::string directory = ModuleDirectory();
+// 实现 ReferenceBoneTablePath：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (directory.empty())
     return std::string();
   return directory + (unity_reference ? "\\data\\reference-miku-unity.json"
                                       : "\\data\\reference-pmx.json");
 }
 
-// 中文说明：PoseFileTask() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
+// 实现 PoseFileTask：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (data == nullptr)
     return;
   Context *context = data->context;
@@ -6859,7 +6859,7 @@ struct PoseFileTaskData final {
 }
 
 // In-memory FTransform layout: rot(4 doubles) + translation(3) + pad + scale(3) + pad.
-// 中文说明：TransformToJson() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 TransformToJson：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   out["rotation"] = {raw[0], raw[1], raw[2], raw[3]};
   out["translation"] = {raw[4], raw[5], raw[6]};
   out["scale"] = {raw[8], raw[9], raw[10]};
@@ -6882,7 +6882,7 @@ struct PoseFileTaskData final {
 // converter derives from it inherit that posture, whereas the reference pose is the one the
 // geometry is actually skinned in. refLocal falling back to nothing is fine -- the converter then
 // uses baseLocal exactly as before.
-// 中文说明：BuildSkeletonDocument() 的实际功能是：调用 `RefreshBoneNames()`、`std::move()`、`RefreshBoneHierarchy()`；并按条件分支处理。
+// 实现 BuildSkeletonDocument：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   // Bone names are the prerequisite for mapping; load them now if never loaded (also refreshes
   // the parent chain).
   if (context.bone_names.size() != count ||
@@ -6957,7 +6957,7 @@ struct PoseFileTaskData final {
   return root.dump();
 }
 
-// 中文说明：ExecutePoseFileAction() 的实际功能是：调用 `SchedulerReady()`、`SetReflectionStatus()`；并更新状态、保存结果或发布状态、按条件分支处理。
+// 实现 ExecutePoseFileAction：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       context.pose_file_action_requested.exchange(0, std::memory_order_acquire);
   if (action == 0)
     return;
@@ -7091,7 +7091,7 @@ struct PoseFileTaskData final {
                                : action == 5 ? "motion convert queued"
                                              : "pose import queued");
 }
-// 中文说明：EnsureActiveCharacterProfile()：直接在函数体内完成计算与状态处理。  if (context.runtime.mesh == 0 || !StorageReady(context.storage))
+// 实现 EnsureActiveCharacterProfile：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return;
   const std::string profile_id = Hex(context.runtime.mesh);
   if (profile_id.empty() || profile_id == context.active_character_id)
@@ -7105,7 +7105,7 @@ struct PoseFileTaskData final {
   context.pose_settings_dirty.store(true, std::memory_order_release);
 }
 
-// 中文说明：ExecuteReflectionAction() 的实际功能是：调用 `CallVirtualUFunction()`、`ForcePoseCache()`、`RefreshBoneNames()`、`std::move()`、`RefreshBoneHierarchy()`、`ReadPoseArrays()`、`SetReflectionStatus()`；并读取、解析或查找数据、更新状态、保存结果或发布状态、按条件分支处理。
+// 实现 ExecuteReflectionAction：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       context.reflection_action_requested.exchange(0, std::memory_order_acquire);
   if (action == 0 || context.runtime.mesh == 0)
     return;
@@ -7165,18 +7165,18 @@ struct PoseFileTaskData final {
   }
 }
 
-// 中文说明：Hex()：直接在函数体内完成计算与状态处理。  std::array<char, 32> buffer{};
+// 实现 Hex：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::snprintf(buffer.data(), buffer.size(), "0x%llX",
                 static_cast<unsigned long long>(value));
   return std::string(buffer.data());
 }
 
-// 中文说明：SetStatus() 的实际功能是：调用 `PublishSnapshot()`；并更新状态、保存结果或发布状态。
+// 实现 SetStatus：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::memcpy(snapshot.status.data(), message.data(), length);
   snapshot.status[length] = '\0';
 }
 
-// 中文说明：PublishSnapshot()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RenderSnapshot next{};
+// 实现 PublishSnapshot：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   next.active = context.runtime.character != 0 && context.runtime.mesh != 0;
   next.character = context.runtime.character;
   next.mesh = context.runtime.mesh;
@@ -7232,7 +7232,7 @@ struct PoseFileTaskData final {
   context.snapshot = next;
 }
 
-// 中文说明：RefreshRuntime()：直接在函数体内完成计算与状态处理。  if (context.runtime.g_world_address == 0 && !ResolveGWorld(context))
+// 实现 RefreshRuntime：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return false;
   if (!ResolveLocalCharacter(context))
     return false;
@@ -7265,7 +7265,7 @@ struct PoseFileTaskData final {
 constexpr std::string_view kFunctionSetMorphTargetPath =
     "/Script/Engine.SkeletalMeshComponent.SetMorphTarget";
 
-// 中文说明：BodyMeshAsset() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 BodyMeshAsset：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     std::uintptr_t candidate{};
     if (!ReadPointerAt(context, mesh, offset, candidate) || candidate == 0)
       continue;
@@ -7316,11 +7316,11 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
   return false;
 }
 
-// 中文说明：CaptureExpression() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 CaptureExpression：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return {context.morph_weights.value, context.morph_weights.driven};
 }
 
-// 中文说明：RestoreExpression() 的实际功能是：调用 `size()`、`Set()`、`Release()`；并更新状态、保存结果或发布状态、遍历集合元素、按条件分支处理。
+// 实现 RestoreExpression：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   auto &weights = context.morph_weights;
   const std::size_t count = weights.value.size();
   for (std::size_t i{}; i != count; ++i) {
@@ -7334,7 +7334,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
 
 // Game thread: undo/redo for the expression, the same settle-then-record
 // history as the pose (pose_history.hpp). A new mesh starts a fresh history.
-// 中文说明：StepExpressionHistory() 的实际功能是：调用 `Reset()`、`CaptureExpression()`、`store()`、`exchange()`、`Undo()`、`Redo()`、`RestoreExpression()`、`Observe()`；并读取、解析或查找数据、更新状态、保存结果或发布状态、按条件分支处理。
+// 实现 StepExpressionHistory：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     if (context.morph_history_mesh != context.morph_mesh) {
       context.morph_history_mesh = context.morph_mesh;
       context.morph_history.Reset(CaptureExpression(context));
@@ -7362,7 +7362,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
 // kilobytes), so it is written and read here rather than on a task.
 //   { "format": "betterpose-expression", "version": 1,
 //     "morphs": [ { "name": "jawOpen", "weight": 0.8 }, ... ] }
-// 中文说明：StepExpressionFile() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 StepExpressionFile：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (request == 0)
     return;
   // Every message goes through the localizer: `key`, English fallback, and
@@ -7484,7 +7484,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
 // Game thread, every update: (re)load the catalogue for a new body mesh, and
 // write every driven weight. A morph the user released is written to 0 once
 // and then left to the game again.
-// 中文说明：StepExpression() 的实际功能是：调用 `clear()`、`BodyMeshAsset()`、`ReadMorphCatalog()`、`lock()`、`size()`、`Build()`、`std::move()`、`Resize()`；并读取、解析或查找数据、更新状态、保存结果或发布状态、遍历集合元素、按条件分支处理。
+// 实现 StepExpression：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     const std::uintptr_t mesh = context.runtime.mesh;
     if (mesh == 0)
       return;
@@ -7634,7 +7634,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
   }
 }
 
-// 中文说明：UpdateRuntime()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!RefreshRuntime(context)) {
+// 实现 UpdateRuntime：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     PublishSnapshot(context, "local player character is unavailable");
     return;
   }
@@ -7941,7 +7941,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
   }
 }
 
-// 中文说明：RestoreAll() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
+// 实现 RestoreAll：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const auto active_character = state.character;
   const auto active_mesh = state.mesh;
   const auto active_instance = state.anim_instance;
@@ -8044,16 +8044,16 @@ constexpr float kOverlayDefaultRadius = 7.0F;
 constexpr float kOverlayMinimumRadius = 3.0F;
 constexpr float kOverlayMaximumRadius = 16.0F;
 
-// 中文说明：V3Sub() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 V3Sub：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
-// 中文说明：V3Length() 的实际功能是：直接执行函数体中的计算或状态操作。
-// 中文说明：QuatNormalize() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 V3Length：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
+// 实现 QuatNormalize：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!(length > 1e-12))
     return Quatd{};
   return Quatd{q.x / length, q.y / length, q.z / length, q.w / length};
 }
 
-// 中文说明：QuatFromRotationVector() 的实际功能是：调用 `QuatNormalize()`。
+// 实现 QuatFromRotationVector：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       std::sqrt(omega[0] * omega[0] + omega[1] * omega[1] + omega[2] * omega[2]);
   if (angle < 1e-12)
     return QuatNormalize(Quatd{omega[0] * 0.5, omega[1] * 0.5, omega[2] * 0.5, 1.0});
@@ -8063,7 +8063,7 @@ constexpr float kOverlayMaximumRadius = 16.0F;
 
 // The inverse of RotatorToQuat, in UE's FQuat::Rotator convention, so the
 // result round-trips through the joint sliders. Degrees, each in [-180, 180].
-// 中文说明：QuatToRotator() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 QuatToRotator：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const Quatd q = QuatNormalize(input);
   const auto normalize = [](double value) {
     while (value > 180.0)
@@ -8102,7 +8102,7 @@ constexpr float kOverlayMaximumRadius = 16.0F;
 // frame with three unknowns and two screen coordinates; the unconstrained one
 // drifted whenever the projection moved by a fraction of a pixel.)
 
-// 中文说明：WrapAngle()：直接在函数体内完成计算与状态处理。  constexpr double kPi = 3.14159265358979323846;
+// 实现 WrapAngle：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   while (radians > kPi)
     radians -= 2.0 * kPi;
   while (radians < -kPi)
@@ -8218,7 +8218,7 @@ bool ViewRotationAxis(Project &&project, const Vec3d &pivot, Vec3d &axis,
 // magnifies, so compare how far apart two points 1 cm apart land on screen
 // 20 cm either way along the ray.
 template <typename Project>
-// 中文说明：TowardCamera() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 TowardCamera：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   double sense{};
   if (!ViewRotationAxis(project, point, ray, sense))
     return false;
@@ -8297,7 +8297,7 @@ bool IsControlBone(const std::string_view name, const std::int32_t parent,
 
 // Facial rig bones under the head: mouth, lips, teeth, eyebrows, eyelids,
 // eyeballs, cheeks. Real joints, but ~50 of them crowd the face into a blob.
-// 中文说明：IsFaceBone() 的实际功能是：直接执行函数体中的计算或状态操作；并遍历集合元素。
+// 实现 IsFaceBone：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   for (const char *key : {"mouth", "zuiba", "yachi", "lip", "eyebrow", "eyelid", "eyeco",
                           "eyeball", "lianjia", "tongue", "jaw"})
     if (low.find(key) != std::string::npos)
@@ -8435,7 +8435,7 @@ Quatd ApplyWorldRotationToOffset(const Quatd &parent_world, const Quatd &world_r
 }
 
 // The shortest rotation taking direction `from` onto direction `to`.
-// 中文说明：QuatFromTo() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 QuatFromTo：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const double lt = V3Length(to);
   if (!(lf > 1e-12) || !(lt > 1e-12))
     return Quatd{};
@@ -8454,7 +8454,7 @@ Quatd ApplyWorldRotationToOffset(const Quatd &parent_world, const Quatd &world_r
 
 // The joints a drag moves by two-bone IK: hands and feet, which sit below a
 // hinge (forearm, calf). Fingers, toes and helper bones stay one-bone drags.
-// 中文说明：IsIkEndBone() 的实际功能是：直接执行函数体中的计算或状态操作；并遍历集合元素。
+// 实现 IsIkEndBone：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   for (const char *skip : {"finger", "toe", "twist", "adjust", "ik", "nub", "prop"})
     if (low.find(skip) != std::string::npos)
       return false;
@@ -8522,7 +8522,7 @@ TwoBoneRotations SolveTwoBone(const Vec3d &root, const Vec3d &mid, const Vec3d &
   return out;
 }
 
-// 中文说明：ClearOverlayScreen()：直接在函数体内完成计算与状态处理。  if (!context.overlay_published)
+// 实现 ClearOverlayScreen：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return;
   std::lock_guard<std::mutex> lock(context.overlay_mutex);
   context.overlay_screen_joints.clear();
@@ -8587,7 +8587,7 @@ Transformd OverlayJointWorld(const Context &context, const Transformd &component
 // Joint limits for a ball joint (shoulder, hip): with the switch on, pull an
 // offset the drag produced back inside the bone's range. Anything that is not
 // a ball joint, or with the switch off, passes through untouched.
-// 中文说明：LimitBallOffset()：直接在函数体内完成计算与状态处理。  if (!context.overlay_limits_enabled.load(std::memory_order_acquire) ||
+// 实现 LimitBallOffset：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       bone >= context.bone_names.size())
     return offset;
   const auto ball = better_pose::limits::BallFor(context.bone_names[bone]);
@@ -9011,7 +9011,7 @@ struct DiscRow {
   float half_width;
 };
 
-// 中文说明：DiscRows() 的实际功能是：调用 `std::sqrt()`、`push_back()`；并遍历集合元素、按条件分支处理。
+// 实现 DiscRows：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (!(radius > 0.0F) || !(step > 0.0F))
     return rows;
   for (float top = -radius; top < radius; top += step) {
@@ -9035,7 +9035,7 @@ struct CircleDetail {
   int segments;
 };
 
-// 中文说明：CircleDetailFor()：直接在函数体内完成计算与状态处理。  CircleDetail detail;
+// 实现 CircleDetailFor：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   detail.strip = (std::max)(2.0F, radius * 0.4F);
   const int segments = static_cast<int>(std::ceil(2.0F * 3.14159265F * radius / 4.5F));
   detail.segments = std::clamp(segments, 8, 16);
@@ -9084,7 +9084,7 @@ bool JointWorldPosition(Context &context, const std::uint32_t bone,
 // step across the view at 100 cm lands on screen. Measured through the AHUD
 // projection (which already sees the pose camera), whether or not the
 // skeleton overlay is drawn.
-// 中文说明：MeasureOrbitFocal() 的实际功能是：调用 `lock()`、`load()`、`better_pose::orbit::ViewOf()`；并按条件分支处理。
+// 实现 MeasureOrbitFocal：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return;
   better_pose::orbit::View view;
   {
@@ -9275,7 +9275,7 @@ void ANOMALY_CALL DrawSkeletonOverlay(void *user,
   }
 }
 
-// 中文说明：SubscribeSkeletonOverlay() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 SubscribeSkeletonOverlay：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return context.ahud_subscription.id != 0;
   AnomalyGenerationHandleV1 handle{};
   const auto status = context.ahud->subscribe(context.ahud->user,
@@ -9286,7 +9286,7 @@ void ANOMALY_CALL DrawSkeletonOverlay(void *user,
   return true;
 }
 
-// 中文说明：UnsubscribeSkeletonOverlay() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 UnsubscribeSkeletonOverlay：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     return;
   const auto handle = context.ahud_subscription;
   context.ahud_subscription = {};
@@ -9459,7 +9459,7 @@ void UpdateSkeletonOverlayPicking(Context &context,
 // drag running) drives the orbit: right drag rotates, middle drag pans, the
 // wheel zooms. Every one is a mouse message the host keeps from the game while
 // the menu is open, so nothing here can make the character move.
-// 中文说明：UpdateOrbitCameraInput() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 UpdateOrbitCameraInput：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     context.orbit_right_dragging = false;
     context.orbit_middle_was_down = false;
     return;
@@ -9533,7 +9533,7 @@ void UpdateSkeletonOverlayPicking(Context &context,
 // Ctrl+Shift+Z) into undo/redo requests, on the press only. The keys are
 // ignored while a text field wants the keyboard, so Ctrl+Z inside the file
 // name box stays the text box's.
-// 中文说明：UpdatePoseHistoryInput() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 UpdatePoseHistoryInput：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     context.pose_edit_held.store(false, std::memory_order_release);
     return;
   }
@@ -9574,7 +9574,7 @@ void UpdateSkeletonOverlayPicking(Context &context,
   context.pose_redo_key_was_down = redo_down;
 }
 
-// 中文说明：MirrorPose()：直接在函数体内完成计算与状态处理。  try {
+// 实现 MirrorPose：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     using namespace better_pose::mirror;
     if (!CapturePoseBase(context))
       return false;
@@ -9729,7 +9729,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start() 的实际功能是：调用 `ResolveGWorld()`、`Status()`；并读取、解析或查找数据、按条件分支处理。
+// 实现 Start：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (context == nullptr)
     return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
   if (!ResolveGWorld(*context)) {
@@ -9744,7 +9744,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
+// 实现 Stop：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (context == nullptr)
     return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
   // First: the overlay callback reads runtime, which is reset below.
@@ -9764,7 +9764,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
+// 实现 Unload：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (context == nullptr)
     return;
   // Release the music device with the plugin: MCI aliases outlive a hot reload, so leaving this
@@ -9790,7 +9790,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   delete context;
 }
 
-// 中文说明：Update() 的实际功能是：调用 `UpdateRuntime()`、`RestoreAll()`、`PublishSnapshot()`；并更新状态、保存结果或发布状态。
+// 实现 Update：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (context == nullptr)
     return;
   try {
@@ -9818,7 +9818,7 @@ bool ReadCurrentBoneTranslation(Context &context,
   return Read(context, transform, translation);
 }
 
-// 中文说明：Draw()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
+// 实现 Draw：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (context == nullptr || !UiReady(ui))
     return;
 
