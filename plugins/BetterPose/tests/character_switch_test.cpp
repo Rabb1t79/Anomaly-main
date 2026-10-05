@@ -4,11 +4,11 @@
 #include <iostream>
 
 namespace fixture {
-// 中文说明：Check()：直接在函数体内完成计算与状态处理，并用断言检查处理结果。  if (!value) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
+// 中文说明：Check() 的实际功能是：调用 `Address()`、`data()`、`Set()`、`std::memcpy()`、`Get()`；并读取、解析或查找数据、更新状态、保存结果或发布状态。
 }
 struct Block {
   std::array<std::uint8_t,0x1000> bytes{};
-// 中文说明：Address()：实际调用 “data()”。// 中文说明：Set()：实际调用 “std::memcpy()”、“data()”，并更新对象状态或持久化结果。// 中文说明：Get()：实际调用 “std::memcpy()”、“data()”，并读取或解析输入数据。};
+// 中文说明：Address() 的实际功能是：直接执行函数体中的计算或状态操作。
 struct Region { std::uintptr_t address; std::size_t size; };
 std::vector<Region> regions;
 // 中文说明：Register()：实际调用 “push_back()”，并更新对象状态或持久化结果。// 中文说明：Contains()：直接在函数体内完成计算与状态处理。  for (const auto& r:regions)
@@ -18,13 +18,13 @@ std::vector<Region> regions;
 // 中文说明：ReadMemory()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!Contains(address,bytes.size)) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
   std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size); return anomaly::sdk::Ok();
 }
-// 中文说明：WriteMemory()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!Contains(address,bytes.size)) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
+// 中文说明：WriteMemory() 的实际功能是：直接执行函数体中的计算或状态操作。
   std::memcpy(reinterpret_cast<void*>(address),bytes.data,bytes.size); return anomaly::sdk::Ok();
 }
 enum Function { Mode,Lod,Visibility,Destroy,Count };
 int functions[Count]{};
 unsigned destroyed{};
-// 中文说明：Event()：直接在函数体内完成计算与状态处理。  auto* bytes=static_cast<std::uint8_t*>(object);
+// 中文说明：Event() 的实际功能是：调用 `Check()`；并按条件分支处理、用断言验证结果。
   if (function==&functions[Mode]) std::memcpy(bytes+kMeshAnimationModeOffset,parameters,1);
   if (function==&functions[Lod]) std::memcpy(bytes+kMeshForcedLodModelOffset,parameters,4);
   if (function==&functions[Visibility]) bytes[0x300]=*static_cast<std::uint8_t*>(parameters);
@@ -33,7 +33,7 @@ unsigned destroyed{};
     ++destroyed;
   }
 }
-// 中文说明：Find()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const std::array<std::string_view,Count> names{kFunctionSetAnimationModePath,kFunctionSetForcedLodPath,
+// 中文说明：Find() 的实际功能是：调用 `size()`、`std::string_view()`、`anomaly::sdk::Ok()`；并遍历集合元素、按条件分支处理。
                                                kFunctionSceneSetVisibilityPath,kFunctionActorComponentDestroyPath};
   for (std::size_t i=0;i<names.size();++i) if (names[i]==std::string_view(path.data,path.size)) {
     handle->id=i+1; return anomaly::sdk::Ok();
@@ -73,7 +73,7 @@ struct Character {
 }
 }
 
-// 中文说明：main()：直接在函数体内完成计算与状态处理。  using namespace fixture;
+// 中文说明：main() 的实际功能是：直接执行函数体中的计算或状态操作。
   Context context;
   AnomalyCoreServiceV1 core{}; core.struct_size=sizeof(core); core.read_memory=ReadMemory; core.write_memory=WriteMemory;
   context.core=&core;
