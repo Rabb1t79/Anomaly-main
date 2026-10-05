@@ -3,7 +3,7 @@ name: nte-vehicle
 on:
   push:
     branches:
-      - nte-vehicle-final-20261004
+      - nte-vehicle-independent-20261006
   pull_request:
     branches:
       - main
