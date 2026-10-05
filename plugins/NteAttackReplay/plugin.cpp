@@ -3,6 +3,8 @@
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
 
+#include <Windows.h>
+
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -62,6 +64,12 @@ struct Context final {
 
     uint64_t last_skill_generation{};
     uint64_t last_skill_sequence{};
+
+    // A replay is not successful when the bridge merely returns accepted=1.
+    // Wait for a newer player->target DamageEvent before counting the replay.
+    uint64_t replay_damage_cursor{};
+    std::chrono::steady_clock::time_point replay_damage_deadline{};
+    bool waiting_for_damage{};
 };
 
 template <typename Struct, typename Field>
@@ -107,6 +115,45 @@ AnomalyStatusV1 Status(uint32_t code, std::string_view message = {}) noexcept {
 
 bool SameHandle(AnomalyGenerationHandleV1 a, AnomalyGenerationHandleV1 b) noexcept {
     return a.id == b.id && a.generation == b.generation;
+}
+
+HWND ResolveReplayWindow() noexcept {
+    const HWND foreground = GetForegroundWindow();
+    if (foreground == nullptr) return nullptr;
+
+    DWORD process_id{};
+    if (GetWindowThreadProcessId(foreground, &process_id) == 0 ||
+        process_id != GetCurrentProcessId()) {
+        return nullptr;
+    }
+
+    const HWND unreal = FindWindowW(L"UnrealWindow", nullptr);
+    if (unreal != nullptr) {
+        DWORD unreal_process{};
+        if (GetWindowThreadProcessId(unreal, &unreal_process) != 0 &&
+            unreal_process == GetCurrentProcessId()) {
+            return unreal;
+        }
+    }
+    return foreground;
+}
+
+// QuickUltimate already uses PostMessageW to deliver real gameplay key input to
+// the owned Unreal window. Reuse that lightweight input path for normal attack.
+bool PostNormalAttackInput() noexcept {
+    const HWND window = ResolveReplayWindow();
+    if (window == nullptr || !IsWindow(window)) return false;
+
+    POINT point{};
+    if (!GetCursorPos(&point) || !ScreenToClient(window, &point)) {
+        point = {0, 0};
+    }
+    const LPARAM lparam = MAKELPARAM(
+        static_cast<short>(point.x), static_cast<short>(point.y));
+    if (PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, lparam) == FALSE) {
+        return false;
+    }
+    return PostMessageW(window, WM_LBUTTONUP, 0, lparam) != FALSE;
 }
 
 std::string ReadAbilityPath(
@@ -300,6 +347,9 @@ void ArmForNextAttack(Context& context) {
     context.captured_ability_path.clear();
     context.captured_target_path.clear();
     context.captured_damage_source_name.clear();
+    context.replay_damage_cursor = 0;
+    context.replay_damage_deadline = {};
+    context.waiting_for_damage = false;
     context.status = context.enabled ? "自动等待玩家下一次攻击" : "自动记录中：重放功能未启用";
 
     // Starting at the current tail prevents an old combat event from being mistaken
@@ -443,11 +493,8 @@ enum class ReplayCallResult : uint32_t {
 ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
     if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
     if (accepted != nullptr) *accepted = 0;
-    if (!InvocationReady(context.invocation) || !context.captured) {
+    if (!context.captured) {
         return ReplayCallResult::InvalidState;
-    }
-    if (!context.captured_has_skill) {
-        return ReplayCallResult::NoSkill;
     }
 
     AnomalyNteCombatantSnapshotV1 combatant{};
@@ -460,6 +507,18 @@ ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* a
 
     context.world = combatant.world;
     context.character = combatant.character;
+
+    // Normal attacks have no NTE skill handle. The old implementation returned
+    // NoSkill here, so a captured normal attack never sent any replay input.
+    if (!context.captured_has_skill) {
+        if (PostNormalAttackInput()) return ReplayCallResult::Success;
+        if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_FAILED;
+        return ReplayCallResult::ServiceError;
+    }
+
+    if (!InvocationReady(context.invocation)) {
+        return ReplayCallResult::InvalidState;
+    }
 
     AnomalyGenerationHandleV1 skill{};
     if (!ResolveReplaySkill(context, &skill)) return ReplayCallResult::NoSkill;
@@ -559,6 +618,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (context->enabled && context->captured && !context->replaying) {
             context->replay_done = 0;
             context->replaying = true;
+            context->waiting_for_damage = false;
             context->next_replay = std::chrono::steady_clock::now();
             context->status = "已提交重放，等待 Game 域执行";
         } else {
@@ -571,6 +631,53 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     if (!context->replaying) return;
 
     const auto now = std::chrono::steady_clock::now();
+
+    // accepted=1 only means the call reached the game. A replay is counted
+    // only after a fresh player->target DamageEvent is observed.
+    if (context->waiting_for_damage) {
+        AnomalyNteCombatEventV1 event{};
+        event.struct_size = sizeof(event);
+        const auto damage_status = context->combat->next_event(
+            context->combat->user, context->replay_damage_cursor, &event);
+        if (damage_status.code == ANOMALY_STATUS_V1_OK) {
+            context->replay_damage_cursor = event.sequence;
+            if (event.kind == ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE &&
+                SameHandle(event.source, context->character) &&
+                event.target.id != 0 &&
+                !SameHandle(event.target, context->character)) {
+                context->waiting_for_damage = false;
+                ++context->replay_done;
+                const double interval_seconds =
+                    1.0 / std::clamp(context->replay_rate, 0.1, 30.0);
+                context->next_replay =
+                    now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                              std::chrono::duration<double>(interval_seconds));
+                context->status = "已确认新的 DamageEvent，重放成功";
+            }
+        } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
+            context->replaying = false;
+            context->waiting_for_damage = false;
+            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误";
+            ArmForNextAttack(*context);
+            return;
+        }
+
+        if (context->replaying && context->replay_done >= context->replay_count) {
+            context->replaying = false;
+            context->status = "重放完成，继续自动等待下一次攻击";
+            ArmForNextAttack(*context);
+            return;
+        }
+        if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
+            context->replaying = false;
+            context->waiting_for_damage = false;
+            context->status = "重放失败：未观察到新的 DamageEvent";
+            ArmForNextAttack(*context);
+            return;
+        }
+        if (context->waiting_for_damage) return;
+    }
+
     if (context->replay_done >= context->replay_count) {
         context->replaying = false;
         context->status = "重放完成，继续自动等待下一次攻击";
@@ -579,6 +686,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     }
 
     if (now < context->next_replay) return;
+
+    // Snapshot the event tail immediately before invoking the replay.
+    context->replay_damage_cursor = context->combat->latest_event_sequence(
+        context->combat->user);
+    context->replay_damage_deadline = now + std::chrono::milliseconds(2000);
 
     uint32_t replay_status = ANOMALY_STATUS_V1_OK;
     uint32_t accepted = 0;
@@ -598,22 +710,12 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         ArmForNextAttack(*context);
         return;
     }
-    context->status = "游戏已接受技能激活请求（accepted=1）";
-
-    ++context->replay_done;
-    const double interval_seconds =
-        1.0 / std::clamp(context->replay_rate, 0.1, 30.0);
-    context->next_replay =
-        now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                  std::chrono::duration<double>(interval_seconds));
-
-    if (context->replay_done >= context->replay_count) {
-        context->replaying = false;
-        context->status = "重放完成，继续自动等待下一次攻击";
-        ArmForNextAttack(*context);
-    } else {
-        context->status = "正在重放";
-    }
+    context->waiting_for_damage = true;
+    context->status = context->captured_has_skill
+        ? (accepted != 0
+            ? "技能调用已接受，等待新的 DamageEvent"
+            : "技能调用已提交，等待新的 DamageEvent")
+        : "已发送普通攻击输入，等待新的 DamageEvent";
 }
 
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
