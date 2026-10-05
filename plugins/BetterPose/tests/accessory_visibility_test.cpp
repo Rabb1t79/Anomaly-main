@@ -14,9 +14,9 @@ struct Component {
   bool child_visible{};
   unsigned queries{}, visibility_writes{}, destroy_calls{};
 };
-// 中文说明：Check() 的实际功能是：调用 `std::memcpy()`；并按条件分支处理、用断言验证结果。
+// 实现 Check：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
-// 中文说明：Event() 的实际功能是：调用 `Check()`、`std::memcpy()`；并按条件分支处理、用断言验证结果。
+// 实现 Event：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   auto* bytes=static_cast<std::uint8_t*>(parameters);
   if (function==&functions[IsVisible]) {
     // The verified native skinned-component getter checks both flags.
@@ -35,13 +35,13 @@ struct Component {
     ++component.destroy_calls;
   }
 }
-// 中文说明：ReadMemory()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size);
+// 实现 ReadMemory：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return anomaly::sdk::Ok();
 }
-// 中文说明：WriteMemory() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 WriteMemory：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return anomaly::sdk::Ok();
 }
-// 中文说明：Find() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Find：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const std::array<std::string_view,Count> paths{
       kFunctionSceneIsVisiblePath,kFunctionSceneSetVisibilityPath,
       kFunctionSceneSetRelativeTransformPath,kFunctionPoseableSetBoneTransformByNamePath,
@@ -55,7 +55,7 @@ struct Component {
 }
 }
 
-// 中文说明：main() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 main：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   Context context;
   AnomalyCoreServiceV1 core{};
   core.struct_size=sizeof(core); core.read_memory=ReadMemory; core.write_memory=WriteMemory;
