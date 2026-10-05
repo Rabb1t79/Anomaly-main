@@ -7,7 +7,7 @@
 namespace {
 using namespace better_pose::limits;
 
-// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
+// 统一测试断言入口：条件失败时把具体失败信息写到标准错误并以退出码 1 终止测试，条件成立时继续执行后续断言。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -15,13 +15,13 @@ void Check(const bool value, const char *message) {
   }
 }
 
-// 中文说明：Distance()：调用 `std::abs()`，结果用于完成该函数对应的数据处理。
+// 验证 Distance 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 double Distance(const Quat &a, const Quat &b) {
   const double dot = std::abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
   return 1.0 - (std::min)(dot, 1.0);
 }
 
-// 中文说明：Around()：调用 `std::sqrt()`、`std::sin()`、`std::cos()`，结果用于完成该函数对应的数据处理。
+// 验证 Around 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 Quat Around(std::array<double, 3> axis, const double degrees) {
   const double n = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
   const double h = degrees * 3.14159265358979323846 / 360.0;
@@ -29,7 +29,7 @@ Quat Around(std::array<double, 3> axis, const double degrees) {
           std::cos(h)};
 }
 
-// 中文说明：Classification()：调用 `Check()`、`LimitFor()`、`bends()`、`left()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Classification 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void Classification() {
   Check(LimitFor("Bip001-L-Finger1").kind == Kind::Free, "a finger root spreads: free");
   Check(LimitFor("Bip001-L-Finger0").kind == Kind::Free, "the thumb root: free");
@@ -62,7 +62,7 @@ void Classification() {
   Check(LimitFor("Finger11").kind == Kind::Free, "a finger with no side is not guessed");
 }
 
-// 中文说明：SplitAndCompose()：调用 `LimitFor()`、`Normalize()`、`Around()`、`Rz()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Split And Compose 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void SplitAndCompose() {
   const Limit limit = LimitFor("Bip001-L-Finger11");  // Z, -1
   const Quat base = Normalize(Around({0.3, -0.8, 0.5}, 70.0));  // arbitrary rest frame
@@ -93,7 +93,7 @@ void SplitAndCompose() {
         "bend is clamped at the minimum (small hyperextension only)");
 }
 
-// 中文说明：BendMovesOnlyInItsPlane()：调用 `LimitFor()`、`ComposeBend()`、`Multiply()`、`Conjugate()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Bend Moves Only In Its Plane 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void BendMovesOnlyInItsPlane() {
   // With base = identity, the hinge is the bone's own local Z. A bend must
   // keep a point on the local Z axis fixed and move one on local X within
@@ -114,7 +114,7 @@ void BendMovesOnlyInItsPlane() {
         "by exactly the bend");
 }
 
-// 中文说明：ElbowCannotFoldBackwards()：调用 `way()`、`LimitFor()`、`Normalize()`、`Around()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Elbow Cannot Fold Backwards；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void ElbowCannotFoldBackwards() {
   // An IK solve that would bend the elbow 20 degrees the wrong way (past
   // straight) is pulled back to the lower bound; a normal bend is kept.
@@ -135,7 +135,7 @@ void ElbowCannotFoldBackwards() {
 }
 }  // namespace
 
-// 中文说明：BallJoints()：调用 `Check()`、`BallFor()`、`Normalize()`、`Around()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Ball Joints；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void BallJoints() {
   Check(BallFor("Bip001-L-UpperArm").valid && BallFor("Bip001-R-Thigh").valid,
         "shoulders and hips are ball joints");
@@ -189,7 +189,7 @@ void BallJoints() {
         "the thighs' local Y points back and Z to the right (measured)");
 }
 
-// 中文说明：main()：调用 `Classification()`、`SplitAndCompose()`、`BendMovesOnlyInItsPlane()`、`ElbowCannotFoldBackwards()`，结果用于完成该函数对应的数据处理。
+// 测试程序入口：按顺序执行本文件覆盖的功能测试；所有断言通过后输出 PASS 并以 0 返回，任一断言失败都会由 Check() 终止进程。
 int main() {
   Classification();
   SplitAndCompose();
