@@ -9,7 +9,7 @@
 namespace {
 using namespace better_pose::morph;
 
-// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
+// 统一测试断言入口：条件失败时把具体失败信息写到标准错误并以退出码 1 终止测试，条件成立时继续执行后续断言。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -18,7 +18,7 @@ void Check(const bool value, const char *message) {
 }
 
 // Names as they appear on the live NTE body mesh.
-// 中文说明：Groups()：调用 `Check()`、`GroupOf()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Groups 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void Groups() {
   Check(GroupOf("look_U") == Group::Gaze && GroupOf("look_LD") == Group::Gaze, "gaze");
   Check(GroupOf("EL_Happy_L_CLO") == Group::Eyes && GroupOf("eye_SF") == Group::Eyes &&
@@ -31,7 +31,7 @@ void Groups() {
   Check(GroupOf("TD_Imagination") == Group::Other && GroupOf("") == Group::Other, "other");
 }
 
-// 中文说明：OrderIsGroupedAndStable()：调用 `push_back()`、`Build()`、`Check()`、`size()`；通过 `Check()` 校验结果，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 验证 Order Is Grouped And Stable 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void OrderIsGroupedAndStable() {
   Catalog catalog;
   std::vector<Entry> list;
@@ -56,7 +56,7 @@ void OrderIsGroupedAndStable() {
         "group counts");
 }
 
-// 中文说明：WeightsDriveOnlyTouchedMorphs()：调用 `Resize()`、`Check()`、`DrivenCount()`、`Set()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Weights Drive Only Touched Morphs；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void WeightsDriveOnlyTouchedMorphs() {
   Weights weights;
   weights.Resize(4);
@@ -76,7 +76,7 @@ void WeightsDriveOnlyTouchedMorphs() {
   Check(weights.DrivenCount() == 0 && weights.value.size() == 2, "a new mesh starts clean");
 }
 
-// 中文说明：MakeCatalog()：调用 `push_back()`、`Build()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 验证 Make Catalog 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 Catalog MakeCatalog(const std::vector<const char *> &names) {
   std::vector<Entry> list;
   for (const char *name : names) {
@@ -89,7 +89,7 @@ Catalog MakeCatalog(const std::vector<const char *> &names) {
   return catalog;
 }
 
-// 中文说明：SaveAndLoad()：调用 `MakeCatalog()`、`Resize()`、`Set()`、`CollectDriven()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 负责 Save And Load 的数据持久化；函数根据当前实现读取或构造配置/文档内容，校验尺寸与状态后调用实际存储接口，输入无效、存储失败或解析失败时返回失败状态。
 void SaveAndLoad() {
   const auto catalog = MakeCatalog({"jawOpen", "look_U", "EL_Happy_L_CLO", "mouthPucker"});
   Weights weights;
@@ -114,7 +114,7 @@ void SaveAndLoad() {
   Check(loaded.driven[1] == 0 && loaded.value[1] == 0.0F,
         "loading replaces the expression instead of mixing into it");
 }
-// 中文说明：ExpressionHistory()：调用 `Reset()`、`Observe()`、`Check()`、`Undo()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Expression History 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void ExpressionHistory() {
   using better_pose::history::ExpressionState;
   better_pose::history::ExpressionHistory history;
@@ -134,7 +134,7 @@ void ExpressionHistory() {
   Check(!history.Observe(game_moved, false, 2400), "a weight the game owns is not recorded");
 }
 
-// 中文说明：MmdMapping()：调用 `mm::Resolve()`、`Check()`、`size()`、`empty()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Mmd Mapping 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void MmdMapping() {
   namespace mm = better_pose::mmd_morph;
   // The two measured NTE characters: one has vowel shapes, one does not.
@@ -201,7 +201,7 @@ void MmdMapping() {
 }
 }  // namespace
 
-// 中文说明：main()：调用 `MmdMapping()`、`Groups()`、`OrderIsGroupedAndStable()`、`WeightsDriveOnlyTouchedMorphs()`，结果用于完成该函数对应的数据处理。
+// 测试程序入口：按顺序执行本文件覆盖的功能测试；所有断言通过后输出 PASS 并以 0 返回，任一断言失败都会由 Check() 终止进程。
 int main() {
   MmdMapping();
   Groups();
