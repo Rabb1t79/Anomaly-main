@@ -785,6 +785,13 @@ typedef struct AnomalyNteCombatStatisticsV1 {
     int64_t basic_damage_total;
     int64_t final_damage_total;
 } AnomalyNteCombatStatisticsV1;
+// Replays one captured player->enemy damage event through the native UE damage pipeline.
+// The Host, not the plugin, resolves UE objects and invokes the validated damage bridge.
+typedef struct AnomalyNteDamageReplayRequestV1 {
+    uint32_t struct_size; uint32_t flags;
+    AnomalyNteDamageEventV1 event;
+} AnomalyNteDamageReplayRequestV1;
+
 typedef struct AnomalyNteCombatServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     AnomalyStatusV1 (ANOMALY_CALL *current_combatant)(
