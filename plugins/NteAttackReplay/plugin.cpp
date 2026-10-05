@@ -2,8 +2,8 @@
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
-
-#include <Windows.h>
+#include "anomaly/sdk/services/interop.h"
+#include "anomaly/sdk/services/ue5.h"
 
 #include <algorithm>
 #include <atomic>
@@ -15,14 +15,20 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
+
+struct NormalAttackBinding { uintptr_t world{}; uintptr_t controller{}; uintptr_t triggered{}; uintptr_t completed{}; std::array<uint8_t,8> pressed{}; std::array<uint8_t,8> released{}; };
 
 struct Context final {
     const AnomalyNteCombatServiceV1* combat{};
     const AnomalyNteSkillsServiceV1* skills{};
     const AnomalyNteSkillInvocationServiceV1* invocation{};
     const AnomalyUiServiceV1* ui{};
+    const AnomalySignatureServiceV1* signature{};
+    const AnomalyUe5NamesServiceV1* names{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
@@ -70,6 +76,7 @@ struct Context final {
     uint64_t replay_damage_cursor{};
     std::chrono::steady_clock::time_point replay_damage_deadline{};
     bool waiting_for_damage{};
+    NormalAttackBinding normal_attack{};
 };
 
 template <typename Struct, typename Field>
@@ -117,44 +124,344 @@ bool SameHandle(AnomalyGenerationHandleV1 a, AnomalyGenerationHandleV1 b) noexce
     return a.id == b.id && a.generation == b.generation;
 }
 
-HWND ResolveReplayWindow() noexcept {
-    const HWND foreground = GetForegroundWindow();
-    if (foreground == nullptr) return nullptr;
 
-    DWORD process_id{};
-    if (GetWindowThreadProcessId(foreground, &process_id) == 0 ||
-        process_id != GetCurrentProcessId()) {
-        return nullptr;
-    }
+/* Native normal-attack replay. Evidence source: Anomaly combat build plus the current HTGame dump.
+   This path never synthesizes mouse messages. */
+constexpr ptrdiff_t kWorldGameInstanceOffset = 560;
+constexpr ptrdiff_t kGameInstanceLocalPlayersOffset = 56;
+constexpr ptrdiff_t kLocalPlayerControllerOffset = 48;
+constexpr ptrdiff_t kObjectClassOffset = 16;
+constexpr ptrdiff_t kObjectNameOffset = 24;
+constexpr ptrdiff_t kUStructChildrenOffset = 72;
+constexpr ptrdiff_t kUStructSuperStructOffset = 64;
+constexpr ptrdiff_t kUFieldNextOffset = 40;
+constexpr ptrdiff_t kUFunctionNumParmsOffset = 180;
+constexpr ptrdiff_t kUFunctionParmsSizeOffset = 182;
+constexpr ptrdiff_t kUStructPropertyLinkOffset = 112;
+constexpr ptrdiff_t kFFieldNameOffset = 32;
+constexpr ptrdiff_t kFFieldClassOffset = 8;
+constexpr ptrdiff_t kFPropertyElementSizeOffset = 52;
+constexpr ptrdiff_t kFPropertyOffsetInternalOffset = 68;
+constexpr ptrdiff_t kFPropertyPropertyLinkNextOffset = 72;
+constexpr ptrdiff_t kDataTableRowMapOffset = 48;
+constexpr size_t kDataTableRowStride = 24;
+constexpr size_t kProcessEventVtableIndex = 0x4C;
+constexpr size_t kMaximumNameBytes = 1024;
+constexpr std::string_view kGWorldPattern =
+    "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
 
-    const HWND unreal = FindWindowW(L"UnrealWindow", nullptr);
-    if (unreal != nullptr) {
-        DWORD unreal_process{};
-        if (GetWindowThreadProcessId(unreal, &unreal_process) != 0 &&
-            unreal_process == GetCurrentProcessId()) {
-            return unreal;
-        }
-    }
-    return foreground;
+bool NativeRead(const void* address, void* destination, size_t size) noexcept {
+    if (!address || !destination) return false;
+    __try { std::memcpy(destination, address, size); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+template <typename T>
+bool NativeRead(const void* address, T& value) noexcept {
+    return NativeRead(address, &value, sizeof(value));
+}
+void* NativePointer(const void* address) noexcept {
+    uintptr_t value{};
+    return NativeRead(address, value) ? reinterpret_cast<void*>(value) : nullptr;
 }
 
-// QuickUltimate already uses PostMessageW to deliver real gameplay key input to
-// the owned Unreal window. Reuse that lightweight input path for normal attack.
-bool PostNormalAttackInput() noexcept {
-    const HWND window = ResolveReplayWindow();
-    if (window == nullptr || !IsWindow(window)) return false;
+std::string NativeName(const Context& c, uint32_t id) {
+    if (!c.names || !c.names->resolve_utf8 || id == 0) return {};
+    size_t size{};
+    if (c.names->resolve_utf8(c.names->user, id, nullptr, &size).code != ANOMALY_STATUS_V1_OK ||
+        size <= 1 || size > kMaximumNameBytes) return {};
+    std::string value(size, '\0');
+    if (c.names->resolve_utf8(c.names->user, id, value.data(), &size).code != ANOMALY_STATUS_V1_OK)
+        return {};
+    value.resize(size - 1);
+    return value;
+}
+std::string NativeObjectName(const Context& c, uintptr_t object) {
+    uint32_t id{};
+    if (!NativeRead(reinterpret_cast<const void*>(object + kObjectNameOffset), id)) return {};
+    return NativeName(c, id);
+}
+std::string NativeFName(const Context& c, uint32_t cmp, uint32_t number) {
+    auto value = NativeName(c, cmp);
+    if (number != 0) value += "_" + std::to_string(number - 1);
+    return value;
+}
 
-    POINT point{};
-    if (!GetCursorPos(&point) || !ScreenToClient(window, &point)) {
-        point = {0, 0};
+bool ResolveNativeWorld(const Context& c, uintptr_t& address) noexcept {
+    address = 0;
+    if (!c.signature || !c.signature->resolve) return false;
+    uintptr_t instruction{};
+    if (c.signature->resolve(
+            c.signature->user, anomaly::sdk::StringView("HTGame.exe"),
+            anomaly::sdk::StringView(".text"),
+            anomaly::sdk::StringView(kGWorldPattern), &instruction).code != ANOMALY_STATUS_V1_OK)
+        return false;
+    int32_t displacement{};
+    if (!NativeRead(reinterpret_cast<const void*>(instruction + 3), displacement)) return false;
+    address = static_cast<uintptr_t>(
+        static_cast<intptr_t>(instruction) + 7 + displacement);
+    return address != 0;
+}
+bool GetNativeController(const Context& c, uintptr_t& world, uintptr_t& controller) noexcept {
+    uintptr_t g_world{};
+    if (!ResolveNativeWorld(c, g_world)) return false;
+    if (!NativeRead(reinterpret_cast<const void*>(g_world), world) || !world) return false;
+    uintptr_t game_instance{}, locals{}, local_player{};
+    int32_t count{};
+    if (!NativeRead(reinterpret_cast<const void*>(world + kWorldGameInstanceOffset), game_instance) ||
+        !game_instance ||
+        !NativeRead(reinterpret_cast<const void*>(game_instance + kGameInstanceLocalPlayersOffset), locals) ||
+        !locals ||
+        !NativeRead(reinterpret_cast<const void*>(game_instance + kGameInstanceLocalPlayersOffset + 8), count) ||
+        count < 1 ||
+        !NativeRead(reinterpret_cast<const void*>(locals), local_player) ||
+        !local_player ||
+        !NativeRead(reinterpret_cast<const void*>(local_player + kLocalPlayerControllerOffset), controller) ||
+        !controller)
+        return false;
+    return true;
+}
+
+bool FindNativeFunction(const Context& c, uintptr_t cls, std::string_view target,
+                        uint8_t num_params, uint16_t params_size,
+                        uintptr_t& result) noexcept {
+    for (unsigned depth{}; cls && depth < 64; ++depth) {
+        uintptr_t field{};
+        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructChildrenOffset), field))
+            return false;
+        for (unsigned count{}; field && count < 4096; ++count) {
+            uintptr_t next{}, field_class{};
+            if (!NativeRead(reinterpret_cast<const void*>(field + kUFieldNextOffset), next) ||
+                !NativeRead(reinterpret_cast<const void*>(field + kObjectClassOffset), field_class))
+                break;
+            if (NativeObjectName(c, field_class) == "Function" &&
+                NativeObjectName(c, field) == target) {
+                uint8_t np{};
+                uint16_t ps{};
+                NativeRead(reinterpret_cast<const void*>(field + kUFunctionNumParmsOffset), np);
+                NativeRead(reinterpret_cast<const void*>(field + kUFunctionParmsSizeOffset), ps);
+                if (np == num_params && ps == params_size) {
+                    result = field;
+                    return true;
+                }
+            }
+            if (!next || next == field) break;
+            field = next;
+        }
+        uintptr_t super{};
+        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructSuperStructOffset), super) ||
+            !super || super == cls) break;
+        cls = super;
     }
-    const LPARAM lparam = MAKELPARAM(
-        static_cast<short>(point.x), static_cast<short>(point.y));
-    if (PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, lparam) == FALSE) {
+    return false;
+}
+
+bool NativePropertyOffset(const Context& c, uintptr_t owner, std::string_view name,
+                          std::string_view type, int32_t expected_size,
+                          int32_t& offset, uint16_t buffer_size = 0) noexcept {
+    uintptr_t property{};
+    if (!NativeRead(reinterpret_cast<const void*>(owner + kUStructPropertyLinkOffset), property))
+        return false;
+    for (unsigned i{}; property && i < 64; ++i) {
+        uint32_t name_id{};
+        if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id))
+            break;
+        if (NativeName(c, name_id) == name) {
+            uintptr_t field_class{};
+            uint32_t type_id{};
+            int32_t actual_size{};
+            if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
+                !field_class ||
+                !NativeRead(reinterpret_cast<const void*>(field_class), type_id) ||
+                NativeName(c, type_id) != type ||
+                !NativeRead(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), actual_size) ||
+                actual_size != expected_size ||
+                !NativeRead(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
+                offset < 0 ||
+                (buffer_size != 0 &&
+                 (expected_size > buffer_size ||
+                  offset > static_cast<int32_t>(buffer_size - expected_size))))
+                return false;
+            return true;
+        }
+        uintptr_t next{};
+        if (!NativeRead(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) ||
+            next == property)
+            break;
+        property = next;
+    }
+    return false;
+}
+
+uintptr_t NativeObjectProperty(const Context& c, uintptr_t object,
+                               std::string_view property_name) noexcept {
+    if (!object) return 0;
+    uintptr_t cls{};
+    if (!NativeRead(reinterpret_cast<const void*>(object + kObjectClassOffset), cls))
+        return 0;
+    for (unsigned depth{}; cls && depth < 64; ++depth) {
+        uintptr_t property{};
+        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructPropertyLinkOffset), property))
+            return 0;
+        for (unsigned count{}; property && count < 4096; ++count) {
+            uint32_t name_id{};
+            if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id))
+                return 0;
+            if (NativeName(c, name_id) == property_name) {
+                uintptr_t field_class{}, value{};
+                uint32_t type_id{};
+                int32_t size{}, offset{};
+                if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
+                    !field_class ||
+                    !NativeRead(reinterpret_cast<const void*>(field_class), type_id) ||
+                    NativeName(c, type_id) != "ObjectProperty" ||
+                    !NativeRead(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), size) ||
+                    size != 8 ||
+                    !NativeRead(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
+                    offset < 0 ||
+                    !NativeRead(reinterpret_cast<const void*>(object + offset), value))
+                    return 0;
+                return value;
+            }
+            uintptr_t next{};
+            if (!NativeRead(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) ||
+                next == property)
+                break;
+            property = next;
+        }
+        uintptr_t super{};
+        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructSuperStructOffset), super) ||
+            super == cls)
+            break;
+        cls = super;
+    }
+    return 0;
+}
+
+bool ReadNativeDataTable(uintptr_t table,
+                         std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>>& rows) noexcept {
+    uintptr_t data{};
+    int32_t num{}, max{};
+    if (!table ||
+        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset), data) ||
+        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset + 8), num) ||
+        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset + 12), max) ||
+        !data || num <= 0 || num > 4096 || max < num)
+        return false;
+    rows.clear();
+    rows.reserve(static_cast<size_t>(num));
+    for (int32_t i{}; i < num; ++i) {
+        const auto at = data + static_cast<size_t>(i) * kDataTableRowStride;
+        std::array<uint32_t, 2> key{};
+        uintptr_t row{};
+        if (NativeRead(reinterpret_cast<const void*>(at), key[0]) &&
+            NativeRead(reinterpret_cast<const void*>(at + 4), key[1]) &&
+            NativeRead(reinterpret_cast<const void*>(at + 8), row) &&
+            key[0] != 0 && row != 0)
+            rows.emplace_back(key, row);
+    }
+    return !rows.empty();
+}
+
+bool InvokeNativeProcessEvent(uintptr_t object, uintptr_t function, void* parameters) noexcept {
+    if (!object || !function) return false;
+    void* vtable = NativePointer(reinterpret_cast<const void*>(object));
+    if (!vtable) return false;
+    void* process_event = NativePointer(
+        reinterpret_cast<const uint8_t*>(vtable) +
+        kProcessEventVtableIndex * sizeof(void*));
+    if (!process_event) return false;
+    using ProcessEvent = void(__fastcall*)(void*, void*, void*);
+    __try {
+        reinterpret_cast<ProcessEvent>(process_event)(
+            reinterpret_cast<void*>(object), reinterpret_cast<void*>(function), parameters);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
-    return PostMessageW(window, WM_LBUTTONUP, 0, lparam) != FALSE;
 }
+
+bool ResolveNormalAttackBinding(Context& c, NormalAttackBinding& out) {
+    uintptr_t world{}, controller{};
+    if (!GetNativeController(c, world, controller)) return false;
+    if (c.normal_attack.world == world &&
+        c.normal_attack.controller == controller &&
+        c.normal_attack.triggered != 0 &&
+        c.normal_attack.completed != 0) {
+        out = c.normal_attack;
+        return true;
+    }
+
+    c.normal_attack = {};
+    uintptr_t cls{};
+    if (!NativeRead(reinterpret_cast<const void*>(controller + kObjectClassOffset), cls))
+        return false;
+
+    NormalAttackBinding next{};
+    next.world = world;
+    next.controller = controller;
+    if (!FindNativeFunction(c, cls, "ActivateAbilityFromID", 2, 8, next.triggered) ||
+        !FindNativeFunction(c, cls, "ReleaseAbilityFromID", 2, 8, next.completed))
+        return false;
+
+    const uintptr_t table = NativeObjectProperty(c, controller, "DT_AbilityInput");
+    const uintptr_t row_struct = NativeObjectProperty(c, table, "RowStruct");
+    int32_t id_offset{}, param_offset{}, action_offset{};
+    std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>> rows;
+    if (!table || NativeObjectName(c, row_struct) != "HTAbilityInputRow" ||
+        !NativePropertyOffset(c, row_struct, "InputID", "ByteProperty", 1, id_offset) ||
+        !NativePropertyOffset(c, row_struct, "Param", "IntProperty", 4, param_offset) ||
+        !NativePropertyOffset(c, row_struct, "InputAction", "ObjectProperty", 8, action_offset) ||
+        !ReadNativeDataTable(table, rows))
+        return false;
+
+    bool found{};
+    for (const auto& [key, row] : rows) {
+        if (NativeFName(c, key[0], key[1]) != "MeleeAtack") continue;
+        uintptr_t action{};
+        if (!NativeRead(reinterpret_cast<const void*>(row + action_offset), action) || !action)
+            continue;
+        const auto action_name = NativeObjectName(c, action);
+        // The dump contains the exact MeleeAtack row. IA_MeleeAttack is an additional
+        // check when that action object is loaded into the current FName pool.
+        if (!action_name.empty() && action_name != "IA_MeleeAttack") continue;
+
+        uint8_t input_id{};
+        int32_t input_param{};
+        if (!NativeRead(reinterpret_cast<const void*>(row + id_offset), input_id) ||
+            !NativeRead(reinterpret_cast<const void*>(row + param_offset), input_param))
+            return false;
+
+        for (const bool pressed : {false, true}) {
+            const auto fn = pressed ? next.triggered : next.completed;
+            auto& value = pressed ? next.pressed : next.released;
+            int32_t fn_id_offset{}, fn_param_offset{};
+            if (!NativePropertyOffset(c, fn, "InputID", "ByteProperty", 1, fn_id_offset, 8) ||
+                !NativePropertyOffset(c, fn, "Param", "IntProperty", 4, fn_param_offset, 8))
+                return false;
+            value.fill(0);
+            value[fn_id_offset] = input_id;
+            std::memcpy(value.data() + fn_param_offset, &input_param, sizeof(input_param));
+        }
+        found = true;
+        break;
+    }
+    if (!found) return false;
+
+    c.normal_attack = next;
+    out = next;
+    return true;
+}
+
+bool InvokeNativeNormalAttack(Context& c) {
+    NormalAttackBinding binding{};
+    if (!ResolveNormalAttackBinding(c, binding)) return false;
+    auto pressed = binding.pressed;
+    auto released = binding.released;
+    if (!InvokeNativeProcessEvent(binding.controller, binding.triggered, pressed.data()))
+        return false;
+    return InvokeNativeProcessEvent(binding.controller, binding.completed, released.data());
+}
+
 
 std::string ReadAbilityPath(
     const AnomalyNteSkillsServiceV1* skills,
@@ -522,7 +829,7 @@ ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* a
     // Normal attacks have no NTE skill handle. The old implementation returned
     // NoSkill here, so a captured normal attack never sent any replay input.
     if (!context.captured_has_skill) {
-        if (PostNormalAttackInput()) return ReplayCallResult::Success;
+        if (InvokeNativeNormalAttack(context)) return ReplayCallResult::Success;
         if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_FAILED;
         return ReplayCallResult::ServiceError;
     }
@@ -570,11 +877,17 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     context->invocation = sdk_host.Query<AnomalyNteSkillInvocationServiceV1>(
         ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
         ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION).get();
+    context->signature = sdk_host.Query<AnomalySignatureServiceV1>(
+        ANOMALY_SIGNATURE_SERVICE_V1_ID, ANOMALY_SIGNATURE_SERVICE_V1_VERSION).get();
+    context->names = sdk_host.Query<AnomalyUe5NamesServiceV1>(
+        ANOMALY_UE5_NAMES_SERVICE_V1_ID, ANOMALY_UE5_NAMES_SERVICE_V1_VERSION).get();
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
     if (!CombatReady(context->combat) || !SkillsReady(context->skills) ||
-        !InvocationReady(context->invocation) || !UiReady(context->ui)) {
+        !InvocationReady(context->invocation) || !UiReady(context->ui) ||
+        context->signature == nullptr || context->names == nullptr ||
+        context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -712,7 +1025,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (replay_result == ReplayCallResult::NoSkill) {
             context->status = context->captured_has_skill
                 ? "重放失败：当前捕获技能句柄已失效或无法重新解析"
-                : "已记录普通攻击，但当前 ABI 没有直接注入普通攻击事件的接口";
+                : "已记录普通攻击，但原生 ActivateAbilityFromID/ReleaseAbilityFromID 输入绑定不可用";
         } else if (replay_result == ReplayCallResult::Rejected) {
             context->status = "重放被游戏拒绝：skill activate accepted=0";
         } else {
