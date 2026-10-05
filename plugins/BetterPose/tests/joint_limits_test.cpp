@@ -7,6 +7,7 @@
 namespace {
 using namespace better_pose::limits;
 
+// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -14,11 +15,13 @@ void Check(const bool value, const char *message) {
   }
 }
 
+// 中文说明：Distance() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 double Distance(const Quat &a, const Quat &b) {
   const double dot = std::abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
   return 1.0 - (std::min)(dot, 1.0);
 }
 
+// 中文说明：Around() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 Quat Around(std::array<double, 3> axis, const double degrees) {
   const double n = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
   const double h = degrees * 3.14159265358979323846 / 360.0;
@@ -26,6 +29,7 @@ Quat Around(std::array<double, 3> axis, const double degrees) {
           std::cos(h)};
 }
 
+// 中文说明：Classification() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Classification() {
   Check(LimitFor("Bip001-L-Finger1").kind == Kind::Free, "a finger root spreads: free");
   Check(LimitFor("Bip001-L-Finger0").kind == Kind::Free, "the thumb root: free");
@@ -58,6 +62,7 @@ void Classification() {
   Check(LimitFor("Finger11").kind == Kind::Free, "a finger with no side is not guessed");
 }
 
+// 中文说明：SplitAndCompose() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SplitAndCompose() {
   const Limit limit = LimitFor("Bip001-L-Finger11");  // Z, -1
   const Quat base = Normalize(Around({0.3, -0.8, 0.5}, 70.0));  // arbitrary rest frame
@@ -88,6 +93,7 @@ void SplitAndCompose() {
         "bend is clamped at the minimum (small hyperextension only)");
 }
 
+// 中文说明：BendMovesOnlyInItsPlane() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void BendMovesOnlyInItsPlane() {
   // With base = identity, the hinge is the bone's own local Z. A bend must
   // keep a point on the local Z axis fixed and move one on local X within
@@ -108,6 +114,7 @@ void BendMovesOnlyInItsPlane() {
         "by exactly the bend");
 }
 
+// 中文说明：ElbowCannotFoldBackwards() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ElbowCannotFoldBackwards() {
   // An IK solve that would bend the elbow 20 degrees the wrong way (past
   // straight) is pulled back to the lower bound; a normal bend is kept.
@@ -128,6 +135,7 @@ void ElbowCannotFoldBackwards() {
 }
 }  // namespace
 
+// 中文说明：BallJoints() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void BallJoints() {
   Check(BallFor("Bip001-L-UpperArm").valid && BallFor("Bip001-R-Thigh").valid,
         "shoulders and hips are ball joints");
@@ -181,6 +189,7 @@ void BallJoints() {
         "the thighs' local Y points back and Z to the right (measured)");
 }
 
+// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 int main() {
   Classification();
   SplitAndCompose();
