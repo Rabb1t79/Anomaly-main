@@ -7,7 +7,7 @@ namespace {
 using better_pose::history::PoseHistory;
 using better_pose::history::PoseState;
 
-// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
+// 统一测试断言入口：条件失败时把具体失败信息写到标准错误并以退出码 1 终止测试，条件成立时继续执行后续断言。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -15,7 +15,7 @@ void Check(const bool value, const char *message) {
   }
 }
 
-// 中文说明：Pose()：调用 `assign()`，结果用于完成该函数对应的数据处理。
+// 实现 Pose；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 PoseState Pose(const double bone1_pitch, const double root_x = 0.0) {
   PoseState state;
   state.angles.assign(4, {0.0, 0.0, 0.0});
@@ -32,7 +32,7 @@ std::uint64_t Hold(PoseHistory &history, const PoseState &state, std::uint64_t n
   return now;
 }
 
-// 中文说明：DragIsOneStep()：调用 `Hold()`、`Pose()`、`Observe()`、`Check()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 验证 Drag Is One Step 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void DragIsOneStep() {
   PoseHistory history;
   std::uint64_t now = 1000;
@@ -53,7 +53,7 @@ void DragIsOneStep() {
   Check(history.Redo(Pose(0), out) && out.SameAs(Pose(30)), "redo returns the drag");
 }
 
-// 中文说明：SeparateEditsAreSeparateSteps()：调用 `Hold()`、`Pose()`、`Check()`、`UndoCount()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Separate Edits Are Separate Steps 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void SeparateEditsAreSeparateSteps() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -75,7 +75,7 @@ void SeparateEditsAreSeparateSteps() {
   Check(history.UndoCount() == 1, "the new edit is the only step");
 }
 
-// 中文说明：UndoWhileSettlingClosesTheEdit()：调用 `Hold()`、`Pose()`、`Check()`、`Undo()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Undo While Settling Closes The Edit；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void UndoWhileSettlingClosesTheEdit() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -91,7 +91,7 @@ void UndoWhileSettlingClosesTheEdit() {
   Check(history.UndoCount() == 1 && history.RedoCount() == 1, "applying undo is not an edit");
 }
 
-// 中文说明：ChangedBackIsNothing()：调用 `Hold()`、`Pose()`、`Check()`、`UndoCount()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 验证 Changed Back Is Nothing 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void ChangedBackIsNothing() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -101,7 +101,7 @@ void ChangedBackIsNothing() {
   Check(history.UndoCount() == 0, "a change that returns to the start records nothing");
 }
 
-// 中文说明：TrailingZerosAndReset()：调用 `assign()`、`resize()`、`Check()`、`SameAs()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Trailing Zeros And Reset；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void TrailingZerosAndReset() {
   PoseState short_state;
   short_state.angles.assign(2, {0.0, 0.0, 0.0});
@@ -120,7 +120,7 @@ void TrailingZerosAndReset() {
   Check(!history.Undo(Pose(99), out), "nothing to undo after a reset");
 }
 
-// 中文说明：Bounded()：调用 `Hold()`、`Pose()`、`Check()`、`UndoCount()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 实现 Bounded；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void Bounded() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -136,7 +136,7 @@ void Bounded() {
 }
 }  // namespace
 
-// 中文说明：main()：调用 `DragIsOneStep()`、`SeparateEditsAreSeparateSteps()`、`UndoWhileSettlingClosesTheEdit()`、`ChangedBackIsNothing()`，结果用于完成该函数对应的数据处理。
+// 测试程序入口：按顺序执行本文件覆盖的功能测试；所有断言通过后输出 PASS 并以 0 返回，任一断言失败都会由 Check() 终止进程。
 int main() {
   DragIsOneStep();
   SeparateEditsAreSeparateSteps();
