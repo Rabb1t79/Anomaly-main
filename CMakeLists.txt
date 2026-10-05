@@ -1315,6 +1315,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteAttackReplay/manifest.json
         PACKAGE_NAME NteAttackReplay
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteAttackReplay")
+    target_link_libraries(anomaly_builtin_nte_attack_replay PRIVATE user32)
 
     anomaly_add_plugin(anomaly_builtin_nte_free_fly
         SOURCES plugins/NteFreeFly/plugin.cpp
