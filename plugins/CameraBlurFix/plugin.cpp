@@ -42,6 +42,7 @@ AnomalyStatusV1 Status(const std::uint32_t code,
 }
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct *value, const std::size_t offset) noexcept {
   return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -52,6 +53,7 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
   return anomaly::sdk::Host(host).Query<Service>(id, version).get();
 }
 
+// 中文说明：CoreReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
   return HasField<AnomalyCoreServiceV1,
                   decltype(AnomalyCoreServiceV1::read_memory)>(
@@ -62,6 +64,7 @@ bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
          service->read_memory != nullptr && service->write_memory != nullptr;
 }
 
+// 中文说明：SignatureReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
   return HasField<AnomalySignatureServiceV1,
                   decltype(AnomalySignatureServiceV1::resolve)>(
@@ -77,6 +80,7 @@ void Log(Context &context, const std::uint32_t level,
 }
 
 template <typename T>
+// 中文说明：Read() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Read(Context &context, const std::uintptr_t address, T &value) noexcept {
   if (!CoreReady(context.core) || address == 0) return false;
   AnomalyMutableByteSpanV1 destination{
@@ -103,6 +107,7 @@ bool AddAddress(const std::uintptr_t base, const std::uint64_t offset,
   return true;
 }
 
+// 中文说明：ResolveGWorld() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ResolveGWorld(Context &context) noexcept {
   if (!SignatureReady(context.signature)) return false;
   std::uintptr_t instruction{};
@@ -165,6 +170,7 @@ bool WriteNormalSetting(Context &context, const std::uintptr_t manager,
          WriteAt(context, settings, offset, value);
 }
 
+// 中文说明：RestoreState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool RestoreState(Context &context) noexcept {
   if (!context.saved_state || context.patched_manager == 0) return true;
   const auto manager = context.patched_manager;
@@ -189,6 +195,7 @@ bool RestoreState(Context &context) noexcept {
   return ok;
 }
 
+// 中文说明：SaveState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SaveState(Context &context, const std::uintptr_t manager) noexcept {
   if (context.saved_state && context.patched_manager == manager) return true;
   if (context.saved_state && !RestoreState(context)) return false;
@@ -216,6 +223,7 @@ bool SaveState(Context &context, const std::uintptr_t manager) noexcept {
   return true;
 }
 
+// 中文说明：Apply() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Apply(Context &context, const std::uintptr_t manager) noexcept {
   if (!SaveState(context, manager)) return false;
   constexpr float kDisabledDistance = 0.0F;
@@ -245,6 +253,7 @@ bool Apply(Context &context, const std::uintptr_t manager) noexcept {
   return true;
 }
 
+// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 Load(const AnomalyHostApiV1 *host, void **plugin_context) {
   if (host == nullptr || plugin_context == nullptr)
     return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -265,6 +274,7 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1 *host, void **plugin_context) {
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 Start(void *plugin_context) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -277,12 +287,14 @@ AnomalyStatusV1 Start(void *plugin_context) noexcept {
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 Stop(void *plugin_context, std::uint32_t) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context != nullptr) static_cast<void>(RestoreState(*context));
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Unload(void *plugin_context) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return;
@@ -290,6 +302,7 @@ void Unload(void *plugin_context) noexcept {
   delete context;
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Update(void *plugin_context, double) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return;
