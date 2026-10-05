@@ -5,6 +5,7 @@ on:
     branches:
       - nte-attack-replay-novs-20261004
       - attack-native-20261005
+      - attack-replay-native-abi-20261005
   workflow_dispatch:
 
 jobs:
