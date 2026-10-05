@@ -15,6 +15,8 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -1023,7 +1025,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (replay_result == ReplayCallResult::NoSkill) {
             context->status = context->captured_has_skill
                 ? "重放失败：当前捕获技能句柄已失效或无法重新解析"
-                : "已记录普通攻击，但当前 ABI 没有直接注入普通攻击事件的接口";
+                : "已记录普通攻击，但原生 ActivateAbilityFromID/ReleaseAbilityFromID 输入绑定不可用";
         } else if (replay_result == ReplayCallResult::Rejected) {
             context->status = "重放被游戏拒绝：skill activate accepted=0";
         } else {
