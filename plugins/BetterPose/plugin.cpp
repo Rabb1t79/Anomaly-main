@@ -866,7 +866,7 @@ AnomalyStatusV1 Status(const std::uint32_t code,
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接在函数体内完成计算与状态处理。  return value != nullptr && value->struct_size >= offset + sizeof(Field);
+// 中文说明：HasField() 的实际功能是：调用 `anomaly::sdk::Host()`、`get()`。
 }
 
 template <typename Service>
@@ -1056,7 +1056,7 @@ bool ApplyPoseDocument(Context &context, const nlohmann::json &json,
 // used to ride along in the plugin's own saved settings, which meant a reload came back with
 // whatever shot was last picked -- including one picked for a different character or a different
 // scene. They are runtime state now: pick the file again when it is wanted.
-// 中文说明：BuildPoseDocument()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  nlohmann::json root = nlohmann::json::object();
+// 中文说明：BuildPoseDocument() 的实际功能是：调用 `lock()`、`size()`、`empty()`、`push_back()`、`std::move()`；并遍历集合元素、按条件分支处理。
   auto bones = nlohmann::json::array();
   {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
@@ -1085,10 +1085,10 @@ bool ApplyPoseDocument(Context &context, const nlohmann::json &json,
   return root.dump();
 }
 
-// 中文说明：PoseProfilePath()：直接在函数体内完成计算与状态处理。  return "character-pose-profile-" + character_id + ".json";
+// 中文说明：PoseProfilePath() 的实际功能是：调用 `BuildPoseDocument()`、`size()`、`write_atomic()`、`anomaly::sdk::StringView()`、`Bytes()`、`empty()`、`StorageReady()`；并按条件分支处理、返回成功/失败状态。
 }
 
-// 中文说明：PersistPoseSettings()：直接在函数体内完成计算与状态处理。  if (!ConfigReady(context.config))
+// 中文说明：PersistPoseSettings() 的实际功能是：调用 `BuildPoseDocument()`、`size()`、`write_atomic()`、`anomaly::sdk::StringView()`、`Bytes()`、`empty()`、`StorageReady()`、`PoseProfilePath()`；并按条件分支处理、返回成功/失败状态。
     return false;
   try {
     const std::string document = BuildPoseDocument(context);
@@ -1146,7 +1146,7 @@ int LoadCharacterPoseProfile(Context &context,
   }
 }
 
-// 中文说明：ResetPoseValues()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  {
+// 中文说明：ResetPoseValues() 的实际功能是：直接执行函数体中的计算或状态操作。
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     for (auto &angle : context.bone_angles)
       angle = {0.0, 0.0, 0.0};
@@ -1156,7 +1156,7 @@ int LoadCharacterPoseProfile(Context &context,
   context.requested_root_offset[2].store(0.0, std::memory_order_release);
 }
 
-// 中文说明：CapturePoseState()：直接在函数体内完成计算与状态处理。  better_pose::history::PoseState state;
+// 中文说明：CapturePoseState() 的实际功能是：调用 `lock()`。
   {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     state.angles = context.bone_angles;
@@ -1166,7 +1166,7 @@ int LoadCharacterPoseProfile(Context &context,
   return state;
 }
 
-// 中文说明：RestorePoseState()：直接在函数体内完成计算与状态处理。  {
+// 中文说明：RestorePoseState() 的实际功能是：调用 `assign()`。
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     // Keep the table at least as long as the skeleton; the pose code reads
     // bone_angles[0 .. count) and the recorded table may be shorter.
@@ -1190,7 +1190,7 @@ bool MirrorPose(Context &context, const int request) noexcept;
 
 // Game thread, every update: record settled edits, apply a posted undo/redo.
 // A different mesh (character switch) starts a fresh history.
-// 中文说明：StepPoseHistory()：直接在函数体内完成计算与状态处理。  try {
+// 中文说明：StepPoseHistory() 的实际功能是：调用 `Reset()`、`CapturePoseState()`、`store()`、`exchange()`、`Undo()`、`Redo()`、`RestorePoseState()`、`Observe()`；并更新状态、保存结果或发布状态、按条件分支处理。
     const std::uint64_t now = GetTickCount64();
     if (context.pose_history_mesh != context.runtime.mesh) {
       context.pose_history_mesh = context.runtime.mesh;
@@ -1215,7 +1215,7 @@ bool MirrorPose(Context &context, const int request) noexcept;
   }
 }
 
-// 中文说明：LoadPoseSettings()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!ConfigReady(context.config))
+// 中文说明：LoadPoseSettings() 的实际功能是：调用 `read()`、`anomaly::sdk::StringView()`、`lock()`、`clear()`、`PersistPoseSettings()`、`document()`、`data()`、`size()`；并更新状态、保存结果或发布状态、按条件分支处理、返回成功/失败状态。
     return false;
   try {
     std::uint32_t version{};
@@ -1275,7 +1275,7 @@ bool AddAddress(const std::uintptr_t base, const std::uint64_t offset,
 }
 
 template <typename T>
-// 中文说明：Read()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!CoreReady(context.core) || address == 0)
+// 中文说明：Read() 的实际功能是：直接执行函数体中的计算或状态操作。
     return false;
   AnomalyMutableByteSpanV1 destination{
       reinterpret_cast<std::uint8_t *>(&value), sizeof(value)};
@@ -1315,7 +1315,7 @@ bool ResolveSignature(Context &context, const std::string_view pattern,
          address != 0;
 }
 
-// 中文说明：ResolveGWorld()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::uintptr_t instruction{};
+// 中文说明：ResolveGWorld() 的实际功能是：直接执行函数体中的计算或状态操作。
   std::int32_t displacement{};
   if (!ResolveSignature(context, kGWorldPattern, instruction) ||
       !Read(context, instruction + kGWorldResolveOffset, displacement))
@@ -1328,7 +1328,7 @@ bool ResolveSignature(Context &context, const std::string_view pattern,
   return true;
 }
 
-// 中文说明：ResolveLocalCharacter()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  context.runtime.character = 0;
+// 中文说明：ResolveLocalCharacter() 的实际功能是：直接执行函数体中的计算或状态操作。
   context.runtime.mesh = 0;
   context.runtime.anim_instance = 0;
   std::uintptr_t world{};
@@ -1364,7 +1364,7 @@ bool ResolveSignature(Context &context, const std::string_view pattern,
   return true;
 }
 
-// 中文说明：ReadAnimationState()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const auto mesh = context.runtime.mesh;
+// 中文说明：ReadAnimationState() 的实际功能是：直接执行函数体中的计算或状态操作。
   if (mesh == 0)
     return false;
   std::uint8_t animation_mode{};
@@ -1394,7 +1394,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return true;
 }
 
-// 中文说明：ReadPoseArrays()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const auto mesh = context.runtime.mesh;
+// 中文说明：ReadPoseArrays() 的实际功能是：直接执行函数体中的计算或状态操作。
   if (mesh == 0)
     return false;
   std::uintptr_t bone_space_data{};
@@ -1473,7 +1473,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return true;
 }
 
-// 中文说明：ApplyRate()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
+// 中文说明：ApplyRate() 的实际功能是：调用 `Read()`；并读取、解析或查找数据、按条件分支处理、返回成功/失败状态。
   if (state.mesh == 0)
     return false;
   if (!enabled)
@@ -1517,7 +1517,7 @@ bool ApplyRootMotion(Context &context, const bool enabled,
                value);
 }
 
-// 中文说明：RestoreMultiThreadedUpdate()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
+// 中文说明：RestoreMultiThreadedUpdate() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理、返回成功/失败状态。
   if (!state.saved_multi_threaded_update || state.anim_instance == 0)
     return true;
   if (state.multi_threaded_update_instance != state.anim_instance) {
@@ -1586,7 +1586,7 @@ bool ForceMeshObjectUpdate(Context &context,
   return Write(context, mesh + kMeshForceMeshObjectUpdateOffset, flags);
 }
 
-// 中文说明：ForcePoseMeshObjectUpdate()：直接在函数体内完成计算与状态处理。  return ForceMeshObjectUpdate(context, context.runtime.mesh);
+// 中文说明：ForcePoseMeshObjectUpdate() 的实际功能是：直接执行函数体中的计算或状态操作。
 }
 
 struct Vec3d {
@@ -1616,7 +1616,7 @@ struct Transformd {
   return out;
 }
 
-// 中文说明：QuatRotateVector()：直接在函数体内完成计算与状态处理。  const Vec3d u{q.x, q.y, q.z};
+// 中文说明：QuatRotateVector() 的实际功能是：直接执行函数体中的计算或状态操作。
   const Vec3d uv{
       u.y * v.z - u.z * v.y,
       u.z * v.x - u.x * v.z,
@@ -1706,7 +1706,7 @@ struct PackedTransform {
 static_assert(sizeof(PackedTransform) == kTransformSize,
               "PackedTransform must match the game FTransform layout");
 
-// 中文说明：UnpackTransform()：直接在函数体内完成计算与状态处理。  Transformd out;
+// 中文说明：UnpackTransform() 的实际功能是：直接执行函数体中的计算或状态操作。
   out.rotation =
       Quatd{source.rotation[0], source.rotation[1], source.rotation[2],
             source.rotation[3]};
@@ -1894,7 +1894,7 @@ bool ApplyPose(Context &context, const bool enabled, const std::uint32_t bone,
   return true;
 }
 
-// 中文说明：ResolvePoseTickTarget()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  target = 0;
+// 中文说明：ResolvePoseTickTarget() 的实际功能是：直接执行函数体中的计算或状态操作。
   const auto mesh = context.runtime.mesh;
   if (mesh == 0)
     return false;
@@ -1955,7 +1955,7 @@ void DestroyPoseableAccessories(Context &context) noexcept;
 void DestroyStalePoseableComponent(Context &context,
                                    std::uintptr_t component) noexcept;
 
-// 中文说明：ReleasePoseTickHook()：直接在函数体内完成计算与状态处理。  if (!HookReady(context.hook) || context.tick_hook.id == 0)
+// 中文说明：ReleasePoseTickHook() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理、返回成功/失败状态。
     return true;
   const auto status =
       context.hook->release(context.hook->user, context.tick_hook);
@@ -1969,7 +1969,7 @@ void DestroyStalePoseableComponent(Context &context,
   return true;
 }
 
-// 中文说明：EnsurePoseTickHook()：直接在函数体内完成计算与状态处理。  if (!HookReady(context.hook))
+// 中文说明：EnsurePoseTickHook() 的实际功能是：直接执行函数体中的计算或状态操作。
     return false;
   std::uintptr_t target{};
   if (!ResolvePoseTickTarget(context, target))
@@ -2098,7 +2098,7 @@ using CameraPovFn = void *(ANOMALY_CALL *)(void *, void *, void *);
 void *ANOMALY_CALL CameraPovDetour(void *self, void *first, void *second) noexcept;
 
 // PlayerController -> camera manager, the offset the active Profile validates.
-// 中文说明：ResolveCameraManager()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  manager = 0;
+// 中文说明：ResolveCameraManager() 的实际功能是：直接执行函数体中的计算或状态操作。
   std::uintptr_t world{};
   std::uintptr_t game_instance{};
   std::uintptr_t local_players{};
@@ -2182,7 +2182,7 @@ bool ResolveCameraPovTarget(Context &context, const std::uintptr_t manager,
   return false;
 }
 
-// 中文说明：RefreshCameraPovTarget()：直接在函数体内完成计算与状态处理。  std::uintptr_t manager{};
+// 中文说明：RefreshCameraPovTarget() 的实际功能是：调用 `ResolveCameraManager()`、`store()`；并读取、解析或查找数据、按条件分支处理、返回成功/失败状态。
   if (!ResolveCameraManager(context, manager)) {
     context.camera_manager.store(0, std::memory_order_release);
     context.camera_manager_resolved.store(false, std::memory_order_release);
@@ -2283,7 +2283,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 }
 
 // The character's feet and the middle of their bounding box, from the mesh's world bounds.
-// 中文说明：CharacterBounds()：直接在函数体内完成计算与状态处理。  const std::uintptr_t mesh = context.runtime.mesh;
+// 中文说明：CharacterBounds() 的实际功能是：直接执行函数体中的计算或状态操作。
   std::uintptr_t origin_address{};
   std::uintptr_t extent_address{};
   double origin[3]{};
@@ -2517,7 +2517,7 @@ void DriveCameraTrack(Context &context, const double feet[3], const double centr
 
 // Rewrite the POV the view is built from. Patching the game's struct in place and returning its
 // pointer unchanged is deliberate -- handing back a substitute buffer is what crashed the game once.
-// 中文说明：CameraPovDetour()：直接在函数体内完成计算与状态处理。  Context *context = g_camera_pov.load(std::memory_order_acquire);
+// 中文说明：CameraPovDetour() 的实际功能是：直接执行函数体中的计算或状态操作。
   AnomalyGenerationHandleV1 lease{};
   bool leased = false;
   CameraPovFn original = nullptr;
@@ -2744,7 +2744,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 // rewritten in place: the same edit the getter's output would have received, made where nothing
 // can run between this call and the view build to undo it, and with the pointer itself left
 // alone so the rest of the struct keeps whatever the engine put there.
-// 中文说明：ResolveGObjects()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::uintptr_t instruction{};
+// 中文说明：ResolveGObjects() 的实际功能是：直接执行函数体中的计算或状态操作。
   std::int32_t displacement{};
   if (!ResolveSignature(context, kGObjectsPattern, instruction) ||
       !Read(context, instruction + kGObjectsResolveOffset, displacement))
@@ -2758,7 +2758,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
   return true;
 }
 
-// 中文说明：RefreshObjectRegistry()：直接在函数体内完成计算与状态处理。  if (context.object_registry.items != 0)
+// 中文说明：RefreshObjectRegistry() 的实际功能是：直接执行函数体中的计算或状态操作。
     return true;
   if (context.g_objects_address == 0 && !ResolveGObjects(context))
     return false;
@@ -3044,7 +3044,7 @@ bool GetBoneIndexFName(Context &context,
   return true;
 }
 
-// 中文说明：RefreshBoneHierarchy()：直接在函数体内完成计算与状态处理。  const auto count = context.runtime.local_space_count;
+// 中文说明：RefreshBoneHierarchy() 的实际功能是：调用 `GetBoneNameFName()`、`GetParentBoneFName()`、`std::memcpy()`、`data()`、`ResolveName()`、`std::find()`、`begin()`、`end()`；并读取、解析或查找数据、遍历集合元素、按条件分支处理。
   context.bone_parents.assign(count, -1);
   if (context.bone_names.size() != count)
     return;
@@ -3153,7 +3153,7 @@ bool ApplyBoneRotationByName(Context &context, const std::uint32_t bone,
                               parameters.data(), parameters.size(), detail);
 }
 
-// 中文说明：ApplyPoseOverridesViaUFunction()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
+// 中文说明：ApplyPoseOverridesViaUFunction() 的实际功能是：调用 `lock()`、`size()`、`assign()`、`begin()`；并按条件分支处理。
   if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
       state.mesh == 0)
     return;
@@ -3625,7 +3625,7 @@ bool SampleMotion(Context &context, const double seconds,
 // Walks the GObjects registry a slice at a time (never more than a fraction of a
 // tick) and collects every object whose class pointer equals our mesh's and
 // whose bone array holds the same bone count. Strictly read-only.
-// 中文说明：StepMeshScan()：直接在函数体内完成计算与状态处理。  if (!context.mesh_scan_requested.load(std::memory_order_acquire))
+// 中文说明：StepMeshScan() 的实际功能是：调用 `store()`；并按条件分支处理。
     return;
   if (context.runtime.mesh == 0) {
     context.mesh_scan_requested.store(false, std::memory_order_release);
@@ -3794,7 +3794,7 @@ bool SampleMotion(Context &context, const double seconds,
   }
 }
 
-// 中文说明：UnloadMotion()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.motion_mutex);
+// 中文说明：UnloadMotion() 的实际功能是：直接执行函数体中的计算或状态操作。
   ++context.motion_load_epoch;
   context.motion_loaded.store(false, std::memory_order_release);
   context.motion_playing.store(false, std::memory_order_release);
@@ -4245,7 +4245,7 @@ bool DrivePoseableSocketPose(Context &context, Context::ExtraMesh &extra,
   return true;
 }
 
-// 中文说明：DestroyPoseableAccessories()：直接在函数体内完成计算与状态处理。  for (auto &extra : context.extra_meshes) {
+// 中文说明：DestroyPoseableAccessories() 的实际功能是：调用 `CallVirtualUFunction()`、`data()`、`size()`；并按条件分支处理。
     if (extra.poseable_component == 0)
       continue;
     std::string detail;
@@ -4354,7 +4354,7 @@ bool ObjectAtIndex(Context &context, const std::uint32_t index,
          object != 0;
 }
 
-// 中文说明：ClassNameOf()：直接在函数体内完成计算与状态处理。  std::uintptr_t klass{};
+// 中文说明：ClassNameOf() 的实际功能是：直接执行函数体中的计算或状态操作。
   if (!Read(context, object + kObjectClassOffset, klass) || klass == 0)
     return {};
   const auto cached = context.mesh_scan_class_cache.find(klass);
@@ -4515,10 +4515,10 @@ std::vector<Transformd> BindPoseTransforms(
   return out;
 }
 
-// 中文说明：QuatConjugate()：直接在函数体内完成计算与状态处理。  return Quatd{-q.x, -q.y, -q.z, q.w};
+// 中文说明：QuatConjugate() 的实际功能是：直接执行函数体中的计算或状态操作。
 }
 
-// 中文说明：TransformInverse()：直接在函数体内完成计算与状态处理。  Transformd out;
+// 中文说明：TransformInverse() 的实际功能是：直接执行函数体中的计算或状态操作。
   out.rotation = QuatConjugate(value.rotation);
   out.scale = Vec3d{value.scale.x != 0.0 ? 1.0 / value.scale.x : 1.0,
                     value.scale.y != 0.0 ? 1.0 / value.scale.y : 1.0,
@@ -4532,7 +4532,7 @@ std::vector<Transformd> BindPoseTransforms(
 }
 
 // Normalised-lerp quaternion blend: stable, and a lag only ever asks for small angles.
-// 中文说明：QuatBlend()：直接在函数体内完成计算与状态处理。  double dot = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
+// 中文说明：QuatBlend() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
   Quatd target = to;
   if (dot < 0.0) {                        // q and -q are the same rotation
     target = Quatd{-to.x, -to.y, -to.z, -to.w};
@@ -4553,7 +4553,7 @@ std::vector<Transformd> BindPoseTransforms(
 }
 
 // Lower-case alphanumeric words of a bone name, camelCase and digits split out.
-// 中文说明：NameTokens()：直接在函数体内完成计算与状态处理。  std::vector<std::string> tokens;
+// 中文说明：NameTokens() 的实际功能是：调用 `empty()`、`push_back()`、`clear()`；并按条件分支处理。
   std::string current;
   const auto flush = [&tokens, &current]() {
     if (!current.empty()) {
@@ -4587,7 +4587,7 @@ std::vector<Transformd> BindPoseTransforms(
 // to appear in the body name, digits have to appear *after* the words they qualify
 // (which is what keeps spine_01_adjust off Bip001-Spine2), and anatomical
 // Bip001-* bones win over helper bones. Returns kNoBone when nothing matches.
-// 中文说明：MatchBodyBone()：直接在函数体内完成计算与状态处理。  std::vector<std::string> words;
+// 中文说明：MatchBodyBone() 的实际功能是：调用 `NameTokens()`、`std::all_of()`、`begin()`、`end()`、`std::isdigit()`、`push_back()`；并遍历集合元素、按条件分支处理。
   std::vector<std::string> digits;
   for (auto &token : NameTokens(name)) {
     if (token == "adjust" || token == "position" || token == "root" ||
@@ -4832,7 +4832,7 @@ bool TryAssetReferencePose(Context &context,
 // candidate offset is only accepted when the index resolves through GObjects to
 // an object whose stored serial matches -- and when that holds for *every* probe
 // component at once, which random data never does.
-// 中文说明：StepAttachScan()：直接在函数体内完成计算与状态处理。  if (!context.attach_scan_requested.load(std::memory_order_acquire))
+// 中文说明：StepAttachScan() 的实际功能是：调用 `RefreshObjectRegistry()`；并按条件分支处理。
     return;
   context.attach_scan_requested.store(false, std::memory_order_release);
   if (!RefreshObjectRegistry(context)) {
@@ -5004,7 +5004,7 @@ bool TryAssetReferencePose(Context &context,
   }
 }
 
-// 中文说明：BuildExtraMeshes()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  // Never latch the result onto an empty mesh: runtime.mesh is zeroed on frames
+// 中文说明：BuildExtraMeshes() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
   // where the local character cannot be resolved, and a build that ran on such a
   // frame stored owner = 0 while clearing the pending flag, which disabled the
   // attach resync permanently.
@@ -5606,7 +5606,7 @@ void WriteExtraMeshes(Context &context,
   }
 }
 
-// 中文说明：RestoreExtraMeshes()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
+// 中文说明：RestoreExtraMeshes() 的实际功能是：调用 `empty()`、`WriteBytes()`、`data()`、`size()`；并更新状态、保存结果或发布状态、遍历集合元素、按条件分支处理。
   DestroyPoseableAccessories(context);
   for (auto &extra : context.extra_meshes) {
     if (extra.buffers_modified && extra.component_space_data != 0 && !extra.saved_component.empty())
@@ -5678,7 +5678,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   RefreshBoneHierarchy(context);
 }
 
-// 中文说明：ForcePoseCache()：直接在函数体内完成计算与状态处理。  detail.clear();
+// 中文说明：ForcePoseCache() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理、返回成功/失败状态。
   if (context.runtime.mesh == 0) {
     detail = "local mesh is unavailable";
     return false;
@@ -5716,7 +5716,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return true;
 }
 
-// 中文说明：EnsurePoseForcedLod()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
+// 中文说明：EnsurePoseForcedLod() 的实际功能是：调用 `CallVirtualUFunction()`；并按条件分支处理。
   if (state.mesh == 0)
     return false;
   if (!enabled) {
@@ -5724,7 +5724,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
       std::string detail;
       const std::int32_t original = state.original_forced_lod;
       if (CallVirtualUFunction(context, state.mesh, kFunctionSetForcedLodPath,
-// 中文说明：sizeof()：直接在函数体内完成计算与状态处理。        state.forced_lod_applied = false;
+// 中文说明：sizeof() 的实际功能是：直接执行函数体中的计算或状态操作。
         state.saved_forced_lod = false;
         state.original_forced_lod = 0;
       }
@@ -5754,7 +5754,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return true;
 }
 
-// 中文说明：EnsurePoseAnimationMode()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
+// 中文说明：EnsurePoseAnimationMode() 的实际功能是：调用 `Write()`；并更新状态、保存结果或发布状态、按条件分支处理、返回成功/失败状态。
   if (state.mesh == 0)
     return false;
   if (!enabled) {
@@ -5808,7 +5808,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   context.reflection_status.assign(message.data(), message.size());
 }
 
-// 中文说明：Utf8ToWide()：直接在函数体内完成计算与状态处理。  if (value.empty() ||
+// 中文说明：Utf8ToWide() 的实际功能是：直接执行函数体中的计算或状态操作。
       value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     return {};
   const int required = MultiByteToWideChar(
@@ -5824,7 +5824,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return result;
 }
 
-// 中文说明：WideToUtf8()：直接在函数体内完成计算与状态处理。  if (value.empty() ||
+// 中文说明：WideToUtf8() 的实际功能是：直接执行函数体中的计算或状态操作。
       value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     return {};
   const int required = WideCharToMultiByte(
@@ -5847,7 +5847,7 @@ public:
     if (SUCCEEDED(result_))
       CoUninitialize();
   }
-// 中文说明：Usable()：直接在函数体内完成计算与状态处理。    return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE;
+// 中文说明：Usable() 的实际功能是：直接执行函数体中的计算或状态操作。
   }
 private:
   HRESULT result_{};
@@ -6122,7 +6122,7 @@ class MusicPlayer {
   MusicPlayer &operator=(const MusicPlayer &) = delete;
   ~MusicPlayer() { Close(); }
 
-// 中文说明：Open()：直接在函数体内完成计算与状态处理。    Close();
+// 中文说明：Open() 的实际功能是：调用 `std::filesystem::exists()`、`Set()`；并更新状态、保存结果或发布状态、按条件分支处理、返回成功/失败状态。
     std::error_code ec;
     const std::filesystem::path path = std::filesystem::path(Utf8ToWide(utf8_path));
     if (!std::filesystem::exists(path, ec) || ec) {
@@ -6274,8 +6274,8 @@ class MusicPlayer {
                        std::to_wstring(clamped * 10),
                    error);
   }
-// 中文说明：Volume()：直接在函数体内完成计算与状态处理。
-// 中文说明：Position()：直接在函数体内完成计算与状态处理。    long long milliseconds{};
+// 中文说明：Volume() 的实际功能是：调用 `Position()`。
+// 中文说明：Position() 的实际功能是：调用 `return()`；并按条件分支处理。
     if (!Query(L"position", &milliseconds))
       return 0.0;
     const double seconds = static_cast<double>(milliseconds) / 1000.0;
@@ -6293,7 +6293,7 @@ class MusicPlayer {
     return seconds;
   }
 
-// 中文说明：Length()：直接在函数体内完成计算与状态处理。    if (frame_table_.valid)
+// 中文说明：Length() 的实际功能是：直接执行函数体中的计算或状态操作。
       return frame_table_.total_seconds;
     long long milliseconds{};
     if (!Query(L"length", &milliseconds))
@@ -6313,7 +6313,7 @@ class MusicPlayer {
     return std::wstring(reply) == L"playing";
   }
 
-// 中文说明：opened()：实际调用 “empty()”。  const std::string &name() const { return name_; }
+// 中文说明：opened() 的实际功能是：调用 `timing_note()`。
   const std::string &timing_note() const { return timing_note_; }
 
  private:
@@ -6338,7 +6338,7 @@ class MusicPlayer {
     return (std::max)(0.0, seconds);
   }
 
-// 中文说明：Command()：直接在函数体内完成计算与状态处理。    wchar_t reply[128]{};
+// 中文说明：Command() 的实际功能是：直接执行函数体中的计算或状态操作。
     const MCIERROR code = ::mciSendStringW(command.c_str(), reply, ARRAYSIZE(reply), nullptr);
     if (code == 0)
       return true;
@@ -6350,7 +6350,7 @@ class MusicPlayer {
     return false;
   }
 
-// 中文说明：Query()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。    if (alias_.empty())
+// 中文说明：Query() 的实际功能是：直接执行函数体中的计算或状态操作。
       return false;
     wchar_t reply[64]{};
     const std::wstring command = std::wstring(L"status ") + Utf8ToWide(alias_) + L" " + what;
@@ -6439,7 +6439,7 @@ void PublishMusicState(const bool opened, const bool playing, const double posit
 // was corrected in one audible lurch the moment the panel was drawn. A stall now forces the
 // correction, and the drift threshold is small enough to catch the device-start offset that the
 // old 1.5 s window never saw.
-// 中文说明：StepMusic()：直接在函数体内完成计算与状态处理。  // Never block the game tick on the panel: skip this tick instead (its critical sections are
+// 中文说明：StepMusic() 的实际功能是：直接执行函数体中的计算或状态操作。
   // short, so the next tick gets through).
   std::unique_lock<std::mutex> lock(g_music_mutex, std::try_to_lock);
   if (!lock.owns_lock())
@@ -6693,7 +6693,7 @@ struct PoseFileTaskData final {
                                       : "\\data\\reference-pmx.json");
 }
 
-// 中文说明：PoseFileTask()：直接在函数体内完成计算与状态处理。  auto *data = static_cast<PoseFileTaskData *>(value);
+// 中文说明：PoseFileTask() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
   if (data == nullptr)
     return;
   Context *context = data->context;
@@ -6859,7 +6859,7 @@ struct PoseFileTaskData final {
 }
 
 // In-memory FTransform layout: rot(4 doubles) + translation(3) + pad + scale(3) + pad.
-// 中文说明：TransformToJson()：直接在函数体内完成计算与状态处理。  nlohmann::json out = nlohmann::json::object();
+// 中文说明：TransformToJson() 的实际功能是：直接执行函数体中的计算或状态操作。
   out["rotation"] = {raw[0], raw[1], raw[2], raw[3]};
   out["translation"] = {raw[4], raw[5], raw[6]};
   out["scale"] = {raw[8], raw[9], raw[10]};
@@ -6882,7 +6882,7 @@ struct PoseFileTaskData final {
 // converter derives from it inherit that posture, whereas the reference pose is the one the
 // geometry is actually skinned in. refLocal falling back to nothing is fine -- the converter then
 // uses baseLocal exactly as before.
-// 中文说明：BuildSkeletonDocument()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const auto count = context.runtime.local_space_count;
+// 中文说明：BuildSkeletonDocument() 的实际功能是：调用 `RefreshBoneNames()`、`std::move()`、`RefreshBoneHierarchy()`；并按条件分支处理。
   // Bone names are the prerequisite for mapping; load them now if never loaded (also refreshes
   // the parent chain).
   if (context.bone_names.size() != count ||
@@ -6957,7 +6957,7 @@ struct PoseFileTaskData final {
   return root.dump();
 }
 
-// 中文说明：ExecutePoseFileAction()：直接在函数体内完成计算与状态处理。  const std::uint32_t action =
+// 中文说明：ExecutePoseFileAction() 的实际功能是：调用 `SchedulerReady()`、`SetReflectionStatus()`；并更新状态、保存结果或发布状态、按条件分支处理。
       context.pose_file_action_requested.exchange(0, std::memory_order_acquire);
   if (action == 0)
     return;
@@ -7105,7 +7105,7 @@ struct PoseFileTaskData final {
   context.pose_settings_dirty.store(true, std::memory_order_release);
 }
 
-// 中文说明：ExecuteReflectionAction()：直接在函数体内完成计算与状态处理。  const std::uint32_t action =
+// 中文说明：ExecuteReflectionAction() 的实际功能是：调用 `CallVirtualUFunction()`、`ForcePoseCache()`、`RefreshBoneNames()`、`std::move()`、`RefreshBoneHierarchy()`、`ReadPoseArrays()`、`SetReflectionStatus()`；并读取、解析或查找数据、更新状态、保存结果或发布状态、按条件分支处理。
       context.reflection_action_requested.exchange(0, std::memory_order_acquire);
   if (action == 0 || context.runtime.mesh == 0)
     return;
@@ -7171,7 +7171,7 @@ struct PoseFileTaskData final {
   return std::string(buffer.data());
 }
 
-// 中文说明：SetStatus()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  const auto length = (std::min)(message.size(), snapshot.status.size() - 1U);
+// 中文说明：SetStatus() 的实际功能是：调用 `PublishSnapshot()`；并更新状态、保存结果或发布状态。
   std::memcpy(snapshot.status.data(), message.data(), length);
   snapshot.status[length] = '\0';
 }
@@ -7265,7 +7265,7 @@ struct PoseFileTaskData final {
 constexpr std::string_view kFunctionSetMorphTargetPath =
     "/Script/Engine.SkeletalMeshComponent.SetMorphTarget";
 
-// 中文说明：BodyMeshAsset()：直接在函数体内完成计算与状态处理。  for (std::uint32_t offset{}; offset + 8 <= 0x2000; offset += 8) {
+// 中文说明：BodyMeshAsset() 的实际功能是：直接执行函数体中的计算或状态操作。
     std::uintptr_t candidate{};
     if (!ReadPointerAt(context, mesh, offset, candidate) || candidate == 0)
       continue;
@@ -7316,11 +7316,11 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
   return false;
 }
 
-// 中文说明：CaptureExpression()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.morph_mutex);
+// 中文说明：CaptureExpression() 的实际功能是：直接执行函数体中的计算或状态操作。
   return {context.morph_weights.value, context.morph_weights.driven};
 }
 
-// 中文说明：RestoreExpression()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.morph_mutex);
+// 中文说明：RestoreExpression() 的实际功能是：调用 `size()`、`Set()`、`Release()`；并更新状态、保存结果或发布状态、遍历集合元素、按条件分支处理。
   auto &weights = context.morph_weights;
   const std::size_t count = weights.value.size();
   for (std::size_t i{}; i != count; ++i) {
@@ -7334,7 +7334,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
 
 // Game thread: undo/redo for the expression, the same settle-then-record
 // history as the pose (pose_history.hpp). A new mesh starts a fresh history.
-// 中文说明：StepExpressionHistory()：直接在函数体内完成计算与状态处理。  try {
+// 中文说明：StepExpressionHistory() 的实际功能是：调用 `Reset()`、`CaptureExpression()`、`store()`、`exchange()`、`Undo()`、`Redo()`、`RestoreExpression()`、`Observe()`；并读取、解析或查找数据、更新状态、保存结果或发布状态、按条件分支处理。
     if (context.morph_history_mesh != context.morph_mesh) {
       context.morph_history_mesh = context.morph_mesh;
       context.morph_history.Reset(CaptureExpression(context));
@@ -7362,7 +7362,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
 // kilobytes), so it is written and read here rather than on a task.
 //   { "format": "betterpose-expression", "version": 1,
 //     "morphs": [ { "name": "jawOpen", "weight": 0.8 }, ... ] }
-// 中文说明：StepExpressionFile()：直接在函数体内完成计算与状态处理。  const int request = context.morph_file_request.exchange(0, std::memory_order_acq_rel);
+// 中文说明：StepExpressionFile() 的实际功能是：直接执行函数体中的计算或状态操作。
   if (request == 0)
     return;
   // Every message goes through the localizer: `key`, English fallback, and
@@ -7484,7 +7484,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
 // Game thread, every update: (re)load the catalogue for a new body mesh, and
 // write every driven weight. A morph the user released is written to 0 once
 // and then left to the game again.
-// 中文说明：StepExpression()：直接在函数体内完成计算与状态处理。  try {
+// 中文说明：StepExpression() 的实际功能是：调用 `clear()`、`BodyMeshAsset()`、`ReadMorphCatalog()`、`lock()`、`size()`、`Build()`、`std::move()`、`Resize()`；并读取、解析或查找数据、更新状态、保存结果或发布状态、遍历集合元素、按条件分支处理。
     const std::uintptr_t mesh = context.runtime.mesh;
     if (mesh == 0)
       return;
@@ -7941,7 +7941,7 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
   }
 }
 
-// 中文说明：RestoreAll()：直接在函数体内完成计算与状态处理。  auto& state = context.runtime;
+// 中文说明：RestoreAll() 的实际功能是：直接执行函数体中的计算或状态操作；并按条件分支处理。
   const auto active_character = state.character;
   const auto active_mesh = state.mesh;
   const auto active_instance = state.anim_instance;
@@ -8044,16 +8044,16 @@ constexpr float kOverlayDefaultRadius = 7.0F;
 constexpr float kOverlayMinimumRadius = 3.0F;
 constexpr float kOverlayMaximumRadius = 16.0F;
 
-// 中文说明：V3Sub()：直接在函数体内完成计算与状态处理。// 中文说明：V3Add()：直接在函数体内完成计算与状态处理。// 中文说明：V3Scale()：直接在函数体内完成计算与状态处理。// 中文说明：V3Dot()：直接在函数体内完成计算与状态处理。// 中文说明：V3Cross()：直接在函数体内完成计算与状态处理。  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+// 中文说明：V3Sub() 的实际功能是：直接执行函数体中的计算或状态操作。
 }
-// 中文说明：V3Length()：实际调用 “std::sqrt()”、“V3Dot()”。
-// 中文说明：QuatNormalize()：直接在函数体内完成计算与状态处理。  const double length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+// 中文说明：V3Length() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 中文说明：QuatNormalize() 的实际功能是：直接执行函数体中的计算或状态操作。
   if (!(length > 1e-12))
     return Quatd{};
   return Quatd{q.x / length, q.y / length, q.z / length, q.w / length};
 }
 
-// 中文说明：QuatFromRotationVector()：直接在函数体内完成计算与状态处理。  const double angle =
+// 中文说明：QuatFromRotationVector() 的实际功能是：调用 `QuatNormalize()`。
       std::sqrt(omega[0] * omega[0] + omega[1] * omega[1] + omega[2] * omega[2]);
   if (angle < 1e-12)
     return QuatNormalize(Quatd{omega[0] * 0.5, omega[1] * 0.5, omega[2] * 0.5, 1.0});
@@ -8063,7 +8063,7 @@ constexpr float kOverlayMaximumRadius = 16.0F;
 
 // The inverse of RotatorToQuat, in UE's FQuat::Rotator convention, so the
 // result round-trips through the joint sliders. Degrees, each in [-180, 180].
-// 中文说明：QuatToRotator()：直接在函数体内完成计算与状态处理。  constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+// 中文说明：QuatToRotator() 的实际功能是：直接执行函数体中的计算或状态操作。
   const Quatd q = QuatNormalize(input);
   const auto normalize = [](double value) {
     while (value > 180.0)
@@ -8218,7 +8218,7 @@ bool ViewRotationAxis(Project &&project, const Vec3d &pivot, Vec3d &axis,
 // magnifies, so compare how far apart two points 1 cm apart land on screen
 // 20 cm either way along the ray.
 template <typename Project>
-// 中文说明：TowardCamera()：直接在函数体内完成计算与状态处理。  Vec3d ray;
+// 中文说明：TowardCamera() 的实际功能是：直接执行函数体中的计算或状态操作。
   double sense{};
   if (!ViewRotationAxis(project, point, ray, sense))
     return false;
@@ -8297,7 +8297,7 @@ bool IsControlBone(const std::string_view name, const std::int32_t parent,
 
 // Facial rig bones under the head: mouth, lips, teeth, eyebrows, eyelids,
 // eyeballs, cheeks. Real joints, but ~50 of them crowd the face into a blob.
-// 中文说明：IsFaceBone()：直接在函数体内完成计算与状态处理。  const auto low = better_pose::secondary::Lower(name);
+// 中文说明：IsFaceBone() 的实际功能是：直接执行函数体中的计算或状态操作；并遍历集合元素。
   for (const char *key : {"mouth", "zuiba", "yachi", "lip", "eyebrow", "eyelid", "eyeco",
                           "eyeball", "lianjia", "tongue", "jaw"})
     if (low.find(key) != std::string::npos)
@@ -8435,7 +8435,7 @@ Quatd ApplyWorldRotationToOffset(const Quatd &parent_world, const Quatd &world_r
 }
 
 // The shortest rotation taking direction `from` onto direction `to`.
-// 中文说明：QuatFromTo()：直接在函数体内完成计算与状态处理。  const double lf = V3Length(from);
+// 中文说明：QuatFromTo() 的实际功能是：直接执行函数体中的计算或状态操作。
   const double lt = V3Length(to);
   if (!(lf > 1e-12) || !(lt > 1e-12))
     return Quatd{};
@@ -8454,7 +8454,7 @@ Quatd ApplyWorldRotationToOffset(const Quatd &parent_world, const Quatd &world_r
 
 // The joints a drag moves by two-bone IK: hands and feet, which sit below a
 // hinge (forearm, calf). Fingers, toes and helper bones stay one-bone drags.
-// 中文说明：IsIkEndBone()：直接在函数体内完成计算与状态处理。  const auto low = better_pose::secondary::Lower(name);
+// 中文说明：IsIkEndBone() 的实际功能是：直接执行函数体中的计算或状态操作；并遍历集合元素。
   for (const char *skip : {"finger", "toe", "twist", "adjust", "ik", "nub", "prop"})
     if (low.find(skip) != std::string::npos)
       return false;
@@ -9011,7 +9011,7 @@ struct DiscRow {
   float half_width;
 };
 
-// 中文说明：DiscRows()：直接在函数体内完成计算与状态处理。  std::vector<DiscRow> rows;
+// 中文说明：DiscRows() 的实际功能是：调用 `std::sqrt()`、`push_back()`；并遍历集合元素、按条件分支处理。
   if (!(radius > 0.0F) || !(step > 0.0F))
     return rows;
   for (float top = -radius; top < radius; top += step) {
@@ -9084,7 +9084,7 @@ bool JointWorldPosition(Context &context, const std::uint32_t bone,
 // step across the view at 100 cm lands on screen. Measured through the AHUD
 // projection (which already sees the pose camera), whether or not the
 // skeleton overlay is drawn.
-// 中文说明：MeasureOrbitFocal()：直接在函数体内完成计算与状态处理。  if (!context.orbit_enabled.load(std::memory_order_acquire))
+// 中文说明：MeasureOrbitFocal() 的实际功能是：调用 `lock()`、`load()`、`better_pose::orbit::ViewOf()`；并按条件分支处理。
     return;
   better_pose::orbit::View view;
   {
@@ -9275,7 +9275,7 @@ void ANOMALY_CALL DrawSkeletonOverlay(void *user,
   }
 }
 
-// 中文说明：SubscribeSkeletonOverlay()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!AhudReady(context.ahud) || context.ahud_subscription.id != 0)
+// 中文说明：SubscribeSkeletonOverlay() 的实际功能是：直接执行函数体中的计算或状态操作。
     return context.ahud_subscription.id != 0;
   AnomalyGenerationHandleV1 handle{};
   const auto status = context.ahud->subscribe(context.ahud->user,
@@ -9286,7 +9286,7 @@ void ANOMALY_CALL DrawSkeletonOverlay(void *user,
   return true;
 }
 
-// 中文说明：UnsubscribeSkeletonOverlay()：直接在函数体内完成计算与状态处理。  if (context.ahud_subscription.id == 0)
+// 中文说明：UnsubscribeSkeletonOverlay() 的实际功能是：直接执行函数体中的计算或状态操作。
     return;
   const auto handle = context.ahud_subscription;
   context.ahud_subscription = {};
@@ -9459,7 +9459,7 @@ void UpdateSkeletonOverlayPicking(Context &context,
 // drag running) drives the orbit: right drag rotates, middle drag pans, the
 // wheel zooms. Every one is a mouse message the host keeps from the game while
 // the menu is open, so nothing here can make the character move.
-// 中文说明：UpdateOrbitCameraInput()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!context.orbit_enabled.load(std::memory_order_acquire) || !InputReady(context.input)) {
+// 中文说明：UpdateOrbitCameraInput() 的实际功能是：直接执行函数体中的计算或状态操作。
     context.orbit_right_dragging = false;
     context.orbit_middle_was_down = false;
     return;
@@ -9533,7 +9533,7 @@ void UpdateSkeletonOverlayPicking(Context &context,
 // Ctrl+Shift+Z) into undo/redo requests, on the press only. The keys are
 // ignored while a text field wants the keyboard, so Ctrl+Z inside the file
 // name box stays the text box's.
-// 中文说明：UpdatePoseHistoryInput()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!InputReady(context.input)) {
+// 中文说明：UpdatePoseHistoryInput() 的实际功能是：直接执行函数体中的计算或状态操作。
     context.pose_edit_held.store(false, std::memory_order_release);
     return;
   }
@@ -9729,7 +9729,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
+// 中文说明：Start() 的实际功能是：调用 `ResolveGWorld()`、`Status()`；并读取、解析或查找数据、按条件分支处理。
   if (context == nullptr)
     return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
   if (!ResolveGWorld(*context)) {
@@ -9790,7 +9790,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   delete context;
 }
 
-// 中文说明：Update()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  auto *context = static_cast<Context *>(plugin_context);
+// 中文说明：Update() 的实际功能是：调用 `UpdateRuntime()`、`RestoreAll()`、`PublishSnapshot()`；并更新状态、保存结果或发布状态。
   if (context == nullptr)
     return;
   try {
