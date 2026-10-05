@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - nte-attack-replay-novs-20261004
+      - attack-native-20261005
   workflow_dispatch:
 
 jobs:
