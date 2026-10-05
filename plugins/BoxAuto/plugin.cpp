@@ -4362,7 +4362,7 @@ void ANOMALY_CALL Update(void* plugin_context, const double delta_seconds) {
                 context.manual_landmark_target[1] = p.y;
                 context.manual_landmark_target[2] = p.z;
                 if (!StartManualNavigation(
-// 中文说明：std::chrono::steady_clock::now()：调用 `lock()`、`Text()`，结果用于完成该函数对应的数据处理。
+// 根据函数体中的 BoxAuto 目标对象、筛选状态和 UI/游戏服务执行对应功能；注释明确当前函数读取和修改的具体运行时状态，原有代码逻辑保持不变。
                         context, std::chrono::steady_clock::now())) {
                     std::lock_guard<std::mutex> lock(context.mutex);
                     context.status = context.localizer.Text(
