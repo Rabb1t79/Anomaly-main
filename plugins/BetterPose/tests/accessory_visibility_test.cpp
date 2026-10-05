@@ -14,9 +14,11 @@ struct Component {
   bool child_visible{};
   unsigned queries{}, visibility_writes{}, destroy_calls{};
 };
+// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Check(bool value, const char* message) {
   if (!value) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
 }
+// 中文说明：Event() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void __fastcall Event(void* object, void* function, void* parameters) {
   auto& component=*static_cast<Component*>(object);
   auto* bytes=static_cast<std::uint8_t*>(parameters);
@@ -37,14 +39,17 @@ void __fastcall Event(void* object, void* function, void* parameters) {
     ++component.destroy_calls;
   }
 }
+// 中文说明：ReadMemory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL ReadMemory(void*,std::uintptr_t address,AnomalyMutableByteSpanV1 bytes) {
   std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size);
   return anomaly::sdk::Ok();
 }
+// 中文说明：WriteMemory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL WriteMemory(void*,std::uintptr_t,AnomalyByteSpanV1) {
   Check(false,"visibility handling must not write raw source buffers");
   return anomaly::sdk::Ok();
 }
+// 中文说明：Find() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Find(void*,AnomalyStringViewV1 name,AnomalyGenerationHandleV1* handle) {
   const std::string_view path(name.data,name.size);
   const std::array<std::string_view,Count> paths{
@@ -60,6 +65,7 @@ AnomalyStatusV1 ANOMALY_CALL Find(void*,AnomalyStringViewV1 name,AnomalyGenerati
 }
 }
 
+// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 int main() {
   using namespace fixture;
   Context context;
