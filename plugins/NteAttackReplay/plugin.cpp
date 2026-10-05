@@ -107,12 +107,12 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// 中文说明：HasField()：检查服务结构指针非空，并确认 struct_size 覆盖目标字段的完整内存范围，防止读取旧版本 ABI 中不存在的字段。
 bool HasField(const Struct* value, std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 中文说明：CombatReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// 中文说明：CombatReady()：检查 NTE 战斗服务的 struct_size，并确认 latest_event_sequence、next_event、current_combatant 三个回调均已提供；只有这些接口齐全时才允许记录战斗事件。
 bool CombatReady(const AnomalyNteCombatServiceV1* service) noexcept {
     return HasField<AnomalyNteCombatServiceV1,
                     decltype(AnomalyNteCombatServiceV1::next_event)>(
@@ -122,7 +122,7 @@ bool CombatReady(const AnomalyNteCombatServiceV1* service) noexcept {
            service->current_combatant != nullptr;
 }
 
-// 中文说明：SkillsReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// 中文说明：SkillsReady()：检查 NTE 技能服务的 struct_size，并确认 frame() 与 page() 可调用；后续通过这两个接口读取当前角色技能快照。
 bool SkillsReady(const AnomalyNteSkillsServiceV1* service) noexcept {
     return HasField<AnomalyNteSkillsServiceV1,
                     decltype(AnomalyNteSkillsServiceV1::page)>(
@@ -130,7 +130,7 @@ bool SkillsReady(const AnomalyNteSkillsServiceV1* service) noexcept {
            service->frame != nullptr && service->page != nullptr;
 }
 
-// 中文说明：InvocationReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// 中文说明：InvocationReady()：检查技能调用服务的 struct_size，并确认 activate() 存在；技能重放时通过该回调提交角色、世界和技能句柄。
 bool InvocationReady(const AnomalyNteSkillInvocationServiceV1* service) noexcept {
     return HasField<AnomalyNteSkillInvocationServiceV1,
                     decltype(AnomalyNteSkillInvocationServiceV1::activate)>(
@@ -138,7 +138,7 @@ bool InvocationReady(const AnomalyNteSkillInvocationServiceV1* service) noexcept
            service->activate != nullptr;
 }
 
-// 中文说明：UiReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// 中文说明：UiReady()：检查 UI 服务结构和窗口、文本、复选框、按钮、整数输入、浮点输入等回调是否齐全，保证重放面板使用的接口全部可用。
 bool UiReady(const AnomalyUiServiceV1* service) noexcept {
     return HasField<AnomalyUiServiceV1,
                     decltype(AnomalyUiServiceV1::end_window)>(
@@ -152,7 +152,7 @@ AnomalyStatusV1 Status(uint32_t code, std::string_view message = {}) noexcept {
     return {code, 0, {message.data(), message.size()}};
 }
 
-// 中文说明：SameHandle()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// 中文说明：SameHandle()：同时比较 GenerationHandle 的 id 和 generation，只有两个句柄指向同一代对象时才认为它们相同。
 bool SameHandle(AnomalyGenerationHandleV1 a, AnomalyGenerationHandleV1 b) noexcept {
     return a.id == b.id && a.generation == b.generation;
 }
@@ -182,14 +182,14 @@ constexpr size_t kMaximumNameBytes = 1024;
 constexpr std::string_view kGWorldPattern =
     "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
 
-// 中文说明：NativeRead()：调用 `std::memcpy()`、`__except()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：NativeRead()：先检查源地址和目标地址，再用 memcpy 复制指定字节；Windows 结构化异常捕获复制期间的非法内存访问，并返回 false。
 bool NativeRead(const void* address, void* destination, size_t size) noexcept {
     if (!address || !destination) return false;
     __try { std::memcpy(destination, address, size); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 template <typename T>
-// 中文说明：NativeRead()：调用 `NativeRead()`，结果用于完成该函数对应的数据处理。
+// 中文说明：NativeRead()：先检查源地址和目标地址，再用 memcpy 复制指定字节；Windows 结构化异常捕获复制期间的非法内存访问，并返回 false。
 bool NativeRead(const void* address, T& value) noexcept {
     return NativeRead(address, &value, sizeof(value));
 }
@@ -199,7 +199,7 @@ void* NativePointer(const void* address) noexcept {
     return NativeRead(address, value) ? reinterpret_cast<void*>(value) : nullptr;
 }
 
-// 中文说明：NativeName()：调用 `resolve_utf8()`、`value()`、`data()`、`resize()`，结果用于完成该函数对应的数据处理。
+// 中文说明：NativeName()：先调用 Anomaly UE5 Names 服务查询字符串长度，再读取 UTF-8 名称并去掉末尾的 NUL；无效名称 ID、长度异常或服务失败时返回空字符串。
 std::string NativeName(const Context& c, uint32_t id) {
     if (!c.names || !c.names->resolve_utf8 || id == 0) return {};
     size_t size{};
@@ -211,20 +211,20 @@ std::string NativeName(const Context& c, uint32_t id) {
     value.resize(size - 1);
     return value;
 }
-// 中文说明：NativeObjectName()：调用 `NativeRead()`、`NativeName()`，结果用于完成该函数对应的数据处理。
+// 中文说明：NativeObjectName()：从 UObject + 0x18 读取 NamePrivate 的比较索引，再交给 NativeName() 解析成人类可读的对象名称。
 std::string NativeObjectName(const Context& c, uintptr_t object) {
     uint32_t id{};
     if (!NativeRead(reinterpret_cast<const void*>(object + kObjectNameOffset), id)) return {};
     return NativeName(c, id);
 }
-// 中文说明：NativeFName()：调用 `NativeName()`、`std::to_string()`，结果用于完成该函数对应的数据处理。
+// 中文说明：NativeFName()：根据 FName 的 comparison index 解析基础名称；当 number 非零时追加 Unreal 的 `_N` 编号后缀。
 std::string NativeFName(const Context& c, uint32_t cmp, uint32_t number) {
     auto value = NativeName(c, cmp);
     if (number != 0) value += "_" + std::to_string(number - 1);
     return value;
 }
 
-// 中文说明：ResolveNativeWorld()：调用 `resolve()`、`anomaly::sdk::StringView()`、`NativeRead()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：ResolveNativeWorld()：用 Anomaly Signature 服务匹配已验证的 GWorld 指令模式，读取指令中的 RIP 相对位移，并计算出 HTGame.exe 当前 GWorld 指针地址。
 bool ResolveNativeWorld(const Context& c, uintptr_t& address) noexcept {
     address = 0;
     if (!c.signature || !c.signature->resolve) return false;
@@ -240,7 +240,7 @@ bool ResolveNativeWorld(const Context& c, uintptr_t& address) noexcept {
         static_cast<intptr_t>(instruction) + 7 + displacement);
     return address != 0;
 }
-// 中文说明：GetNativeController()：调用 `ResolveNativeWorld()`、`NativeRead()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：GetNativeController()：从 GWorld 依次读取 GameInstance、LocalPlayers 数组、首个 LocalPlayer 和 PlayerController；任一指针或数量无效都会终止解析。
 bool GetNativeController(const Context& c, uintptr_t& world, uintptr_t& controller) noexcept {
     uintptr_t g_world{};
     if (!ResolveNativeWorld(c, g_world)) return false;
@@ -402,7 +402,7 @@ bool ReadNativeDataTable(uintptr_t table,
     return !rows.empty();
 }
 
-// 中文说明：InvokeNativeProcessEvent()：调用 `NativePointer()`、`void()`、`__except()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：InvokeNativeProcessEvent()：读取目标 UObject 的虚表，从已验证的 ProcessEvent 虚表索引取得函数指针，并把目标 UFunction 与参数内存提交给 UE 对象。
 bool InvokeNativeProcessEvent(uintptr_t object, uintptr_t function, void* parameters) noexcept {
     if (!object || !function) return false;
     void* vtable = NativePointer(reinterpret_cast<const void*>(object));
@@ -421,7 +421,7 @@ bool InvokeNativeProcessEvent(uintptr_t object, uintptr_t function, void* parame
     }
 }
 
-// 中文说明：ResolveNormalAttackBinding()：调用 `GetNativeController()`、`NativeRead()`、`FindNativeFunction()`、`NativeObjectProperty()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：ResolveNormalAttackBinding()：定位当前 PlayerController 的 ActivateAbilityFromID/ReleaseAbilityFromID，再读取 DT_AbilityInput 的 HTAbilityInputRow；查找 `MeleeAtack` 行，取得 InputID、Param 和 InputAction，并按目标 UFunction 的实际属性偏移构造按下/释放参数。
 bool ResolveNormalAttackBinding(Context& c, NormalAttackBinding& out) {
     uintptr_t world{}, controller{};
     if (!GetNativeController(c, world, controller)) return false;
@@ -494,7 +494,7 @@ bool ResolveNormalAttackBinding(Context& c, NormalAttackBinding& out) {
     return true;
 }
 
-// 中文说明：InvokeNativeNormalAttack()：调用 `ResolveNormalAttackBinding()`、`InvokeNativeProcessEvent()`、`data()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：InvokeNativeNormalAttack()：先解析或复用普通攻击绑定，然后通过 ProcessEvent 依次调用 ActivateAbilityFromID 的按下参数和 ReleaseAbilityFromID 的释放参数，形成一次完整的普通攻击输入。
 bool InvokeNativeNormalAttack(Context& c) {
     NormalAttackBinding binding{};
     if (!ResolveNormalAttackBinding(c, binding)) return false;
@@ -572,7 +572,7 @@ std::string ReadAbilityDisplayName(
 
 // Refresh the candidate skill before the combat stream is consumed. The Host's skill
 // snapshot is immutable for its sequence, so the plugin never walks UE objects itself.
-// 中文说明：UpdateSkillCandidate()：调用 `SkillsReady()`、`frame()`、`size()`、`page()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// 中文说明：UpdateSkillCandidate()：读取当前技能帧和整页技能快照，优先选择带 INPUT_PRESSED 标志的技能，否则选择 ACTIVE 技能；保存其技能句柄、AbilityClass 和 InputID，供下一次 DamageEvent 关联。
 void UpdateSkillCandidate(Context& context) {
     if (!SkillsReady(context.skills)) return;
 
@@ -631,7 +631,7 @@ void UpdateSkillCandidate(Context& context) {
     }
 }
 
-// 中文说明：ResolveReplaySkill()：调用 `SkillsReady()`、`snapshot_by_handle()`、`SameHandle()`、`frame()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：ResolveReplaySkill()：先用捕获时保存的技能句柄查询当前快照并校验角色归属；若技能代际已刷新，则按同一角色的 AbilityClass，再按 InputID，在当前技能页重新映射可调用句柄。
 bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) {
     if (!SkillsReady(context.skills) || skill_out == nullptr) return false;
 
@@ -691,7 +691,7 @@ bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) 
     return false;
 }
 
-// 中文说明：ArmForNextAttack()：调用 `clear()`、`latest_event_sequence()`，结果用于完成该函数对应的数据处理。
+// 中文说明：ArmForNextAttack()：清空上一轮捕获的角色、目标、技能、伤害值、DamageEvent 序号和重放等待状态，并把战斗事件游标推进到当前队尾，避免旧事件被当成下一次攻击。
 void ArmForNextAttack(Context& context) {
     context.captured = false;
     context.replaying = false;
@@ -724,7 +724,7 @@ void ArmForNextAttack(Context& context) {
     }
 }
 
-// 中文说明：CaptureNextAttack()：调用 `CombatReady()`、`current_combatant()`、`UpdateSkillCandidate()`、`next_event()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 中文说明：CaptureNextAttack()：读取当前战斗角色并从 combat 事件流寻找新的玩家攻击伤害事件，同时更新技能候选；捕获玩家→非玩家目标的首次有效 DamageEvent 后保存目标、伤害、技能和 DamageSource 等数据，作为后续重放依据。
 bool CaptureNextAttack(Context& context) {
     if (!CombatReady(context.combat)) return false;
 
@@ -855,7 +855,7 @@ enum class ReplayCallResult : uint32_t {
     Rejected,
 };
 
-// 中文说明：ReplayOnce()：调用 `current_combatant()`、`InvokeNativeNormalAttack()`、`InvocationReady()`、`ResolveReplaySkill()`，结果用于完成该函数对应的数据处理。
+// 中文说明：ReplayOnce()：验证当前捕获状态和玩家战斗角色；普通攻击没有 NTE 技能句柄时直接走已验证的原生输入链，有技能时重新解析技能句柄并调用 NTE skill invocation 服务，区分成功、无技能、状态错误、服务错误和被拒绝。
 ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
     if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
     if (accepted != nullptr) *accepted = 0;
@@ -946,7 +946,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：调用 `Status()`、`store()`、`ArmForNextAttack()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// 中文说明：Start()：初始化重放次数、重放速率、停止/请求原子状态，并调用 ArmForNextAttack() 清空旧捕获数据、建立新的战斗事件起始游标。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -961,7 +961,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `Status()`、`store()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// 中文说明：Stop()：关闭 replaying 状态，清除待处理的重放请求，并设置 stop_requested，让 Update() 在下一次游戏线程更新中停止当前重放流程。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, uint32_t) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -971,12 +971,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, uint32_t) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// 中文说明：Unload()：释放 Load() 创建的 Context，结束插件实例生命周期。
 void ANOMALY_CALL Unload(void* plugin_context) {
     delete static_cast<Context*>(plugin_context);
 }
 
-// 中文说明：Update()：调用 `CaptureNextAttack()`、`exchange()`、`std::chrono::steady_clock::now()`、`next_event()`，结果用于完成该函数对应的数据处理。
+// 中文说明：Update()：每帧先持续监听下一次玩家攻击；处理停止请求、重放请求和 DamageEvent 成功确认，并在重放次数、速率和等待超时条件下推进下一次 ReplayOnce()。
 void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
