@@ -91,15 +91,18 @@ struct FNamePair {
 };
 
 // 模块不直接写面板：状态字符串经 `host.set_status` 回到调用方。
+// 中文说明：SetStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SetStatus(Host& host, const std::string& text) noexcept {
     if (host.set_status != nullptr) host.set_status(host.status_user, text);
 }
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// 中文说明：SignatureReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
     return HasField<AnomalySignatureServiceV1,
                decltype(AnomalySignatureServiceV1::resolve)>(
@@ -107,6 +110,7 @@ bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
         s->resolve != nullptr;
 }
 
+// 中文说明：NamesReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
     return HasField<AnomalyUe5NamesServiceV1,
                decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -114,6 +118,7 @@ bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
         s->resolve_utf8 != nullptr;
 }
 
+// 中文说明：PlayerReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool PlayerReady(const AnomalyNtePlayerServiceV1* s) noexcept {
     return HasField<AnomalyNtePlayerServiceV1,
                decltype(AnomalyNtePlayerServiceV1::snapshot)>(
@@ -122,6 +127,7 @@ bool PlayerReady(const AnomalyNtePlayerServiceV1* s) noexcept {
 }
 
 template <typename T>
+// 中文说明：Read() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Read(const void* address, T& value) noexcept {
     if (address == nullptr) return false;
     __try {
@@ -132,6 +138,7 @@ bool Read(const void* address, T& value) noexcept {
     }
 }
 
+// 中文说明：ReadPointer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void* ReadPointer(const void* address) noexcept {
     std::uintptr_t value{};
     return Read(address, value) ? reinterpret_cast<void*>(value) : nullptr;
@@ -198,6 +205,7 @@ std::string ObjectName(const AnomalyUe5NamesServiceV1* names,
     return ResolveName(names, name_id);
 }
 
+// 中文说明：RenderFName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string RenderFName(const Host& host, const FNamePair& f) {
     std::string s = ResolveName(host.names, f.cmp);
     if (f.number != 0) {
@@ -245,6 +253,7 @@ bool FindFunction(const AnomalyUe5NamesServiceV1* names, const std::uintptr_t cl
     return false;
 }
 
+// 中文说明：Invoke() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Invoke(void* object, void* function, void* parameters) noexcept {
     if (!object || !function) return false;
     using ProcessEvent = void(__fastcall*)(void*, void*, void*);
@@ -264,6 +273,7 @@ bool Invoke(void* object, void* function, void* parameters) noexcept {
 void StopAutoCombatMovement(Host& host, State& state) noexcept;
 void ResetAutoCombatTarget(Host& host, State& state) noexcept;
 
+// 中文说明：GetPlayerState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool GetPlayerState(Host& host, State& state) noexcept {
     if (state.g_world_address == 0 &&
         !ResolveRipRelative(host.signature, kGWorldPattern, 0,
@@ -322,6 +332,7 @@ bool GetPlayerState(Host& host, State& state) noexcept {
     return true;
 }
 
+// 中文说明：SnapshotPlayerPosition() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SnapshotPlayerPosition(Host& host, double (&position)[3]) noexcept {
     if (!PlayerReady(host.player)) return false;
     AnomalyNtePlayerSnapshotV1 snapshot{sizeof(snapshot)};
@@ -429,6 +440,7 @@ std::uintptr_t FindWidgetProperty(const Host& host, std::uintptr_t object,
     return 0;
 }
 
+// 中文说明：ResolveNormalAttackInput() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ResolveNormalAttackInput(Host& host, State& state) {
     if (!GetPlayerState(host, state)) {
         SetStatus(host, "普攻输入：等待玩家");
@@ -492,6 +504,7 @@ bool ResolveNormalAttackInput(Host& host, State& state) {
     return true;
 }
 
+// 中文说明：InvokeNormalAttack() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool InvokeNormalAttack(Host& host, State& state) {
     if (!ResolveNormalAttackInput(host, state)) return false;
     const auto& binding = state.normal_attack;
@@ -506,6 +519,7 @@ bool InvokeNormalAttack(Host& host, State& state) {
     return pressed && released;
 }
 
+// 中文说明：ActivateSkillByInputId() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ActivateSkillByInputId(Host& host, std::int32_t input_id) noexcept {
     // 原实现在这里用 `context.host` 现查 combat / skills / skill_invocation 三个服务；
     // 模块由 `Host` 注入，指针为空即视为服务不可用（`HasField` 对空指针返回 false）。
@@ -574,6 +588,7 @@ bool ActivateSkillByInputId(Host& host, std::int32_t input_id) noexcept {
     return false;
 }
 
+// 中文说明：IsMonsterClassName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool IsMonsterClassName(const std::string& name) noexcept {
     // 以怪物前缀开头是最强信号，直接认定，不参与下面的辅助对象排除：
     // 例如 mon_038_BP_World_CityEvent_Passive_01_C 名字里带 World/Passive，
@@ -624,6 +639,7 @@ struct CombatTargetPick {
     std::uint32_t class_name_id{};
 };
 
+// 中文说明：CombatDistanceSquared() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 double CombatDistanceSquared(const double* from, const double* to) noexcept {
     const double dx = to[0] - from[0];
     const double dy = to[1] - from[1];
@@ -740,6 +756,7 @@ bool PickNearestMonsterFrom(
 
 // 同时扫描 entities 与 actors 两个来源。二者覆盖面确实不同：entities 只覆盖
 // world.persistentLevel，包含大世界怪物的 actors 只在全部关卡的扫描里出现。
+// 中文说明：FindMonsterClassIds() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool FindMonsterClassIds(Host& host, State& state) noexcept {
     const auto now = std::chrono::steady_clock::now();
     if (!state.monster_class_name_ids.empty() && now < state.next_class_rescan) return true;
@@ -752,6 +769,7 @@ bool FindMonsterClassIds(Host& host, State& state) noexcept {
     return true;
 }
 
+// 中文说明：StopAutoCombatMovement() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void StopAutoCombatMovement(Host& host, State& state) noexcept {
     if (!state.moving) return;
     if (host.navigation != nullptr && host.navigation->stop_movement != nullptr) {
@@ -760,6 +778,7 @@ void StopAutoCombatMovement(Host& host, State& state) noexcept {
     state.moving = false;
 }
 
+// 中文说明：ResetAutoCombatTarget() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ResetAutoCombatTarget(Host& host, State& state) noexcept {
     StopAutoCombatMovement(host, state);
     state.target_valid = false;
@@ -805,6 +824,7 @@ void BlacklistAutoCombatTarget(
 }
 
 // 伤害流是否可用。不可用时不能做尸体判定，否则会误把所有目标判成尸体。
+// 中文说明：CombatStreamAvailable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CombatStreamAvailable(const Host& host) noexcept {
     return host.combat != nullptr &&
         host.combat->latest_damage_sequence != nullptr &&
@@ -813,6 +833,7 @@ bool CombatStreamAvailable(const Host& host) noexcept {
 
 // 消费战斗伤害流，记录"玩家最近一次打出了伤害"的时刻。
 // 该时刻是判断当前目标是否还能打的依据：尸体和道具类目标仍在快照里，但打不出任何伤害。
+// 中文说明：PumpAutoCombatCombatStream() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void PumpAutoCombatCombatStream(Host& host, State& state) noexcept {
     const auto now = std::chrono::steady_clock::now();
     if (host.combat == nullptr) return;
@@ -852,6 +873,7 @@ void PumpAutoCombatCombatStream(Host& host, State& state) noexcept {
 
 // 传送请求要当前 world 句柄，只能从 session 快照取（原实现在这里还会惰性重查 session 服务，
 // 模块改为由 `host.session` 注入）。
+// 中文说明：TeleportToPosition() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool TeleportToPosition(Host& host, const double (&position)[3]) noexcept {
     if (host.session == nullptr || host.player == nullptr ||
         host.teleport == nullptr || host.teleport->teleport == nullptr) {
@@ -879,6 +901,7 @@ bool TeleportToPosition(Host& host, const double (&position)[3]) noexcept {
 
 }  // namespace
 
+// 中文说明：Tick() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 Result Tick(Host& host, State& state) noexcept {
     // 每帧重算：只有「打不动」（普攻/技能调用失败）才置真。调用方要区分它与「等服务/等位置/
     // 等目标数据」那几种等待——原实现只在打不动时关掉总开关并结束流程。
@@ -1082,6 +1105,7 @@ Result Tick(Host& host, State& state) noexcept {
     return Result::working;
 }
 
+// 中文说明：Reset() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Reset(Host& host, State& state) noexcept {
     ResetAutoCombatTarget(host, state);
     state.monster_class_name_ids.clear();
