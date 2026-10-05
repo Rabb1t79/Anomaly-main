@@ -23,10 +23,12 @@ struct Context {
 } g_context;
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// 中文说明：StatusCode() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 constexpr AnomalyStatusV1 StatusCode(const std::uint32_t code) noexcept {
     return {code, 0, {}};
 }
@@ -36,6 +38,7 @@ struct ServiceQuery {
     const Service* service{};
     AnomalyStatusV1 status{StatusCode(ANOMALY_STATUS_V1_UNAVAILABLE)};
 
+// 中文说明：bool() 负责执行这里的具体处理；保持现有调用关系与行为不变。
     [[nodiscard]] explicit operator bool() const noexcept { return service != nullptr; }
 };
 
@@ -63,6 +66,7 @@ ServiceQuery<Service> QueryService(
     return {service, StatusCode(ANOMALY_STATUS_V1_OK)};
 }
 
+// 中文说明：StatusName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 const char* StatusName(const std::uint32_t code) noexcept {
     switch (code) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -79,6 +83,7 @@ const char* StatusName(const std::uint32_t code) noexcept {
     }
 }
 
+// 中文说明：SnapshotState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 const char* SnapshotState(const std::uint32_t flags) noexcept {
     if ((flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) == 0) return "UNAVAILABLE";
     const bool stale = (flags & ANOMALY_NTE_SNAPSHOT_V1_STALE) != 0;
@@ -89,6 +94,7 @@ const char* SnapshotState(const std::uint32_t flags) noexcept {
     return "VALID";
 }
 
+// 中文说明：SessionStateName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 const char* SessionStateName(const std::uint32_t state) noexcept {
     switch (state) {
     case ANOMALY_NTE_SESSION_V1_WORLD_READY: return "WORLD_READY";
@@ -97,6 +103,7 @@ const char* SessionStateName(const std::uint32_t state) noexcept {
     }
 }
 
+// 中文说明：SessionEventName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string SessionEventName(const std::uint32_t kind) {
     switch (kind) {
     case ANOMALY_NTE_SESSION_EVENT_V1_WORLD_READY:
@@ -110,6 +117,7 @@ std::string SessionEventName(const std::uint32_t kind) {
     }
 }
 
+// 中文说明：HasUiFrameFunctions() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasUiFrameFunctions(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_window)>(
                ui, offsetof(AnomalyUiServiceV1, begin_window)) &&
@@ -120,6 +128,7 @@ bool HasUiFrameFunctions(const AnomalyUiServiceV1* ui) noexcept {
         ui->begin_window != nullptr && ui->end_window != nullptr && ui->text != nullptr;
 }
 
+// 中文说明：DrawText() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawText(const AnomalyUiServiceV1* ui, const std::string_view text) {
     if (!HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::text)>(
             ui, offsetof(AnomalyUiServiceV1, text)) ||
@@ -171,6 +180,7 @@ bool DrawSnapshotState(
     return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0;
 }
 
+// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     const auto ui = QueryService<AnomalyUiServiceV1>(
@@ -183,14 +193,17 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     static_cast<Context*>(context)->session_cursor = 0;
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) { return anomaly::sdk::Ok(); }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void*) { g_context = {}; }
 
 void DrawSessionSnapshot(
@@ -267,6 +280,7 @@ void DrawSessionEvents(
         "Session event cursor: STALE; resynchronized to #{0}", arguments));
 }
 
+// 中文说明：DrawSession() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawSession(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     const auto session = QueryService<AnomalyNteSessionServiceV1>(
         host,
@@ -354,6 +368,7 @@ void DrawCameraSnapshot(
         arguments));
 }
 
+// 中文说明：DrawPlayer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawPlayer(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     const auto player = QueryService<AnomalyNtePlayerServiceV1>(
         host,
@@ -367,6 +382,7 @@ void DrawPlayer(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     DrawCameraSnapshot(player.service, ui);
 }
 
+// 中文说明：DrawMetrics() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawMetrics(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     const auto metrics = QueryService<AnomalyNteMetricsServiceV1>(
         host,
@@ -410,6 +426,7 @@ void DrawMetrics(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
         arguments));
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
     if (g_context.host == nullptr) return;
     if (!HasUiFrameFunctions(ui)) {
