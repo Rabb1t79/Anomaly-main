@@ -792,7 +792,11 @@ struct Ue5NteAdapter::State {
 
     std::vector<std::string> vehicle_ids;
     std::string selected_vehicle_id{"Vehicle007"};
+    // The vehicle list must come from the real DT_VehicleData UObject, not from
+    // arbitrary FNamePool strings containing "Vehicle".
+    std::uintptr_t vehicle_data_table{};
     std::uint64_t vehicle_catalog_generation{};
+    std::uint64_t vehicle_catalog_last_scan_sequence{};
     bool vehicle_catalog_attempted{};
     struct PendingVehicleSummon {
         bool active{};
@@ -1651,6 +1655,11 @@ struct Ue5NteAdapter::State {
                 "ffieldClass.name", "fproperty.arrayDim", "fproperty.elementSize",
                 "fproperty.offsetInternal", "fproperty.propertyLinkNext",
                 "fobjectProperty.propertyClass", "fstructProperty.struct",
+                "dataTable.rowMap", "dataTable.rowMapData", "dataTable.rowMapNum",
+                "dataTable.rowMapNumFree", "dataTable.rowMapMax",
+                "dataTable.rowMapElementStride", "dataTable.rowMapRowOffset",
+                "dataTable.rowMapInlineFlags", "dataTable.rowMapFlagsData",
+                "dataTable.rowMapFlagsNum", "dataTable.rowMapFlagsMax",
                 "vehicle.movementComponent", "vehicle.maxEngineTorque"}) &&
             FeatureDeclaresDependency(profile, "nte.vehicle", "nte.player") &&
             FeatureDeclaresDependency(profile, "nte.vehicle", "ue5.names") &&
@@ -7715,77 +7724,107 @@ struct Ue5NteAdapter::State {
     }
 
     void BuildVehicleCatalogLocked() noexcept {
-        if (vehicle_catalog_attempted &&
-            vehicle_catalog_generation == object_generation) return;
-        vehicle_catalog_attempted = true;
-        vehicle_catalog_generation = object_generation;
-        vehicle_ids.clear();
+        // DT_VehicleData is the game-native source. A FNamePool substring scan
+        // is not a valid substitute because it also sees classes and functions.
+        const auto sequence = tick_sequence.load(std::memory_order_acquire);
+        if (vehicle_catalog_generation != object_generation) {
+            vehicle_catalog_generation = object_generation;
+            vehicle_catalog_last_scan_sequence = 0;
+            vehicle_catalog_attempted = false;
+            vehicle_data_table = 0;
+            vehicle_ids.clear();
+        }
+        if (vehicle_catalog_attempted) return;
+        if (vehicle_catalog_last_scan_sequence != 0 &&
+            sequence < vehicle_catalog_last_scan_sequence + 30U) {
+            return;
+        }
+        vehicle_catalog_last_scan_sequence = sequence;
+        if (object_registry.items == 0 || object_registry.count == 0) return;
 
-        const auto* names = Symbol("ue5.FNamePool");
-        if (!names || !names->Available()) return;
-        const auto blocks_offset = Layout(profile, "names.blocksOffset");
-        const auto block_bits = Layout(profile, "names.blockBits", 16);
-        const auto entry_stride = Layout(profile, "names.entryStride", 2);
-        const auto length_shift = Layout(profile, "names.headerLengthShift", 6);
-        if (blocks_offset < 0 || block_bits <= 0 || block_bits >= 31 || entry_stride <= 0 ||
-            length_shift <= 0 || length_shift >= 16) return;
-
-        const std::uint64_t entries_per_block = std::uint64_t{1} << block_bits;
-        auto block_at = [&](std::uint32_t block_index, std::uintptr_t& block) {
-            std::int64_t slot_offset{};
-            std::uintptr_t block_slot{};
-            return AddLayoutOffset(blocks_offset,
-                       static_cast<std::int64_t>(block_index) * sizeof(std::uintptr_t), slot_offset) &&
-                AddAddress(names->address, slot_offset, block_slot) &&
-                ReadValue(*memory, block_slot, block) && block != 0;
-        };
-
-        std::uint32_t newest_block{};
-        bool found{};
-        for (std::uint32_t block_index = kMaximumNameBlocks; block_index-- > 0;) {
-            std::uintptr_t block{};
-            if (block_at(block_index, block)) {
-                newest_block = block_index; found = true; break;
+        // Locate the loaded UObject named DT_VehicleData from the authoritative
+        // UObject registry. The dump contains this exact native table name.
+        if (vehicle_data_table == 0) {
+            for (std::uint32_t index = 0; index < object_registry.count; ++index) {
+                std::uintptr_t candidate{};
+                std::uint32_t serial{};
+                if (!ReadObjectSlot(*memory, object_registry, index, candidate, serial) ||
+                    candidate == 0) {
+                    continue;
+                }
+                std::string object_name;
+                if (!ReadReflectedObjectNameLocked(candidate, object_name) ||
+                    object_name != "DT_VehicleData") {
+                    continue;
+                }
+                std::uintptr_t class_object{};
+                std::string class_name;
+                if (!ReadPointerAt(*memory, candidate,
+                        Layout(profile, "object.class"), class_object) ||
+                    !ReadReflectedObjectNameLocked(class_object, class_name) ||
+                    class_name != "DataTable") {
+                    continue;
+                }
+                vehicle_data_table = candidate;
+                break;
             }
         }
-        if (!found) return;
+        if (vehicle_data_table == 0) return;
 
-        std::unordered_set<std::string> seen;
-        const std::uint32_t lowest = newest_block >= kMaximumScannedNameBlocks
-            ? newest_block - kMaximumScannedNameBlocks + 1U : 0U;
-        for (std::uint32_t block_index = newest_block;; --block_index) {
-            std::uintptr_t block{};
-            if (!block_at(block_index, block)) {
-                if (block_index == lowest) break;
+        const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
+        if (row_map_offset < 0) return;
+        SparseMapView map;
+        if (!ReadSparseMapViewLocked(
+                vehicle_data_table + static_cast<std::uintptr_t>(row_map_offset), map) ||
+            map.num <= 0) {
+            return;
+        }
+
+        const auto element_bytes =
+            static_cast<std::size_t>(map.num) * static_cast<std::size_t>(map.stride);
+        if (element_bytes == 0 || element_bytes > 4U * 1024U * 1024U ||
+            map.num > 4096) {
+            return;
+        }
+        std::vector<std::uint8_t> elements(element_bytes);
+        if (!memory->Read(map.data, elements.data(), elements.size())) return;
+
+        std::vector<std::string> next_ids;
+        next_ids.reserve(static_cast<std::size_t>(map.num - map.num_free));
+        for (std::int32_t slot = 0; slot < map.num; ++slot) {
+            const auto unsigned_slot = static_cast<std::uint32_t>(slot);
+            if ((map.flags[static_cast<std::size_t>(unsigned_slot) / 32U] &
+                    (1U << (unsigned_slot & 31U))) == 0) {
                 continue;
             }
-            std::uint64_t entries = entries_per_block;
-            if (block_index == newest_block) {
-                entries = 0;
-                for (std::uint64_t entry_index = entries_per_block; entry_index-- > 0;) {
-                    std::uintptr_t entry{};
-                    if (!AddAddress(block, static_cast<std::int64_t>(entry_index * entry_stride), entry)) break;
-                    std::uint16_t header{};
-                    if (!ReadValue(*memory, entry, header)) break;
-                    if (header != 0) { entries = entry_index + 1U; break; }
-                }
+            const auto* element = elements.data() +
+                static_cast<std::size_t>(slot) * static_cast<std::size_t>(map.stride);
+            std::uint32_t comparison_index{};
+            std::uint32_t number{};
+            std::memcpy(&comparison_index, element, sizeof(comparison_index));
+            std::memcpy(&number, element + sizeof(comparison_index), sizeof(number));
+            const std::uint64_t key =
+                static_cast<std::uint64_t>(comparison_index) |
+                (static_cast<std::uint64_t>(number) << 32U);
+            if (key == 0) continue;
+
+            std::string row_name;
+            if (!ResolveFNameLocked(comparison_index, number, row_name) ||
+                row_name.empty() || !ContainsVehicleName(row_name) ||
+                row_name.size() > ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES) {
+                continue;
             }
-            for (std::uint64_t entry_index = entries; entry_index-- > 0;) {
-                std::uintptr_t entry{};
-                if (!AddAddress(block, static_cast<std::int64_t>(entry_index * entry_stride), entry)) break;
-                std::uint16_t header{};
-                if (!ReadValue(*memory, entry, header)) break;
-                const std::size_t length = static_cast<std::size_t>(header >> length_shift);
-                if (length == 0 || length > 128) continue;
-                std::string value(length, '\0');
-                if (!memory->Read(entry + sizeof(header), value.data(), value.size())) break;
-                if (!ContainsVehicleName(value) || value.size() > ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES) continue;
-                if (value.size() >= 2 && value.ends_with("_C")) continue;
-                if (seen.insert(value).second) vehicle_ids.push_back(std::move(value));
-            }
-            if (block_index == lowest) break;
+            next_ids.push_back(std::move(row_name));
         }
-        std::ranges::sort(vehicle_ids);
+
+        if (next_ids.empty()) {
+            // The object can exist before streaming populates RowMap. Retry later.
+            return;
+        }
+        std::ranges::sort(next_ids);
+        next_ids.erase(std::ranges::unique(next_ids).begin(), next_ids.end());
+        vehicle_ids = std::move(next_ids);
+        vehicle_catalog_attempted = true;
     }
 
     bool ApplySummonedVehicleLocked(const std::uint64_t sequence) noexcept {
