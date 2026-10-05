@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - nte-vehicle-final-20261004
+      - vehicle-native-dump-20261005
   pull_request:
     branches:
       - main
