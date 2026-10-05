@@ -56,19 +56,23 @@ struct Context final {
     bool stopped{};
 };
 
+// 中文说明：Status() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 Status(const std::uint32_t code, const char* message = nullptr) noexcept {
     return {code, 0, {message, message == nullptr ? 0U : std::strlen(message)}};
 }
 
+// 中文说明：Bytes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// 中文说明：ConfigReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ConfigReady(const AnomalyConfigServiceV1* service) noexcept {
     return HasField<AnomalyConfigServiceV1, decltype(AnomalyConfigServiceV1::write_atomic)>(
                service, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
@@ -77,12 +81,14 @@ bool ConfigReady(const AnomalyConfigServiceV1* service) noexcept {
         service->write_atomic != nullptr;
 }
 
+// 中文说明：HasUiWindow() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasUiWindow(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_window)>(
                ui, offsetof(AnomalyUiServiceV1, end_window)) &&
         ui->begin_window != nullptr && ui->end_window != nullptr && ui->text != nullptr;
 }
 
+// 中文说明：HasUiInput() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasUiInput(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::input_text)>(
                ui, offsetof(AnomalyUiServiceV1, input_text)) &&
@@ -91,6 +97,7 @@ bool HasUiInput(const AnomalyUiServiceV1* ui) noexcept {
         ui->input_text != nullptr && ui->button != nullptr;
 }
 
+// 中文说明：Utf8ToWide() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::wstring Utf8ToWide(const std::string_view value) {
     if (value.empty() ||
         value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
@@ -108,6 +115,7 @@ std::wstring Utf8ToWide(const std::string_view value) {
     return result;
 }
 
+// 中文说明：WideToUtf8() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string WideToUtf8(const std::wstring_view value) {
     if (value.empty() ||
         value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
@@ -126,6 +134,7 @@ std::string WideToUtf8(const std::wstring_view value) {
     return result;
 }
 
+// 中文说明：PluginPackageDirectory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::filesystem::path PluginPackageDirectory(std::string& error) {
     if (g_plugin_module == nullptr) {
         error = "The plugin module handle is unavailable";
@@ -183,12 +192,14 @@ bool ResolveLibraryPath(
     return true;
 }
 
+// 中文说明：SetEditor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SetEditor(Context& context, const std::string_view value) noexcept {
     context.editor.fill('\0');
     const std::size_t count = (std::min)(value.size(), context.editor.size() - 1U);
     std::copy_n(value.data(), count, context.editor.data());
 }
 
+// 中文说明：ReadSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReadSettings(Context& context) {
     std::uint32_t schema_version{};
     std::size_t size{};
@@ -229,6 +240,7 @@ bool ReadSettings(Context& context) {
     return true;
 }
 
+// 中文说明：SaveSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SaveSettings(Context& context) {
     std::string path;
     {
@@ -258,6 +270,7 @@ bool SaveSettings(Context& context) {
     }
 }
 
+// 中文说明：LoadConfiguredLibrary() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void LoadConfiguredLibrary(Context& context) noexcept {
     std::string configured_path;
     {
@@ -300,6 +313,7 @@ void LoadConfiguredLibrary(Context& context) noexcept {
     }
 }
 
+// 中文说明：UnloadConfiguredLibrary() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void UnloadConfiguredLibrary(Context& context) noexcept {
     HMODULE module{};
     {
@@ -349,6 +363,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     }
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* const context = static_cast<Context*>(plugin_context);
     if (context == nullptr) {
@@ -358,6 +373,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     auto* const context = static_cast<Context*>(plugin_context);
     if (context == nullptr) {
@@ -376,6 +392,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
                        "DLL loader settings could not be saved");
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* plugin_context) {
     auto* const context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -449,6 +466,7 @@ void ANOMALY_CALL Draw(
 
 }  // namespace
 
+// 中文说明：DllMain() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_plugin_module = module;
