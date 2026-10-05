@@ -36,7 +36,7 @@ constexpr std::chrono::milliseconds kTickInterval{25};
 // 一次「怪物消失 → cleared」的硬上限：判据是 5 秒，多给 3 秒余量。
 constexpr std::chrono::seconds kClearCap{8};
 
-// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
 void Check(bool value, const char* message) {
     if (!value) {
         std::cerr << "FAIL: " << message << '\n';
@@ -44,12 +44,12 @@ void Check(bool value, const char* message) {
     }
 }
 
-// 中文说明：Status() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Status()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 Status(std::uint32_t code) {
     return AnomalyStatusV1{code, 0, AnomalyStringViewV1{nullptr, 0}};
 }
 
-// 中文说明：TickSleep() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：TickSleep()：调用 `std::this_thread::sleep_for()`，结果用于完成该函数对应的数据处理。
 void TickSleep() { std::this_thread::sleep_for(kTickInterval); }
 
 // 假内存布局。模块用固定偏移读 GWorld → GameInstance → LocalPlayer → Controller →
@@ -75,11 +75,11 @@ constexpr std::size_t kControllerPlayerStateOffset = 720;
 struct Arena {
     alignas(8) std::array<std::uint8_t, kArenaBytes> bytes{};
     template <typename T>
-// 中文说明：Store() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Store()：调用 `std::memcpy()`、`data()`，结果用于完成该函数对应的数据处理。
     void Store(std::size_t at, T value) {
         std::memcpy(bytes.data() + at, &value, sizeof(T));
     }
-// 中文说明：Base() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Base()：调用 `data()`，结果用于完成该函数对应的数据处理。
     std::uintptr_t Base() const {
         return reinterpret_cast<std::uintptr_t>(bytes.data());
     }
@@ -121,7 +121,7 @@ struct Fixture {
 
     Fixture();
 
-// 中文说明：AddMonster() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AddMonster()：调用 `push_back()`；把结果追加到输出容器，结果用于完成该函数对应的数据处理。
     void AddMonster(double x, double y, double z) {
         Row row;
         row.class_id = 1;
@@ -133,7 +133,7 @@ struct Fixture {
         row.handle_id = 7;
         entity_source.rows.push_back(row);
     }
-// 中文说明：ClearMonsters() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ClearMonsters()：调用 `clear()`，结果用于完成该函数对应的数据处理。
     void ClearMonsters() { entity_source.rows.clear(); }
 };
 
@@ -145,7 +145,7 @@ AnomalyStatusV1 ANOMALY_CALL ResolveSignature(void* user, AnomalyStringViewV1,
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：PlayerSnapshot() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：PlayerSnapshot()：调用 `anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL PlayerSnapshot(void* user, AnomalyNtePlayerSnapshotV1* snapshot) {
     const auto& fx = *static_cast<Fixture*>(user);
     snapshot->flags = ANOMALY_NTE_SNAPSHOT_V1_VALID;
@@ -157,27 +157,27 @@ AnomalyStatusV1 ANOMALY_CALL PlayerSnapshot(void* user, AnomalyNtePlayerSnapshot
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：MoveToLocation() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MoveToLocation()：调用 `anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL MoveToLocation(void* user, const double[3]) {
     ++static_cast<Fixture*>(user)->navigation_moves;
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：StopMovement() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：StopMovement()：调用 `anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL StopMovement(void*) { return anomaly::sdk::Ok(); }
 
-// 中文说明：RequestNearby() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RequestNearby()：调用 `anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL RequestNearby(void* user, const AnomalyNtePickupRequestV1*) {
     ++static_cast<Fixture*>(user)->pickup_requests;
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：SetStatusCallback() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SetStatusCallback()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 void SetStatusCallback(void* user, const std::string&) noexcept {
     ++static_cast<Fixture*>(user)->status_calls;
 }
 
-// 中文说明：EntityFrame() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：EntityFrame()：调用 `size()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL EntityFrame(void* user, AnomalyNteEntityFrameV1* frame) {
     const auto& source = *static_cast<Fixture::Source*>(user);
     frame->flags = 0;
@@ -331,7 +331,7 @@ struct CycleReport {
 
 // 走完一次「怪物出现 → 被看到 → 消失 → 5 秒后 cleared」。怪物放在玩家正东 20 米
 // （攻击距离 6 米之外），所以模块只寻路、不出手，选靶结果不受伤害流影响。
-// 中文说明：DriveCycle() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：DriveCycle()：调用 `AddMonster()`、`Clock::now()`、`std::chrono::seconds()`、`Check()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 CycleReport DriveCycle(Fixture& fx) {
     CycleReport report;
     fx.AddMonster(2000.0, 0.0, 0.0);
@@ -389,7 +389,7 @@ CycleReport DriveCycle(Fixture& fx) {
 }
 
 // 断言 2：一个从头到尾没有怪的点必须一直 working，永远不会 cleared。
-// 中文说明：ScenarioWithoutMonster() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ScenarioWithoutMonster()：调用 `Clock::now()`、`Tick()`、`Check()`、`std::chrono::seconds()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 void ScenarioWithoutMonster() {
     Fixture fx;
     const auto started = Clock::now();
@@ -411,7 +411,7 @@ void ScenarioWithoutMonster() {
 }
 
 // 断言 3、4、5、6a、7、8。
-// 中文说明：ScenarioClearCycle() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ScenarioClearCycle()：调用 `DriveCycle()`、`Check()`、`Clock::now()`、`std::chrono::milliseconds()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 void ScenarioClearCycle() {
     Fixture fx;
     const CycleReport report = DriveCycle(fx);
@@ -472,7 +472,7 @@ void ScenarioClearCycle() {
 }
 
 // 断言 6b：loot_after_kill = false 时不发掉落请求。
-// 中文说明：ScenarioLootDisabled() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ScenarioLootDisabled()：调用 `DriveCycle()`、`Check()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void ScenarioLootDisabled() {
     Fixture fx;
     fx.host.loot_after_kill = false;
@@ -482,7 +482,7 @@ void ScenarioLootDisabled() {
 }
 
 // 断言 6c：pickup 为空时既不能崩，也不能发掉落请求。
-// 中文说明：ScenarioPickupUnavailable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ScenarioPickupUnavailable()：调用 `DriveCycle()`、`Check()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void ScenarioPickupUnavailable() {
     Fixture fx;
     fx.host.loot_after_kill = true;
@@ -494,7 +494,7 @@ void ScenarioPickupUnavailable() {
 
 // 断言 9：`attack_failed` 只标记「打不动」，其余 unavailable 都是等待。
 // 四种 unavailable 的来源在夹具里都能分别驱动到，所以这里逐条比对，而不是只测一条。
-// 中文说明：ScenarioAttackFailedFlag() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ScenarioAttackFailedFlag()：调用 `Check()`、`Tick()`、`AddMonster()`、`ClearMonsters()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void ScenarioAttackFailedFlag() {
     // 9a：等待战斗服务（navigation 缺失）。
     {
@@ -545,7 +545,7 @@ void ScenarioAttackFailedFlag() {
 
 }  // namespace
 
-// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：main()：调用 `Check()`、`Tick()`、`ScenarioAttackFailedFlag()`、`no_monster()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 int main() {
     // 断言 1：服务缺失 → unavailable。
     {
