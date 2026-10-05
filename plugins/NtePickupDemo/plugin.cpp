@@ -41,6 +41,7 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -75,6 +76,7 @@ const Service* Query(
         : nullptr;
 }
 
+// 中文说明：UiReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool UiReady(const AnomalyUiServiceV1* service) noexcept {
     return HasField<AnomalyUiServiceV1,
                decltype(AnomalyUiServiceV1::button_enabled)>(
@@ -84,6 +86,7 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
         service->input_uint32 != nullptr && service->button_enabled != nullptr;
 }
 
+// 中文说明：PickupReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool PickupReady(const AnomalyNtePickupServiceV1* service) noexcept {
     return HasField<AnomalyNtePickupServiceV1,
                decltype(AnomalyNtePickupServiceV1::snapshot)>(
@@ -101,6 +104,7 @@ void Log(
     }
 }
 
+// 中文说明：StatusName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 const char* StatusName(const std::uint32_t status) noexcept {
     switch (status) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -113,6 +117,7 @@ const char* StatusName(const std::uint32_t status) noexcept {
     }
 }
 
+// 中文说明：StateName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 const char* StateName(const std::uint32_t state) noexcept {
     switch (state) {
     case ANOMALY_NTE_PICKUP_V1_QUEUED: return "QUEUED";
@@ -122,6 +127,7 @@ const char* StateName(const std::uint32_t state) noexcept {
     }
 }
 
+// 中文说明：DrawText() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawText(const AnomalyUiServiceV1& ui, const std::string_view text) {
     ui.text(ui.user, anomaly::sdk::StringView(text));
 }
@@ -185,6 +191,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* user) {
     auto* context = static_cast<Context*>(user);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -194,6 +201,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* user) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* user, std::uint32_t) {
     auto* context = static_cast<Context*>(user);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -204,10 +212,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* user, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* user) {
     delete static_cast<Context*>(user);
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void* user, double) {
     auto* context = static_cast<Context*>(user);
     if (context == nullptr) return;
@@ -236,6 +246,7 @@ void ANOMALY_CALL Update(void* user, double) {
     }
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void* user, const AnomalyUiServiceV1* supplied_ui) {
     auto* context = static_cast<Context*>(user);
     if (context == nullptr) return;
