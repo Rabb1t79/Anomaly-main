@@ -8,7 +8,7 @@
 // nearest reachable point), and the world rotation must be expressed in the
 // pose model's parent space.
 namespace fixture {
-// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
+// 统一测试断言入口：条件失败时把具体失败信息写到标准错误并以退出码 1 终止测试，条件成立时继续执行后续断言。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -16,7 +16,7 @@ void Check(const bool value, const char *message) {
   }
 }
 
-// 中文说明：QuatDistance()：调用 `std::abs()`，结果用于完成该函数对应的数据处理。
+// 验证 Quat Distance 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 double QuatDistance(const Quatd &a, const Quatd &b) {
   const double dot = std::abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
   return 1.0 - (std::min)(dot, 1.0);
@@ -27,7 +27,7 @@ struct Camera {
   double focal{800.0};
   float cx{960.0F};
   float cy{540.0F};
-// 中文说明：operator()：直接处理局部数据；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 实现 operator；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
   bool operator()(const double world[3], float screen[2]) const {
     if (world[0] <= 1.0)
       return false;
@@ -37,7 +37,7 @@ struct Camera {
   }
 };
 
-// 中文说明：RotatorRoundTrip()：调用 `RotatorToQuat()`、`QuatToRotator()`、`Check()`、`QuatDistance()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 实现 Rotator Round Trip；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void RotatorRoundTrip() {
   const double samples[][3]{{0, 0, 0},     {10, 20, 30},   {-45, 170, -90},
                             {89, -30, 12}, {-89, 60, 170}, {33, -179, 179},
@@ -66,7 +66,7 @@ struct TiltedCamera {
   Quatd view = QuatNormalize(RotatorToQuat(-25.0, 40.0, 10.0));  // camera to world
   Vec3d eye{-200.0, -150.0, 120.0};
   double focal{900.0};
-// 中文说明：operator()：调用 `QuatRotateVector()`、`QuatConjugate()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 实现 operator；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
   bool operator()(const double world[3], float screen[2]) const {
     const Vec3d local = QuatRotateVector(
         QuatConjugate(view), Vec3d{world[0] - eye.x, world[1] - eye.y, world[2] - eye.z});
@@ -90,7 +90,7 @@ struct Drag {
   bool ready{};
   double last_raw{};
   double angle{};
-// 中文说明：Start()：调用 `camera()`、`ViewRotationAxis()`、`AdvanceDragAngle()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 实现 Start 的运行时操作；函数直接使用函数体中的服务、对象和状态字段推进当前流程，并在必要的输入无效、目标不存在或底层调用失败时提前返回，成功时更新对应输出或运行时状态。
   bool Start(const float press[2]) {
     double sense{};
     const double p[3]{pivot.x, pivot.y, pivot.z};
@@ -100,7 +100,7 @@ struct Drag {
     AdvanceDragAngle(pivot_screen, press, ready, last_raw, angle);
     return true;
   }
-// 中文说明：Move()：调用 `AdvanceDragAngle()`、`QuatRotateVector()`、`QuatFromRotationVector()`、`camera()`，结果用于完成该函数对应的数据处理。
+// 实现 Move；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
   bool Move(const float cursor[2], float joint[2]) {
     AdvanceDragAngle(pivot_screen, cursor, ready, last_raw, angle);
     const Vec3d moved = QuatRotateVector(
@@ -110,14 +110,14 @@ struct Drag {
   }
 };
 
-// 中文说明：ScreenAngle()：调用 `std::atan2()`，结果用于完成该函数对应的数据处理。
+// 实现 Screen Angle；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 double ScreenAngle(const float centre[2], const float point[2]) {
   return std::atan2(static_cast<double>(point[1]) - centre[1],
                     static_cast<double>(point[0]) - centre[0]);
 }
 
 template <typename Cam>
-// 中文说明：DragFollowsCursor()：调用 `Check()`、`camera()`、`Start()`、`std::hypot()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 实现 Drag Follows Cursor；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void DragFollowsCursor(const Cam &camera, const char *name) {
   const Vec3d pivot{250.0, 30.0, 60.0};
   const Vec3d offset{10.0, -15.0, -40.0};
@@ -189,7 +189,7 @@ void DragFollowsCursor(const Cam &camera, const char *name) {
 
 // A biped arm: 0 root, 1 upperarm, 2 upperarm_twist (on 1), 3 lowerarm,
 // 4 lowerarm_twist (on 3), 5 hand, 6 hand_adjust (on 5, no children).
-// 中文说明：StackedBones()：调用 `return()`、`Check()`、`ResolveDragPivot()`、`CountDescendants()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 实现 Stacked Bones；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void StackedBones() {
   const std::vector<std::int32_t> parents{-1, 0, 1, 1, 3, 3, 5};
   const std::vector<Vec3d> positions{{0, 0, 0},  {0, 0, 0},  {0, 0, 0}, {30, 0, 0},
@@ -235,7 +235,7 @@ void StackedBones() {
         "the nearest point wins when nothing is stacked on it");
 }
 
-// 中文说明：BodyOnlyMask()：调用 `Bone_hairR00()`、`keyword()`、`skirt()`、`twist()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Body Only Mask；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void BodyOnlyMask() {
   // 0 pelvis, 1 spine, 2 head, 3 Bone_hairR00 (on head), 4 hair helper with no
   // keyword (on 3), 5 Bn_qun_01 skirt (on pelvis), 6 twist (stays), 7 hat,
@@ -277,7 +277,7 @@ void BodyOnlyMask() {
   Check(BuildOverlayHiddenMask({"a", "b"}, cycle, hidden) == 0, "a cyclic hierarchy ends");
 }
 
-// 中文说明：TwoBoneIk()：调用 `V3Length()`、`V3Sub()`、`V3Scale()`、`V3Dot()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 实现 Two Bone Ik；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void TwoBoneIk() {
   // A bent arm: shoulder at the origin, elbow 30 cm out and bent forward,
   // hand 25 cm further.
@@ -348,7 +348,7 @@ void TwoBoneIk() {
 }
 
 template <typename Cam>
-// 中文说明：TwistAndDepth()：调用 `V3Add()`、`Check()`、`TowardCamera()`、`V3Sub()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Twist And Depth；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void TwistAndDepth(const Cam &camera, const Vec3d &eye, const char *name) {
   const Vec3d pivot{250.0, 30.0, 60.0};
   const Vec3d offset{10.0, -15.0, -40.0};
@@ -401,7 +401,7 @@ void TwistAndDepth(const Cam &camera, const Vec3d &eye, const char *name) {
         "twist turns the bone by the requested angle");
 }
 
-// 中文说明：CircleCost()：调用 `CircleDetailFor()`、`DiscRows()`、`size()`、`Check()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 实现 Circle Cost；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void CircleCost() {
   constexpr double kPi = 3.14159265358979323846;
   for (const float radius : {3.0F, 5.0F, 7.0F, 10.0F, 13.0F, 16.0F}) {
@@ -423,7 +423,7 @@ void CircleCost() {
         "the default 7 px marker is 16 calls");
 }
 
-// 中文说明：DiscStrips()：调用 `DiscRows()`、`Check()`、`empty()`、`std::abs()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
+// 实现 Disc Strips；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void DiscStrips() {
   for (const float radius : {3.0F, 7.0F, 10.5F, 16.0F}) {
     const auto rows = DiscRows(radius, 2.0F);
@@ -444,7 +444,7 @@ void DiscStrips() {
         "degenerate discs draw nothing");
 }
 
-// 中文说明：BehindCameraIsRejected()：调用 `Check()`、`ViewRotationAxis()`；通过 `Check()` 校验结果，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 验证 Behind Camera Is Rejected 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void BehindCameraIsRejected() {
   const auto never = [](const double *, float *) { return false; };
   Vec3d axis;
@@ -452,7 +452,7 @@ void BehindCameraIsRejected() {
   Check(!ViewRotationAxis(never, Vec3d{}, axis, sense), "no projection means no axis");
 }
 
-// 中文说明：ParentSpaceConversion()：调用 `QuatNormalize()`、`RotatorToQuat()`、`QuatFromRotationVector()`、`ApplyWorldRotationToOffset()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
+// 实现 Parent Space Conversion；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
 void ParentSpaceConversion() {
   // local = offset * base, world = parent * local. Adding a world rotation R
   // must give parent * offset' * base == R * parent * offset * base.
@@ -470,7 +470,7 @@ void ParentSpaceConversion() {
 }
 }  // namespace fixture
 
-// 中文说明：main()：调用 `fixture::RotatorRoundTrip()`、`fixture::DragFollowsCursor()`、`fixture::BehindCameraIsRejected()`、`fixture::ParentSpaceConversion()`，结果用于完成该函数对应的数据处理。
+// 测试程序入口：按顺序执行本文件覆盖的功能测试；所有断言通过后输出 PASS 并以 0 返回，任一断言失败都会由 Check() 终止进程。
 int main() {
   fixture::RotatorRoundTrip();
   fixture::DragFollowsCursor(fixture::Camera{}, "axis-aligned camera projects the joint");
