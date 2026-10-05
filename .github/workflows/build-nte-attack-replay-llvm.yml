@@ -45,6 +45,17 @@ jobs:
           echo "build_rc=$rc" > build-result.txt
           exit "$rc"
 
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-build-diagnostics
+          path: |
+            cmake-configure.log
+            cmake-build.log
+            build-result.txt
+          if-no-files-found: warn
+
       - name: Stage package
         shell: bash
         run: |
