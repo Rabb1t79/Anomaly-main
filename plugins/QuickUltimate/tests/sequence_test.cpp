@@ -11,12 +11,14 @@ using anomaly::plugins::quick_ultimate::Phase;
 using anomaly::plugins::quick_ultimate::Sequencer;
 using Clock = Sequencer::Clock;
 
+// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Check(const bool condition, const char* message) {
     if (condition) return true;
     std::fprintf(stderr, "FAIL: %s\n", message);
     return false;
 }
 
+// 中文说明：Equals() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Equals(const std::optional<Command> value, const Command expected) {
     return value.has_value() && *value == expected;
 }
@@ -50,6 +52,7 @@ bool AdvanceToFirstUltimate(
         "first ultimate must begin immediately after digit release");
 }
 
+// 中文说明：HeldComboRepeatsUltimateEveryHundredMilliseconds() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HeldComboRepeatsUltimateEveryHundredMilliseconds() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -87,6 +90,7 @@ bool HeldComboRepeatsUltimateEveryHundredMilliseconds() {
         "repeated ultimate must release before the next gap");
 }
 
+// 中文说明：ReleaseBeforeUltimateStopsWithoutQ() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReleaseBeforeUltimateStopsWithoutQ() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -120,6 +124,7 @@ bool ReleaseBeforeUltimateStopsWithoutQ() {
         "release before the first Q must not send Q");
 }
 
+// 中文说明：ReleaseDuringUltimateStopsAfterKeyUp() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReleaseDuringUltimateStopsAfterKeyUp() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -141,6 +146,7 @@ bool ReleaseDuringUltimateStopsAfterKeyUp() {
         "release during Q down must restore Alt");
 }
 
+// 中文说明：ReleaseDuringRepeatWaitStops() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReleaseDuringRepeatWaitStops() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -166,6 +172,7 @@ bool ReleaseDuringRepeatWaitStops() {
         "release during repeat wait must not send another Q");
 }
 
+// 中文说明：LatestSlotReplacesTarget() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool LatestSlotReplacesTarget() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -192,6 +199,7 @@ bool LatestSlotReplacesTarget() {
         "only the latest slot may remain active");
 }
 
+// 中文说明：CancelAndFailureClearPostedState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CancelAndFailureClearPostedState() {
     Sequencer cancelled;
     const Clock::time_point start{};
@@ -232,6 +240,7 @@ bool CancelAndFailureClearPostedState() {
 
 }  // namespace
 
+// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 int main() {
     if (!HeldComboRepeatsUltimateEveryHundredMilliseconds()) return 1;
     if (!ReleaseBeforeUltimateStopsWithoutQ()) return 1;
