@@ -1,3 +1,24 @@
+/*
+ * 中文维护说明：
+ * 1. 本文件是 NTE Attack Replay 插件的实现。
+ * 2. 插件始终监听玩家对目标产生的真实 DamageEvent，并记录攻击上下文。
+ * 3. 普通攻击不依赖技能句柄；其重放路径依据 HTGame 中已确认的
+ *    DT_AbilityInput / HTAbilityInputRow / MeleeAtack / InputID / Param
+ *    以及 ActivateAbilityFromID、ReleaseAbilityFromID 反射函数执行。
+ * 4. 技能攻击继续通过 Anomaly NTE skill-invocation 服务执行。
+ * 5. Draw 只产生请求；真正的游戏调用在 Update 的 Game 域执行，避免跨线程
+ *    直接操作游戏对象。
+ * 6. 每次重放只有在之后观察到新的“玩家 -> 非玩家目标”DamageEvent 后，
+ *    才计为一次成功重放；仅收到 accepted=1 不作为成功依据。
+ * 7. 本文件中的原生偏移、函数名、DataTable 字段和 ProcessEvent 调用链，
+ *    均对应当前项目/HTGame 证据；禁止把未经验证的猜测写入这里。
+ *
+ * 本次改动行为说明：
+ * - 新增/完善普通攻击原生输入绑定与重放路径。
+ * - 增加对 DataTable 行结构、属性类型、参数大小的运行时校验。
+ * - 增加重放后的真实 DamageEvent 验证。
+ * - 保留自动捕获、技能重放和 UI 请求/游戏线程分离行为。
+ */
 // Record the first player->target DAMAGE event; normal attacks do not require a skill.
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
@@ -125,8 +146,7 @@ bool SameHandle(AnomalyGenerationHandleV1 a, AnomalyGenerationHandleV1 b) noexce
 }
 
 
-/* Native normal-attack replay. Evidence source: Anomaly combat build plus the current HTGame dump.
-   This path never synthesizes mouse messages. */
+/* 中文说明：以下常量和函数实现已从当前 HTGame/Anomaly 证据中确定的普通攻击原生调用链。 */
 constexpr ptrdiff_t kWorldGameInstanceOffset = 560;
 constexpr ptrdiff_t kGameInstanceLocalPlayersOffset = 56;
 constexpr ptrdiff_t kLocalPlayerControllerOffset = 48;
