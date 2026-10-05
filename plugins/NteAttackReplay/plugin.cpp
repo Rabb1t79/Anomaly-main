@@ -461,44 +461,6 @@ bool InvokeNativeNormalAttack(Context& c) {
 }
 
 
-    const HWND foreground = GetForegroundWindow();
-    if (foreground == nullptr) return nullptr;
-
-    DWORD process_id{};
-    if (GetWindowThreadProcessId(foreground, &process_id) == 0 ||
-        process_id != GetCurrentProcessId()) {
-        return nullptr;
-    }
-
-    const HWND unreal = FindWindowW(L"UnrealWindow", nullptr);
-    if (unreal != nullptr) {
-        DWORD unreal_process{};
-        if (GetWindowThreadProcessId(unreal, &unreal_process) != 0 &&
-            unreal_process == GetCurrentProcessId()) {
-            return unreal;
-        }
-    }
-    return foreground;
-}
-
-// QuickUltimate already uses PostMessageW to deliver real gameplay key input to
-// the owned Unreal window. Reuse that lightweight input path for normal attack.
-bool PostNormalAttackInput() noexcept {
-    const HWND window = ResolveReplayWindow();
-    if (window == nullptr || !IsWindow(window)) return false;
-
-    POINT point{};
-    if (!GetCursorPos(&point) || !ScreenToClient(window, &point)) {
-        point = {0, 0};
-    }
-    const LPARAM lparam = MAKELPARAM(
-        static_cast<short>(point.x), static_cast<short>(point.y));
-    if (PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, lparam) == FALSE) {
-        return false;
-    }
-    return PostMessageW(window, WM_LBUTTONUP, 0, lparam) != FALSE;
-}
-
 std::string ReadAbilityPath(
     const AnomalyNteSkillsServiceV1* skills,
     AnomalyGenerationHandleV1 ability) {
@@ -865,7 +827,7 @@ ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* a
     // Normal attacks have no NTE skill handle. The old implementation returned
     // NoSkill here, so a captured normal attack never sent any replay input.
     if (!context.captured_has_skill) {
-        if (PostNormalAttackInput()) return ReplayCallResult::Success;
+        if (InvokeNativeNormalAttack(context)) return ReplayCallResult::Success;
         if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_FAILED;
         return ReplayCallResult::ServiceError;
     }
@@ -913,11 +875,17 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     context->invocation = sdk_host.Query<AnomalyNteSkillInvocationServiceV1>(
         ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
         ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION).get();
+    context->signature = sdk_host.Query<AnomalySignatureServiceV1>(
+        ANOMALY_SIGNATURE_SERVICE_V1_ID, ANOMALY_SIGNATURE_SERVICE_V1_VERSION).get();
+    context->names = sdk_host.Query<AnomalyUe5NamesServiceV1>(
+        ANOMALY_UE5_NAMES_SERVICE_V1_ID, ANOMALY_UE5_NAMES_SERVICE_V1_VERSION).get();
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
     if (!CombatReady(context->combat) || !SkillsReady(context->skills) ||
-        !InvocationReady(context->invocation) || !UiReady(context->ui)) {
+        !InvocationReady(context->invocation) || !UiReady(context->ui) ||
+        context->signature == nullptr || context->names == nullptr ||
+        context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
