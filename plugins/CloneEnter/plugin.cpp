@@ -330,14 +330,14 @@ struct Context {
 };
 
 // 模块不直接写面板：战斗状态字符串经这个回调回到插件。
-// 中文说明：SetCombatStatus()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// SetCombatStatus 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SetCombatStatus(void* user, const std::string& text) noexcept {
     static_cast<Context*>(user)->combat_status = text;
 }
 
 // 每个调用点现构造宿主：服务指针、策略与回显都取自插件当前状态，模块不缓存它们，
 // 所以热重载或服务晚发布都不会让它用到过期指针。
-// 中文说明：MakeCombatHost()：调用 `anomaly::sdk::Host()`、`get()`、`view()`、`load()`，结果用于完成该函数对应的数据处理。
+// MakeCombatHost 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 combat::Host MakeCombatHost(Context& context) noexcept {
     combat::Host host;
     host.navigation = context.navigation;
@@ -384,12 +384,12 @@ combat::Host MakeCombatHost(Context& context) noexcept {
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// HasField 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 中文说明：CoreReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// CoreReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool CoreReady(const AnomalyCoreServiceV1* service) noexcept {
     return HasField<AnomalyCoreServiceV1,
                decltype(AnomalyCoreServiceV1::write_memory)>(
@@ -397,7 +397,7 @@ bool CoreReady(const AnomalyCoreServiceV1* service) noexcept {
         service->read_memory != nullptr && service->write_memory != nullptr;
 }
 
-// 中文说明：InputReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// InputReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool InputReady(const AnomalyInputServiceV1* s) noexcept {
     return HasField<AnomalyInputServiceV1,
                decltype(AnomalyInputServiceV1::release_hotkey)>(
@@ -406,7 +406,7 @@ bool InputReady(const AnomalyInputServiceV1* s) noexcept {
         s->release_hotkey != nullptr;
 }
 
-// 中文说明：DeveloperModeEnabled()：调用 `decltype()`、`offsetof()`、`developer_mode_enabled()`，结果用于完成该函数对应的数据处理。
+// DeveloperModeEnabled 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1,
                decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -415,13 +415,13 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
         ui->developer_mode_enabled(ui->user) != 0;
 }
 
-// 中文说明：ValidHotkey()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// ValidHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ValidHotkey(const std::uint32_t key) noexcept {
     return key == 0 || (key < 256U && key != VK_ESCAPE &&
         !(key >= VK_LBUTTON && key <= VK_XBUTTON2));
 }
 
-// 中文说明：HotkeyName()：调用 `std::string()`、`std::to_string()`，结果用于完成该函数对应的数据处理。
+// HotkeyName 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::string HotkeyName(const std::uint32_t key) {
     if (key == 0) return "未设置";
     if (key >= '0' && key <= '9') return std::string(1, static_cast<char>(key));
@@ -471,7 +471,7 @@ ExitHotkeyResult RegisterExitHotkey(
     return ExitHotkeyResult::Failed;
 }
 
-// 中文说明：ReleaseExitHotkey()：调用 `InputReady()`、`release_hotkey()`，结果用于完成该函数对应的数据处理。
+// ReleaseExitHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ReleaseExitHotkey(Context& context) noexcept {
     if (context.exit_hotkey.id != 0 && InputReady(context.input)) {
         static_cast<void>(context.input->release_hotkey(context.input->user, context.exit_hotkey));
@@ -479,7 +479,7 @@ void ReleaseExitHotkey(Context& context) noexcept {
     context.exit_hotkey = {};
 }
 
-// 中文说明：ReplaceExitHotkey()：调用 `load()`、`RegisterExitHotkey()`、`release_hotkey()`、`store()`，结果用于完成该函数对应的数据处理。
+// ReplaceExitHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ReplaceExitHotkey(Context& context, const std::uint32_t key) noexcept {
     if (key == context.exit_hotkey_key.load(std::memory_order_acquire)) return true;
     AnomalyGenerationHandleV1 replacement{};
@@ -497,7 +497,7 @@ bool ReplaceExitHotkey(Context& context, const std::uint32_t key) noexcept {
     return true;
 }
 
-// 中文说明：CaptureExitHotkey()：调用 `was_pressed()`、`store()`、`ValidHotkey()`、`ReplaceExitHotkey()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// CaptureExitHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void CaptureExitHotkey(Context& context) noexcept {
     int pressed{};
     if (context.input->was_pressed(context.input->user, VK_ESCAPE, &pressed).code ==
@@ -516,7 +516,7 @@ void CaptureExitHotkey(Context& context) noexcept {
     }
 }
 
-// 中文说明：SignatureReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// SignatureReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
     return HasField<AnomalySignatureServiceV1,
                decltype(AnomalySignatureServiceV1::resolve)>(
@@ -524,7 +524,7 @@ bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
         s->resolve != nullptr;
 }
 
-// 中文说明：NamesReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// NamesReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
     return HasField<AnomalyUe5NamesServiceV1,
                decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -532,7 +532,7 @@ bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
         s->resolve_utf8 != nullptr;
 }
 
-// 中文说明：LandmarksReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// LandmarksReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
     return HasField<AnomalyNteMapLandmarksServiceV1,
                decltype(AnomalyNteMapLandmarksServiceV1::teleport)>(
@@ -541,7 +541,7 @@ bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
         s->snapshot_at != nullptr && s->teleport != nullptr;
 }
 
-// 中文说明：PlayerReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// PlayerReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool PlayerReady(const AnomalyNtePlayerServiceV1* s) noexcept {
     return HasField<AnomalyNtePlayerServiceV1,
                decltype(AnomalyNtePlayerServiceV1::snapshot)>(
@@ -550,7 +550,7 @@ bool PlayerReady(const AnomalyNtePlayerServiceV1* s) noexcept {
 }
 
 template <typename T>
-// 中文说明：Read()：调用 `std::memcpy()`、`__except()`，结果用于完成该函数对应的数据处理。
+// Read 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool Read(const void* address, T& value) noexcept {
     if (address == nullptr) return false;
     __try {
@@ -561,13 +561,13 @@ bool Read(const void* address, T& value) noexcept {
     }
 }
 
-// 中文说明：ReadPointer()：调用 `Read()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// ReadPointer 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void* ReadPointer(const void* address) noexcept {
     std::uintptr_t value{};
     return Read(address, value) ? reinterpret_cast<void*>(value) : nullptr;
 }
 
-// 中文说明：WriteFloatRaw()：调用 `__except()`，结果用于完成该函数对应的数据处理。
+// WriteFloatRaw 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool WriteFloatRaw(const std::uintptr_t address, const float value) noexcept {
     __try {
         *reinterpret_cast<float*>(address) = value;
@@ -638,7 +638,7 @@ std::string ObjectName(const AnomalyUe5NamesServiceV1* names,
     return ResolveName(names, name_id);
 }
 
-// 中文说明：RenderFName()：调用 `ResolveName()`、`std::to_string()`，结果用于完成该函数对应的数据处理。
+// RenderFName 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::string RenderFName(Context& context, const FNamePair& f) {
     std::string s = ResolveName(context.names, f.cmp);
     if (f.number != 0) {
@@ -686,7 +686,7 @@ bool FindFunction(const AnomalyUe5NamesServiceV1* names, const std::uintptr_t cl
     return false;
 }
 
-// 中文说明：Invoke()：调用 `void()`、`ReadPointer()`、`__except()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// Invoke 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool Invoke(void* object, void* function, void* parameters) noexcept {
     if (!object || !function) return false;
     using ProcessEvent = void(__fastcall*)(void*, void*, void*);
@@ -703,7 +703,7 @@ bool Invoke(void* object, void* function, void* parameters) noexcept {
     }
 }
 
-// 中文说明：GetPlayerState()：调用 `ResolveRipRelative()`、`Read()`、`MakeCombatHost()`、`combat::Reset()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// GetPlayerState 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool GetPlayerState(Context& context) noexcept {
     // 解析结果存在战斗状态机里（原 Context 的 g_world_address/player_state/controller/
     // cached_world）：插件其余部分与模块共用同一份缓存，和搬移前完全一致。
@@ -766,7 +766,7 @@ bool GetPlayerState(Context& context) noexcept {
     return true;
 }
 
-// 中文说明：SnapshotPlayerPosition()：调用 `PlayerReady()`、`snapshot()`，结果用于完成该函数对应的数据处理。
+// SnapshotPlayerPosition 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     if (!PlayerReady(context.player)) return false;
     AnomalyNtePlayerSnapshotV1 snapshot{sizeof(snapshot)};
@@ -781,14 +781,14 @@ bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     return true;
 }
 
-// 中文说明：EnsureGObjects()：调用 `ResolveRipRelative()`，结果用于完成该函数对应的数据处理。
+// EnsureGObjects 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool EnsureGObjects(Context& context) noexcept {
     if (context.combat_state.g_objects_address != 0) return true;
     return ResolveRipRelative(context.signature, kGObjectsPattern, kGObjectsAddend,
                               context.combat_state.g_objects_address);
 }
 
-// 中文说明：ActorsReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// ActorsReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ActorsReady(const AnomalyNteActorsServiceV1* s) noexcept {
     return HasField<AnomalyNteActorsServiceV1,
                decltype(AnomalyNteActorsServiceV1::frame)>(
@@ -796,7 +796,7 @@ bool ActorsReady(const AnomalyNteActorsServiceV1* s) noexcept {
         s->frame != nullptr && s->snapshot_at != nullptr && s->class_name_utf8 != nullptr;
 }
 
-// 中文说明：ScanMonsters()：调用 `std::fopen()`、`ActorsReady()`、`std::fprintf()`、`std::fclose()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// ScanMonsters 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ScanMonsters(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\monsters.txt", "w");
     if (fp == nullptr) return;
@@ -836,7 +836,7 @@ void ScanMonsters(Context& context) noexcept {
 }
 
 
-// 中文说明：ObjectAt()：调用 `EnsureGObjects()`、`Read()`、`ReadPointer()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// ObjectAt 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void* ObjectAt(Context& context, const std::uint32_t index) noexcept {
     if (!EnsureGObjects(context)) return nullptr;
     std::int32_t count{}, num_chunks{};
@@ -858,7 +858,7 @@ void* ObjectAt(Context& context, const std::uint32_t index) noexcept {
         static_cast<std::uintptr_t>(within) * kObjectItemStride);
 }
 
-// 中文说明：KillMonsters()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// KillMonsters 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void KillMonsters(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\kill-monsters.txt", "w");
     if (fp == nullptr) return;
@@ -956,7 +956,7 @@ void KillMonsters(Context& context) noexcept {
     std::fprintf(fp, "total=%d\n", killed);
     std::fclose(fp);
 }
-// 中文说明：DumpFunctionParams()：调用 `Read()`、`std::fprintf()`、`ResolveName()`、`c_str()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpFunctionParams 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpFunctionParams(Context& context, std::uintptr_t fn, std::FILE* fp) noexcept {
     std::uintptr_t prop{};
     if (!Read(reinterpret_cast<const void*>(fn + kUStructPropertyLinkOffset), prop) || prop == 0) {
@@ -991,7 +991,7 @@ void DumpFunctionParams(Context& context, std::uintptr_t fn, std::FILE* fp) noex
     }
 }
 
-// 中文说明：ScanGE()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ScanGE 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ScanGE(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\ge-classes.txt", "w");
     if (fp == nullptr) return;
@@ -1035,7 +1035,7 @@ void ScanGE(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpControllerDamageParams()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpControllerDamageParams 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpControllerDamageParams(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\controller-damage-params.txt", "w");
     if (fp == nullptr) return;
@@ -1126,7 +1126,7 @@ void MoveSystemCursor(std::int32_t vx, std::int32_t vy) noexcept;
 void SendMouseButton(bool down) noexcept;
 void DumpSettlementUI(Context& context) noexcept;
 
-// 中文说明：DumpNetTargetStruct()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpNetTargetStruct 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpNetTargetStruct(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\nettarget-struct.txt", "w");
     if (fp == nullptr) return;
@@ -1194,7 +1194,7 @@ void DumpNetTargetStruct(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpCharForNet()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpCharForNet 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpCharForNet(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\charfornet.txt", "w");
     if (fp == nullptr) return;
@@ -1290,7 +1290,7 @@ void DumpCharForNet(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpPlayerDamageFunc()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpPlayerDamageFunc 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpPlayerDamageFunc(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\player-damage-func.txt", "w");
     if (fp == nullptr) return;
@@ -1343,7 +1343,7 @@ void DumpPlayerDamageFunc(Context& context) noexcept {
 }
 
 
-// 中文说明：KillMonstersViaAnyDamage()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// KillMonstersViaAnyDamage 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void KillMonstersViaAnyDamage(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\kill-any-damage.txt", "w");
     if (fp == nullptr) return;
@@ -1436,7 +1436,7 @@ void KillMonstersViaAnyDamage(Context& context) noexcept {
 }
 
 
-// 中文说明：KillMonstersViaKillSelf()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// KillMonstersViaKillSelf 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void KillMonstersViaKillSelf(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\kill-self.txt", "w");
     if (fp == nullptr) return;
@@ -1492,7 +1492,7 @@ void KillMonstersViaKillSelf(Context& context) noexcept {
 }
 
 
-// 中文说明：KillMonstersViaDeathEvent()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// KillMonstersViaDeathEvent 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void KillMonstersViaDeathEvent(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\kill-death-event.txt", "w");
     if (fp == nullptr) return;
@@ -1566,7 +1566,7 @@ void KillMonstersViaDeathEvent(Context& context) noexcept {
 }
 
 
-// 中文说明：ApplyDamageViaNetTarget()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ApplyDamageViaNetTarget 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ApplyDamageViaNetTarget(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\nettarget-damage.txt", "w");
     if (fp == nullptr) return;
@@ -1668,7 +1668,7 @@ void ApplyDamageViaNetTarget(Context& context) noexcept {
 }
 
 
-// 中文说明：SetMonstersHPToOne()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// SetMonstersHPToOne 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SetMonstersHPToOne(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\set-hp-one.txt", "w");
     if (fp == nullptr) return;
@@ -1740,7 +1740,7 @@ void SetMonstersHPToOne(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpMonsterAttrSet()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpMonsterAttrSet 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpMonsterAttrSet(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\monster-attrset.txt", "w");
     if (fp == nullptr) return;
@@ -1833,7 +1833,7 @@ void DumpMonsterAttrSet(Context& context) noexcept {
 }
 
 
-// 中文说明：ScanMonsterHP()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ScanMonsterHP 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ScanMonsterHP(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\monster-hp-scan.txt", "w");
     if (fp == nullptr) return;
@@ -1894,7 +1894,7 @@ void ScanMonsterHP(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpMonsterHPValues()：调用 `std::fopen()`、`GetPlayerState()`、`EnsureGObjects()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpMonsterHPValues 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpMonsterHPValues(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\monster-hp-values.txt", "w");
     if (fp == nullptr) return;
@@ -1959,7 +1959,7 @@ void DumpMonsterHPValues(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpPlayerAttributeSet()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpPlayerAttributeSet 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpPlayerAttributeSet(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\player-attrset.txt", "w");
     if (fp == nullptr) return;
@@ -2034,7 +2034,7 @@ void DumpPlayerAttributeSet(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpAttributeValues()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpAttributeValues 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpAttributeValues(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\attr-values.txt", "w");
     if (fp == nullptr) return;
@@ -2114,7 +2114,7 @@ void DumpAttributeValues(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpHTAttrClass()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpHTAttrClass 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpHTAttrClass(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\ht-attr-class.txt", "w");
     if (fp == nullptr) return;
@@ -2198,7 +2198,7 @@ void DumpHTAttrClass(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpDamageAttrs()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpDamageAttrs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpDamageAttrs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\damage-attrs.txt", "w");
     if (fp == nullptr) return;
@@ -2281,7 +2281,7 @@ void DumpDamageAttrs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpHPAttrs()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpHPAttrs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpHPAttrs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\hp-attrs.txt", "w");
     if (fp == nullptr) return;
@@ -2365,7 +2365,7 @@ void DumpHPAttrs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpModifierAttr()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpModifierAttr 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpModifierAttr(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\modifier-attr.txt", "w");
     if (fp == nullptr) return;
@@ -2428,7 +2428,7 @@ void DumpModifierAttr(Context& context) noexcept {
 }
 
 
-// 中文说明：BoostPlayerDamage()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，写入运行时数据，结果用于完成该函数对应的数据处理。
+// BoostPlayerDamage 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void BoostPlayerDamage(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\player-damage-boost.txt", "w");
     if (fp == nullptr) return;
@@ -2481,7 +2481,7 @@ void BoostPlayerDamage(Context& context) noexcept {
 }
 
 
-// 中文说明：ApplyPlayerDamageBuff()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ApplyPlayerDamageBuff 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ApplyPlayerDamageBuff(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\player-buff.txt", "w");
     if (fp == nullptr) return;
@@ -2557,7 +2557,7 @@ void ApplyPlayerDamageBuff(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpPlayerFuncs()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpPlayerFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpPlayerFuncs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\player-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -2630,7 +2630,7 @@ void DumpPlayerFuncs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpMonsterParams()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpMonsterParams 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpMonsterParams(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\monster-params.txt", "w");
     if (fp == nullptr) return;
@@ -2707,7 +2707,7 @@ void DumpMonsterParams(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpStructFields()：调用 `Read()`、`std::fputs()`、`ResolveName()`、`std::fprintf()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpStructFields 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpStructFields(Context& context, std::uintptr_t s, std::FILE* fp, int depth) noexcept {
     if (depth > 4) return;
     const char* pad = "    ";
@@ -2782,7 +2782,7 @@ void DumpStructFields(Context& context, std::uintptr_t s, std::FILE* fp, int dep
 }
 
 
-// 中文说明：DumpModifyDataStruct()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpModifyDataStruct 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpModifyDataStruct(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\modify-data-struct.txt", "w");
     if (fp == nullptr) return;
@@ -2871,7 +2871,7 @@ void DumpModifyDataStruct(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpGEStruct()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpGEStruct 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpGEStruct(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\ge-struct.txt", "w");
     if (fp == nullptr) return;
@@ -2929,7 +2929,7 @@ void DumpGEStruct(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpScriptStruct()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpScriptStruct 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpScriptStruct(Context& context, const char* name) noexcept {
     std::FILE* fp = std::fopen("D:\\script-struct.txt", "a");
     if (fp == nullptr) return;
@@ -2972,7 +2972,7 @@ void DumpScriptStruct(Context& context, const char* name) noexcept {
     std::fclose(fp);
 }
 
-// 中文说明：DumpModifierInfo()：调用 `std::fopen()`、`std::fclose()`、`DumpScriptStruct()`，结果用于完成该函数对应的数据处理。
+// DumpModifierInfo 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpModifierInfo(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\script-struct.txt", "w");
     if (fp != nullptr) std::fclose(fp);
@@ -2981,7 +2981,7 @@ void DumpModifierInfo(Context& context) noexcept {
 }
 
 
-// 中文说明：ReadFString()：调用 `Read()`、`reserve()`、`push_back()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ReadFString 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::string ReadFString(Context& context, const std::uintptr_t addr) noexcept {
     std::uintptr_t data{};
     std::int32_t num{};
@@ -3000,7 +3000,7 @@ std::string ReadFString(Context& context, const std::uintptr_t addr) noexcept {
     return out;
 }
 
-// 中文说明：DumpModifiers()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpModifiers 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpModifiers(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\ge-modifiers.txt", "w");
     if (fp == nullptr) return;
@@ -3088,7 +3088,7 @@ void DumpModifiers(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpClassFuncs()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpClassFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpClassFuncs(Context& context, const char* class_name) noexcept {
     std::FILE* fp = std::fopen("D:\\class-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -3169,7 +3169,7 @@ void DumpClassFuncs(Context& context, const char* class_name) noexcept {
 }
 
 
-// 中文说明：FindDataAsset()：调用 `EnsureGObjects()`、`Read()`、`ObjectName()`、`std::string()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// FindDataAsset 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::uintptr_t FindDataAsset(Context& context) noexcept {
     if (!EnsureGObjects(context)) return 0;
     std::int32_t count{}, num_chunks{};
@@ -3268,7 +3268,7 @@ bool ReadSubInfo(Context& context, const FNamePair& sub, std::uint8_t& out_type,
                  std::int32_t* out_team) noexcept;
 void SaveCache(Context& context) noexcept;
 
-// 中文说明：LoadEntries()：调用 `FindDataAsset()`、`Read()`、`ReadDataTable()`、`std::move()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// LoadEntries 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool LoadEntries(Context& context) noexcept {
     const std::uintptr_t da = FindDataAsset(context);
     if (da == 0) return false;
@@ -3318,7 +3318,7 @@ bool LoadEntries(Context& context) noexcept {
     SaveCache(context);
     return true;
 }
-// 中文说明：SaveCache()：调用 `std::fopen()`、`c_str()`、`std::fwrite()`、`size()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// SaveCache 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SaveCache(Context& context) noexcept {
     std::FILE* fp = std::fopen(context.cache_path.c_str(), "wb");
     if (fp == nullptr) return;
@@ -3350,7 +3350,7 @@ void SaveCache(Context& context) noexcept {
     std::fclose(fp);
 }
 
-// 中文说明：LoadCache()：调用 `std::fopen()`、`c_str()`、`std::fread()`、`std::fclose()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// LoadCache 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool LoadCache(Context& context) noexcept {
     std::FILE* fp = std::fopen(context.cache_path.c_str(), "rb");
     if (fp == nullptr) return false;
@@ -3482,7 +3482,7 @@ bool ReadSubInfo(Context& context, const FNamePair& sub, std::uint8_t& out_type,
     return false;
 }
 
-// 中文说明：DumpStructure()：调用 `LoadEntries()`、`std::fopen()`、`std::fprintf()`、`size()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpStructure 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpStructure(Context& context) noexcept {
     if (!context.entries_loaded) {
         static_cast<void>(LoadEntries(context));
@@ -3551,7 +3551,7 @@ bool TeleportToLandmark(Context& context, const std::string_view target_id,
     return status.code == ANOMALY_STATUS_V1_OK;
 }
 
-// 中文说明：DoEnterClone()：调用 `GetPlayerState()`、`Read()`、`FindFunction()`、`LoadEntries()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// DoEnterClone 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool DoEnterClone(Context& context) noexcept {
     if (!GetPlayerState(context)) return false;
     std::uintptr_t ps_cls{};
@@ -3634,7 +3634,7 @@ bool DoEnterClone(Context& context) noexcept {
                   reinterpret_cast<void*>(fn), p);
 }
 
-// 中文说明：ExitClone()：调用 `GetPlayerState()`、`Read()`、`FindFunction()`、`Invoke()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ExitClone 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ExitClone(Context& context) noexcept {
     if (!GetPlayerState(context)) return;
     std::uintptr_t ps_cls{};
@@ -3654,7 +3654,7 @@ void ExitClone(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpPlayerStateFuncs()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpPlayerStateFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpPlayerStateFuncs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\player-state-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -3702,7 +3702,7 @@ void DumpPlayerStateFuncs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpCloneRPCParams()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpCloneRPCParams 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpCloneRPCParams(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\clone-rpc-params.txt", "w");
     if (fp == nullptr) return;
@@ -3768,7 +3768,7 @@ void DumpCloneRPCParams(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpCloneEnums()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpCloneEnums 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpCloneEnums(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\clone-enums.txt", "w");
     if (fp == nullptr) return;
@@ -3822,7 +3822,7 @@ void DumpCloneEnums(Context& context) noexcept {
 }
 
 
-// 中文说明：ScanCloneClasses()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ScanCloneClasses 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ScanCloneClasses(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\clone-classes.txt", "w");
     if (fp == nullptr) return;
@@ -3866,7 +3866,7 @@ void ScanCloneClasses(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpCloneManagerFuncs()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpCloneManagerFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpCloneManagerFuncs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\clone-manager-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -3944,7 +3944,7 @@ void DumpCloneManagerFuncs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpEnumValues()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpEnumValues 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpEnumValues(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\enum-values.txt", "w");
     if (fp == nullptr) return;
@@ -4018,7 +4018,7 @@ void DumpEnumValues(Context& context) noexcept {
 }
 
 
-// 中文说明：TriggerPassPermitAward()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// TriggerPassPermitAward 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void TriggerPassPermitAward(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\passpermit-award.txt", "w");
     if (fp == nullptr) return;
@@ -4042,7 +4042,7 @@ void TriggerPassPermitAward(Context& context) noexcept {
 }
 
 
-// 中文说明：ActivateSkill()：调用 `std::fopen()`、`std::fprintf()`、`std::fclose()`，结果用于完成该函数对应的数据处理。
+// ActivateSkill 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ActivateSkill(Context& context) noexcept {
     // 调试入口：直接 ProcessEvent 调用 ActivateAbilityFromID。
     std::FILE* fp = std::fopen("D:\\activate-skill.txt", "w");
@@ -4054,7 +4054,7 @@ void ActivateSkill(Context& context) noexcept {
 }
 
 
-// 中文说明：ActivateSkillByInputId()：调用 `host()`、`get()`、`decltype()`、`offsetof()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// ActivateSkillByInputId 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ActivateSkillByInputId(Context& context, std::int32_t input_id) noexcept {
     if (context.host == nullptr) return false;
     const anomaly::sdk::Host host(context.host);
@@ -4161,7 +4161,7 @@ bool InputFieldOffset(Context& context, std::uintptr_t owner,
     return false;
 }
 
-// 中文说明：ResolveNormalAttackInput()：调用 `GetPlayerState()`、`Read()`、`FindFunction()`、`FindWidgetProperty()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ResolveNormalAttackInput 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ResolveNormalAttackInput(Context& context) {
     if (!GetPlayerState(context)) {
         context.combat_status = "普攻输入：等待玩家";
@@ -4228,7 +4228,7 @@ bool ResolveNormalAttackInput(Context& context) {
     return true;
 }
 
-// 中文说明：InvokeNormalAttack()：调用 `ResolveNormalAttackInput()`、`alignas()`、`Invoke()`、`data()`，结果用于完成该函数对应的数据处理。
+// InvokeNormalAttack 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool InvokeNormalAttack(Context& context) {
     if (!ResolveNormalAttackInput(context)) return false;
     const auto& binding = context.combat_state.normal_attack;
@@ -4246,7 +4246,7 @@ bool InvokeNormalAttack(Context& context) {
 
 void LogRewardDiagnostic(Context& context, const std::string& message);
 
-// 中文说明：TryGetCurrentCloneId()：调用 `GetPlayerState()`、`Read()`、`FindFunction()`、`Invoke()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// TryGetCurrentCloneId 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool TryGetCurrentCloneId(Context& context, std::uint64_t& id) noexcept {
     if (!GetPlayerState(context)) return false;
     if (context.get_cur_clone_id_fn == 0) {
@@ -4265,7 +4265,7 @@ bool TryGetCurrentCloneId(Context& context, std::uint64_t& id) noexcept {
     return true;
 }
 
-// 中文说明：GetCurrentCloneId()：调用 `TryGetCurrentCloneId()`，结果用于完成该函数对应的数据处理。
+// GetCurrentCloneId 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::uint64_t GetCurrentCloneId(Context& context) noexcept {
     std::uint64_t id{};
     static_cast<void>(TryGetCurrentCloneId(context, id));
@@ -4273,7 +4273,7 @@ std::uint64_t GetCurrentCloneId(Context& context) noexcept {
 }
 
 
-// 中文说明：CombatDistanceSquared()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// CombatDistanceSquared 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 double CombatDistanceSquared(const double* from, const double* to) noexcept {
     const double dx = to[0] - from[0];
     const double dy = to[1] - from[1];
@@ -4281,7 +4281,7 @@ double CombatDistanceSquared(const double* from, const double* to) noexcept {
     return dx * dx + dy * dy + dz * dz;
 }
 
-// 中文说明：DumpCombatTarget()：调用 `std::fopen()`、`std::fprintf()`、`std::fclose()`，结果用于完成该函数对应的数据处理。
+// DumpCombatTarget 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpCombatTarget(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\combat-target.txt", "w");
     if (fp != nullptr) {
@@ -4291,7 +4291,7 @@ void DumpCombatTarget(Context& context) noexcept {
     (void)context;
 }
 
-// 中文说明：DumpMonsterClasses()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpMonsterClasses 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpMonsterClasses(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\monster-classes.txt", "w");
     if (fp == nullptr) return;
@@ -4335,7 +4335,7 @@ void DumpMonsterClasses(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpCloneMonsterInfo()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpCloneMonsterInfo 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpCloneMonsterInfo(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\clone-monster-info.txt", "w");
     if (fp == nullptr) return;
@@ -4414,7 +4414,7 @@ void DumpCloneMonsterInfo(Context& context) noexcept {
 }
 
 
-// 中文说明：ScanMonsterAssets()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ScanMonsterAssets 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ScanMonsterAssets(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\monster-assets.txt", "w");
     if (fp == nullptr) return;
@@ -4461,7 +4461,7 @@ void ScanMonsterAssets(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpEntityClasses()：调用 `std::fopen()`、`std::fprintf()`、`std::fclose()`、`frame()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpEntityClasses 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpEntityClasses(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\entity-classes.txt", "w");
     if (fp == nullptr) return;
@@ -4509,7 +4509,7 @@ void DumpEntityClasses(Context& context) noexcept {
 }
 
 
-// 中文说明：FindChestActor()：调用 `frame()`、`snapshot_at()`、`class_name_utf8()`、`cn()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// FindChestActor 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::uintptr_t FindChestActor(Context& context, double* position) noexcept {
     const auto* ents = context.entities;
     if (ents == nullptr || ents->frame == nullptr || ents->snapshot_at == nullptr ||
@@ -4555,7 +4555,7 @@ std::uintptr_t FindChestActor(Context& context, double* position) noexcept {
 }
 
 
-// 中文说明：FindChestPos()：调用 `frame()`、`snapshot_at()`、`class_name_utf8()`、`cn()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// FindChestPos 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool FindChestPos(Context& context, double (&pos)[3]) noexcept {
     const auto* ents = context.entities;
     if (ents == nullptr || ents->frame == nullptr || ents->snapshot_at == nullptr ||
@@ -4597,7 +4597,7 @@ bool QueryWidgetBool(Context& context, std::uintptr_t object,
     return true;
 }
 
-// 中文说明：LogRewardDiagnostic()：调用 `log()`、`anomaly::sdk::StringView()`，结果用于完成该函数对应的数据处理。
+// LogRewardDiagnostic 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void LogRewardDiagnostic(Context& context, const std::string& message) {
     if (context.core != nullptr && context.core->log != nullptr) {
         context.core->log(context.core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO,
@@ -4605,7 +4605,7 @@ void LogRewardDiagnostic(Context& context, const std::string& message) {
     }
 }
 
-// 中文说明：IsActiveRewardWidget()：调用 `QueryWidgetBool()`、`Read()`、`LogRewardDiagnostic()`、`ObjectName()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// IsActiveRewardWidget 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool IsActiveRewardWidget(Context& context, std::uintptr_t object, bool diagnose = false) noexcept {
     bool active{}, visible{};
     const bool queried_active = QueryWidgetBool(context, object, "IsActivated", active);
@@ -4638,7 +4638,7 @@ struct RewardWindows {
     const char* reason{"not started"};
 };
 
-// 中文说明：FindRewardWindows()：调用 `std::chrono::steady_clock::now()`、`std::snprintf()`、`LogRewardDiagnostic()`、`std::string()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// FindRewardWindows 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 RewardWindows FindRewardWindows(Context& context, bool diagnose = false) {
     RewardWindows result;
     const auto now = std::chrono::steady_clock::now();
@@ -4748,19 +4748,19 @@ RewardWindows FindRewardWindows(Context& context, bool diagnose = false) {
     return finish("complete");
 }
 
-// 中文说明：FindAwardUI()：调用 `FindRewardWindows()`，结果用于完成该函数对应的数据处理。
+// FindAwardUI 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::uintptr_t FindAwardUI(Context& context) noexcept {
     const auto windows = FindRewardWindows(context);
     return windows.complete && !windows.ambiguous ? windows.award : 0;
 }
 
-// 中文说明：IsAwardUIVisible()：调用 `FindAwardUI()`，结果用于完成该函数对应的数据处理。
+// IsAwardUIVisible 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool IsAwardUIVisible(Context& context) noexcept {
     return FindAwardUI(context) != 0;
 }
 
 
-// 中文说明：FindSettlementUI()：调用 `FindRewardWindows()`，结果用于完成该函数对应的数据处理。
+// FindSettlementUI 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::uintptr_t FindSettlementUI(Context& context) noexcept {
     const auto windows = FindRewardWindows(context);
     return windows.complete && !windows.ambiguous ? windows.settlement : 0;
@@ -4805,7 +4805,7 @@ std::uintptr_t FindWidgetProperty(Context& context, std::uintptr_t object,
 
 enum class RewardClickResult { Invoked, Waiting, Unavailable, Fault };
 
-// 中文说明：RewardButtonVisible()：调用 `QueryWidgetBool()`、`Read()`、`FindFunction()`、`Invoke()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// RewardButtonVisible 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool RewardButtonVisible(Context& context, std::uintptr_t button, bool& visible) {
     visible = false;
     auto widget = button;
@@ -4827,7 +4827,7 @@ bool RewardButtonVisible(Context& context, std::uintptr_t button, bool& visible)
     return false;
 }
 
-// 中文说明：SelectRewardButton()：调用 `FindWidgetProperty()`、`RewardButtonVisible()`、`std::string()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// SelectRewardButton 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 const char* SelectRewardButton(Context& context, const RewardWindows& windows, bool prefer_double) {
     // A visible but disabled double button remains the requested reward mode.
     const std::array<const char*, 2> candidates = prefer_double
@@ -4936,7 +4936,7 @@ RewardClickResult ClickRewardButton(Context& context, std::uintptr_t window,
     return RewardClickResult::Invoked;
 }
 
-// 中文说明：ExitSettlement()：调用 `FindSettlementUI()`、`ClickRewardButton()`，结果用于完成该函数对应的数据处理。
+// ExitSettlement 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ExitSettlement(Context& context) noexcept {
     const std::uintptr_t ui_obj = FindSettlementUI(context);
     if (ui_obj == 0) {
@@ -4947,7 +4947,7 @@ void ExitSettlement(Context& context) noexcept {
 }
 
 
-// 中文说明：ClaimReward()：调用 `FindRewardWindows()`、`std::string()`、`SelectRewardButton()`、`ClickRewardButton()`，结果用于完成该函数对应的数据处理。
+// ClaimReward 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ClaimReward(Context& context, std::int32_t index) noexcept {
     const auto windows = FindRewardWindows(context, true);
     if (!windows.complete) {
@@ -4967,7 +4967,7 @@ void ClaimReward(Context& context, std::int32_t index) noexcept {
 }
 
 
-// 中文说明：DumpChestChoices()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpChestChoices 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpChestChoices(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\chest-choices.txt", "w");
     if (fp == nullptr) return;
@@ -5058,7 +5058,7 @@ void DumpChestChoices(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpChestFuncs()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpChestFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpChestFuncs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\chest-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -5138,7 +5138,7 @@ void DumpChestFuncs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpRewardParams()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpRewardParams 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpRewardParams(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\reward-params.txt", "w");
     if (fp == nullptr) return;
@@ -5219,7 +5219,7 @@ void DumpRewardParams(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpAwardFuncs()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpAwardFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpAwardFuncs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\award-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -5266,7 +5266,7 @@ void DumpAwardFuncs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpAwardUIFuncs()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpAwardUIFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpAwardUIFuncs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\award-ui-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -5343,7 +5343,7 @@ void DumpAwardUIFuncs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpAwardUI()：调用 `std::fopen()`、`EnsureGObjects()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpAwardUI 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpAwardUI(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\award-ui.txt", "w");
     if (fp == nullptr) return;
@@ -5389,7 +5389,7 @@ void DumpAwardUI(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpAwardWidgets()：调用 `std::fopen()`、`FindAwardUI()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpAwardWidgets 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpAwardWidgets(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\award-widgets.txt", "w");
     if (fp == nullptr) return;
@@ -5440,7 +5440,7 @@ void DumpAwardWidgets(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpSettlementUI()：调用 `std::fopen()`、`FindSettlementUI()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpSettlementUI 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpSettlementUI(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\settlement-ui.txt", "w");
     if (fp == nullptr) return;
@@ -5491,7 +5491,7 @@ void DumpSettlementUI(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpBtnParams()：调用 `std::fopen()`、`FindAwardUI()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpBtnParams 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpBtnParams(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\btn-params.txt", "w");
     if (fp == nullptr) return;
@@ -5580,7 +5580,7 @@ void DumpBtnParams(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpControllerClickFuncs()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpControllerClickFuncs 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpControllerClickFuncs(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\controller-click-funcs.txt", "w");
     if (fp == nullptr) return;
@@ -5622,7 +5622,7 @@ void DumpControllerClickFuncs(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpBtnGeometry()：调用 `std::fopen()`、`FindAwardUI()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpBtnGeometry 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpBtnGeometry(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\btn-geometry.txt", "w");
     if (fp == nullptr) return;
@@ -5660,7 +5660,7 @@ void DumpBtnGeometry(Context& context) noexcept {
 }
 
 
-// 中文说明：DumpClickParams()：调用 `std::fopen()`、`GetPlayerState()`、`std::fprintf()`、`std::fclose()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// DumpClickParams 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void DumpClickParams(Context& context) noexcept {
     std::FILE* fp = std::fopen("D:\\click-params.txt", "w");
     if (fp == nullptr) return;
@@ -5746,7 +5746,7 @@ void DumpClickParams(Context& context) noexcept {
 }
 
 
-// 中文说明：GetPluginDir()：调用 `GetModuleHandleExW()`、`GetModuleFileNameW()`、`ws()`、`find_last_of()`，结果用于完成该函数对应的数据处理。
+// GetPluginDir 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::string GetPluginDir() noexcept {
     HMODULE mod = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -5770,7 +5770,7 @@ std::string GetPluginDir() noexcept {
 }
 
 
-// 中文说明：GetConfigDir()：调用 `GetPluginDir()`、`size()`、`substr()`、`tolower()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// GetConfigDir 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::string GetConfigDir() noexcept {
     std::string dir = GetPluginDir();
     if (dir.size() >= 4 && dir[0] == '\\' && dir[1] == '\\' &&
@@ -5792,7 +5792,7 @@ std::string GetConfigDir() noexcept {
 }
 
 
-// 中文说明：GetClientSize()：调用 `FindWindowW()`、`GetForegroundWindow()`、`GetClientRect()`，结果用于完成该函数对应的数据处理。
+// GetClientSize 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void GetClientSize(std::int32_t& w, std::int32_t& h) noexcept {
     HWND hwnd = FindWindowW(L"UnrealWindow", nullptr);
     if (hwnd == nullptr) hwnd = GetForegroundWindow();
@@ -5805,7 +5805,7 @@ void GetClientSize(std::int32_t& w, std::int32_t& h) noexcept {
 }
 
 
-// 中文说明：SaveClickConfig()：调用 `GetConfigDir()`、`std::fopen()`、`c_str()`、`std::fprintf()`，结果用于完成该函数对应的数据处理。
+// SaveClickConfig 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SaveClickConfig(const Context& context) noexcept {
     const std::string path = GetConfigDir() + "\\config-click.txt";
     std::FILE* fp = std::fopen(path.c_str(), "w");
@@ -5817,7 +5817,7 @@ void SaveClickConfig(const Context& context) noexcept {
 }
 
 
-// 中文说明：LoadClickConfig()：调用 `GetConfigDir()`、`std::fopen()`、`c_str()`、`std::fscanf()`，结果用于完成该函数对应的数据处理。
+// LoadClickConfig 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void LoadClickConfig(Context& context) noexcept {
     const std::string path = GetConfigDir() + "\\config-click.txt";
     std::FILE* fp = std::fopen(path.c_str(), "r");
@@ -5855,7 +5855,7 @@ void LoadClickConfig(Context& context) noexcept {
 }
 
 
-// 中文说明：GetEffectiveClickPos()：调用 `GetClientSize()`，结果用于完成该函数对应的数据处理。
+// GetEffectiveClickPos 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void GetEffectiveClickPos(const Context& context, std::int32_t& x, std::int32_t& y) noexcept {
     x = context.click_x;
     y = context.click_y;
@@ -5871,7 +5871,7 @@ void GetEffectiveClickPos(const Context& context, std::int32_t& x, std::int32_t&
 }
 
 
-// 中文说明：GetEffectiveClaimPos()：调用 `GetClientSize()`，结果用于完成该函数对应的数据处理。
+// GetEffectiveClaimPos 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void GetEffectiveClaimPos(const Context& context, std::int32_t& x, std::int32_t& y) noexcept {
     if (context.auto_claim_is_weekly && context.weekly_click_x != 0) {
         x = context.weekly_click_x;
@@ -5890,7 +5890,7 @@ void GetEffectiveClaimPos(const Context& context, std::int32_t& x, std::int32_t&
 }
 
 
-// 中文说明：RecordMousePos()：调用 `GetPlayerState()`、`Read()`、`FindFunction()`、`Invoke()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// RecordMousePos 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void RecordMousePos(Context& context) noexcept {
     if (!GetPlayerState(context)) { context.combat_status = "无玩家"; return; }
     std::uintptr_t cc{};
@@ -5918,7 +5918,7 @@ void RecordMousePos(Context& context) noexcept {
 }
 
 
-// 中文说明：RecordExitPos()：调用 `GetPlayerState()`、`Read()`、`FindFunction()`、`Invoke()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// RecordExitPos 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void RecordExitPos(Context& context) noexcept {
     if (!GetPlayerState(context)) { context.combat_status = "无玩家"; return; }
     std::uintptr_t cc{};
@@ -5948,7 +5948,7 @@ void RecordExitPos(Context& context) noexcept {
 }
 
 
-// 中文说明：LoadExitConfig()：调用 `GetConfigDir()`、`std::fopen()`、`c_str()`、`std::fscanf()`，结果用于完成该函数对应的数据处理。
+// LoadExitConfig 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void LoadExitConfig(Context& context) noexcept {
     const std::string epath = GetConfigDir() + "\\config-exit.txt";
     std::FILE* fp = std::fopen(epath.c_str(), "r");
@@ -5983,7 +5983,7 @@ void LoadExitConfig(Context& context) noexcept {
 }
 
 
-// 中文说明：RecordWeeklyPos()：调用 `GetPlayerState()`、`Read()`、`FindFunction()`、`Invoke()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// RecordWeeklyPos 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void RecordWeeklyPos(Context& context) noexcept {
     if (!GetPlayerState(context)) { context.combat_status = "无玩家"; return; }
     std::uintptr_t cc{};
@@ -6013,7 +6013,7 @@ void RecordWeeklyPos(Context& context) noexcept {
 }
 
 
-// 中文说明：LoadWeeklyConfig()：调用 `GetConfigDir()`、`std::fopen()`、`c_str()`、`std::fscanf()`，结果用于完成该函数对应的数据处理。
+// LoadWeeklyConfig 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void LoadWeeklyConfig(Context& context) noexcept {
     const std::string wpath = GetConfigDir() + "\\config-weekly.txt";
     std::FILE* fp = std::fopen(wpath.c_str(), "r");
@@ -6031,7 +6031,7 @@ void LoadWeeklyConfig(Context& context) noexcept {
 }
 
 
-// 中文说明：MoveSystemCursor()：调用 `FindWindowW()`、`GetForegroundWindow()`、`ClientToScreen()`、`SetCursorPos()`；修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// MoveSystemCursor 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void MoveSystemCursor(std::int32_t vx, std::int32_t vy) noexcept {
     HWND hwnd = FindWindowW(L"UnrealWindow", nullptr);
     if (hwnd == nullptr) hwnd = GetForegroundWindow();
@@ -6042,7 +6042,7 @@ void MoveSystemCursor(std::int32_t vx, std::int32_t vy) noexcept {
 }
 
 
-// 中文说明：SendMouseButton()：调用 `FindWindowW()`、`GetForegroundWindow()`、`GetCursorPos()`、`ScreenToClient()`，结果用于完成该函数对应的数据处理。
+// SendMouseButton 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SendMouseButton(bool down) noexcept {
     HWND hwnd = FindWindowW(L"UnrealWindow", nullptr);
     if (hwnd == nullptr) hwnd = GetForegroundWindow();
@@ -6059,7 +6059,7 @@ void SendMouseButton(bool down) noexcept {
 }
 
 
-// 中文说明：SendKeyF()：调用 `FindWindowW()`、`GetForegroundWindow()`、`PostMessageW()`，结果用于完成该函数对应的数据处理。
+// SendKeyF 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SendKeyF(bool down) noexcept {
     HWND hwnd = FindWindowW(L"UnrealWindow", nullptr);
     if (hwnd == nullptr) hwnd = GetForegroundWindow();
@@ -6072,7 +6072,7 @@ void SendKeyF(bool down) noexcept {
 }
 
 
-// 中文说明：SimulateClick()：调用 `GetPlayerState()`、`Read()`、`GetEffectiveClickPos()`、`FindFunction()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// SimulateClick 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SimulateClick(Context& context) noexcept {
     if (!GetPlayerState(context)) { context.combat_status = "无玩家"; return; }
     std::uintptr_t cc{};
@@ -6113,7 +6113,7 @@ void SimulateClick(Context& context) noexcept {
 }
 
 
-// 中文说明：StopAutoClaim()：调用 `LogRewardDiagnostic()`，结果用于完成该函数对应的数据处理。
+// StopAutoClaim 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void StopAutoClaim(Context& context, const std::string& reason) noexcept {
     context.auto_claim_active = false;
     context.auto_claim_succeeded = false;
@@ -6122,7 +6122,7 @@ void StopAutoClaim(Context& context, const std::string& reason) noexcept {
     LogRewardDiagnostic(context, "autoclaim stop: " + reason);
 }
 
-// 中文说明：StartAutoClaim()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// StartAutoClaim 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void StartAutoClaim(Context& context) noexcept {
     context.auto_claim_active = true;
     context.auto_claim_succeeded = false;
@@ -6162,7 +6162,7 @@ bool TriggerRewardChest(Context& context, std::uintptr_t chest,
     return true;
 }
 
-// 中文说明：OpenRewardWindow()：调用 `stop_movement()`、`store()`、`MakeCombatHost()`、`combat::Reset()`，结果用于完成该函数对应的数据处理。
+// OpenRewardWindow 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void OpenRewardWindow(Context& context) {
     const bool moving_to_chest = context.auto_claim_active &&
         context.auto_claim_nav_deadline != std::chrono::steady_clock::time_point{};
@@ -6235,7 +6235,7 @@ constexpr double kTeleportChestZOffset = 200.0;
 
 // 开发者模式下代替寻路：直接传送到目标点。world/player 句柄取自当前快照，
 // 过期句柄由 Host 拒绝，不暴露 UE 对象指针。
-// 中文说明：TeleportToPosition()：调用 `anomaly::sdk::Host()`、`get()`、`snapshot()`、`teleport()`，结果用于完成该函数对应的数据处理。
+// TeleportToPosition 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool TeleportToPosition(Context& context, const double (&position)[3]) noexcept {
     if (context.session == nullptr) {
         // session 服务可能晚于插件加载才发布（加载时世界还没初始化），惰性重试。
@@ -6276,7 +6276,7 @@ constexpr double kAutoClaimApproachRangeCm = 300.0;
 // 原先的 15 次余量太薄，所以放宽。
 constexpr std::uint32_t kAutoClaimWaitPolls = 25;
 
-// 中文说明：AutoClaimTick()：调用 `std::chrono::steady_clock::now()`、`StopAutoClaim()`、`GetPlayerState()`、`std::chrono::seconds()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// AutoClaimTick 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void AutoClaimTick(Context& context) noexcept {
     if (!context.auto_claim_active) return;
     const auto now = std::chrono::steady_clock::now();
@@ -6504,7 +6504,7 @@ void AutoClaimTick(Context& context) noexcept {
 // 是同一个 5：模块负责计数，这里只负责跨过它）。
 constexpr std::uint32_t kOneKeyNoMonsterSeconds = 5;
 
-// 中文说明：OneKeyTick()：调用 `GetPlayerState()`、`std::chrono::steady_clock::now()`、`store()`、`std::chrono::seconds()`，结果用于完成该函数对应的数据处理。
+// OneKeyTick 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void OneKeyTick(Context& context) noexcept {
     if (!context.one_key_active) return;
     if (!GetPlayerState(context)) { context.combat_status = "一键副本：无玩家"; return; }
@@ -6638,7 +6638,7 @@ void OneKeyTick(Context& context) noexcept {
 }
 
 
-// 中文说明：TestAttackTick()：调用 `std::chrono::steady_clock::now()`、`InvokeNormalAttack()`、`LogRewardDiagnostic()`、`std::chrono::milliseconds()`，结果用于完成该函数对应的数据处理。
+// TestAttackTick 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void TestAttackTick(Context& context) noexcept {
     if (!context.test_attack_waiting) return;
     const auto now = std::chrono::steady_clock::now();
@@ -6659,7 +6659,7 @@ void TestAttackTick(Context& context) noexcept {
 
 }  // namespace
 
-// 中文说明：Load()：调用 `new()`、`std::fopen()`、`std::fprintf()`、`GetConfigDir()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// Load 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (!host || !plugin_context || host->api_major != ANOMALY_PLUGIN_API_V1_MAJOR) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -6757,7 +6757,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：调用 `load()`、`RegisterExitHotkey()`、`store()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// Start 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (!plugin_context) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -6772,7 +6772,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `store()`、`ReleaseExitHotkey()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// Stop 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     if (!plugin_context) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -6783,7 +6783,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// Unload 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ANOMALY_CALL Unload(void* plugin_context) {
     delete static_cast<Context*>(plugin_context);
 }
@@ -6791,12 +6791,12 @@ void ANOMALY_CALL Unload(void* plugin_context) {
 // 模块把「普攻打不出来」和「等服务/等位置/等目标数据」都并进了 unavailable，而原实现
 // 只对前者关掉总开关并结束副本。模块用 `State::attack_failed` 把前者单独标出来（每帧重算），
 // 这里直接读它——不要用回显的状态文本判断，那会把模块的措辞变成隐性契约。
-// 中文说明：CombatAttackUnavailable()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// CombatAttackUnavailable 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool CombatAttackUnavailable(const Context& context) {
     return context.combat_state.attack_failed;
 }
 
-// 中文说明：Update()：调用 `store()`、`DeveloperModeEnabled()`、`exchange()`、`OpenRewardWindow()`；修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// Update 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ANOMALY_CALL Update(void* plugin_context, const double /*delta_seconds*/) {
     if (!plugin_context) return;
     auto& context = *static_cast<Context*>(plugin_context);
@@ -7212,7 +7212,7 @@ void ANOMALY_CALL Update(void* plugin_context, const double /*delta_seconds*/) {
     TestAttackTick(context);
 }
 
-// 中文说明：Draw()：调用 `anomaly::sdk::Host()`、`get()`、`store()`、`DeveloperModeEnabled()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// Draw 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
     if (!plugin_context) return;
     auto& context = *static_cast<Context*>(plugin_context);
