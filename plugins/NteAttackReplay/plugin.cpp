@@ -178,16 +178,27 @@ std::string ReadAbilityPath(
 
 std::string ReadDamageSourceName(
     const AnomalyNteCombatServiceV1* combat,
-    uint64_t source_id) {
-    if (combat == nullptr || combat->source_name_utf8 == nullptr || source_id == 0) return {};
+    const AnomalyNteCombatEventV1& event) {
+    // The unified combat stream exposes the event's DamageSource name through
+    // event_name_utf8(event). name_id is not the source_id accepted by
+    // source_name_utf8, so passing name_id to source_name_utf8 can silently
+    // lose the skill correlation and incorrectly fall back to normal input.
+    if (combat == nullptr || combat->event_name_utf8 == nullptr || event.name_id == 0) {
+        return {};
+    }
     size_t size = 0;
-    const auto sizing = combat->source_name_utf8(combat->user, source_id, nullptr, &size);
+    const auto sizing = combat->event_name_utf8(
+        combat->user, &event, nullptr, &size);
     if (sizing.code != ANOMALY_STATUS_V1_OK &&
-        sizing.code != ANOMALY_STATUS_V1_BUFFER_TOO_SMALL) return {};
+        sizing.code != ANOMALY_STATUS_V1_BUFFER_TOO_SMALL) {
+        return {};
+    }
     if (size == 0) return {};
     std::string result(size, '\0');
-    if (combat->source_name_utf8(
-            combat->user, source_id, result.data(), &size).code != ANOMALY_STATUS_V1_OK) return {};
+    if (combat->event_name_utf8(
+            combat->user, &event, result.data(), &size).code != ANOMALY_STATUS_V1_OK) {
+        return {};
+    }
     if (!result.empty() && result.back() == '\0') result.pop_back();
     return result;
 }
@@ -415,7 +426,7 @@ bool CaptureNextAttack(Context& context) {
         // Prefer an exact reflected ability display-name match over the skill that
         // merely happened to be active immediately before the hit.
         context.captured_damage_source_name =
-            ReadDamageSourceName(context.combat, event.name_id);
+            ReadDamageSourceName(context.combat, event);
         if (!context.captured_damage_source_name.empty() &&
             SkillsReady(context.skills)) {
             AnomalyNteSkillFrameV1 frame{};
