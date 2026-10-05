@@ -14475,6 +14475,34 @@ private:
             : StoppedStatus();
     }
 
+    AnomalyStatusV1 Invoke(
+        const std::shared_ptr<State>& state,
+        const std::uintptr_t object,
+        const std::uintptr_t function,
+        void* const parameters,
+        const std::size_t parameter_size) noexcept {
+        if (GetCurrentThreadId() != state->game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "ProcessEvent invoke must run on Game thread");
+        if (!state->process_event_invoker)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "validated ProcessEvent invoker is unavailable");
+        try {
+            return state->process_event_invoker(object, function, parameters, parameter_size)
+                ? Status(ANOMALY_STATUS_V1_OK)
+                : Status(ANOMALY_STATUS_V1_FAILED, "validated ProcessEvent invocation failed");
+        } catch (...) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "validated ProcessEvent invocation threw");
+        }
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL InvokeThunk(
+        void* user, const std::uintptr_t object, const std::uintptr_t function,
+        void* const parameters, const std::size_t parameter_size) noexcept {
+        auto* endpoint = static_cast<ProcessEventServiceEndpoint*>(user);
+        auto lease = endpoint->Acquire();
+        return lease ? endpoint->Invoke(lease.StateOwner(), object, function, parameters, parameter_size)
+                     : StoppedStatus();
+    }
+
     std::weak_ptr<State> state_;
     const std::uint64_t generation_{};
     AdmissionGate gate_;
@@ -14532,7 +14560,7 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
         : state_(std::move(state)), generation_(generation == 0 ? 1 : generation) {
         service = {sizeof(AnomalyUe5ProcessEventServiceV1),
                    ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_VERSION, this,
-                   SubscribeThunk, UnsubscribeThunk};
+                   SubscribeThunk, UnsubscribeThunk, InvokeThunk};
         subscriptions_snapshot_.store(
             std::make_shared<const SubscriptionList>(), std::memory_order_release);
     }
