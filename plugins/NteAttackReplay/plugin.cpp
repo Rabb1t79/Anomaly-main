@@ -57,6 +57,7 @@ struct Context final {
     const AnomalySignatureServiceV1* signature{};
     const AnomalyUe5NamesServiceV1* names{};
     const AnomalyUe5FrameworkServiceV1* framework{};
+    const AnomalyUe5ProcessEventServiceV1* process_event{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
@@ -403,33 +404,22 @@ bool ReadNativeDataTable(uintptr_t table,
     return !rows.empty();
 }
 
-// 通过 UObject 虚表中已定位的 ProcessEvent 槽位，把目标 UFunction 和参数缓冲区提交给 UE5；调用包在异常保护中，避免错误对象或参数布局导致插件直接崩溃。
+// ProcessEvent 必须经 Host 已验证的 ABI 调用器进入，禁止插件自行读取 UObject 虚表槽位。
 bool IsCanonicalUserPointer(uintptr_t value) noexcept {
     // Windows x64 的用户态对象、UFunction 和虚表地址应落在低位 canonical 地址范围；异常地址 0xffffffff... 不进入原生调用。
     return value >= 0x10000ull && value <= 0x00007FFFFFFFFFFFull;
 }
 
 // 从 PlayerController 的 UObject 虚表读取已配置的 ProcessEvent 槽位；在真正调用前拒绝非 canonical 的对象、UFunction、虚表和函数地址，避免错误的反射地址直接进入 HTGame。
-bool InvokeNativeProcessEvent(uintptr_t object, uintptr_t function, void* parameters) noexcept {
+bool InvokeNativeProcessEvent(const Context& c, uintptr_t object, uintptr_t function,
+                             void* parameters, size_t parameter_size) noexcept {
+    if (c.process_event == nullptr || c.process_event->struct_size <
+        offsetof(AnomalyUe5ProcessEventServiceV1, invoke) + sizeof(c.process_event->invoke) ||
+        c.process_event->invoke == nullptr) return false;
     if (!IsCanonicalUserPointer(object) || !IsCanonicalUserPointer(function)) return false;
-    void* vtable = NativePointer(reinterpret_cast<const void*>(object));
-    if (!vtable || !IsCanonicalUserPointer(reinterpret_cast<uintptr_t>(vtable))) return false;
-    const auto slot_address =
-        reinterpret_cast<const uint8_t*>(vtable) +
-        kProcessEventVtableIndex * sizeof(void*);
-    void* process_event = NativePointer(slot_address);
-    if (!process_event || !IsCanonicalUserPointer(reinterpret_cast<uintptr_t>(process_event)))
-        return false;
-    using ProcessEvent = void(__fastcall*)(void*, void*, void*);
-    __try {
-        reinterpret_cast<ProcessEvent>(process_event)(
-            reinterpret_cast<void*>(object), reinterpret_cast<void*>(function), parameters);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return c.process_event->invoke(c.process_event->user, object, function,
+                                   parameters, parameter_size).code == ANOMALY_STATUS_V1_OK;
 }
-
 // 从当前 PlayerController 找到 ActivateAbilityFromID/ReleaseAbilityFromID，再读取 DT_AbilityInput 的 MeleeAtack 行，取得 InputID 和 Param 并按 UFunction 参数布局写入调用缓冲区，为普通攻击按下/释放调用准备原生参数。
 bool ResolveNormalAttackBinding(Context& c, NormalAttackBinding& out) {
     uintptr_t world{}, controller{};
@@ -509,9 +499,9 @@ bool InvokeNativeNormalAttack(Context& c) {
     if (!ResolveNormalAttackBinding(c, binding)) return false;
     auto pressed = binding.pressed;
     auto released = binding.released;
-    if (!InvokeNativeProcessEvent(binding.controller, binding.triggered, pressed.data()))
+    if (!InvokeNativeProcessEvent(c, binding.controller, binding.triggered, pressed.data(), pressed.size()))
         return false;
-    return InvokeNativeProcessEvent(binding.controller, binding.completed, released.data());
+    return InvokeNativeProcessEvent(c, binding.controller, binding.completed, released.data(), released.size());
 }
 
 
