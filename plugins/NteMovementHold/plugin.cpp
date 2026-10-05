@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 // Movement-hold probe: an on-screen panel that flips the Host's character hold, so the pin the
 // teleport arrival window uses can be exercised on a live client without going through a
 // teleport and without claiming a keyboard key. The panel reports the live gravity scale, velocity
