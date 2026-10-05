@@ -197,7 +197,7 @@ struct Context final {
 };
 
 template <typename Table, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// HasField 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool HasField(const Table* table, const std::size_t offset) noexcept {
   return table != nullptr && table->struct_size >= offset + sizeof(Field);
 }
@@ -224,7 +224,7 @@ const Service* Query(const AnomalyHostApiV1* host, const char* id,
              ? service : nullptr;
 }
 
-// 中文说明：CoreReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// CoreReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool CoreReady(const AnomalyCoreServiceV1* core) noexcept {
   return HasField<AnomalyCoreServiceV1,
                   decltype(AnomalyCoreServiceV1::read_memory)>(
@@ -232,7 +232,7 @@ bool CoreReady(const AnomalyCoreServiceV1* core) noexcept {
          core->read_memory != nullptr;
 }
 
-// 中文说明：SignatureReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// SignatureReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool SignatureReady(const AnomalySignatureServiceV1* signature) noexcept {
   return HasField<AnomalySignatureServiceV1,
                   decltype(AnomalySignatureServiceV1::resolve)>(
@@ -240,7 +240,7 @@ bool SignatureReady(const AnomalySignatureServiceV1* signature) noexcept {
          signature->resolve != nullptr;
 }
 
-// 中文说明：NamesReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// NamesReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool NamesReady(const AnomalyUe5NamesServiceV1* names) noexcept {
   return HasField<AnomalyUe5NamesServiceV1,
                   decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -248,7 +248,7 @@ bool NamesReady(const AnomalyUe5NamesServiceV1* names) noexcept {
          names->resolve_utf8 != nullptr;
 }
 
-// 中文说明：ObjectsReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// ObjectsReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* objects) noexcept {
   return HasField<AnomalyUe5ObjectsServiceV1,
                   decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
@@ -257,14 +257,14 @@ bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* objects) noexcept {
 }
 
 
-// 中文说明：IsCurrentWorld()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// IsCurrentWorld 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool IsCurrentWorld(const AnomalyNteSessionSnapshotV1& snapshot) noexcept {
   return snapshot.struct_size >= sizeof(snapshot) &&
          snapshot.state == ANOMALY_NTE_SESSION_V1_WORLD_READY &&
          snapshot.world.id != 0 && snapshot.world.generation != 0;
 }
 
-// 中文说明：IsCurrentPlayer()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// IsCurrentPlayer 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool IsCurrentPlayer(const AnomalyNtePlayerSnapshotV1& snapshot) noexcept {
   return snapshot.struct_size >= sizeof(snapshot) &&
          (snapshot.flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
@@ -273,14 +273,14 @@ bool IsCurrentPlayer(const AnomalyNtePlayerSnapshotV1& snapshot) noexcept {
          snapshot.handle.id != 0 && snapshot.handle.generation != 0;
 }
 
-// 中文说明：IsFinitePosition()：调用 `std::ranges::all_of()`、`std::isfinite()`，结果用于完成该函数对应的数据处理。
+// IsFinitePosition 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool IsFinitePosition(const std::array<double, 3>& position) noexcept {
   return std::ranges::all_of(position, [](const double value) {
     return std::isfinite(value);
   });
 }
 
-// 中文说明：PlayerReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// PlayerReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool PlayerReady(const AnomalyNtePlayerServiceV1* service) noexcept {
   return HasField<AnomalyNtePlayerServiceV1,
                   decltype(AnomalyNtePlayerServiceV1::snapshot)>(
@@ -288,7 +288,7 @@ bool PlayerReady(const AnomalyNtePlayerServiceV1* service) noexcept {
          service->snapshot != nullptr;
 }
 
-// 中文说明：NavigationReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// NavigationReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool NavigationReady(const AnomalyNteNavigationServiceV1* service) noexcept {
   return HasField<AnomalyNteNavigationServiceV1,
                   decltype(AnomalyNteNavigationServiceV1::stop_movement)>(
@@ -296,7 +296,7 @@ bool NavigationReady(const AnomalyNteNavigationServiceV1* service) noexcept {
          service->move_to_location != nullptr && service->stop_movement != nullptr;
 }
 
-// 中文说明：TeleportReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// TeleportReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool TeleportReady(const AnomalyNtePlayerTeleportServiceV1* service) noexcept {
   return HasField<AnomalyNtePlayerTeleportServiceV1,
                   decltype(AnomalyNtePlayerTeleportServiceV1::teleport)>(
@@ -304,7 +304,7 @@ bool TeleportReady(const AnomalyNtePlayerTeleportServiceV1* service) noexcept {
          service->teleport != nullptr;
 }
 
-// 中文说明：LandmarksReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// LandmarksReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* service) noexcept {
   return HasField<AnomalyNteMapLandmarksServiceV1,
                   decltype(AnomalyNteMapLandmarksServiceV1::teleport)>(
@@ -313,7 +313,7 @@ bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* service) noexcept {
          service->snapshot_at != nullptr && service->teleport != nullptr;
 }
 
-// 中文说明：DeveloperModeEnabled()：调用 `decltype()`、`offsetof()`、`developer_mode_enabled()`，结果用于完成该函数对应的数据处理。
+// DeveloperModeEnabled 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
   return HasField<AnomalyUiServiceV1,
                   decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -322,7 +322,7 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
          ui->developer_mode_enabled(ui->user) != 0;
 }
 
-// 中文说明：PickupReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// PickupReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool PickupReady(const AnomalyNtePickupServiceV1* service) noexcept {
   return HasField<AnomalyNtePickupServiceV1,
                   decltype(AnomalyNtePickupServiceV1::snapshot)>(
@@ -330,7 +330,7 @@ bool PickupReady(const AnomalyNtePickupServiceV1* service) noexcept {
          service->request_nearby != nullptr && service->snapshot != nullptr;
 }
 
-// 中文说明：StatusName()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// StatusName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 const char* StatusName(const std::uint32_t code) noexcept {
   switch (code) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -382,7 +382,7 @@ std::string CollectionModeName(const Context& context,
       : context.localizer.Text("mode.navigation", "Navigation pickup");
 }
 
-// 中文说明：RouteCompletionDetail()：调用 `std::to_string()`、`std::string_view()`、`Format()`，结果用于完成该函数对应的数据处理。
+// RouteCompletionDetail 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string RouteCompletionDetail(const Context& context) {
   const std::string collected = std::to_string(context.collected);
   const std::string target = std::to_string(context.active_wallet_target);
@@ -491,7 +491,7 @@ bool SnapshotPlayer(Context& context,
   return true;
 }
 
-// 中文说明：SnapshotPlayer()：调用 `SnapshotPlayer()`、`std::ranges::copy()`、`begin()`、`IsFinitePosition()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// SnapshotPlayer 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool SnapshotPlayer(Context& context, std::array<double, 3>& position) noexcept {
   AnomalyNtePlayerSnapshotV1 snapshot{sizeof(snapshot)};
   if (!SnapshotPlayer(context, snapshot)) return false;
@@ -499,13 +499,13 @@ bool SnapshotPlayer(Context& context, std::array<double, 3>& position) noexcept 
   return IsFinitePosition(position);
 }
 
-// 中文说明：StopAutomationMovement()：调用 `NavigationReady()`、`stop_movement()`，结果用于完成该函数对应的数据处理。
+// StopAutomationMovement 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void StopAutomationMovement(Context& context) noexcept {
   if (NavigationReady(context.navigation))
     static_cast<void>(context.navigation->stop_movement(context.navigation->user));
 }
 
-// 中文说明：RefreshLandmarkCatalog()：调用 `LandmarksReady()`、`sequence()`、`lock()`、`count()`；把结果追加到输出容器，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// RefreshLandmarkCatalog 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool RefreshLandmarkCatalog(Context& context) {
   if (!LandmarksReady(context.map_landmarks)) {
     context.map_landmarks = Query<AnomalyNteMapLandmarksServiceV1>(
@@ -629,7 +629,7 @@ void FailPickup(Context& context, const std::string_view reason_key,
       "detail.skipped", "{0}; skipped", arguments);
 }
 
-// 中文说明：BeginTeleport()：调用 `lock()`、`Text()`、`decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// BeginTeleport 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void BeginTeleport(Context& context, const RoutePoint& target) {
   const auto skip_target = [&context](const std::string_view key,
                                        const std::string_view fallback) {
@@ -697,7 +697,7 @@ void BeginTeleport(Context& context, const RoutePoint& target) {
       "detail.teleport_rejected", "Teleport rejected at {0} ({1})", arguments);
 }
 
-// 中文说明：BeginMove()：调用 `lock()`、`size()`、`RouteCompletionDetail()`、`load()`，结果用于完成该函数对应的数据处理。
+// BeginMove 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void BeginMove(Context& context) {
   RoutePoint target;
   std::uint32_t navigation_attempt{};
@@ -768,7 +768,7 @@ void BeginMove(Context& context) {
       "detail.navigation_rejected", "Navigation rejected {0} ({1})", arguments);
 }
 
-// 中文说明：BeginPickup()：调用 `snapshot()`、`FailPickup()`、`request_nearby()`、`lock()`，结果用于完成该函数对应的数据处理。
+// BeginPickup 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void BeginPickup(Context& context) {
   AnomalyNtePickupSnapshotV1 baseline{sizeof(baseline)};
   const AnomalyStatusV1 baseline_status =
@@ -802,7 +802,7 @@ void BeginPickup(Context& context) {
       arguments);
 }
 
-// 中文说明：ResetAutomationForWorld()：调用 `StopAutomationMovement()`、`lock()`、`clear()`、`Text()`，结果用于完成该函数对应的数据处理。
+// ResetAutomationForWorld 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ResetAutomationForWorld(Context& context) noexcept {
   StopAutomationMovement(context);
   std::scoped_lock lock(context.mutex);
@@ -829,7 +829,7 @@ void ResetAutomationForWorld(Context& context) noexcept {
       was_active ? "World changed; waiting for scan" : "Idle");
 }
 
-// 中文说明：ProcessAutomation()：调用 `std::isfinite()`、`exchange()`、`StopAutomationMovement()`、`lock()`，结果用于完成该函数对应的数据处理。
+// ProcessAutomation 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ProcessAutomation(Context& context, double delta_seconds) {
   if (!std::isfinite(delta_seconds) || delta_seconds < 0.0) delta_seconds = 0.0;
   delta_seconds = (std::min)(delta_seconds, 1.0);
@@ -1207,7 +1207,7 @@ void ProcessAutomation(Context& context, double delta_seconds) {
 }
 
 template <typename T>
-// 中文说明：Read()：调用 `CoreReady()`、`read_memory()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// Read 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool Read(Context& context, const std::uintptr_t address, T& value) noexcept {
   if (!CoreReady(context.core) || address == 0) return false;
   AnomalyMutableByteSpanV1 destination{
@@ -1277,7 +1277,7 @@ bool ResolveRipRelative(Context& context, const std::string_view pattern,
                                            addend, address);
 }
 
-// 中文说明：ResolveName()：调用 `NamesReady()`、`size()`、`resolve_utf8()`、`data()`，结果用于完成该函数对应的数据处理。
+// ResolveName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string ResolveName(Context& context, const std::uint32_t name_id) {
   if (!NamesReady(context.names) || name_id == 0) return {};
   std::array<char, 128> local{};
@@ -1295,7 +1295,7 @@ std::string ResolveName(Context& context, const std::uint32_t name_id) {
   return value;
 }
 
-// 中文说明：RenderFName()：调用 `ResolveName()`、`empty()`、`push_back()`、`std::to_string()`；把结果追加到输出容器，结果用于完成该函数对应的数据处理。
+// RenderFName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string RenderFName(Context& context, const FNameValue value) {
   std::string result = ResolveName(context, value.comparison_index);
   if (result.empty() || value.number == 0) return result;
@@ -1304,13 +1304,13 @@ std::string RenderFName(Context& context, const FNameValue value) {
   return result;
 }
 
-// 中文说明：EncodeFName()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// EncodeFName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::uint64_t EncodeFName(const FNameValue value) noexcept {
   return static_cast<std::uint64_t>(value.comparison_index) |
       (static_cast<std::uint64_t>(value.number) << 32U);
 }
 
-// 中文说明：RefreshRegistry()：调用 `ResolveRipRelative()`、`ReadPointerAt()`、`Read()`、`store()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// RefreshRegistry 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool RefreshRegistry(Context& context) noexcept {
   if (context.g_objects_address == 0 &&
       !ResolveRipRelative(context, kGObjectsPattern, kGObjectsAddend,
@@ -1341,7 +1341,7 @@ bool RefreshRegistry(Context& context) noexcept {
   return true;
 }
 
-// 中文说明：ReadUtf16Array()：调用 `clear()`、`Read()`、`value()`、`ReadBytes()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ReadUtf16Array 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool ReadUtf16Array(Context& context, const std::uintptr_t address, std::string& result) {
   result.clear();
   ArrayHeader header{};
@@ -1366,7 +1366,7 @@ bool ReadUtf16Array(Context& context, const std::uintptr_t address, std::string&
   return true;
 }
 
-// 中文说明：ReadUtf16CString()：调用 `clear()`、`size()`、`ReadBytes()`、`data()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ReadUtf16CString 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool ReadUtf16CString(Context& context, const std::uintptr_t address, std::string& result) {
   result.clear();
   if (address == 0) return false;
@@ -1397,7 +1397,7 @@ bool ReadUtf16CString(Context& context, const std::uintptr_t address, std::strin
   return false;
 }
 
-// 中文说明：FindDataAsset()：调用 `find_exact()`、`anomaly::sdk::StringView()`、`ANOMALY_UE5_OBJECT_HANDLE_INDEX()`、`ReadPointerAt()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// FindDataAsset 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool FindDataAsset(Context& context) {
   if (context.data_asset != 0) return true;
   AnomalyGenerationHandleV1 handle{};
@@ -1430,7 +1430,7 @@ bool FindDataAsset(Context& context) {
   return true;
 }
 
-// 中文说明：ScanDataTable()：调用 `load()`、`AddSignedAddress()`、`Read()`、`elements()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ScanDataTable 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool ScanDataTable(Context& context) {
   if (context.data_table == 0 || context.table_scanned.load(std::memory_order_acquire))
     return false;
@@ -1494,7 +1494,7 @@ bool ScanDataTable(Context& context) {
   return changed;
 }
 
-// 中文说明：ResolvePlayerState()：调用 `ResolveRipRelative()`、`Read()`、`ReadPointerAt()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ResolvePlayerState 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool ResolvePlayerState(Context& context, std::uintptr_t& player_state) {
   player_state = 0;
   if (context.g_world_address == 0 &&
@@ -1512,7 +1512,7 @@ bool ResolvePlayerState(Context& context, std::uintptr_t& player_state) {
       ReadPointerAt(context, controller, kControllerPlayerStateOffset, player_state);
 }
 
-// 中文说明：ResolveRandomItemRecords()：调用 `ResolveSignature()`、`Read()`、`find_record()`、`lock()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ResolveRandomItemRecords 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool ResolveRandomItemRecords(Context& context, const std::uintptr_t player_state) {
   if (player_state == 0) return false;
   if (context.record_owner != 0 && context.fixed_record != 0 &&
@@ -1617,7 +1617,7 @@ bool ReadRecordSelections(Context& context, const std::uintptr_t record,
   return true;
 }
 
-// 中文说明：RefreshRecordCatalog()：调用 `empty()`、`ReadRecordSelections()`、`lock()`、`find()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// RefreshRecordCatalog 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool RefreshRecordCatalog(Context& context) {
   if (context.candidate_rows.empty() || context.fixed_record == 0 ||
       context.dynamic_record == 0) return false;
@@ -1697,7 +1697,7 @@ void ResetCatalog(Context& context, const std::uint64_t world_id,
   context.dynamic_record_rows = 0;
 }
 
-// 中文说明：RestartScan()：调用 `store()`，结果用于完成该函数对应的数据处理。
+// RestartScan 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void RestartScan(Context& context) noexcept {
   context.data_asset = 0;
   context.data_table = 0;
@@ -1705,7 +1705,7 @@ void RestartScan(Context& context) noexcept {
   context.data_asset_found.store(false, std::memory_order_release);
 }
 
-// 中文说明：Load()：调用 `Status()`、`new()`、`Context()`、`anomaly::plugins::Localizer()`，结果用于完成该函数对应的数据处理。
+// Load 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
   if (host == nullptr || plugin_context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
   auto* context = new (std::nothrow) Context();
@@ -1739,7 +1739,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：调用 `Status()`、`store()`、`lock()`、`clear()`，结果用于完成该函数对应的数据处理。
+// Start 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
   auto* context = static_cast<Context*>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -1776,7 +1776,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `Status()`、`store()`、`lock()`、`clear()`，结果用于完成该函数对应的数据处理。
+// Stop 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
   auto* context = static_cast<Context*>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -1795,7 +1795,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload()：调用 `Stop()`，结果用于完成该函数对应的数据处理。
+// Unload 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ANOMALY_CALL Unload(void* plugin_context) {
   auto* context = static_cast<Context*>(plugin_context);
   if (context == nullptr) return;
@@ -1803,7 +1803,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
   delete context;
 }
 
-// 中文说明：Update()：调用 `load()`、`store()`、`DeveloperModeEnabled()`、`is_game_thread()`，结果用于完成该函数对应的数据处理。
+// Update 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ANOMALY_CALL Update(void* plugin_context, const double delta_seconds) {
   auto* context = static_cast<Context*>(plugin_context);
   if (context == nullptr || context->stopping.load(std::memory_order_acquire)) return;
@@ -1846,7 +1846,7 @@ void ANOMALY_CALL Update(void* plugin_context, const double delta_seconds) {
   } catch (...) {}
 }
 
-// 中文说明：Draw()：调用 `decltype()`、`offsetof()`、`Label()`、`begin_window()`，结果用于完成该函数对应的数据处理。
+// Draw 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
   auto* context = static_cast<Context*>(plugin_context);
   if (context == nullptr || ui == nullptr || ui->begin_window == nullptr ||
