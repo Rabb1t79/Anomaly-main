@@ -56,6 +56,7 @@ struct Context final {
     const AnomalyUiServiceV1* ui{};
     const AnomalySignatureServiceV1* signature{};
     const AnomalyUe5NamesServiceV1* names{};
+    const AnomalyUe5FrameworkServiceV1* framework{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
@@ -91,8 +92,8 @@ struct Context final {
     std::atomic_bool stop_requested{false};
     uint32_t replay_count{10};
     uint32_t replay_done{};
-    double replay_rate{2.0};
-    std::chrono::steady_clock::time_point next_replay{};
+    uint64_t replay_last_tick{};
+    uint64_t replay_target_count{};
     std::string status{"自动等待玩家下一次攻击"};
 
     uint64_t last_skill_generation{};
@@ -403,14 +404,22 @@ bool ReadNativeDataTable(uintptr_t table,
 }
 
 // 通过 UObject 虚表中已定位的 ProcessEvent 槽位，把目标 UFunction 和参数缓冲区提交给 UE5；调用包在异常保护中，避免错误对象或参数布局导致插件直接崩溃。
+bool IsCanonicalUserPointer(uintptr_t value) noexcept {
+    // Windows x64 的用户态对象、UFunction 和虚表地址应落在低位 canonical 地址范围；异常地址 0xffffffff... 不进入原生调用。
+    return value >= 0x10000ull && value <= 0x00007FFFFFFFFFFFull;
+}
+
+// 从 PlayerController 的 UObject 虚表读取已配置的 ProcessEvent 槽位；在真正调用前拒绝非 canonical 的对象、UFunction、虚表和函数地址，避免错误的反射地址直接进入 HTGame。
 bool InvokeNativeProcessEvent(uintptr_t object, uintptr_t function, void* parameters) noexcept {
-    if (!object || !function) return false;
+    if (!IsCanonicalUserPointer(object) || !IsCanonicalUserPointer(function)) return false;
     void* vtable = NativePointer(reinterpret_cast<const void*>(object));
-    if (!vtable) return false;
-    void* process_event = NativePointer(
+    if (!vtable || !IsCanonicalUserPointer(reinterpret_cast<uintptr_t>(vtable))) return false;
+    const auto slot_address =
         reinterpret_cast<const uint8_t*>(vtable) +
-        kProcessEventVtableIndex * sizeof(void*));
-    if (!process_event) return false;
+        kProcessEventVtableIndex * sizeof(void*);
+    void* process_event = NativePointer(slot_address);
+    if (!process_event || !IsCanonicalUserPointer(reinterpret_cast<uintptr_t>(process_event)))
+        return false;
     using ProcessEvent = void(__fastcall*)(void*, void*, void*);
     __try {
         reinterpret_cast<ProcessEvent>(process_event)(
@@ -713,6 +722,8 @@ void ArmForNextAttack(Context& context) {
     context.captured_damage_source_name.clear();
     context.replay_damage_cursor = 0;
     context.replay_damage_deadline = {};
+    context.replay_last_tick = 0;
+    context.replay_target_count = 0;
     context.waiting_for_damage = false;
     context.status = context.enabled ? "自动等待玩家下一次攻击" : "自动记录中：重放功能未启用";
 
@@ -929,13 +940,16 @@ AnomalyStatusV1 ANOMALY_CALL Load(
         ANOMALY_SIGNATURE_SERVICE_V1_ID, ANOMALY_SIGNATURE_SERVICE_V1_VERSION).get();
     context->names = sdk_host.Query<AnomalyUe5NamesServiceV1>(
         ANOMALY_UE5_NAMES_SERVICE_V1_ID, ANOMALY_UE5_NAMES_SERVICE_V1_VERSION).get();
+    context->framework = sdk_host.Query<AnomalyUe5FrameworkServiceV1>(
+        ANOMALY_UE5_FRAMEWORK_SERVICE_V1_ID, ANOMALY_UE5_FRAMEWORK_SERVICE_V1_VERSION).get();
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
     if (!CombatReady(context->combat) || !SkillsReady(context->skills) ||
         !InvocationReady(context->invocation) || !UiReady(context->ui) ||
-        context->signature == nullptr || context->names == nullptr ||
-        context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr) {
+        context->signature == nullptr || context->names == nullptr || context->framework == nullptr ||
+        context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr ||
+        context->framework->tick_sequence == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -952,8 +966,9 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     context->enabled = false;
     context->replay_count = 10;
-    context->replay_rate = 2.0;
     context->replay_done = 0;
+    context->replay_target_count = 0;
+    context->replay_last_tick = 0;
     context->replaying = false;
     context->replay_requested.store(false, std::memory_order_release);
     context->stop_requested.store(false, std::memory_order_release);
@@ -995,8 +1010,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            context->next_replay = std::chrono::steady_clock::now();
-            context->status = "已提交重放，等待 Game 域执行";
+            context->replay_target_count = context->replay_count + 1u;
+            context->replay_last_tick = 0;
+            context->status = "已提交重放，等待下一游戏帧";
         } else {
             context->status = context->captured
                 ? "无法开始重放：请先启用重放功能"
@@ -1007,6 +1023,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     if (!context->replaying) return;
 
     const auto now = std::chrono::steady_clock::now();
+    const uint64_t current_tick = context->framework->tick_sequence(
+        context->framework->user);
 
     // accepted=1 only means the call reached the game. A replay is counted
     // only after a fresh player->target DamageEvent is observed.
@@ -1023,12 +1041,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                 !SameHandle(event.target, context->character)) {
                 context->waiting_for_damage = false;
                 ++context->replay_done;
-                const double interval_seconds =
-                    1.0 / std::clamp(context->replay_rate, 0.1, 30.0);
-                context->next_replay =
-                    now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                              std::chrono::duration<double>(interval_seconds));
-                context->status = "已确认新的 DamageEvent，重放成功";
+                context->replay_last_tick = event.tick_sequence;
+                context->status = "已确认新的 DamageEvent，进入下一游戏帧";
             }
         } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
             context->replaying = false;
@@ -1038,7 +1052,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             return;
         }
 
-        if (context->replaying && context->replay_done >= context->replay_count) {
+        if (context->replaying && context->replay_done >= context->replay_target_count) {
             context->replaying = false;
             context->status = "重放完成，继续自动等待下一次攻击";
             ArmForNextAttack(*context);
@@ -1054,14 +1068,17 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (context->waiting_for_damage) return;
     }
 
-    if (context->replay_done >= context->replay_count) {
+    if (context->replay_done >= context->replay_target_count) {
         context->replaying = false;
         context->status = "重放完成，继续自动等待下一次攻击";
         ArmForNextAttack(*context);
         return;
     }
 
-    if (now < context->next_replay) return;
+    // on_update() runs once per Game tick. Do not issue a second replay invocation
+    // inside the same tick; one accepted attack is allowed to mature into one damage
+    // event before the next frame is permitted to submit another attack.
+    if (current_tick == 0 || current_tick == context->replay_last_tick) return;
 
     // Snapshot the event tail immediately before invoking the replay.
     context->replay_damage_cursor = context->combat->latest_event_sequence(
@@ -1144,8 +1161,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (ui->input_double != nullptr) {
         ui->input_double(
             ui->user, anomaly::sdk::StringView("重放速率（次/秒）"),
-            &context->replay_rate, 0.1, 1.0);
-        context->replay_rate = std::clamp(context->replay_rate, 0.1, 30.0);
+            &context->replay_count, 1, 10);
     }
 
     if (context->captured) {
@@ -1165,6 +1181,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             "进度：" + std::to_string(context->replay_done) + "/" +
             std::to_string(context->replay_count);
         ui->text(ui->user, anomaly::sdk::StringView(progress));
+        ui->text(ui->user, anomaly::sdk::StringView("节拍：每个 Game tick 最多提交一次攻击，每个确认 DamageEvent 计 1 次伤害"));
     } else {
         ui->text(ui->user, anomaly::sdk::StringView(
             "无需手动录制：插件自动等待下一次玩家攻击"));
