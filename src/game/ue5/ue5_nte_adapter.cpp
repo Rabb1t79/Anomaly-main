@@ -8068,10 +8068,11 @@ struct Ue5NteAdapter::State {
         pending_vehicle_summon = {};
         pending_vehicle_summon.active = true;
         pending_vehicle_summon.request_sequence = tick_sequence.load(std::memory_order_acquire);
+        // Vehicle summon target is the player's current validated position; do not add an unverified offset.
         pending_vehicle_summon.target = {
-            player_position[0] - 2000.0,
-            player_position[1] + 2000.0,
-            player_position[2] + 2000.0};
+            player_position[0],
+            player_position[1],
+            player_position[2]};
         if (actor_frame_cache) {
             for (const auto& entity : actor_frame_cache->entities) {
                 if (entity.object_identity_available && entity.entity_id != 0)
