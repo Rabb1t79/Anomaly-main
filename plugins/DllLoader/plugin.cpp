@@ -56,23 +56,23 @@ struct Context final {
     bool stopped{};
 };
 
-// 中文说明：Status()：调用 `std::strlen()`，结果用于完成该函数对应的数据处理。
+// 把状态码和可选错误字符串封装成 AnomalyStatusV1；同时写入消息指针和长度，供插件 ABI 回调统一返回错误原因。
 AnomalyStatusV1 Status(const std::uint32_t code, const char* message = nullptr) noexcept {
     return {code, 0, {message, message == nullptr ? 0U : std::strlen(message)}};
 }
 
-// 中文说明：Bytes()：调用 `data()`、`size()`，结果用于完成该函数对应的数据处理。
+// 把 std::string_view 的连续字节区域转换成 AnomalyByteSpanV1；返回的指针直接指向原字符串，不复制数据，因此调用期间原字符串必须保持有效。
 AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// 按服务结构体的 struct_size 检查指定字段是否实际存在；它用 offset 加字段大小与 ABI 提供的结构长度比较，避免访问旧版本服务结构中尚未提供的成员。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 中文说明：ConfigReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// 检查配置服务是否包含插件实际使用的 write_atomic 等 ABI 字段；结构长度不足或回调为空时返回 false，阻止后续持久化调用。
 bool ConfigReady(const AnomalyConfigServiceV1* service) noexcept {
     return HasField<AnomalyConfigServiceV1, decltype(AnomalyConfigServiceV1::write_atomic)>(
                service, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
@@ -81,14 +81,14 @@ bool ConfigReady(const AnomalyConfigServiceV1* service) noexcept {
         service->write_atomic != nullptr;
 }
 
-// 中文说明：HasUiWindow()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// 确认 UI 服务提供窗口开始/结束所需回调；缺少 end_window 等字段时不进入插件窗口生命周期。
 bool HasUiWindow(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_window)>(
                ui, offsetof(AnomalyUiServiceV1, end_window)) &&
         ui->begin_window != nullptr && ui->end_window != nullptr && ui->text != nullptr;
 }
 
-// 中文说明：HasUiInput()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// 确认 UI 服务提供 input_text 等输入回调；只有输入接口存在时插件才读取用户编辑内容。
 bool HasUiInput(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::input_text)>(
                ui, offsetof(AnomalyUiServiceV1, input_text)) &&
@@ -97,7 +97,7 @@ bool HasUiInput(const AnomalyUiServiceV1* ui) noexcept {
         ui->input_text != nullptr && ui->button != nullptr;
 }
 
-// 中文说明：Utf8ToWide()：调用 `empty()`、`size()`、`MultiByteToWideChar()`、`data()`，结果用于完成该函数对应的数据处理。
+// 使用 Windows UTF-8 转宽字符 API 将插件保存的 UTF-8 路径/文本转换为宽字符串；输入为空、长度超限或转换失败时返回空结果。
 std::wstring Utf8ToWide(const std::string_view value) {
     if (value.empty() ||
         value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
@@ -115,7 +115,7 @@ std::wstring Utf8ToWide(const std::string_view value) {
     return result;
 }
 
-// 中文说明：WideToUtf8()：调用 `empty()`、`size()`、`WideCharToMultiByte()`、`data()`，结果用于完成该函数对应的数据处理。
+// 使用 Windows 宽字符转 UTF-8 API 将系统返回的宽字符串转换为 UTF-8；输入无效或转换失败时返回空字符串。
 std::string WideToUtf8(const std::wstring_view value) {
     if (value.empty() ||
         value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
@@ -134,7 +134,7 @@ std::string WideToUtf8(const std::wstring_view value) {
     return result;
 }
 
-// 中文说明：PluginPackageDirectory()：调用 `GetModuleFileNameW()`、`data()`、`size()`、`std::filesystem::path()`，结果用于完成该函数对应的数据处理。
+// 从插件自身模块句柄解析 DLL 所在目录，再据此定位插件包内的配置/资源路径；模块句柄不可用时返回错误而不猜测目录。
 std::filesystem::path PluginPackageDirectory(std::string& error) {
     if (g_plugin_module == nullptr) {
         error = "The plugin module handle is unavailable";
@@ -192,14 +192,14 @@ bool ResolveLibraryPath(
     return true;
 }
 
-// 中文说明：SetEditor()：调用 `fill()`、`size()`、`std::copy_n()`、`data()`，结果用于完成该函数对应的数据处理。
+// 清空 Context 的 editor 缓冲区并把输入文本截断到缓冲区可容纳的最大长度，再写入结尾的 NUL，保证 UI 编辑框始终获得有效 C 字符串。
 void SetEditor(Context& context, const std::string_view value) noexcept {
     context.editor.fill('\0');
     const std::size_t count = (std::min)(value.size(), context.editor.size() - 1U);
     std::copy_n(value.data(), count, context.editor.data());
 }
 
-// 中文说明：ReadSettings()：调用 `read()`、`anomaly::sdk::StringView()`、`SetEditor()`、`document()`；修改对象或运行时状态，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 从原子共享指针取得当前设置快照；acquire 读取保证 UI/更新线程看到完整的已发布 SettingsSnapshot。
 bool ReadSettings(Context& context) {
     std::uint32_t schema_version{};
     std::size_t size{};
@@ -240,7 +240,7 @@ bool ReadSettings(Context& context) {
     return true;
 }
 
-// 中文说明：SaveSettings()：调用 `lock()`、`dump()`、`write_atomic()`、`anomaly::sdk::StringView()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// 在持锁状态下取得当前配置路径和编辑内容，把设置序列化后通过 config->write_atomic 写入配置文件；写入失败返回对应错误状态。
 bool SaveSettings(Context& context) {
     std::string path;
     {
@@ -270,7 +270,7 @@ bool SaveSettings(Context& context) {
     }
 }
 
-// 中文说明：LoadConfiguredLibrary()：调用 `lock()`、`empty()`、`ResolveLibraryPath()`、`std::move()`，结果用于完成该函数对应的数据处理。
+// 读取当前配置的 DLL 路径并调用 Windows LoadLibrary 加载目标模块；加载成功后保存模块句柄，路径为空或系统加载失败时不改变现有状态。
 void LoadConfiguredLibrary(Context& context) noexcept {
     std::string configured_path;
     {
@@ -313,7 +313,7 @@ void LoadConfiguredLibrary(Context& context) noexcept {
     }
 }
 
-// 中文说明：UnloadConfiguredLibrary()：调用 `lock()`、`std::exchange()`、`clear()`、`FreeLibrary()`，结果用于完成该函数对应的数据处理。
+// 取出当前已加载 DLL 的 HMODULE 并调用 FreeLibrary 释放；释放后清空模块句柄，避免 Context 继续引用已经卸载的代码。
 void UnloadConfiguredLibrary(Context& context) noexcept {
     HMODULE module{};
     {
@@ -363,7 +363,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     }
 }
 
-// 中文说明：Start()：调用 `Status()`、`LoadConfiguredLibrary()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// Start 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* const context = static_cast<Context*>(plugin_context);
     if (context == nullptr) {
@@ -373,7 +373,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `Status()`、`lock()`、`anomaly::sdk::Ok()`、`SaveSettings()`，结果用于完成该函数对应的数据处理。
+// Stop 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     auto* const context = static_cast<Context*>(plugin_context);
     if (context == nullptr) {
@@ -392,7 +392,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
                        "DLL loader settings could not be saved");
 }
 
-// 中文说明：Unload()：调用 `UnloadConfiguredLibrary()`，结果用于完成该函数对应的数据处理。
+// Unload 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ANOMALY_CALL Unload(void* plugin_context) {
     auto* const context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -466,7 +466,7 @@ void ANOMALY_CALL Draw(
 
 }  // namespace
 
-// 中文说明：DllMain()：调用 `DisableThreadLibraryCalls()`，结果用于完成该函数对应的数据处理。
+// DllMain 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_plugin_module = module;
