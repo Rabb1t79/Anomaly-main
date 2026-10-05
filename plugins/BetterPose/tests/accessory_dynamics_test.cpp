@@ -4,13 +4,13 @@
 
 using namespace better_pose::accessory;
 namespace {
-// 中文说明：Check() 的实际功能是：调用 `Make()`。
+// 实现 Check：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
-// 中文说明：RotationDegrees() 的实际功能是：调用 `Make()`。
+// 实现 RotationDegrees：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return 2.0*std::acos((std::min)(1.0,std::abs(delta.w)))*180.0/3.14159265358979323846;
 }
 Bone Make(Vec p,Quat q={}) { return {q.x,q.y,q.z,q.w,p.x,p.y,p.z,0,1,1,1,0}; }
-// 中文说明：Motion() 的实际功能是：调用 `std::sin()`、`std::cos()`。
+// 实现 Motion：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return {{20*std::sin(t*3),8*std::sin(t),170+4*std::sin(t*2)},
           {0,std::sin(a/2),0,std::cos(a/2)},1};
 }
@@ -23,7 +23,7 @@ struct Rig {
       Make({18,0,-18}),Make({12,0,-30}),Make({24,0,-26}),Make({-12,0,0}),
       Make({-12,0,-11}),Make({-12,0,-22}),Make({0,0,10}),Make({14,0,-32})};
 };
-// 中文说明：CheckPose() 的实际功能是：调用 `size()`、`Check()`、`std::isfinite()`、`Rotation()`、`std::abs()`、`Rotate()`、`Inverse()`、`Position()`；并遍历集合元素、按条件分支处理、用断言验证结果。
+// 实现 CheckPose：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   Check(Length(Position(pose[10])-Position(rig.bind[10]))<1e-8,"ornament translated");
   for (std::size_t i=0;i<pose.size();++i) {
     for (double v:pose[i]) Check(std::isfinite(v),"nonfinite pose");
@@ -39,7 +39,7 @@ struct Rig {
   const Quat leaf=Multiply(Inverse(Rotation(pose[5])),Rotation(pose[11]));
   Check(std::abs(leaf.w-1)<1e-8,"rigid leaf failed to inherit parent rotation");
 }
-// 中文说明：Classifications() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Classifications：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
                          "piao", "gongpai", "lalian", "xiong", "tie", "skirt", "Bn_extra"}) {
     Dynamics d;
     Check(d.Configure({Make({}),Make({0,0,-10})},{-1,0},{name,"tip"}),"eligible class skipped");
@@ -55,7 +55,7 @@ struct Rig {
   Check(!better_pose::secondary::IsSleeve("Bn_qunFxiuA_L"),"skirt weighted as sleeve");
   Check(better_pose::secondary::IsSwingOnly("Bn_kami"),"hair spelling rule");
 }
-// 中文说明：Run() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Run：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   Check(d.Configure(rig.bind,rig.parents,rig.names),"fork rig rejected");
   Check(d.DrivenBones()==7,"full hierarchy missed a branch/root or counted a leaf");
   std::array<double,3> movement{};
@@ -72,7 +72,7 @@ struct Rig {
   Check(d.LengthError()<1e-7,"solver stretched bones");
   return d.Pose();
 }
-// 中文说明：Resets()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  Rig rig; Dynamics d;
+// 实现 Resets：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   d.Configure(rig.bind,rig.parents,rig.names);
   d.Sample(Motion(0),0,4,true); d.Sample(Motion(.05),.05,4,true);
   Check(d.Sample(Motion(.05),.05,4,false)==rig.bind,"pause did not restore bind");
@@ -103,7 +103,7 @@ struct Rig {
   Check(d.Configure({Make({}),Make({0,0,-5})},{-1,0},{"ribbon","tip"}),"character rebuild failed");
   Check(d.DrivenBones()==1 && d.Pose().size()==2,"old rig retained");
 }
-// 中文说明：Hang() 的实际功能是：调用 `Sample()`；并遍历集合元素。
+// 实现 Hang：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   for (int i=0;i<=600;++i) d.Sample({},i/120.0,0,true);
   const Vec tip=Position(d.Pose()[1]);
   Check(std::abs(Length(tip)-10)<1e-8,"gravity stretched segment");
@@ -112,7 +112,7 @@ struct Rig {
   Check(Length(Position(settled[1])-Position(d.Pose()[1]))<.001,"spring did not settle");
   return std::atan2(-tip.z,tip.x)*180/3.14159265358979323846;
 }
-// 中文说明：GravityAndRoll() 的实际功能是：调用 `std::sin()`、`std::cos()`。
+// 实现 GravityAndRoll：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   Check(std::abs(Hang("hair")-10.00798)<.01,"regular gravity share differs from body");
   Check(std::abs(Hang("Bn_l_xiu")-39.28941)<.01,"sleeve gravity share differs from body");
   Check(std::abs(Hang("Bn_qunFxiuA_L")-10.00798)<.01,"skirt got sleeve gravity");
@@ -129,14 +129,14 @@ struct Rig {
   for (int i=0;i<=600;++i) side.Sample(frame,i/120.0,0,true);
   Check(frame.Point(Position(side.Pose()[1])).z<rest-1,"gravity used component down");
 }
-// 中文说明：Depth() 的实际功能是：调用 `Position()`、`Length()`、`Closest()`；并遍历集合元素。
+// 实现 Depth：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   for (double t:{.5,.75,1.0}) {
     const Vec p=Position(pose[0])+(Position(pose[1])-Position(pose[0]))*t;
     result=(std::max)(result,c.radius-Length(p-Closest(p,c.a,c.b)));
   }
   return result;
 }
-// 中文说明：Collisions() 的实际功能是：调用 `Configure()`。
+// 实现 Collisions：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   Dynamics d; d.Configure(bind,{-1,0,1},{"hair","tip","marker"});
   const std::array<Capsule,1> capsules{{{{0,0,0},{0,0,20},8,better_pose::secondary::kCollideTorso}}};
   const auto first=d.Sample({},0,0,true,capsules);
@@ -186,7 +186,7 @@ struct Rig {
   ribbon.ConfigureCollisions({}, {}, {}, "Bip001-Pelvis");
   Check(ribbon.BodyCapsules(body.size(),[&](int i){return Position(body[i]);},{}).empty(),"missing body retained old capsules");
 }
-// 中文说明：Independence() 的实际功能是：调用 `Configure()`、`Make()`。
+// 实现 Independence：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   changed[8][6]-=8; changed[9][6]-=16;
   a.Configure(rig.bind,rig.parents,rig.names); b.Configure(changed,rig.parents,rig.names);
   Dynamics other; other.Configure({Make({}),Make({20,0,0})},{-1,0},{"Bn_l_xiu","tip"});
@@ -198,7 +198,7 @@ struct Rig {
     for (auto bone:{0,1,2,3,4,5,6,10,11}) Check(pa[bone]==pb[bone],"state leaked across separate branches/accessories");
   }
 }
-// 中文说明：HairSway() 的实际功能是：调用 `Make()`。
+// 实现 HairSway：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   // previous spring response, so it is a reference for the requested increase.
   const std::vector<Bone> bind{Make({}),Make({0,0,-25})};
   Dynamics cloth;
@@ -224,7 +224,7 @@ struct Rig {
   Check(amplitude<reference*2,"hair sway increase is excessive");
 }
 }
-// 中文说明：main() 的实际功能是：调用 `Run()`、`Length()`、`Position()`、`Check()`；并遍历集合元素、用断言验证结果。
+// 实现 main：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const auto baseline=Run(120);
   for (int fps:{30,60,144}) {
     const auto pose=Run(fps); double worst=0;
