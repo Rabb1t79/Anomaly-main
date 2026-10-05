@@ -109,7 +109,7 @@ struct MapLandmark final {
     std::string teleport_id;
 };
 
-// 中文说明：VisionPoints() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：VisionPoints()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 std::vector<Point> VisionPoints() {
     return {
         {"伤心英熊_mon_019_SadBear_BP_World_C_0", -28170, 84678, 6503},
@@ -325,7 +325,7 @@ struct Context final {
     bool combat_retry_engaged{};
 };
 
-// 中文说明：RebuildFilteredLocked() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RebuildFilteredLocked()：调用 `clear()`、`std::strlen()`、`compare()`、`push_back()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
 void RebuildFilteredLocked(Context& context) {
     context.filtered_points.clear();
     if (context.type_choice == 0 || context.sub_choice == 0) {
@@ -342,12 +342,12 @@ void RebuildFilteredLocked(Context& context) {
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 中文说明：SignatureReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SignatureReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
     return HasField<AnomalySignatureServiceV1,
                decltype(AnomalySignatureServiceV1::resolve)>(
@@ -355,7 +355,7 @@ bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
         s->resolve != nullptr;
 }
 
-// 中文说明：NamesReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：NamesReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
     return HasField<AnomalyUe5NamesServiceV1,
                decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -363,7 +363,7 @@ bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
         s->resolve_utf8 != nullptr;
 }
 
-// 中文说明：ObjectsReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ObjectsReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* s) noexcept {
     return HasField<AnomalyUe5ObjectsServiceV1,
                decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
@@ -371,7 +371,7 @@ bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* s) noexcept {
         s->find_exact != nullptr;
 }
 
-// 中文说明：NavigationReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：NavigationReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool NavigationReady(const AnomalyNteNavigationServiceV1* s) noexcept {
     return HasField<AnomalyNteNavigationServiceV1,
                decltype(AnomalyNteNavigationServiceV1::move_to_location)>(
@@ -379,7 +379,7 @@ bool NavigationReady(const AnomalyNteNavigationServiceV1* s) noexcept {
         s->move_to_location != nullptr && s->stop_movement != nullptr;
 }
 
-// 中文说明：DeveloperModeEnabled() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：DeveloperModeEnabled()：调用 `decltype()`、`offsetof()`、`developer_mode_enabled()`，结果用于完成该函数对应的数据处理。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1,
                decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -389,14 +389,14 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
 }
 
 template <typename T>
-// 中文说明：Read() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Read()：调用 `std::memcpy()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool Read(const void* address, T& value) noexcept {
     if (address == nullptr) return false;
     std::memcpy(&value, address, sizeof(T));
     return true;
 }
 
-// 中文说明：ReadPointer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ReadPointer()：调用 `Read()`；读取运行时数据，结果用于完成该函数对应的数据处理。
 void* ReadPointer(const void* address) noexcept {
     std::uintptr_t value{};
     return Read(address, value) ? reinterpret_cast<void*>(value) : nullptr;
@@ -435,7 +435,7 @@ bool ResolveRipRelative(
     return address != 0;
 }
 
-// 中文说明：ObjectAt() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ObjectAt()：调用 `Read()`、`ReadPointer()`；读取运行时数据，结果用于完成该函数对应的数据处理。
 void* ObjectAt(const std::uintptr_t g_objects, const std::uint32_t index) noexcept {
     std::int32_t count{};
     std::int32_t num_chunks{};
@@ -477,7 +477,7 @@ std::string ResolveName(
     return value;
 }
 
-// 中文说明：SnapshotPlayerPosition() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SnapshotPlayerPosition()：调用 `snapshot()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     if (context.player == nullptr || context.player->snapshot == nullptr) {
         return false;
@@ -494,14 +494,14 @@ bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     return true;
 }
 
-// 中文说明：PlanarDistanceSquared() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：PlanarDistanceSquared()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 double PlanarDistanceSquared(double ax, double ay, double bx, double by) noexcept {
     const double dx = ax - bx;
     const double dy = ay - by;
     return dx * dx + dy * dy;
 }
 
-// 中文说明：LandmarksReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：LandmarksReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
     return HasField<AnomalyNteMapLandmarksServiceV1,
                decltype(AnomalyNteMapLandmarksServiceV1::teleport)>(
@@ -511,7 +511,7 @@ bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
 }
 
 // Caller must hold context.mutex.
-// 中文说明：RefreshLandmarkCatalog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RefreshLandmarkCatalog()：调用 `LandmarksReady()`、`sequence()`、`count()`、`reserve()`；把结果追加到输出容器，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool RefreshLandmarkCatalog(Context& context) noexcept {
     const auto* service = context.map_landmarks;
     if (!LandmarksReady(service)) return false;
@@ -600,7 +600,7 @@ bool TryBeginLandmarkTransfer(Context& context, const Point& target,
     return true;
 }
 
-// 中文说明：GetStateDirectory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：GetStateDirectory()：调用 `directory()`、`value()`、`data()`、`size()`，结果用于完成该函数对应的数据处理。
 std::string GetStateDirectory(const AnomalyPluginStateServiceV1* service) noexcept {
     if (service == nullptr || service->directory == nullptr) return {};
     std::size_t size{};
@@ -618,7 +618,7 @@ std::string GetStateDirectory(const AnomalyPluginStateServiceV1* service) noexce
     return value;
 }
 
-// 中文说明：ReadTable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ReadTable()：调用 `ObjectsReady()`、`lock()`、`Text()`、`find_exact()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
 void ReadTable(Context& context) {
     std::vector<Point> points;
     void* table_object{};
@@ -698,7 +698,7 @@ void ReadTable(Context& context) {
         "status.read", "Read {0} points", read_args);
 }
 
-// 中文说明：Teleport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Teleport()：调用 `snapshot()`、`teleport()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool Teleport(Context& context, const Point& p) noexcept {
     if (context.session == nullptr || context.player == nullptr ||
         context.teleport == nullptr || context.teleport->teleport == nullptr) {
@@ -722,7 +722,7 @@ bool Teleport(Context& context, const Point& p) noexcept {
         ANOMALY_STATUS_V1_OK;
 }
 
-// 中文说明：IssueNavigation() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：IssueNavigation()：调用 `NavigationReady()`、`SnapshotPlayerPosition()`、`std::sqrt()`、`move_to_location()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool IssueNavigation(Context& context, const Point& p) noexcept {
     if (!NavigationReady(context.navigation)) return false;
     double destination[3]{p.x, p.y, p.z};
@@ -756,7 +756,7 @@ bool StartNavigation(Context& context, const Point& p,
     return true;
 }
 
-// 中文说明：LoadDoneSet() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：LoadDoneSet()：调用 `clear()`、`empty()`、`std::fopen()`、`c_str()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
 void LoadDoneSet(Context& context) {
     context.done_set.clear();
     if (context.state_directory.empty()) return;
@@ -780,7 +780,7 @@ void LoadDoneSet(Context& context) {
     std::fclose(file);
 }
 
-// 中文说明：SaveDoneSet() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SaveDoneSet()：调用 `empty()`、`std::fopen()`、`c_str()`、`std::fwrite()`；遍历输入集合，结果用于完成该函数对应的数据处理。
 void SaveDoneSet(Context& context) {
     if (context.state_directory.empty()) return;
     const std::string path = context.state_directory + "\\done.txt";
@@ -795,7 +795,7 @@ void SaveDoneSet(Context& context) {
 
 // —— 自动战斗阶段（plugins/common/combat）——
 // 模块不认识面板：它每 tick 报的状态文本经这个回调落进插件自己的状态行，面板始终只显示一行。
-// 中文说明：SetCombatStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SetCombatStatus()：调用 `lock()`，结果用于完成该函数对应的数据处理。
 void SetCombatStatus(void* user, const std::string& text) noexcept {
     auto* context = static_cast<Context*>(user);
     if (context == nullptr) return;
@@ -804,7 +804,7 @@ void SetCombatStatus(void* user, const std::string& text) noexcept {
 }
 
 // 模块不查服务，宿主指针每次 tick 重建一份。
-// 中文说明：MakeCombatHost() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MakeCombatHost()：调用 `anomaly::sdk::Host()`、`get()`、`std::clamp()`、`load()`，结果用于完成该函数对应的数据处理。
 combat::Host MakeCombatHost(Context& context) noexcept {
     // 有些服务可能在本插件 Load 之后才发布（实体/角色快照随世界加载），Load 时查询会静默
     // 拿到空指针。这里对空指针惰性重查——与一键副本对动态服务（session/combat/skills）的处理
@@ -887,7 +887,7 @@ void FailPointStart(Context& context, const std::string_view key,
 }
 
 // 结束战斗阶段并清空模块状态（换点、跳过、停止本轮都走这里）。
-// 中文说明：EndCombat() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：EndCombat()：调用 `MakeCombatHost()`、`combat::Reset()`、`clear()`，结果用于完成该函数对应的数据处理。
 void EndCombat(Context& context) {
     if (!context.combat_active) return;
     combat::Host host = MakeCombatHost(context);
@@ -960,7 +960,7 @@ void StartPoint(Context& context, const Point& p,
 }
 
 // 到达本点：清空模块状态，开始「首次接敌超时」计时；随后每 tick 由 TickCombat 驱动。
-// 中文说明：BeginCombat() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：BeginCombat()：调用 `MakeCombatHost()`、`combat::Reset()`、`clear()`、`SnapshotPlayerPosition()`，结果用于完成该函数对应的数据处理。
 void BeginCombat(Context& context, std::chrono::steady_clock::time_point now) {
     // 新点位：清零掉落重传计数 ✗（它只在「见到怪」时清零 ✗，否则会跨点位累加 ✗）。
     context.fallout_retries = 0;
@@ -994,7 +994,7 @@ void BeginCombat(Context& context, std::chrono::steady_clock::time_point now) {
 }
 
 // 掉出世界（判据与 BoxAuto 相同：玩家 Z 比当前点低 10 米以上）。
-// 中文说明：FellOutOfWorld() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：FellOutOfWorld()：调用 `SnapshotPlayerPosition()`、`std::chrono::steady_clock::now()`、`count()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool FellOutOfWorld(Context& context) {
     // 正在打一个比你低得多的怪时（悬崖/多层地形，开发者模式下模块还会传送到怪身上），
     // 玩家位置会合法地低于点位——那不是掉出世界，所以有目标就不判。
@@ -1019,7 +1019,7 @@ bool FellOutOfWorld(Context& context) {
 }
 
 // 掉出世界后重传当前点：走与出发同一条路径（StartPoint 的传送分支），不另写一套。
-// 中文说明：RetryCurrentPoint() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RetryCurrentPoint()：调用 `lock()`、`StartPoint()`，结果用于完成该函数对应的数据处理。
 void RetryCurrentPoint(Context& context, std::chrono::steady_clock::time_point now) {
     const bool engaged = context.combat_state.met_monster;
     Point p;
@@ -1036,7 +1036,7 @@ void RetryCurrentPoint(Context& context, std::chrono::steady_clock::time_point n
 }
 
 // 本点结束（打完或跳过）：不标记，直接取列表里的下一个点；列表走完就收工。
-// 中文说明：AdvancePoint() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AdvancePoint()：调用 `lock()`、`size()`、`Text()`、`StartPoint()`；遍历输入集合，结果用于完成该函数对应的数据处理。
 void AdvancePoint(Context& context, std::chrono::steady_clock::time_point now) {
     Point next;
     bool have_next = false;
@@ -1061,7 +1061,7 @@ void AdvancePoint(Context& context, std::chrono::steady_clock::time_point now) {
     if (have_next) StartPoint(context, next, now);
 }
 
-// 中文说明：StopRun() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：StopRun()：调用 `NavigationReady()`、`stop_movement()`、`MakeCombatHost()`、`combat::Reset()`，结果用于完成该函数对应的数据处理。
 void StopRun(Context& context) {
     if (context.navigating && NavigationReady(context.navigation)) {
         context.navigation->stop_movement(context.navigation->user);
@@ -1083,7 +1083,7 @@ void StopRun(Context& context) {
 // 伤害流不可用时的兜底：日志实测 `dmg=never`（打死了怪也收不到伤害事件），此时模块内部
 // 「8 秒没伤害就换靶」的计时会被距离抖动/句柄变化反复清零，永远攒不满。这里用调用方自己
 // 的时钟判断「多久没有伤害了」——参考点取最近一次伤害，从没有过就取进入战斗的时刻。
-// 中文说明：NoDamageForTooLong() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：NoDamageForTooLong()：调用 `time_since_epoch()`、`count()`、`load()`、`std::chrono::milliseconds()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool NoDamageForTooLong(Context& context, std::chrono::steady_clock::time_point now) {
     if (!context.combat_state.met_monster) return false;
     // 参考点取最晚的一个：最近一次伤害 / 最近一次换目标 / 进入战斗。
@@ -1104,7 +1104,7 @@ bool NoDamageForTooLong(Context& context, std::chrono::steady_clock::time_point 
 }
 
 // 战斗阶段每 tick 调用一次。模块内部已负责选靶/接近/攻击，以及 cleared 那一次拾取。
-// 中文说明：TickCombat() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：TickCombat()：调用 `FellOutOfWorld()`、`std::to_string()`、`RetryCurrentPoint()`、`lock()`，结果用于完成该函数对应的数据处理。
 void TickCombat(Context& context, std::chrono::steady_clock::time_point now) {
     // 掉出世界先于模块 tick 处理：地图外不该再让模块选靶/寻路。
     if (FellOutOfWorld(context)) {
@@ -1224,7 +1224,7 @@ void TickCombat(Context& context, std::chrono::steady_clock::time_point now) {
     }
 }
 
-// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Draw()：调用 `anomaly::sdk::Host()`、`get()`、`store()`、`DeveloperModeEnabled()`；遍历输入集合，结果用于完成该函数对应的数据处理。
 void Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
     if (plugin_context == nullptr) return;
     auto& context = *static_cast<Context*>(plugin_context);
@@ -1429,7 +1429,7 @@ void Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
 
 }  // namespace
 
-// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Load()：调用 `new()`、`anomaly::sdk::Host()`、`anomaly::plugins::Localizer()`、`get()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (!host || !plugin_context || host->api_major != ANOMALY_PLUGIN_API_V1_MAJOR) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -1490,7 +1490,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Start()：调用 `LoadDoneSet()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (!plugin_context) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -1500,7 +1500,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Stop()：调用 `anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     if (!plugin_context) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -1508,12 +1508,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Unload()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 void ANOMALY_CALL Unload(void* plugin_context) {
     delete static_cast<Context*>(plugin_context);
 }
 
-// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Update()：调用 `std::chrono::steady_clock::now()`、`exchange()`、`ReadTable()`、`SnapshotPlayerPosition()`；读取运行时数据，结果用于完成该函数对应的数据处理。
 void ANOMALY_CALL Update(void* plugin_context, const double) {
     if (!plugin_context) return;
     auto& context = *static_cast<Context*>(plugin_context);
