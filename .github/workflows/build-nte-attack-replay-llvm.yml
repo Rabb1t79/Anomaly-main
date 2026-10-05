@@ -6,6 +6,7 @@ on:
       - nte-attack-replay-novs-20261004
       - attack-native-20261005
       - attack-replay-native-abi-20261005
+      - nte-attack-replay-native-20261006
   workflow_dispatch:
   pull_request:
     branches:
