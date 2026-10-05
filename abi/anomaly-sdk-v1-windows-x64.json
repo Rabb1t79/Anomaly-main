@@ -1479,7 +1479,7 @@
       }
     },
     "AnomalyNteVehicleServiceV1": {
-      "size": 72,
+      "size": 80,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
