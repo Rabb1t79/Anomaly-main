@@ -115,6 +115,7 @@ struct Context final {
 std::atomic<Context *> g_active{};
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct *value, const std::size_t offset) noexcept {
   return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -124,6 +125,7 @@ AnomalyStatusV1 Status(const std::uint32_t code,
   return {code, 0, {message.data(), message.size()}};
 }
 
+// 中文说明：Bytes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
   return {reinterpret_cast<const std::uint8_t *>(value.data()), value.size()};
 }
@@ -150,6 +152,7 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
              : nullptr;
 }
 
+// 中文说明：CoreReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
   return HasField<AnomalyCoreServiceV1,
                   decltype(AnomalyCoreServiceV1::read_memory)>(
@@ -157,6 +160,7 @@ bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
          service->read_memory != nullptr;
 }
 
+// 中文说明：ConfigReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ConfigReady(const AnomalyConfigServiceV1 *service) noexcept {
   return HasField<AnomalyConfigServiceV1,
                   decltype(AnomalyConfigServiceV1::write_atomic)>(
@@ -169,6 +173,7 @@ bool ConfigReady(const AnomalyConfigServiceV1 *service) noexcept {
          service->unregister_schema != nullptr;
 }
 
+// 中文说明：InputReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool InputReady(const AnomalyInputServiceV1 *service) noexcept {
   return HasField<AnomalyInputServiceV1,
                   decltype(AnomalyInputServiceV1::release_hotkey)>(
@@ -178,6 +183,7 @@ bool InputReady(const AnomalyInputServiceV1 *service) noexcept {
          service->release_hotkey != nullptr;
 }
 
+// 中文说明：UiReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool UiReady(const AnomalyUiServiceV1 *service) noexcept {
   return HasField<AnomalyUiServiceV1,
                   decltype(AnomalyUiServiceV1::input_double)>(
@@ -192,6 +198,7 @@ bool UiReady(const AnomalyUiServiceV1 *service) noexcept {
          service->end_table != nullptr && service->input_double != nullptr;
 }
 
+// 中文说明：DeveloperModeEnabled() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1 *service) noexcept {
   return HasField<AnomalyUiServiceV1,
                   decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -200,12 +207,14 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1 *service) noexcept {
          service->developer_mode_enabled(service->user) != 0;
 }
 
+// 中文说明：CurrentWorld() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CurrentWorld(const AnomalyNteSessionSnapshotV1 &snapshot) noexcept {
   return snapshot.struct_size >= sizeof(snapshot) &&
          snapshot.state == ANOMALY_NTE_SESSION_V1_WORLD_READY &&
          snapshot.world.id != 0 && snapshot.world.generation != 0;
 }
 
+// 中文说明：CurrentPlayer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CurrentPlayer(const AnomalyNtePlayerSnapshotV1 &snapshot) noexcept {
   return snapshot.struct_size >= sizeof(snapshot) &&
          (snapshot.flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
@@ -223,6 +232,7 @@ bool SnapshotPosition(const std::array<std::atomic<double>, 3> &position,
   return true;
 }
 
+// 中文说明：SignatureReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
   return HasField<AnomalySignatureServiceV1,
                   decltype(AnomalySignatureServiceV1::resolve)>(
@@ -230,6 +240,7 @@ bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
          service->resolve != nullptr;
 }
 
+// 中文说明：HookReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HookReady(const AnomalyHookServiceV1 *service) noexcept {
   return HasField<AnomalyHookServiceV1,
                   decltype(AnomalyHookServiceV1::end_callback)>(
@@ -247,6 +258,7 @@ void Log(Context &context, const std::uint32_t level,
 }
 
 template <typename T>
+// 中文说明：Read() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Read(Context &context, const std::uintptr_t address, T &value) noexcept {
   if (context.core == nullptr || context.core->read_memory == nullptr ||
       address == 0) {
@@ -337,12 +349,14 @@ bool NameEquals(Context &context, const std::uint32_t name_id,
   return std::equal(expected.begin(), expected.end(), name.begin());
 }
 
+// 中文说明：MouseAxisNamesValid() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool MouseAxisNamesValid(Context &context) noexcept {
   return NameEquals(context, kMouseXNameId, "MouseX") &&
          NameEquals(context, kMouseYNameId, "MouseY") &&
          NameEquals(context, kMouse2DNameId, "Mouse2D");
 }
 
+// 中文说明：IsMouseAxisInput() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool IsMouseAxisInput(const void *parameters) noexcept {
   if (parameters == nullptr)
     return false;
@@ -410,6 +424,7 @@ bool StreamingSourceMethodsAvailable(
          service->set_override != nullptr && service->clear_override != nullptr;
 }
 
+// 中文说明：SyncStreamingSourceOverride() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SyncStreamingSourceOverride(Context &context) noexcept {
   const bool follows =
       context.enabled.load(std::memory_order_acquire) &&
@@ -453,6 +468,7 @@ void SyncStreamingSourceOverride(Context &context) noexcept {
   context.streaming_source_armed = armed;
 }
 
+// 中文说明：RefreshCameraManager() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RefreshCameraManager(Context &context) noexcept {
   std::uintptr_t manager{};
   if (!ResolveActiveCameraManager(context, manager)) {
@@ -471,6 +487,7 @@ void RefreshCameraManager(Context &context) noexcept {
   }
 }
 
+// 中文说明：RefreshPlayerInput() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RefreshPlayerInput(Context &context) noexcept {
   std::uintptr_t player_input{};
   if (!ResolveActivePlayerInput(context, player_input)) {
@@ -485,6 +502,7 @@ void RefreshPlayerInput(Context &context) noexcept {
   }
 }
 
+// 中文说明：DistanceValid() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool DistanceValid(const double distance) noexcept {
   return std::isfinite(distance) && distance >= 0.0;
 }
@@ -495,6 +513,7 @@ bool KeyDown(const AnomalyInputSnapshotV1 &input,
                         static_cast<std::uint8_t>(1U << (key % 8U))) != 0;
 }
 
+// 中文说明：VirtualKeyName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string VirtualKeyName(const Context &context, const std::uint32_t key) {
   if ((key >= '0' && key <= '9') || (key >= 'A' && key <= 'Z'))
     return std::string(1, static_cast<char>(key));
@@ -588,12 +607,14 @@ bool SettingsValid(const double distance, const float speed,
          toggle < 256U && teleport > 0 && teleport < 256U;
 }
 
+// 中文说明：MarkSettingsDirty() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void MarkSettingsDirty(Context &context) noexcept {
   context.settings_changed_at.store(GetTickCount64(),
                                     std::memory_order_release);
   context.settings_revision.fetch_add(1, std::memory_order_acq_rel);
 }
 
+// 中文说明：PersistSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool PersistSettings(Context &context) noexcept {
   const double distance = context.distance.load(std::memory_order_acquire);
   const float speed = context.speed.load(std::memory_order_acquire);
@@ -633,6 +654,7 @@ bool PersistSettings(Context &context) noexcept {
   }
 }
 
+// 中文说明：LoadSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool LoadSettings(Context &context) noexcept {
   try {
     std::uint32_t version{};
@@ -702,6 +724,7 @@ bool LoadSettings(Context &context) noexcept {
   }
 }
 
+// 中文说明：SetFreeCameraEnabled() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SetFreeCameraEnabled(Context &context, const bool enabled) noexcept {
   const bool changed = context.configured_enabled.exchange(
                            enabled, std::memory_order_acq_rel) != enabled;
@@ -754,6 +777,7 @@ bool RegisterToggleHotkey(Context &context, const std::uint32_t key,
   }
 }
 
+// 中文说明：ReleaseToggleHotkey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReleaseToggleHotkey(Context &context) noexcept {
   if (context.toggle_hotkey.id != 0 && InputReady(context.input)) {
     static_cast<void>(context.input->release_hotkey(context.input->user,
@@ -762,6 +786,7 @@ void ReleaseToggleHotkey(Context &context) noexcept {
   context.toggle_hotkey = {};
 }
 
+// 中文说明：ReleaseSettingsSchema() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReleaseSettingsSchema(Context &context) noexcept {
   if (context.settings_schema.id == 0 || context.config == nullptr ||
       !HasField<AnomalyConfigServiceV1,
@@ -776,6 +801,7 @@ void ReleaseSettingsSchema(Context &context) noexcept {
   context.settings_schema = {};
 }
 
+// 中文说明：ReplaceToggleHotkey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReplaceToggleHotkey(Context &context, const std::uint32_t key) noexcept {
   const auto current = context.toggle_key.load(std::memory_order_acquire);
   if (key == current)
@@ -797,6 +823,7 @@ bool ReplaceToggleHotkey(Context &context, const std::uint32_t key) noexcept {
   return true;
 }
 
+// 中文说明：CaptureToggleKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CaptureToggleKey(Context &context) noexcept {
   int pressed{};
   if (context.input->was_pressed(context.input->user, VK_ESCAPE, &pressed)
@@ -818,6 +845,7 @@ void CaptureToggleKey(Context &context) noexcept {
   }
 }
 
+// 中文说明：QueueTeleport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void QueueTeleport(Context &context) noexcept {
   if (!context.camera_position_valid.load(std::memory_order_acquire)) {
     context.teleport_status.store(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -871,6 +899,7 @@ bool RegisterTeleportHotkey(Context &context, const std::uint32_t key,
   }
 }
 
+// 中文说明：ReleaseTeleportHotkey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReleaseTeleportHotkey(Context &context) noexcept {
   if (context.teleport_hotkey.id != 0 && InputReady(context.input)) {
     static_cast<void>(context.input->release_hotkey(
@@ -879,6 +908,7 @@ void ReleaseTeleportHotkey(Context &context) noexcept {
   context.teleport_hotkey = {};
 }
 
+// 中文说明：ReplaceTeleportHotkey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReplaceTeleportHotkey(Context &context, const std::uint32_t key) noexcept {
   const auto current = context.teleport_key.load(std::memory_order_acquire);
   if (key == current) return true;
@@ -898,6 +928,7 @@ bool ReplaceTeleportHotkey(Context &context, const std::uint32_t key) noexcept {
   return true;
 }
 
+// 中文说明：CaptureTeleportKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CaptureTeleportKey(Context &context) noexcept {
   int pressed{};
   if (context.input->was_pressed(context.input->user, VK_ESCAPE, &pressed)
@@ -1044,6 +1075,7 @@ bool ANOMALY_CALL PlayerInputKeyDetour(void *object,
   return handled;
 }
 
+// 中文说明：ProcessTeleport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ProcessTeleport(Context &context) noexcept {
   if (!context.teleport_pending.exchange(false, std::memory_order_acq_rel))
     return;
@@ -1140,6 +1172,7 @@ void ProcessTeleport(Context &context) noexcept {
   }
 }
 
+// 中文说明：UpdateFreeCamera() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void UpdateFreeCamera(Context &context, const double delta_seconds) noexcept {
   if (!InputReady(context.input) ||
       context.camera_manager.load(std::memory_order_acquire) == 0)
@@ -1249,6 +1282,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1344,6 +1378,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1400,6 +1435,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   return result;
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void *plugin_context) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1411,6 +1447,7 @@ void ANOMALY_CALL Unload(void *plugin_context) {
   delete context;
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1441,6 +1478,7 @@ void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) {
     }
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void *plugin_context, const AnomalyUiServiceV1 *ui) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr || !UiReady(ui))
