@@ -161,12 +161,12 @@ std::uint64_t g_reconciled_cache_generation{};
 AnomalyGenerationHandleV1 g_ahud_subscription{};
 
 template <typename Struct, typename Field>
-// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool HasField(const Struct* value, std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 中文说明：LogSettingsFailure() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：LogSettingsFailure()：调用 `decltype()`、`offsetof()`、`std::string()`、`log()`，结果用于完成该函数对应的数据处理。
 void LogSettingsFailure(const std::string_view operation) {
     if (!HasField<AnomalyCoreServiceV1, decltype(AnomalyCoreServiceV1::log)>(
             g_context.core, offsetof(AnomalyCoreServiceV1, log)) ||
@@ -179,10 +179,10 @@ void LogSettingsFailure(const std::string_view operation) {
         anomaly::sdk::StringView(message));
 }
 
-// 中文说明：ValidBoolean() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ValidBoolean()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool ValidBoolean(int value) noexcept { return value == 0 || value == 1; }
 
-// 中文说明：ValidSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ValidSettings()：调用 `ValidBoolean()`、`std::isfinite()`、`std::ranges::all_of()`，结果用于完成该函数对应的数据处理。
 bool ValidSettings(const Context& settings) noexcept {
     return ValidBoolean(settings.menu_open) && ValidBoolean(settings.enabled) &&
         ValidBoolean(settings.draw_2d) && ValidBoolean(settings.draw_3d) &&
@@ -207,10 +207,10 @@ bool ValidSettings(const Context& settings) noexcept {
 
 class SettingsJsonReader final {
 public:
-// 中文说明：SettingsJsonReader() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SettingsJsonReader()：直接处理局部数据，结果用于完成该函数对应的数据处理。
     explicit SettingsJsonReader(const std::string_view input) noexcept : input_(input) {}
 
-// 中文说明：Consume() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Consume()：调用 `SkipWhitespace()`、`size()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
     bool Consume(const char expected) noexcept {
         SkipWhitespace();
         if (position_ == input_.size() || input_[position_] != expected) return false;
@@ -218,7 +218,7 @@ public:
         return true;
     }
 
-// 中文说明：ParseBoolean() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ParseBoolean()：调用 `SkipWhitespace()`、`substr()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
     bool ParseBoolean(int& value) noexcept {
         SkipWhitespace();
         if (input_.substr(position_, 4) == "true") {
@@ -234,7 +234,7 @@ public:
         return false;
     }
 
-// 中文说明：ParseNumber() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ParseNumber()：调用 `SkipWhitespace()`、`size()`、`std::from_chars()`、`data()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
     bool ParseNumber(float& value) noexcept {
         SkipWhitespace();
         const std::size_t begin = position_;
@@ -280,7 +280,7 @@ public:
             std::isfinite(value);
     }
 
-// 中文说明：ParseString() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ParseString()：调用 `Consume()`、`clear()`、`size()`、`push_back()`；把结果追加到输出容器，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
     bool ParseString(std::string& value, const std::size_t maximum_size) {
         if (!Consume('"')) return false;
         value.clear();
@@ -296,14 +296,14 @@ public:
         return false;
     }
 
-// 中文说明：AtEnd() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AtEnd()：调用 `SkipWhitespace()`、`size()`，结果用于完成该函数对应的数据处理。
     bool AtEnd() noexcept {
         SkipWhitespace();
         return position_ == input_.size();
     }
 
 private:
-// 中文说明：SkipWhitespace() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SkipWhitespace()：调用 `size()`；遍历输入集合，结果用于完成该函数对应的数据处理。
     void SkipWhitespace() noexcept {
         while (position_ < input_.size() &&
                (input_[position_] == ' ' || input_[position_] == '\n' ||
@@ -316,7 +316,7 @@ private:
     std::size_t position_{};
 };
 
-// 中文说明：ParseFilterId() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ParseFilterId()：调用 `empty()`、`size()`、`front()`、`max()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool ParseFilterId(const std::string_view text, std::uint64_t& value) noexcept {
     if (text.empty() || text.size() > 20 || (text.size() > 1 && text.front() == '0')) {
         return false;
@@ -352,7 +352,7 @@ bool ParseFilterMap(
     }
 }
 
-// 中文说明：ParseColor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ParseColor()：调用 `Consume()`、`std::size()`、`ParseNumber()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool ParseColor(SettingsJsonReader& reader, float (&color)[4]) noexcept {
     if (!reader.Consume('[')) return false;
     for (std::size_t index = 0; index < std::size(color); ++index) {
@@ -366,7 +366,7 @@ bool ParseColor(SettingsJsonReader& reader, float (&color)[4]) noexcept {
     return true;
 }
 
-// 中文说明：ApplySettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ApplySettings()：调用 `std::ranges::copy()`、`std::move()`，结果用于完成该函数对应的数据处理。
 void ApplySettings(Context& loaded) {
     g_context.menu_open = loaded.menu_open;
     g_context.enabled = loaded.enabled;
@@ -389,7 +389,7 @@ void ApplySettings(Context& loaded) {
     g_context.settings_dirty = false;
 }
 
-// 中文说明：ParseSettingsDocument() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ParseSettingsDocument()：调用 `reader()`、`Consume()`、`ParseString()`、`ParseBoolean()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool ParseSettingsDocument(const std::string_view document) {
     constexpr std::uint32_t kMenuOpen = 1U << 0U;
     constexpr std::uint32_t kEnabled = 1U << 1U;
@@ -488,7 +488,7 @@ bool ParseSettingsDocument(const std::string_view document) {
     return true;
 }
 
-// 中文说明：AppendNumber() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AppendNumber()：调用 `std::isfinite()`、`std::to_chars()`、`data()`、`size()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool AppendNumber(std::string& document, const float value) {
     if (!std::isfinite(value)) return false;
     std::array<char, 64> buffer{};
@@ -528,7 +528,7 @@ bool AppendFilterMap(
     return true;
 }
 
-// 中文说明：BuildSettingsDocument() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：BuildSettingsDocument()：调用 `ValidSettings()`、`clear()`、`reserve()`、`push_back()`；把结果追加到输出容器，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool BuildSettingsDocument(std::string& document) {
     if (!ValidSettings(g_context)) return false;
     document.clear();
@@ -569,7 +569,7 @@ bool BuildSettingsDocument(std::string& document) {
     return document.size() <= kMaximumSettingsBytes;
 }
 
-// 中文说明：HasConfigFunctions() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：HasConfigFunctions()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool HasConfigFunctions(const AnomalyConfigServiceV1* config) noexcept {
     return HasField<AnomalyConfigServiceV1, decltype(AnomalyConfigServiceV1::write_atomic)>(
                config, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
@@ -580,7 +580,7 @@ bool HasConfigFunctions(const AnomalyConfigServiceV1* config) noexcept {
 
 enum class SettingsLoadResult { Loaded, Missing, Failed };
 
-// 中文说明：LoadSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：LoadSettings()：调用 `HasConfigFunctions()`、`read()`、`anomaly::sdk::StringView()`、`document()`，结果用于完成该函数对应的数据处理。
 SettingsLoadResult LoadSettings() {
     const auto* config = g_context.config;
     if (!HasConfigFunctions(config)) return SettingsLoadResult::Failed;
@@ -614,7 +614,7 @@ SettingsLoadResult LoadSettings() {
     }
 }
 
-// 中文说明：SaveSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SaveSettings()：调用 `HasConfigFunctions()`、`BuildSettingsDocument()`、`write_atomic()`、`anomaly::sdk::StringView()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool SaveSettings() {
     const auto* config = g_context.config;
     if (!HasConfigFunctions(config)) return false;
@@ -632,13 +632,13 @@ bool SaveSettings() {
     }
 }
 
-// 中文说明：IsCompleteSnapshot() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：IsCompleteSnapshot()：调用 `return()`，结果用于完成该函数对应的数据处理。
 bool IsCompleteSnapshot(const std::uint32_t flags) noexcept {
     return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
         (flags & ANOMALY_NTE_SNAPSHOT_V1_PARTIAL) == 0;
 }
 
-// 中文说明：CurrentDisplaySettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：CurrentDisplaySettings()：调用 `std::ranges::copy()`、`begin()`，结果用于完成该函数对应的数据处理。
 DisplaySettings CurrentDisplaySettings() {
     DisplaySettings settings;
     settings.enabled = g_context.enabled;
@@ -660,14 +660,14 @@ DisplaySettings CurrentDisplaySettings() {
     return settings;
 }
 
-// 中文说明：PublishDisplaySettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：PublishDisplaySettings()：调用 `store()`、`CurrentDisplaySettings()`，结果用于完成该函数对应的数据处理。
 void PublishDisplaySettings() {
     g_display_settings.store(
         std::make_shared<const DisplaySettings>(CurrentDisplaySettings()),
         std::memory_order_release);
 }
 
-// 中文说明：MobilityName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MobilityName()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 std::string MobilityName(std::uint32_t flags) {
     if ((flags & ANOMALY_NTE_ENTITY_V1_MOVABLE) != 0) return "Movable";
     if ((flags & ANOMALY_NTE_ENTITY_V1_STATIONARY) != 0) return "Stationary";
@@ -675,12 +675,12 @@ std::string MobilityName(std::uint32_t flags) {
     return "Unknown";
 }
 
-// 中文说明：CategoryLabel() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：CategoryLabel()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 const std::string& CategoryLabel(const EntityView& entity) noexcept {
     return entity.category;
 }
 
-// 中文说明：MobilityVisible() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MobilityVisible()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool MobilityVisible(std::uint32_t flags) noexcept {
     if ((flags & ANOMALY_NTE_ENTITY_V1_MOVABLE) != 0) return g_context.show_movable != 0;
     if ((flags & ANOMALY_NTE_ENTITY_V1_STATIONARY) != 0) return g_context.show_stationary != 0;
@@ -688,7 +688,7 @@ bool MobilityVisible(std::uint32_t flags) noexcept {
     return g_context.show_unknown != 0;
 }
 
-// 中文说明：MobilityVisible() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MobilityVisible()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool MobilityVisible(const DisplaySettings& settings, std::uint32_t flags) noexcept {
     if ((flags & ANOMALY_NTE_ENTITY_V1_MOVABLE) != 0) return settings.show_movable != 0;
     if ((flags & ANOMALY_NTE_ENTITY_V1_STATIONARY) != 0) {
@@ -699,7 +699,7 @@ bool MobilityVisible(const DisplaySettings& settings, std::uint32_t flags) noexc
 }
 
 template <typename Resolve>
-// 中文说明：ResolveUtf8() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ResolveUtf8()：调用 `resolve()`、`value()`、`data()`、`find()`，结果用于完成该函数对应的数据处理。
 std::string ResolveUtf8(Resolve&& resolve) {
     std::size_t size{};
     if (resolve(nullptr, &size).code != ANOMALY_STATUS_V1_OK ||
@@ -728,7 +728,7 @@ std::string ResolveCategory(
     return value;
 }
 
-// 中文说明：CollectEntities() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：CollectEntities()：调用 `host()`、`decltype()`、`get()`、`offsetof()`；把结果追加到输出容器，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool CollectEntities(AnomalyNteEntityFrameV1& frame, std::vector<EntityView>& entities) {
     const anomaly::sdk::Host host(g_context.host);
     const auto service = host.Query<AnomalyNteEntitiesServiceV1>(
@@ -796,7 +796,7 @@ bool CollectEntities(AnomalyNteEntityFrameV1& frame, std::vector<EntityView>& en
         offset = result.next_offset;
     }
 }
-// 中文说明：SetAll() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SetAll()：直接处理局部数据；遍历输入集合，结果用于完成该函数对应的数据处理。
 void SetAll(std::unordered_map<std::uint64_t, int>& values, int enabled) {
     for (auto& [id, value] : values) {
         static_cast<void>(id);
@@ -804,7 +804,7 @@ void SetAll(std::unordered_map<std::uint64_t, int>& values, int enabled) {
     }
 }
 
-// 中文说明：AnyEnabled() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AnyEnabled()：调用 `empty()`、`std::ranges::any_of()`，结果用于完成该函数对应的数据处理。
 bool AnyEnabled(const std::unordered_map<std::uint64_t, int>& values) {
     return values.empty() || std::ranges::any_of(values, [](const auto& entry) {
         return entry.second != 0;
@@ -818,33 +818,33 @@ bool FilterEnabled(
     return found == filters.end() || found->second != 0;
 }
 
-// 中文说明：HasVisibleMobility() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：HasVisibleMobility()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool HasVisibleMobility() noexcept {
     return g_context.show_static != 0 || g_context.show_stationary != 0 ||
         g_context.show_movable != 0 || g_context.show_unknown != 0;
 }
 
-// 中文说明：HasVisibleMobility() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：HasVisibleMobility()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool HasVisibleMobility(const DisplaySettings& settings) noexcept {
     return settings.show_static != 0 || settings.show_stationary != 0 ||
         settings.show_movable != 0 || settings.show_unknown != 0;
 }
 
-// 中文说明：HasActiveRendering() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：HasActiveRendering()：调用 `HasVisibleMobility()`、`AnyEnabled()`，结果用于完成该函数对应的数据处理。
 bool HasActiveRendering() {
     return g_context.enabled != 0 && (g_context.draw_2d != 0 || g_context.draw_3d != 0) &&
         HasVisibleMobility() && AnyEnabled(g_context.class_enabled) &&
         AnyEnabled(g_context.entity_enabled);
 }
 
-// 中文说明：HasActiveRendering() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：HasActiveRendering()：调用 `HasVisibleMobility()`、`AnyEnabled()`，结果用于完成该函数对应的数据处理。
 bool HasActiveRendering(const DisplaySettings& settings) {
     return settings.enabled != 0 && (settings.draw_2d != 0 || settings.draw_3d != 0) &&
         HasVisibleMobility(settings) && AnyEnabled(settings.class_enabled) &&
         AnyEnabled(settings.entity_enabled);
 }
 
-// 中文说明：ReconcileEntityFilters() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ReconcileEntityFilters()：调用 `empty()`、`reserve()`、`size()`、`try_emplace()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool ReconcileEntityFilters(const EntityCache& cache) {
     if (!cache.available || cache.entities.empty()) return false;
     g_context.class_enabled.reserve(
@@ -861,7 +861,7 @@ bool ReconcileEntityFilters(const EntityCache& cache) {
     return changed;
 }
 
-// 中文说明：BuildClassSummaries() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：BuildClassSummaries()：调用 `MobilityVisible()`、`CategoryLabel()`、`reserve()`、`size()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
 std::vector<ClassSummary> BuildClassSummaries(const std::vector<EntityView>& entities) {
     std::map<std::uint64_t, ClassSummary> by_id;
     for (const auto& entity : entities) {
@@ -884,7 +884,7 @@ std::vector<ClassSummary> BuildClassSummaries(const std::vector<EntityView>& ent
     return result;
 }
 
-// 中文说明：MobilityVisibilityKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MobilityVisibilityKey()：调用 `return()`，结果用于完成该函数对应的数据处理。
 std::uint32_t MobilityVisibilityKey() noexcept {
     return (g_context.show_static != 0 ? 1u : 0u) |
         (g_context.show_stationary != 0 ? 1u << 1u : 0u) |
@@ -892,7 +892,7 @@ std::uint32_t MobilityVisibilityKey() noexcept {
         (g_context.show_unknown != 0 ? 1u << 3u : 0u);
 }
 
-// 中文说明：CachedClassSummaries() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：CachedClassSummaries()：调用 `MobilityVisibilityKey()`、`BuildClassSummaries()`，结果用于完成该函数对应的数据处理。
 const std::vector<ClassSummary>& CachedClassSummaries(const EntityCache& cache) {
     const std::uint32_t visibility = MobilityVisibilityKey();
     if (cache.frame.generation != g_context.class_summary_generation ||
@@ -904,7 +904,7 @@ const std::vector<ClassSummary>& CachedClassSummaries(const EntityCache& cache) 
     return g_context.class_summaries;
 }
 
-// 中文说明：PageCount() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：PageCount()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 std::size_t PageCount(std::size_t item_count) noexcept {
     return std::max<std::size_t>(1, (item_count + kPageSize - 1) / kPageSize);
 }
@@ -933,7 +933,7 @@ void PageButtons(
     ui->text(ui->user, anomaly::sdk::StringView(page_text));
 }
 
-// 中文说明：DrawMenu() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：DrawMenu()：调用 `set_next_window_size()`、`Label()`、`begin_window()`、`anomaly::sdk::StringView()`；把结果追加到输出容器，遍历输入集合，修改对象或运行时状态，结果用于完成该函数对应的数据处理。
 bool DrawMenu(const AnomalyUiServiceV1* ui, const EntityCache& cache) {
     if (ui == nullptr || ui->begin_window == nullptr || ui->end_window == nullptr) return false;
     bool settings_changed{};
@@ -1110,13 +1110,13 @@ bool DrawMenu(const AnomalyUiServiceV1* ui, const EntityCache& cache) {
     return settings_changed;
 }
 
-// 中文说明：ClearEntityCache() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ClearEntityCache()：调用 `store()`、`clear()`，结果用于完成该函数对应的数据处理。
 void ClearEntityCache() noexcept {
     g_entity_cache.store({}, std::memory_order_release);
     g_class_names.clear();
 }
 
-// 中文说明：RefreshCacheIfDue() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RefreshCacheIfDue()：调用 `Clock::now()`、`exchange()`、`CollectEntities()`、`store()`，结果用于完成该函数对应的数据处理。
 void RefreshCacheIfDue() {
     const auto now = Clock::now();
     if (!g_refresh_requested.exchange(false, std::memory_order_acq_rel) &&
@@ -1139,7 +1139,7 @@ void RefreshCacheIfDue() {
         std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / rate));
 }
 
-// 中文说明：AhudServiceAvailable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AhudServiceAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool AhudServiceAvailable(const AnomalyUe5AhudServiceV1* service) noexcept {
     return service != nullptr &&
         HasField<AnomalyUe5AhudServiceV1,
@@ -1155,7 +1155,7 @@ bool AhudServiceAvailable(const AnomalyUe5AhudServiceV1* service) noexcept {
         service->subscribe != nullptr && service->unsubscribe != nullptr;
 }
 
-// 中文说明：AhudFrameAvailable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AhudFrameAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
 bool AhudFrameAvailable(const AnomalyUe5AhudFrameV1* frame) noexcept {
     return frame != nullptr &&
         HasField<AnomalyUe5AhudFrameV1,
@@ -1498,7 +1498,7 @@ void DrawLabel(
         frame->user, anomaly::sdk::StringView(label), x, y, color, scale));
 }
 
-// 中文说明：PackColor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：PackColor()：调用 `std::lround()`、`std::clamp()`、`std::isfinite()`、`ANOMALY_RGBA_V1()`，结果用于完成该函数对应的数据处理。
 std::uint32_t PackColor(const std::array<float, 4>& rgba) noexcept {
     const auto channel = [](const float value) {
         return static_cast<std::uint32_t>(std::lround(
@@ -1544,7 +1544,7 @@ void ANOMALY_CALL DrawAhud(
     }
 }
 
-// 中文说明：SubscribeAhud() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SubscribeAhud()：调用 `AhudServiceAvailable()`、`subscribe()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 SubscribeAhud() noexcept {
     if (!AhudServiceAvailable(g_context.ahud)) {
         return {ANOMALY_STATUS_V1_UNAVAILABLE, 0, {}};
@@ -1560,7 +1560,7 @@ AnomalyStatusV1 SubscribeAhud() noexcept {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：UnsubscribeAhud() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：UnsubscribeAhud()：调用 `anomaly::sdk::Ok()`、`AhudServiceAvailable()`、`unsubscribe()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 UnsubscribeAhud() noexcept {
     if (g_ahud_subscription.id == 0) return anomaly::sdk::Ok();
     const AnomalyGenerationHandleV1 handle = g_ahud_subscription;
@@ -1576,7 +1576,7 @@ AnomalyStatusV1 UnsubscribeAhud() noexcept {
     return status;
 }
 
-// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Load()：调用 `host_view()`、`HasConfigFunctions()`、`get()`、`AhudServiceAvailable()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     *context = nullptr;
@@ -1625,7 +1625,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Start()：调用 `ClearEntityCache()`、`store()`、`PublishDisplaySettings()`、`SubscribeAhud()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     ClearEntityCache();
     g_refresh_requested.store(true, std::memory_order_release);
@@ -1641,7 +1641,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Stop()：调用 `UnsubscribeAhud()`、`SaveSettings()`、`LogSettingsFailure()`、`ClearEntityCache()`，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     const AnomalyStatusV1 ahud_status = UnsubscribeAhud();
     const bool saved = !g_context.settings_dirty || SaveSettings();
@@ -1653,7 +1653,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     return saved ? anomaly::sdk::Ok() : AnomalyStatusV1{ANOMALY_STATUS_V1_FAILED, 0, {}};
 }
 
-// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Unload()：调用 `UnsubscribeAhud()`、`ClearEntityCache()`、`store()`，结果用于完成该函数对应的数据处理。
 void ANOMALY_CALL Unload(void*) {
     static_cast<void>(UnsubscribeAhud());
     ClearEntityCache();
@@ -1662,7 +1662,7 @@ void ANOMALY_CALL Unload(void*) {
     g_context = {};
 }
 
-// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Update()：调用 `load()`、`HasActiveRendering()`、`RefreshCacheIfDue()`，结果用于完成该函数对应的数据处理。
 void ANOMALY_CALL Update(void*, double) {
     const auto settings = g_display_settings.load(std::memory_order_acquire);
     if (!settings || !HasActiveRendering(*settings)) {
@@ -1674,7 +1674,7 @@ void ANOMALY_CALL Update(void*, double) {
     RefreshCacheIfDue();
 }
 
-// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Draw()：调用 `load()`、`ReconcileEntityFilters()`、`DrawMenu()`、`PublishDisplaySettings()`，结果用于完成该函数对应的数据处理。
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
     const auto cache = g_entity_cache.load(std::memory_order_acquire);
     const EntityCache empty;
