@@ -4,27 +4,35 @@
 #include <iostream>
 
 namespace fixture {
+// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Check(bool value,const char* message) {
   if (!value) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
 }
 struct Block {
   std::array<std::uint8_t,0x1000> bytes{};
+// 中文说明：Address() 负责执行这里的具体处理；保持现有调用关系与行为不变。
   std::uintptr_t Address() { return reinterpret_cast<std::uintptr_t>(bytes.data()); }
+// 中文说明：Set() 负责执行这里的具体处理；保持现有调用关系与行为不变。
   template<class T> void Set(std::size_t offset,T value) { std::memcpy(bytes.data()+offset,&value,sizeof(value)); }
+// 中文说明：Get() 负责执行这里的具体处理；保持现有调用关系与行为不变。
   template<class T> T Get(std::size_t offset) const { T value{}; std::memcpy(&value,bytes.data()+offset,sizeof(value)); return value; }
 };
 struct Region { std::uintptr_t address; std::size_t size; };
 std::vector<Region> regions;
+// 中文说明：Register() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 template<class T> void Register(T& data) { regions.push_back({reinterpret_cast<std::uintptr_t>(&data),sizeof(data)}); }
+// 中文说明：Contains() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Contains(std::uintptr_t address,std::size_t size) {
   for (const auto& r:regions)
     if (address>=r.address && address-r.address<=r.size && size<=r.size-(address-r.address)) return true;
   return false;
 }
+// 中文说明：ReadMemory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL ReadMemory(void*,std::uintptr_t address,AnomalyMutableByteSpanV1 bytes) {
   if (!Contains(address,bytes.size)) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
   std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size); return anomaly::sdk::Ok();
 }
+// 中文说明：WriteMemory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL WriteMemory(void*,std::uintptr_t address,AnomalyByteSpanV1 bytes) {
   if (!Contains(address,bytes.size)) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
   std::memcpy(reinterpret_cast<void*>(address),bytes.data,bytes.size); return anomaly::sdk::Ok();
@@ -32,6 +40,7 @@ AnomalyStatusV1 ANOMALY_CALL WriteMemory(void*,std::uintptr_t address,AnomalyByt
 enum Function { Mode,Lod,Visibility,Destroy,Count };
 int functions[Count]{};
 unsigned destroyed{};
+// 中文说明：Event() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void __fastcall Event(void* object,void* function,void* parameters) {
   auto* bytes=static_cast<std::uint8_t*>(object);
   if (function==&functions[Mode]) std::memcpy(bytes+kMeshAnimationModeOffset,parameters,1);
@@ -42,6 +51,7 @@ void __fastcall Event(void* object,void* function,void* parameters) {
     ++destroyed;
   }
 }
+// 中文说明：Find() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Find(void*,AnomalyStringViewV1 path,AnomalyGenerationHandleV1* handle) {
   const std::array<std::string_view,Count> names{kFunctionSetAnimationModePath,kFunctionSetForcedLodPath,
                                                kFunctionSceneSetVisibilityPath,kFunctionActorComponentDestroyPath};
@@ -69,12 +79,14 @@ struct Character {
     }
   }
 };
+// 中文说明：TakeOver() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void TakeOver(Context& context) {
   Check(ReadAnimationState(context) && ReadPoseArrays(context),"new skeleton unavailable");
   Check(EnsurePoseAnimationMode(context,true) && EnsurePoseForcedLod(context,true) &&
         ApplyPause(context,true) && ApplyRate(context,true,.25F) &&
         ApplyRootMotion(context,true,.5F) && ApplyMultiThreadedUpdate(context,true),"body takeover failed");
 }
+// 中文说明：CheckOriginal() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CheckOriginal(const Character& c,std::uint8_t mode,std::uint8_t flags,float rate,float root,int lod) {
   Check(c.mesh.Get<std::uint8_t>(kMeshAnimationModeOffset)==mode,"previous character animation mode not restored");
   Check(c.mesh.Get<std::uint8_t>(kMeshAnimationFlagsOffset)==flags,"previous character stayed paused");
@@ -85,6 +97,7 @@ void CheckOriginal(const Character& c,std::uint8_t mode,std::uint8_t flags,float
 }
 }
 
+// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 int main() {
   using namespace fixture;
   Context context;
