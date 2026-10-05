@@ -11,11 +11,11 @@ struct Block {
 // 中文说明：Address() 的实际功能是：直接执行函数体中的计算或状态操作。
 struct Region { std::uintptr_t address; std::size_t size; };
 std::vector<Region> regions;
-// 中文说明：Register()：实际调用 “push_back()”，并更新对象状态或持久化结果。// 中文说明：Contains()：直接在函数体内完成计算与状态处理。  for (const auto& r:regions)
+// Register 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
     if (address>=r.address && address-r.address<=r.size && size<=r.size-(address-r.address)) return true;
   return false;
 }
-// 中文说明：ReadMemory()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!Contains(address,bytes.size)) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
+// ReadMemory 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
   std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size); return anomaly::sdk::Ok();
 }
 // 中文说明：WriteMemory() 的实际功能是：直接执行函数体中的计算或状态操作。
@@ -59,12 +59,12 @@ struct Character {
     }
   }
 };
-// 中文说明：TakeOver()：直接在函数体内完成计算与状态处理。  Check(ReadAnimationState(context) && ReadPoseArrays(context),"new skeleton unavailable");
+// TakeOver 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
   Check(EnsurePoseAnimationMode(context,true) && EnsurePoseForcedLod(context,true) &&
         ApplyPause(context,true) && ApplyRate(context,true,.25F) &&
         ApplyRootMotion(context,true,.5F) && ApplyMultiThreadedUpdate(context,true),"body takeover failed");
 }
-// 中文说明：CheckOriginal()：直接在函数体内完成计算与状态处理。  Check(c.mesh.Get<std::uint8_t>(kMeshAnimationModeOffset)==mode,"previous character animation mode not restored");
+// CheckOriginal 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
   Check(c.mesh.Get<std::uint8_t>(kMeshAnimationFlagsOffset)==flags,"previous character stayed paused");
   Check(c.mesh.Get<float>(kMeshGlobalAnimRateScaleOffset)==rate,"rate restored to wrong character");
   Check(c.actor.Get<float>(kCharacterAnimRootMotionScaleOffset)==root,"root scale restored to wrong actor");
