@@ -34,11 +34,13 @@ struct Context final {
   double report_accumulator{};
 };
 
+// 中文说明：Held() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Held(const Context &context) noexcept {
   return context.snapshot_valid &&
          (context.snapshot.flags & ANOMALY_NTE_PLAYER_HOLD_V1_HELD) != 0;
 }
 
+// 中文说明：Refused() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Refused(const Context &context) noexcept {
   return context.snapshot_valid &&
          (context.snapshot.flags & ANOMALY_NTE_PLAYER_HOLD_V1_REFUSED) != 0;
@@ -64,6 +66,7 @@ void Log(Context &context, const std::uint32_t level,
 
 // The hold entry points live on the player service, so they are present only when the Host
 // published a struct_size that covers them.
+// 中文说明：HoldReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HoldReady(const AnomalyNtePlayerServiceV1 *service) noexcept {
   return service != nullptr &&
          service->struct_size >=
@@ -73,6 +76,7 @@ bool HoldReady(const AnomalyNtePlayerServiceV1 *service) noexcept {
          service->hold_snapshot != nullptr;
 }
 
+// 中文说明：ResolvePlayer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ResolvePlayer(Context &context) noexcept {
   if (HoldReady(context.player)) return;
   context.player = Query<AnomalyNtePlayerServiceV1>(
@@ -80,6 +84,7 @@ void ResolvePlayer(Context &context) noexcept {
       ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION);
 }
 
+// 中文说明：CaptureSnapshot() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CaptureSnapshot(Context &context) noexcept {
   context.snapshot_valid = false;
   if (!HoldReady(context.player)) return;
@@ -92,6 +97,7 @@ void CaptureSnapshot(Context &context) noexcept {
   context.snapshot_valid = true;
 }
 
+// 中文说明：Toggle() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Toggle(Context &context) noexcept {
   ResolvePlayer(context);
   if (!HoldReady(context.player)) {
@@ -146,6 +152,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -154,6 +161,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -165,10 +173,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void *plugin_context) {
   delete static_cast<Context *>(plugin_context);
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return;
@@ -192,6 +202,7 @@ void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) noexc
   }
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void *plugin_context, const AnomalyUiServiceV1 *ui) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr || ui == nullptr) return;
