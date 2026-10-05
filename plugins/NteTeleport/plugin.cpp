@@ -245,17 +245,17 @@ struct Context {
 } g_context;
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// HasField 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 中文说明：StatusCode()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// StatusCode 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 constexpr AnomalyStatusV1 StatusCode(const std::uint32_t code) noexcept {
     return {code, 0, {}};
 }
 
-// 中文说明：Bytes()：调用 `data()`、`size()`，结果用于完成该函数对应的数据处理。
+// Bytes 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
@@ -265,7 +265,7 @@ struct ServiceQuery {
     const Service* service{};
     AnomalyStatusV1 status{StatusCode(ANOMALY_STATUS_V1_UNAVAILABLE)};
 
-// 中文说明：bool()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// bool 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     [[nodiscard]] explicit operator bool() const noexcept { return service != nullptr; }
 };
 
@@ -293,7 +293,7 @@ ServiceQuery<Service> QueryService(
     return {service, StatusCode(ANOMALY_STATUS_V1_OK)};
 }
 
-// 中文说明：StatusName()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// StatusName 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 const char* StatusName(const std::uint32_t code) noexcept {
     switch (code) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -310,7 +310,7 @@ const char* StatusName(const std::uint32_t code) noexcept {
     }
 }
 
-// 中文说明：HasUiFunctions()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// HasUiFunctions 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool HasUiFunctions(const AnomalyUiServiceV1* ui) noexcept {
     return ui != nullptr && ui->service_version >= ANOMALY_UI_SERVICE_V1_VERSION &&
         HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_window)>(
@@ -373,7 +373,7 @@ bool HasUiFunctions(const AnomalyUiServiceV1* ui) noexcept {
         ui->set_next_window_size_constraints != nullptr;
 }
 
-// 中文说明：ConfigMethodsAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// ConfigMethodsAvailable 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ConfigMethodsAvailable(const AnomalyConfigServiceV1* service) noexcept {
     return service != nullptr &&
         service->service_version >= ANOMALY_CONFIG_SERVICE_V1_VERSION &&
@@ -387,7 +387,7 @@ bool ConfigMethodsAvailable(const AnomalyConfigServiceV1* service) noexcept {
         service->write_atomic != nullptr;
 }
 
-// 中文说明：InputMethodsAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// InputMethodsAvailable 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool InputMethodsAvailable(const AnomalyInputServiceV1* service) noexcept {
     return service != nullptr &&
         service->service_version >= ANOMALY_INPUT_SERVICE_V1_VERSION &&
@@ -401,7 +401,7 @@ bool InputMethodsAvailable(const AnomalyInputServiceV1* service) noexcept {
         service->was_pressed != nullptr;
 }
 
-// 中文说明：JsonMethodsAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// JsonMethodsAvailable 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool JsonMethodsAvailable(const AnomalyJsonServiceV1* service) noexcept {
     return service != nullptr &&
         service->service_version >= ANOMALY_JSON_SERVICE_V1_VERSION &&
@@ -427,7 +427,7 @@ bool JsonMethodsAvailable(const AnomalyJsonServiceV1* service) noexcept {
         service->object_find != nullptr;
 }
 
-// 中文说明：SchedulerMethodsAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// SchedulerMethodsAvailable 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool SchedulerMethodsAvailable(const AnomalySchedulerServiceV1* service) noexcept {
     return service != nullptr &&
         service->service_version >= ANOMALY_SCHEDULER_SERVICE_V1_VERSION &&
@@ -436,7 +436,7 @@ bool SchedulerMethodsAvailable(const AnomalySchedulerServiceV1* service) noexcep
         service->schedule != nullptr;
 }
 
-// 中文说明：CoreMethodsAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// CoreMethodsAvailable 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool CoreMethodsAvailable(const AnomalyCoreServiceV1* service) noexcept {
     return service != nullptr &&
         service->service_version >= ANOMALY_CORE_SERVICE_V1_VERSION &&
@@ -445,7 +445,7 @@ bool CoreMethodsAvailable(const AnomalyCoreServiceV1* service) noexcept {
         service->read_memory != nullptr;
 }
 
-// 中文说明：SignatureMethodsAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// SignatureMethodsAvailable 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool SignatureMethodsAvailable(const AnomalySignatureServiceV1* service) noexcept {
     return service != nullptr &&
         service->service_version >= ANOMALY_SIGNATURE_SERVICE_V1_VERSION &&
@@ -484,7 +484,7 @@ bool ReadBytes(
 }
 
 template <typename Value>
-// 中文说明：ReadValue()：调用 `ReadBytes()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// ReadValue 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadValue(const std::uintptr_t address, Value& value) noexcept {
     return ReadBytes(address, &value, sizeof(value));
 }
@@ -502,7 +502,7 @@ bool ReadPointerAt(const std::uintptr_t base, const std::uint64_t offset,
     return AddAddress(base, offset, address) && ReadValue(address, value) && value != 0;
 }
 
-// 中文说明：ResolveSignature()：调用 `SignatureMethodsAvailable()`、`resolve()`、`anomaly::sdk::StringView()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ResolveSignature 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ResolveSignature(const std::string_view pattern, std::uintptr_t& address) noexcept {
     address = 0;
     if (!SignatureMethodsAvailable(g_context.signature)) return false;
@@ -512,7 +512,7 @@ bool ResolveSignature(const std::string_view pattern, std::uintptr_t& address) n
         ANOMALY_STATUS_V1_OK && address != 0;
 }
 
-// 中文说明：ResolveGWorld()：调用 `ResolveSignature()`、`AddAddress()`、`ReadValue()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ResolveGWorld 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ResolveGWorld() noexcept {
     if (g_context.g_world_address != 0) return true;
     std::uintptr_t instruction{};
@@ -528,7 +528,7 @@ bool ResolveGWorld() noexcept {
     return true;
 }
 
-// 中文说明：ReadTrackedTarget()：调用 `ResolveGWorld()`、`ReadValue()`、`ReadPointerAt()`、`AddAddress()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadTrackedTarget 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadTrackedTarget(double position[3]) noexcept {
     if (!ResolveGWorld()) return false;
     std::uintptr_t world{};
@@ -571,7 +571,7 @@ bool ReadTrackedTarget(double position[3]) noexcept {
 
 // Preload diagnostics go to the core log so a silently skipped preload can be
 // told apart from a working one without a debugger attached.
-// 中文说明：Log()：调用 `CoreMethodsAvailable()`、`log()`、`anomaly::sdk::StringView()`、`c_str()`，结果用于完成该函数对应的数据处理。
+// Log 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void Log(const std::uint32_t level, const std::string& message) noexcept {
     if (!CoreMethodsAvailable(g_context.core)) return;
     try {
@@ -584,7 +584,7 @@ void Log(const std::uint32_t level, const std::string& message) noexcept {
 // The framework owns the streaming-source hook and the preload window, so the plugin only
 // asks for a preload through the teleport service. A failure is not fatal: the host still
 // teleports, it just cannot stream the destination in first.
-// 中文说明：ArmTeleportPreload()：调用 `TeleportServiceMethodsAvailable()`、`lock()`、`std::isfinite()`、`preload()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// ArmTeleportPreload 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ArmTeleportPreload(const PendingTeleport& pending) noexcept {
     if (g_context.teleport_service == nullptr ||
         !TeleportServiceMethodsAvailable(g_context.teleport_service)) {
@@ -609,7 +609,7 @@ void ArmTeleportPreload(const PendingTeleport& pending) noexcept {
     }
 }
 
-// 中文说明：DrawText()：调用 `text()`、`anomaly::sdk::StringView()`，结果用于完成该函数对应的数据处理。
+// DrawText 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawText(const AnomalyUiServiceV1* ui, const std::string_view text) {
     ui->text(ui->user, anomaly::sdk::StringView(text));
 }
@@ -630,14 +630,14 @@ void DrawStatus(
     }
 }
 
-// 中文说明：IsCurrentWorld()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// IsCurrentWorld 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool IsCurrentWorld(const AnomalyNteSessionSnapshotV1& snapshot) noexcept {
     return snapshot.struct_size >= sizeof(snapshot) &&
         snapshot.state == ANOMALY_NTE_SESSION_V1_WORLD_READY &&
         snapshot.world.id != 0 && snapshot.world.generation != 0;
 }
 
-// 中文说明：IsCurrentPlayer()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// IsCurrentPlayer 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool IsCurrentPlayer(const AnomalyNtePlayerSnapshotV1& snapshot) noexcept {
     return snapshot.struct_size >= sizeof(snapshot) &&
         (snapshot.flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
@@ -646,18 +646,18 @@ bool IsCurrentPlayer(const AnomalyNtePlayerSnapshotV1& snapshot) noexcept {
         snapshot.handle.id != 0 && snapshot.handle.generation != 0;
 }
 
-// 中文说明：IsFinitePosition()：调用 `std::isfinite()`，结果用于完成该函数对应的数据处理。
+// IsFinitePosition 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool IsFinitePosition(const double position[3]) noexcept {
     return std::isfinite(position[0]) && std::isfinite(position[1]) &&
         std::isfinite(position[2]);
 }
 
-// 中文说明：IsFinitePosition()：调用 `IsFinitePosition()`、`data()`，结果用于完成该函数对应的数据处理。
+// IsFinitePosition 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool IsFinitePosition(const std::array<double, 3>& position) noexcept {
     return IsFinitePosition(position.data());
 }
 
-// 中文说明：IsValidPresetName()：调用 `empty()`、`size()`、`std::ranges::none_of()`，结果用于完成该函数对应的数据处理。
+// IsValidPresetName 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool IsValidPresetName(const std::string_view name) noexcept {
     return !name.empty() && name.size() <= kMaximumPresetNameBytes &&
         std::ranges::none_of(name, [](const unsigned char character) {
@@ -667,10 +667,10 @@ bool IsValidPresetName(const std::string_view name) noexcept {
 
 class SettingsJsonReader final {
 public:
-// 中文说明：SettingsJsonReader()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// SettingsJsonReader 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     explicit SettingsJsonReader(const std::string_view input) noexcept : input_(input) {}
 
-// 中文说明：Consume()：调用 `SkipWhitespace()`、`size()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// Consume 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     bool Consume(const char expected) noexcept {
         SkipWhitespace();
         if (position_ == input_.size() || input_[position_] != expected) return false;
@@ -678,7 +678,7 @@ public:
         return true;
     }
 
-// 中文说明：ReadString()：调用 `Consume()`、`clear()`、`size()`、`push_back()`；把结果追加到输出容器，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadString 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     bool ReadString(std::string& value, const std::size_t maximum_size) {
         if (!Consume('"')) return false;
         value.clear();
@@ -708,7 +708,7 @@ public:
         return false;
     }
 
-// 中文说明：ReadNumber()：调用 `SkipWhitespace()`、`size()`、`std::from_chars()`、`data()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadNumber 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     bool ReadNumber(double& value) noexcept {
         SkipWhitespace();
         const std::size_t begin = position_;
@@ -758,7 +758,7 @@ public:
             std::isfinite(value);
     }
 
-// 中文说明：ReadUnsigned()：调用 `ReadNumber()`、`std::floor()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadUnsigned 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     bool ReadUnsigned(std::uint32_t& value) noexcept {
         double number{};
         if (!ReadNumber(number) || number < 0.0 ||
@@ -770,14 +770,14 @@ public:
         return true;
     }
 
-// 中文说明：AtEnd()：调用 `SkipWhitespace()`、`size()`，结果用于完成该函数对应的数据处理。
+// AtEnd 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     bool AtEnd() noexcept {
         SkipWhitespace();
         return position_ == input_.size();
     }
 
 private:
-// 中文说明：SkipWhitespace()：调用 `size()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// SkipWhitespace 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     void SkipWhitespace() noexcept {
         while (position_ < input_.size() &&
                (input_[position_] == ' ' || input_[position_] == '\n' ||
@@ -790,7 +790,7 @@ private:
     std::size_t position_{};
 };
 
-// 中文说明：ReadPosition()：调用 `Consume()`、`size()`、`ReadNumber()`、`IsFinitePosition()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadPosition 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadPosition(SettingsJsonReader& reader, std::array<double, 3>& position) noexcept {
     if (!reader.Consume('[')) return false;
     for (std::size_t axis = 0; axis < position.size(); ++axis) {
@@ -804,7 +804,7 @@ bool ReadPosition(SettingsJsonReader& reader, std::array<double, 3>& position) n
     return IsFinitePosition(position);
 }
 
-// 中文说明：ReadPreset()：调用 `Consume()`、`ReadString()`、`ReadPosition()`、`IsValidPresetName()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadPreset 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadPreset(SettingsJsonReader& reader, CoordinatePreset& preset) {
     bool name_seen{};
     bool position_seen{};
@@ -829,7 +829,7 @@ bool ReadPreset(SettingsJsonReader& reader, CoordinatePreset& preset) {
     return name_seen && position_seen && IsValidPresetName(preset.name);
 }
 
-// 中文说明：ReadPresets()：调用 `Consume()`、`size()`、`ReadPreset()`、`std::ranges::any_of()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ReadPresets 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadPresets(SettingsJsonReader& reader, std::vector<CoordinatePreset>& presets) {
     if (!reader.Consume('[')) return false;
     if (reader.Consume(']')) return true;
@@ -848,7 +848,7 @@ bool ReadPresets(SettingsJsonReader& reader, std::vector<CoordinatePreset>& pres
     }
 }
 
-// 中文说明：DerivePointCategory()：调用 `size()`、`std::isspace()`、`std::string()`、`substr()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// DerivePointCategory 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string DerivePointCategory(const std::string_view name) {
     std::size_t position = 0;
     while (position < name.size() && std::isspace(
@@ -883,7 +883,7 @@ std::string DerivePointCategory(const std::string_view name) {
     return position < name.size() ? std::string(name.substr(position)) : std::string(name);
 }
 
-// 中文说明：ReadImportedPoint()：调用 `Consume()`、`ReadString()`、`ReadUnsigned()`、`ReadNumber()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadImportedPoint 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadImportedPoint(SettingsJsonReader& reader, ImportedPoint& point) {
     bool name_seen{};
     bool category_seen{};
@@ -932,7 +932,7 @@ bool ReadImportedPoint(SettingsJsonReader& reader, ImportedPoint& point) {
     return !point.category.empty();
 }
 
-// 中文说明：ReadImportedPoints()：调用 `Consume()`、`size()`、`ReadImportedPoint()`、`push_back()`；读取运行时数据，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ReadImportedPoints 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadImportedPoints(SettingsJsonReader& reader, std::vector<ImportedPoint>& points) {
     if (!reader.Consume('[')) return false;
     if (reader.Consume(']')) return true;
@@ -946,7 +946,7 @@ bool ReadImportedPoints(SettingsJsonReader& reader, std::vector<ImportedPoint>& 
     }
 }
 
-// 中文说明：ParseSettingsDocument()：调用 `reader()`、`Consume()`、`ReadString()`、`ReadPosition()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ParseSettingsDocument 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ParseSettingsDocument(const std::string_view document, TeleportSettings& settings) {
     SettingsJsonReader reader(document);
     bool target_seen{};
@@ -994,7 +994,7 @@ bool ParseSettingsDocument(const std::string_view document, TeleportSettings& se
         settings.forward_hotkey < 256U;
 }
 
-// 中文说明：EscapeJsonString()：调用 `reserve()`、`size()`、`push_back()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// EscapeJsonString 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string EscapeJsonString(const std::string_view value) {
     std::string escaped;
     escaped.reserve(value.size());
@@ -1005,7 +1005,7 @@ std::string EscapeJsonString(const std::string_view value) {
     return escaped;
 }
 
-// 中文说明：FormatDouble()：调用 `std::to_chars()`、`data()`、`size()`、`std::string()`，结果用于完成该函数对应的数据处理。
+// FormatDouble 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string FormatDouble(const double value) {
     std::array<char, 64> buffer{};
     const auto [end, error] = std::to_chars(
@@ -1013,7 +1013,7 @@ std::string FormatDouble(const double value) {
     return error == std::errc{} ? std::string(buffer.data(), end) : "0";
 }
 
-// 中文说明：SerializeSettings()：调用 `FormatDouble()`、`size()`、`push_back()`、`EscapeJsonString()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// SerializeSettings 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string SerializeSettings(const TeleportSettings& settings) {
     std::string document = "{\"target\":[" + FormatDouble(settings.target[0]) + "," +
         FormatDouble(settings.target[1]) + "," + FormatDouble(settings.target[2]) +
@@ -1046,7 +1046,7 @@ std::string SerializeSettings(const TeleportSettings& settings) {
     return document;
 }
 
-// 中文说明：LoadSettings()：调用 `ConfigMethodsAvailable()`、`read()`、`anomaly::sdk::StringView()`、`document()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// LoadSettings 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool LoadSettings() {
     if (!ConfigMethodsAvailable(g_context.config)) return false;
     std::uint32_t schema_version{};
@@ -1092,7 +1092,7 @@ bool LoadSettings() {
     }
 }
 
-// 中文说明：SaveSettings()：调用 `lock()`、`std::ranges::copy()`、`begin()`、`ConfigMethodsAvailable()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// SaveSettings 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool SaveSettings() {
     TeleportSettings settings;
     {
@@ -1124,7 +1124,7 @@ bool SaveSettings() {
     }
 }
 
-// 中文说明：RecordResult()：调用 `lock()`、`std::memcpy()`，结果用于完成该函数对应的数据处理。
+// RecordResult 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void RecordResult(const AnomalyStatusV1 status) noexcept {
     std::scoped_lock lock(g_context.mutex);
     g_context.has_result = true;
@@ -1138,12 +1138,12 @@ void RecordResult(const AnomalyStatusV1 status) noexcept {
     g_context.result_message[count] = '\0';
 }
 
-// 中文说明：RecordResult()：调用 `RecordResult()`、`StatusCode()`，结果用于完成该函数对应的数据处理。
+// RecordResult 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void RecordResult(const std::uint32_t code) noexcept {
     RecordResult(StatusCode(code));
 }
 
-// 中文说明：Utf8ToWide()：调用 `empty()`、`size()`、`MultiByteToWideChar()`、`data()`，结果用于完成该函数对应的数据处理。
+// Utf8ToWide 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::wstring Utf8ToWide(const std::string_view value) {
     if (value.empty() ||
         value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
@@ -1161,7 +1161,7 @@ std::wstring Utf8ToWide(const std::string_view value) {
     return result;
 }
 
-// 中文说明：ReadImportFile()：调用 `file()`、`assign()`、`bad()`、`empty()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadImportFile 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReadImportFile(const std::filesystem::path& path, std::string& document) {
     std::ifstream file(path, std::ios::binary);
     if (!file) return false;
@@ -1170,7 +1170,7 @@ bool ReadImportFile(const std::filesystem::path& path, std::string& document) {
     return !file.bad() && !document.empty();
 }
 
-// 中文说明：WideToUtf8()：调用 `empty()`、`size()`、`WideCharToMultiByte()`、`data()`，结果用于完成该函数对应的数据处理。
+// WideToUtf8 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string WideToUtf8(const std::wstring_view value) {
     if (value.empty() ||
         value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
@@ -1196,7 +1196,7 @@ public:
         if (SUCCEEDED(result_)) CoUninitialize();
     }
 
-// 中文说明：Usable()：调用 `SUCCEEDED()`，结果用于完成该函数对应的数据处理。
+// Usable 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     [[nodiscard]] bool Usable() const noexcept {
         return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE;
     }
@@ -1243,13 +1243,13 @@ std::optional<std::filesystem::path> ChooseFolder(
     return result;
 }
 
-// 中文说明：UsableHotkey()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// UsableHotkey 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool UsableHotkey(const std::uint32_t key) noexcept {
     return key > 0 && key < 256U && key != VK_LBUTTON && key != VK_RBUTTON &&
         key != VK_MBUTTON && key != VK_XBUTTON1 && key != VK_XBUTTON2;
 }
 
-// 中文说明：VirtualKeyName()：调用 `std::string()`、`std::to_string()`，结果用于完成该函数对应的数据处理。
+// VirtualKeyName 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string VirtualKeyName(const std::uint32_t key) {
     if (key >= '0' && key <= '9') return std::string(1, static_cast<char>(key));
     if (key >= 'A' && key <= 'Z') return std::string(1, static_cast<char>(key));
@@ -1283,7 +1283,7 @@ std::string VirtualKeyName(const std::uint32_t key) {
     }
 }
 
-// 中文说明：SetTeleportAction()：调用 `lock()`，结果用于完成该函数对应的数据处理。
+// SetTeleportAction 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void SetTeleportAction(const TeleportAction action) noexcept {
     std::scoped_lock lock(g_context.mutex);
     if (!g_context.capturing_forward) {
@@ -1325,7 +1325,7 @@ bool RegisterForwardHotkey(Context& context, const std::uint32_t key,
         ForwardHotkey, handle);
 }
 
-// 中文说明：ReleaseHotkeys()：调用 `InputMethodsAvailable()`、`release_hotkey()`，结果用于完成该函数对应的数据处理。
+// ReleaseHotkeys 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ReleaseHotkeys(Context& context) noexcept {
     if (context.forward_hotkey.id != 0 && InputMethodsAvailable(context.input)) {
         static_cast<void>(context.input->release_hotkey(
@@ -1334,7 +1334,7 @@ void ReleaseHotkeys(Context& context) noexcept {
     context.forward_hotkey = {};
 }
 
-// 中文说明：ReplaceForwardHotkey()：调用 `InputMethodsAvailable()`、`release_hotkey()`、`RegisterForwardHotkey()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReplaceForwardHotkey 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool ReplaceForwardHotkey(Context& context, const std::uint32_t key) noexcept {
     if (key == context.forward_hotkey_key) return true;
     if (key == 0) {
@@ -1397,7 +1397,7 @@ bool CaptureHotkey(
     return false;
 }
 
-// 中文说明：StatusMessage()：调用 `std::string()`，结果用于完成该函数对应的数据处理。
+// StatusMessage 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string StatusMessage(const AnomalyStatusV1& status) {
     if (status.message.data == nullptr || status.message.size == 0) return {};
     return std::string(status.message.data, status.message.size);
@@ -1415,7 +1415,7 @@ void SetImportStatus(const std::uint32_t code, const std::string_view message = 
 
 class JsonHandleScope final {
 public:
-// 中文说明：JsonHandleScope()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// JsonHandleScope 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     explicit JsonHandleScope(const AnomalyJsonServiceV1* json) noexcept : json_(json) {}
     ~JsonHandleScope() {
         if (json_ == nullptr) return;
@@ -1424,7 +1424,7 @@ public:
         }
     }
 
-// 中文说明：Add()：调用 `push_back()`；把结果追加到输出容器，结果用于完成该函数对应的数据处理。
+// Add 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     void Add(const AnomalyGenerationHandleV1 handle) { handles_.push_back(handle); }
 
 private:
@@ -1546,7 +1546,7 @@ bool ImportPointsFromDocument(
 
 class ImportRunningGuard final {
 public:
-// 中文说明：ImportRunningGuard()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// ImportRunningGuard 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     explicit ImportRunningGuard(Context* context) noexcept : context_(context) {}
     ~ImportRunningGuard() {
         if (context_ == nullptr) return;
@@ -1557,7 +1557,7 @@ private:
     Context* context_;
 };
 
-// 中文说明：ScanFolderTask()：调用 `guard()`、`lock()`、`empty()`、`SetImportStatus()`；把结果追加到输出容器，遍历输入集合，修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// ScanFolderTask 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL ScanFolderTask(void* value, AnomalyGenerationHandleV1) {
     auto* context = static_cast<Context*>(value);
     if (context == nullptr) return;
@@ -1620,7 +1620,7 @@ void ANOMALY_CALL ScanFolderTask(void* value, AnomalyGenerationHandleV1) {
     }
 }
 
-// 中文说明：ImportFileTask()：调用 `guard()`、`lock()`、`JsonMethodsAvailable()`、`SetImportStatus()`；读取运行时数据，修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// ImportFileTask 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL ImportFileTask(void* value, AnomalyGenerationHandleV1) {
     auto* context = static_cast<Context*>(value);
     if (context == nullptr) return;
@@ -1671,7 +1671,7 @@ void ANOMALY_CALL ImportFileTask(void* value, AnomalyGenerationHandleV1) {
     }
 }
 
-// 中文说明：ScheduleFolderScan()：调用 `SchedulerMethodsAvailable()`、`SetImportStatus()`、`lock()`、`schedule()`；修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// ScheduleFolderScan 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ScheduleFolderScan(Context& context) {
     if (!SchedulerMethodsAvailable(context.scheduler)) {
         SetImportStatus(ANOMALY_STATUS_V1_UNAVAILABLE, "Scheduler is unavailable");
@@ -1694,7 +1694,7 @@ void ScheduleFolderScan(Context& context) {
     }
 }
 
-// 中文说明：ScheduleImportFile()：调用 `SchedulerMethodsAvailable()`、`SetImportStatus()`、`lock()`、`schedule()`；修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// ScheduleImportFile 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ScheduleImportFile(Context& context) {
     if (!SchedulerMethodsAvailable(context.scheduler)) {
         SetImportStatus(ANOMALY_STATUS_V1_UNAVAILABLE, "Scheduler is unavailable");
@@ -1720,7 +1720,7 @@ void ScheduleImportFile(Context& context) {
 // The host streams a preload-mode destination before it moves the player: flags == 0 asks for
 // that window, ANOMALY_NTE_PLAYER_TELEPORT_REQUEST_V1_IMMEDIATE for the previous synchronous
 // behaviour. A zero preload delay selects the immediate path.
-// 中文说明：PreloadModeEnabled()：调用 `lock()`、`std::isfinite()`，结果用于完成该函数对应的数据处理。
+// PreloadModeEnabled 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool PreloadModeEnabled() noexcept {
     std::scoped_lock lock(g_context.mutex);
     return std::isfinite(g_context.preload_delay) && g_context.preload_delay > 0.0;
@@ -1750,7 +1750,7 @@ AnomalyStatusV1 IssueTeleport(
     return teleport.service->teleport(teleport.service->user, &request);
 }
 
-// 中文说明：ProcessLandingMonitor()：调用 `lock()`、`TryReadCurrentPosition()`、`std::ranges::copy()`、`begin()`，结果用于完成该函数对应的数据处理。
+// ProcessLandingMonitor 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ProcessLandingMonitor(const AnomalyHostApiV1* host) {
     LandingMonitor monitor{};
     double landing_lift{};
@@ -1823,7 +1823,7 @@ void QueueRequest(
     g_context.result_message[0] = '\0';
 }
 
-// 中文说明：DrawResult()：调用 `lock()`、`std::memcpy()`、`DrawText()`、`Text()`，结果用于完成该函数对应的数据处理。
+// DrawResult 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawResult(const AnomalyUiServiceV1* ui) {
     bool queued{};
     bool has_result{};
@@ -1847,7 +1847,7 @@ void DrawResult(const AnomalyUiServiceV1* ui) {
     }
 }
 
-// 中文说明：TryQueueRequest()：调用 `IsFinitePosition()`、`RecordResult()`、`decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// TryQueueRequest 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void TryQueueRequest(const AnomalyHostApiV1* host, const double position[3]) {
     if (!IsFinitePosition(position)) {
         RecordResult(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -1899,7 +1899,7 @@ void TryQueueRequest(const AnomalyHostApiV1* host, const double position[3]) {
     QueueRequest(session_snapshot, player_snapshot, position);
 }
 
-// 中文说明：TryReadCurrentPosition()：调用 `decltype()`、`offsetof()`、`snapshot()`、`IsCurrentPlayer()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// TryReadCurrentPosition 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool TryReadCurrentPosition(const AnomalyHostApiV1* host, double position[3]) {
     const auto player = QueryService<AnomalyNtePlayerServiceV1>(
         host, ANOMALY_NTE_PLAYER_SERVICE_V1_ID, ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION);
@@ -1921,7 +1921,7 @@ bool TryReadCurrentPosition(const AnomalyHostApiV1* host, double position[3]) {
     return true;
 }
 
-// 中文说明：IsCurrentCamera()：调用 `IsFinitePosition()`，结果用于完成该函数对应的数据处理。
+// IsCurrentCamera 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool IsCurrentCamera(const AnomalyNteCameraSnapshotV1& snapshot) noexcept {
     return snapshot.struct_size >= sizeof(snapshot) &&
         (snapshot.flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
@@ -2018,7 +2018,7 @@ void QueueDirectionalTeleport(
     QueueRequest(session_snapshot, player_snapshot, destination.data(), false);
 }
 
-// 中文说明：FormatPosition()：调用 `std::snprintf()`、`data()`、`size()`，结果用于完成该函数对应的数据处理。
+// FormatPosition 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string FormatPosition(const std::array<double, 3>& position) {
     std::array<char, 160> buffer{};
     std::snprintf(
@@ -2027,7 +2027,7 @@ std::string FormatPosition(const std::array<double, 3>& position) {
     return buffer.data();
 }
 
-// 中文说明：Load()：调用 `StatusCode()`、`HasUiFunctions()`、`ConfigMethodsAvailable()`、`lock()`，结果用于完成该函数对应的数据处理。
+// Load 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return StatusCode(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     const auto ui = QueryService<AnomalyUiServiceV1>(
@@ -2128,7 +2128,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：调用 `StatusCode()`、`lock()`、`ReleaseHotkeys()`、`RegisterForwardHotkey()`，结果用于完成该函数对应的数据处理。
+// Start 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Start(void* context) {
     if (context != &g_context) return StatusCode(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     {
@@ -2147,7 +2147,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* context) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `StatusCode()`、`ReleaseHotkeys()`、`SaveSettings()`、`lock()`，结果用于完成该函数对应的数据处理。
+// Stop 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* context, std::uint32_t) {
     if (context != &g_context) return StatusCode(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     ReleaseHotkeys(g_context);
@@ -2159,7 +2159,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* context, std::uint32_t) {
     return settings_saved ? anomaly::sdk::Ok() : StatusCode(ANOMALY_STATUS_V1_FAILED);
 }
 
-// 中文说明：Unload()：调用 `lock()`、`clear()`、`fill()`，结果用于完成该函数对应的数据处理。
+// Unload 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL Unload(void* context) {
     if (context != &g_context) return;
     std::scoped_lock lock(g_context.mutex);
@@ -2200,7 +2200,7 @@ void ANOMALY_CALL Unload(void* context) {
     g_context.result_message[0] = '\0';
 }
 
-// 中文说明：Update()：调用 `lock()`、`RecordResult()`、`ProcessLandingMonitor()`、`ScheduleFolderScan()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// Update 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL Update(void* context, double) {
     if (context != &g_context) return;
 
@@ -2332,7 +2332,7 @@ void ANOMALY_CALL Update(void* context, double) {
     }
 }
 
-// 中文说明：DrawImportStatus()：调用 `lock()`、`std::memcpy()`、`DrawText()`、`Text()`，结果用于完成该函数对应的数据处理。
+// DrawImportStatus 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawImportStatus(const AnomalyUiServiceV1* ui) {
     bool running{};
     std::uint32_t import_status{};
@@ -2399,7 +2399,7 @@ void DrawTabCoordinate(
     ui->end_tab_item(ui->user);
 }
 
-// 中文说明：DrawTabTrackedTarget()：调用 `Label()`、`begin_tab_item()`、`anomaly::sdk::StringView()`、`lock()`，结果用于完成该函数对应的数据处理。
+// DrawTabTrackedTarget 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawTabTrackedTarget(const AnomalyUiServiceV1* ui) {
     const std::string label = g_context.localizer.Label(
         "tab.tracked_target", "Tracked Target", "tab-tracked-target");
@@ -2446,7 +2446,7 @@ void DrawTabTrackedTarget(const AnomalyUiServiceV1* ui) {
     ui->end_tab_item(ui->user);
 }
 
-// 中文说明：DrawTabPoints()：调用 `Label()`、`begin_tab_item()`、`anomaly::sdk::StringView()`、`separator()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// DrawTabPoints 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawTabPoints(const AnomalyUiServiceV1* ui, const AnomalyHostApiV1* host) {
     const std::string label = g_context.localizer.Label(
         "tab.points", "Points", "tab-points");
@@ -2635,7 +2635,7 @@ void DrawTabPoints(const AnomalyUiServiceV1* ui, const AnomalyHostApiV1* host) {
     ui->end_tab_item(ui->user);
 }
 
-// 中文说明：DrawTabSettings()：调用 `Label()`、`begin_tab_item()`、`anomaly::sdk::StringView()`、`separator()`，结果用于完成该函数对应的数据处理。
+// DrawTabSettings 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawTabSettings(const AnomalyUiServiceV1* ui) {
     const std::string label = g_context.localizer.Label(
         "tab.settings", "Settings", "tab-settings");
@@ -2735,7 +2735,7 @@ void DrawTabSettings(const AnomalyUiServiceV1* ui) {
     ui->end_tab_item(ui->user);
 }
 
-// 中文说明：Draw()：调用 `lock()`、`HasUiFunctions()`、`Label()`、`window()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// Draw 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL Draw(void* context, const AnomalyUiServiceV1* ui) {
     if (context != &g_context) return;
 
