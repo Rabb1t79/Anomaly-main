@@ -866,9 +866,7 @@ AnomalyStatusV1 Status(const std::uint32_t code,
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool HasField(const Struct *value, const std::size_t offset) noexcept {
-  return value != nullptr && value->struct_size >= offset + sizeof(Field);
+// 中文说明：HasField()：直接在函数体内完成计算与状态处理。  return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
 template <typename Service>
@@ -877,9 +875,7 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
   return anomaly::sdk::Host(host).Query<Service>(id, version).get();
 }
 
-// 中文说明：CoreReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
-  return HasField<AnomalyCoreServiceV1,
+// 中文说明：CoreReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyCoreServiceV1,
                   decltype(AnomalyCoreServiceV1::read_memory)>(
              service, offsetof(AnomalyCoreServiceV1, read_memory)) &&
          HasField<AnomalyCoreServiceV1,
@@ -888,17 +884,13 @@ bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
          service->read_memory != nullptr && service->write_memory != nullptr;
 }
 
-// 中文说明：SignatureReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
-  return HasField<AnomalySignatureServiceV1,
+// 中文说明：SignatureReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalySignatureServiceV1,
                   decltype(AnomalySignatureServiceV1::resolve)>(
              service, offsetof(AnomalySignatureServiceV1, resolve)) &&
          service->resolve != nullptr;
 }
 
-// 中文说明：UiReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool UiReady(const AnomalyUiServiceV1 *service) noexcept {
-  return HasField<AnomalyUiServiceV1,
+// 中文说明：UiReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUiServiceV1,
                   decltype(AnomalyUiServiceV1::input_double)>(
              service, offsetof(AnomalyUiServiceV1, input_double)) &&
          service->set_next_window_size != nullptr &&
@@ -909,18 +901,14 @@ bool UiReady(const AnomalyUiServiceV1 *service) noexcept {
          service->same_line != nullptr;
 }
 
-// 中文说明：HookReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool HookReady(const AnomalyHookServiceV1 *service) noexcept {
-  return HasField<AnomalyHookServiceV1,
+// 中文说明：HookReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyHookServiceV1,
                   decltype(AnomalyHookServiceV1::end_callback)>(
              service, offsetof(AnomalyHookServiceV1, end_callback)) &&
          service->create != nullptr && service->release != nullptr &&
          service->begin_callback != nullptr && service->end_callback != nullptr;
 }
 
-// 中文说明：ConfigReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ConfigReady(const AnomalyConfigServiceV1 *service) noexcept {
-  return HasField<AnomalyConfigServiceV1,
+// 中文说明：ConfigReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyConfigServiceV1,
                   decltype(AnomalyConfigServiceV1::write_atomic)>(
              service, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
          service->register_schema != nullptr && service->read != nullptr &&
@@ -928,29 +916,21 @@ bool ConfigReady(const AnomalyConfigServiceV1 *service) noexcept {
          service->unregister_schema != nullptr;
 }
 
-// 中文说明：StorageReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool StorageReady(const AnomalyStorageServiceV1 *service) noexcept {
-  return service != nullptr && service->read != nullptr &&
+// 中文说明：StorageReady()：直接在函数体内完成计算与状态处理。  return service != nullptr && service->read != nullptr &&
          service->write_atomic != nullptr;
 }
 
-// 中文说明：SchedulerReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool SchedulerReady(const AnomalySchedulerServiceV1 *service) noexcept {
-  return service != nullptr && service->schedule != nullptr;
+// 中文说明：SchedulerReady()：直接在函数体内完成计算与状态处理。  return service != nullptr && service->schedule != nullptr;
 }
 
-// 中文说明：AhudReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool AhudReady(const AnomalyUe5AhudServiceV1 *service) noexcept {
-  return HasField<AnomalyUe5AhudServiceV1,
+// 中文说明：AhudReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5AhudServiceV1,
                   decltype(AnomalyUe5AhudServiceV1::unsubscribe)>(
              service, offsetof(AnomalyUe5AhudServiceV1, unsubscribe)) &&
          service->service_version >= ANOMALY_UE5_AHUD_SERVICE_V1_VERSION &&
          service->subscribe != nullptr && service->unsubscribe != nullptr;
 }
 
-// 中文说明：AhudFrameReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool AhudFrameReady(const AnomalyUe5AhudFrameV1 *frame) noexcept {
-  return HasField<AnomalyUe5AhudFrameV1,
+// 中文说明：AhudFrameReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5AhudFrameV1,
                   decltype(AnomalyUe5AhudFrameV1::draw_rect)>(
              frame, offsetof(AnomalyUe5AhudFrameV1, draw_rect)) &&
          frame->viewport_width != 0 && frame->viewport_height != 0 &&
@@ -958,22 +938,16 @@ bool AhudFrameReady(const AnomalyUe5AhudFrameV1 *frame) noexcept {
          frame->draw_rect != nullptr;
 }
 
-// 中文说明：InputReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool InputReady(const AnomalyInputServiceV1 *service) noexcept {
-  return HasField<AnomalyInputServiceV1,
+// 中文说明：InputReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyInputServiceV1,
                   decltype(AnomalyInputServiceV1::snapshot)>(
              service, offsetof(AnomalyInputServiceV1, snapshot)) &&
          service->snapshot != nullptr;
 }
 
-// 中文说明：Bytes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
-  return {reinterpret_cast<const std::uint8_t *>(value.data()), value.size()};
+// 中文说明：Bytes()：直接在函数体内完成计算与状态处理。  return {reinterpret_cast<const std::uint8_t *>(value.data()), value.size()};
 }
 
-// 中文说明：EnsurePoseAngleCapacity() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void EnsurePoseAngleCapacity(Context &context) noexcept {
-  std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
+// 中文说明：EnsurePoseAngleCapacity()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
   const auto count = context.runtime.local_space_count;
   if (context.bone_angles.size() < count)
     context.bone_angles.resize(count);
@@ -1082,9 +1056,7 @@ bool ApplyPoseDocument(Context &context, const nlohmann::json &json,
 // used to ride along in the plugin's own saved settings, which meant a reload came back with
 // whatever shot was last picked -- including one picked for a different character or a different
 // scene. They are runtime state now: pick the file again when it is wanted.
-// 中文说明：BuildPoseDocument() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string BuildPoseDocument(Context &context) noexcept {
-  nlohmann::json root = nlohmann::json::object();
+// 中文说明：BuildPoseDocument()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  nlohmann::json root = nlohmann::json::object();
   auto bones = nlohmann::json::array();
   {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
@@ -1113,14 +1085,10 @@ std::string BuildPoseDocument(Context &context) noexcept {
   return root.dump();
 }
 
-// 中文说明：PoseProfilePath() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string PoseProfilePath(const std::string &character_id) noexcept {
-  return "character-pose-profile-" + character_id + ".json";
+// 中文说明：PoseProfilePath()：直接在函数体内完成计算与状态处理。  return "character-pose-profile-" + character_id + ".json";
 }
 
-// 中文说明：PersistPoseSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool PersistPoseSettings(Context &context) noexcept {
-  if (!ConfigReady(context.config))
+// 中文说明：PersistPoseSettings()：直接在函数体内完成计算与状态处理。  if (!ConfigReady(context.config))
     return false;
   try {
     const std::string document = BuildPoseDocument(context);
@@ -1178,9 +1146,7 @@ int LoadCharacterPoseProfile(Context &context,
   }
 }
 
-// 中文说明：ResetPoseValues() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ResetPoseValues(Context &context) noexcept {
-  {
+// 中文说明：ResetPoseValues()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     for (auto &angle : context.bone_angles)
       angle = {0.0, 0.0, 0.0};
@@ -1190,9 +1156,7 @@ void ResetPoseValues(Context &context) noexcept {
   context.requested_root_offset[2].store(0.0, std::memory_order_release);
 }
 
-// 中文说明：CapturePoseState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-better_pose::history::PoseState CapturePoseState(Context &context) {
-  better_pose::history::PoseState state;
+// 中文说明：CapturePoseState()：直接在函数体内完成计算与状态处理。  better_pose::history::PoseState state;
   {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     state.angles = context.bone_angles;
@@ -1202,9 +1166,7 @@ better_pose::history::PoseState CapturePoseState(Context &context) {
   return state;
 }
 
-// 中文说明：RestorePoseState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void RestorePoseState(Context &context, const better_pose::history::PoseState &state) {
-  {
+// 中文说明：RestorePoseState()：直接在函数体内完成计算与状态处理。  {
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     // Keep the table at least as long as the skeleton; the pose code reads
     // bone_angles[0 .. count) and the recorded table may be shorter.
@@ -1228,9 +1190,7 @@ bool MirrorPose(Context &context, const int request) noexcept;
 
 // Game thread, every update: record settled edits, apply a posted undo/redo.
 // A different mesh (character switch) starts a fresh history.
-// 中文说明：StepPoseHistory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void StepPoseHistory(Context &context) noexcept {
-  try {
+// 中文说明：StepPoseHistory()：直接在函数体内完成计算与状态处理。  try {
     const std::uint64_t now = GetTickCount64();
     if (context.pose_history_mesh != context.runtime.mesh) {
       context.pose_history_mesh = context.runtime.mesh;
@@ -1255,9 +1215,7 @@ void StepPoseHistory(Context &context) noexcept {
   }
 }
 
-// 中文说明：LoadPoseSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool LoadPoseSettings(Context &context) noexcept {
-  if (!ConfigReady(context.config))
+// 中文说明：LoadPoseSettings()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!ConfigReady(context.config))
     return false;
   try {
     std::uint32_t version{};
@@ -1296,17 +1254,13 @@ bool LoadPoseSettings(Context &context) noexcept {
     return false;
   }
 }
-// 中文说明：ObjectsReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ObjectsReady(const AnomalyUe5ObjectsServiceV1 *service) noexcept {
-  return HasField<AnomalyUe5ObjectsServiceV1,
+// 中文说明：ObjectsReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5ObjectsServiceV1,
                   decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
              service, offsetof(AnomalyUe5ObjectsServiceV1, find_exact)) &&
          service->find_exact != nullptr;
 }
 
-// 中文说明：NamesReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool NamesReady(const AnomalyUe5NamesServiceV1 *service) noexcept {
-  return HasField<AnomalyUe5NamesServiceV1,
+// 中文说明：NamesReady()：直接在函数体内完成计算与状态处理。  return HasField<AnomalyUe5NamesServiceV1,
                   decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
              service, offsetof(AnomalyUe5NamesServiceV1, resolve_utf8)) &&
          service->resolve_utf8 != nullptr;
@@ -1321,9 +1275,7 @@ bool AddAddress(const std::uintptr_t base, const std::uint64_t offset,
 }
 
 template <typename T>
-// 中文说明：Read() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool Read(Context &context, const std::uintptr_t address, T &value) noexcept {
-  if (!CoreReady(context.core) || address == 0)
+// 中文说明：Read()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!CoreReady(context.core) || address == 0)
     return false;
   AnomalyMutableByteSpanV1 destination{
       reinterpret_cast<std::uint8_t *>(&value), sizeof(value)};
@@ -1363,9 +1315,7 @@ bool ResolveSignature(Context &context, const std::string_view pattern,
          address != 0;
 }
 
-// 中文说明：ResolveGWorld() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ResolveGWorld(Context &context) noexcept {
-  std::uintptr_t instruction{};
+// 中文说明：ResolveGWorld()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::uintptr_t instruction{};
   std::int32_t displacement{};
   if (!ResolveSignature(context, kGWorldPattern, instruction) ||
       !Read(context, instruction + kGWorldResolveOffset, displacement))
@@ -1378,9 +1328,7 @@ bool ResolveGWorld(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：ResolveLocalCharacter() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ResolveLocalCharacter(Context &context) noexcept {
-  context.runtime.character = 0;
+// 中文说明：ResolveLocalCharacter()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  context.runtime.character = 0;
   context.runtime.mesh = 0;
   context.runtime.anim_instance = 0;
   std::uintptr_t world{};
@@ -1416,9 +1364,7 @@ bool ResolveLocalCharacter(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：ReadAnimationState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ReadAnimationState(Context &context) noexcept {
-  const auto mesh = context.runtime.mesh;
+// 中文说明：ReadAnimationState()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const auto mesh = context.runtime.mesh;
   if (mesh == 0)
     return false;
   std::uint8_t animation_mode{};
@@ -1448,9 +1394,7 @@ bool ReadArrayHeader(Context &context, const std::uintptr_t array_address,
   return true;
 }
 
-// 中文说明：ReadPoseArrays() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ReadPoseArrays(Context &context) noexcept {
-  const auto mesh = context.runtime.mesh;
+// 中文说明：ReadPoseArrays()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const auto mesh = context.runtime.mesh;
   if (mesh == 0)
     return false;
   std::uintptr_t bone_space_data{};
@@ -1489,9 +1433,7 @@ bool ReadPoseArrays(Context &context) noexcept {
       context.runtime.component_space_count);
 }
 
-// 中文说明：RestorePause() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RestorePause(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：RestorePause()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
   if (!state.saved_pause || state.mesh == 0)
     return true;
   if (!Write(context, state.mesh + kMeshAnimationFlagsOffset,
@@ -1502,9 +1444,7 @@ bool RestorePause(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：ApplyPause() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ApplyPause(Context &context, const bool enabled) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：ApplyPause()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
   if (state.mesh == 0)
     return false;
   if (!enabled)
@@ -1523,9 +1463,7 @@ bool ApplyPause(Context &context, const bool enabled) noexcept {
   return true;
 }
 
-// 中文说明：RestoreRate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RestoreRate(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：RestoreRate()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
   if (!state.saved_rate || state.mesh == 0)
     return true;
   if (!Write(context, state.mesh + kMeshGlobalAnimRateScaleOffset,
@@ -1535,9 +1473,7 @@ bool RestoreRate(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：ApplyRate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ApplyRate(Context &context, const bool enabled, const float value) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：ApplyRate()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
   if (state.mesh == 0)
     return false;
   if (!enabled)
@@ -1552,9 +1488,7 @@ bool ApplyRate(Context &context, const bool enabled, const float value) noexcept
   return Write(context, state.mesh + kMeshGlobalAnimRateScaleOffset, value);
 }
 
-// 中文说明：RestoreRootMotion() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RestoreRootMotion(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：RestoreRootMotion()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
   if (!state.saved_root_motion || state.character == 0)
     return true;
   if (!Write(context, state.character + kCharacterAnimRootMotionScaleOffset,
@@ -1583,9 +1517,7 @@ bool ApplyRootMotion(Context &context, const bool enabled,
                value);
 }
 
-// 中文说明：RestoreMultiThreadedUpdate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RestoreMultiThreadedUpdate(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：RestoreMultiThreadedUpdate()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
   if (!state.saved_multi_threaded_update || state.anim_instance == 0)
     return true;
   if (state.multi_threaded_update_instance != state.anim_instance) {
@@ -1600,9 +1532,7 @@ bool RestoreMultiThreadedUpdate(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：ApplyMultiThreadedUpdate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ApplyMultiThreadedUpdate(Context &context, const bool enabled) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：ApplyMultiThreadedUpdate()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
   if (!enabled)
     return RestoreMultiThreadedUpdate(context);
   if (state.anim_instance == 0)
@@ -1627,9 +1557,7 @@ bool ApplyMultiThreadedUpdate(Context &context, const bool enabled) noexcept {
                flags);
 }
 
-// 中文说明：RestorePose() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RestorePose(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：RestorePose()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
   if (!state.saved_pose)
     return true;
   state.pose_descendants.clear();
@@ -1658,9 +1586,7 @@ bool ForceMeshObjectUpdate(Context &context,
   return Write(context, mesh + kMeshForceMeshObjectUpdateOffset, flags);
 }
 
-// 中文说明：ForcePoseMeshObjectUpdate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ForcePoseMeshObjectUpdate(Context &context) noexcept {
-  return ForceMeshObjectUpdate(context, context.runtime.mesh);
+// 中文说明：ForcePoseMeshObjectUpdate()：直接在函数体内完成计算与状态处理。  return ForceMeshObjectUpdate(context, context.runtime.mesh);
 }
 
 struct Vec3d {
@@ -1682,9 +1608,7 @@ struct Transformd {
   Vec3d scale{1.0, 1.0, 1.0};
 };
 
-// 中文说明：QuatMultiply() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Quatd QuatMultiply(const Quatd &a, const Quatd &b) noexcept {
-  Quatd out;
+// 中文说明：QuatMultiply()：直接在函数体内完成计算与状态处理。  Quatd out;
   out.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
   out.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
   out.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
@@ -1692,9 +1616,7 @@ Quatd QuatMultiply(const Quatd &a, const Quatd &b) noexcept {
   return out;
 }
 
-// 中文说明：QuatRotateVector() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Vec3d QuatRotateVector(const Quatd &q, const Vec3d &v) noexcept {
-  const Vec3d u{q.x, q.y, q.z};
+// 中文说明：QuatRotateVector()：直接在函数体内完成计算与状态处理。  const Vec3d u{q.x, q.y, q.z};
   const Vec3d uv{
       u.y * v.z - u.z * v.y,
       u.z * v.x - u.x * v.z,
@@ -1784,9 +1706,7 @@ struct PackedTransform {
 static_assert(sizeof(PackedTransform) == kTransformSize,
               "PackedTransform must match the game FTransform layout");
 
-// 中文说明：UnpackTransform() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Transformd UnpackTransform(const PackedTransform &source) noexcept {
-  Transformd out;
+// 中文说明：UnpackTransform()：直接在函数体内完成计算与状态处理。  Transformd out;
   out.rotation =
       Quatd{source.rotation[0], source.rotation[1], source.rotation[2],
             source.rotation[3]};
@@ -1796,9 +1716,7 @@ Transformd UnpackTransform(const PackedTransform &source) noexcept {
   return out;
 }
 
-// 中文说明：PackTransform() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void PackTransform(const Transformd &source, PackedTransform &destination) noexcept {
-  destination.rotation[0] = source.rotation.x;
+// 中文说明：PackTransform()：直接在函数体内完成计算与状态处理。  destination.rotation[0] = source.rotation.x;
   destination.rotation[1] = source.rotation.y;
   destination.rotation[2] = source.rotation.z;
   destination.rotation[3] = source.rotation.w;
@@ -1845,9 +1763,7 @@ Transformd ComputeBoneComponent(
   return components[bone_index];
 }
 
-// 中文说明：ApplyPoseOverridesInTick() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ApplyPoseOverridesInTick(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：ApplyPoseOverridesInTick()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
   if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
       state.mesh == 0 || state.local_space_data == 0 || state.pose_data == 0 ||
       state.pose_component_data == 0 || state.local_space_count == 0 ||
@@ -1978,9 +1894,7 @@ bool ApplyPose(Context &context, const bool enabled, const std::uint32_t bone,
   return true;
 }
 
-// 中文说明：ResolvePoseTickTarget() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ResolvePoseTickTarget(Context &context, std::uintptr_t &target) noexcept {
-  target = 0;
+// 中文说明：ResolvePoseTickTarget()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  target = 0;
   const auto mesh = context.runtime.mesh;
   if (mesh == 0)
     return false;
@@ -2041,9 +1955,7 @@ void DestroyPoseableAccessories(Context &context) noexcept;
 void DestroyStalePoseableComponent(Context &context,
                                    std::uintptr_t component) noexcept;
 
-// 中文说明：ReleasePoseTickHook() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ReleasePoseTickHook(Context &context) noexcept {
-  if (!HookReady(context.hook) || context.tick_hook.id == 0)
+// 中文说明：ReleasePoseTickHook()：直接在函数体内完成计算与状态处理。  if (!HookReady(context.hook) || context.tick_hook.id == 0)
     return true;
   const auto status =
       context.hook->release(context.hook->user, context.tick_hook);
@@ -2057,9 +1969,7 @@ bool ReleasePoseTickHook(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：EnsurePoseTickHook() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool EnsurePoseTickHook(Context &context) noexcept {
-  if (!HookReady(context.hook))
+// 中文说明：EnsurePoseTickHook()：直接在函数体内完成计算与状态处理。  if (!HookReady(context.hook))
     return false;
   std::uintptr_t target{};
   if (!ResolvePoseTickTarget(context, target))
@@ -2188,9 +2098,7 @@ using CameraPovFn = void *(ANOMALY_CALL *)(void *, void *, void *);
 void *ANOMALY_CALL CameraPovDetour(void *self, void *first, void *second) noexcept;
 
 // PlayerController -> camera manager, the offset the active Profile validates.
-// 中文说明：ResolveCameraManager() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ResolveCameraManager(Context &context, std::uintptr_t &manager) noexcept {
-  manager = 0;
+// 中文说明：ResolveCameraManager()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  manager = 0;
   std::uintptr_t world{};
   std::uintptr_t game_instance{};
   std::uintptr_t local_players{};
@@ -2274,9 +2182,7 @@ bool ResolveCameraPovTarget(Context &context, const std::uintptr_t manager,
   return false;
 }
 
-// 中文说明：RefreshCameraPovTarget() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RefreshCameraPovTarget(Context &context) noexcept {
-  std::uintptr_t manager{};
+// 中文说明：RefreshCameraPovTarget()：直接在函数体内完成计算与状态处理。  std::uintptr_t manager{};
   if (!ResolveCameraManager(context, manager)) {
     context.camera_manager.store(0, std::memory_order_release);
     context.camera_manager_resolved.store(false, std::memory_order_release);
@@ -2306,9 +2212,7 @@ bool RefreshCameraPovTarget(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：ReleaseCameraPovHook() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ReleaseCameraPovHook(Context &context) noexcept {
-  g_camera_pov.store(nullptr, std::memory_order_release);
+// 中文说明：ReleaseCameraPovHook()：直接在函数体内完成计算与状态处理。  g_camera_pov.store(nullptr, std::memory_order_release);
   context.camera_manager.store(0, std::memory_order_release);
   context.camera_manager_resolved.store(false, std::memory_order_release);
   context.camera_hook_ready.store(false, std::memory_order_release);
@@ -2330,9 +2234,7 @@ bool ReleaseCameraPovHook(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：EnsureCameraPovHook() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool EnsureCameraPovHook(Context &context) noexcept {
-  if (!HookReady(context.hook) ||
+// 中文说明：EnsureCameraPovHook()：直接在函数体内完成计算与状态处理。  if (!HookReady(context.hook) ||
       !context.camera_manager_resolved.load(std::memory_order_acquire))
     return false;
   const std::uintptr_t target = context.camera_pov_resolved_target;
@@ -2375,17 +2277,13 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 
 // MMD (x, y, z) -> the rig's local axes, the mapping the motion retarget uses. The model faces
 // its own -Z, which lands on local +Y, so local +Y is "the way the character faces".
-// 中文说明：MmdToLocal() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void MmdToLocal(const double source[3], double local[3]) noexcept {
-  local[0] = source[0];
+// 中文说明：MmdToLocal()：直接在函数体内完成计算与状态处理。  local[0] = source[0];
   local[1] = -source[2];
   local[2] = source[1];
 }
 
 // The character's feet and the middle of their bounding box, from the mesh's world bounds.
-// 中文说明：CharacterBounds() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool CharacterBounds(Context &context, double feet[3], double centre[3]) noexcept {
-  const std::uintptr_t mesh = context.runtime.mesh;
+// 中文说明：CharacterBounds()：直接在函数体内完成计算与状态处理。  const std::uintptr_t mesh = context.runtime.mesh;
   std::uintptr_t origin_address{};
   std::uintptr_t extent_address{};
   double origin[3]{};
@@ -2416,9 +2314,7 @@ bool CharacterBounds(Context &context, double feet[3], double centre[3]) noexcep
 // x = 0 with pitch 0 while the character stood 11.5 km away. Only a reading taken near the
 // character is allowed to anchor the shot; the attempt is retried until one arrives, and the
 // distance test alone is enough, because a placeholder is nowhere near the character.
-// 中文说明：GameCameraReadingIsPlausible() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool GameCameraReadingIsPlausible(const double location[3], const double centre[3]) noexcept {
-  const double dx = centre[0] - location[0];
+// 中文说明：GameCameraReadingIsPlausible()：直接在函数体内完成计算与状态处理。  const double dx = centre[0] - location[0];
   const double dy = centre[1] - location[1];
   const double dz = centre[2] - location[2];
   const double range = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -2429,9 +2325,7 @@ bool GameCameraReadingIsPlausible(const double location[3], const double centre[
 // both converters bake): its x is the character's left, its y the way they walk, its z up, and it
 // is used as it arrives. Turning it a half turn first was tried and reverted: it pointed the
 // track shot's aim at a point mirrored through the character, which is a shot staring at scenery.
-// 中文说明：CameraUnitCm() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-double CameraUnitCm(Context &context) noexcept {
-  const double unit = context.mmd_unit_cm.load(std::memory_order_acquire);
+// 中文说明：CameraUnitCm()：直接在函数体内完成计算与状态处理。  const double unit = context.mmd_unit_cm.load(std::memory_order_acquire);
   return unit > 1e-6 ? unit : kCameraFallbackUnitCm;
 }
 
@@ -2623,9 +2517,7 @@ void DriveCameraTrack(Context &context, const double feet[3], const double centr
 
 // Rewrite the POV the view is built from. Patching the game's struct in place and returning its
 // pointer unchanged is deliberate -- handing back a substitute buffer is what crashed the game once.
-// 中文说明：CameraPovDetour() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void *ANOMALY_CALL CameraPovDetour(void *self, void *first, void *second) noexcept {
-  Context *context = g_camera_pov.load(std::memory_order_acquire);
+// 中文说明：CameraPovDetour()：直接在函数体内完成计算与状态处理。  Context *context = g_camera_pov.load(std::memory_order_acquire);
   AnomalyGenerationHandleV1 lease{};
   bool leased = false;
   CameraPovFn original = nullptr;
@@ -2852,9 +2744,7 @@ void LogCameraDrive(Context &context, const bool follow_mode, const double locat
 // rewritten in place: the same edit the getter's output would have received, made where nothing
 // can run between this call and the view build to undo it, and with the pointer itself left
 // alone so the rest of the struct keeps whatever the engine put there.
-// 中文说明：ResolveGObjects() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ResolveGObjects(Context &context) noexcept {
-  std::uintptr_t instruction{};
+// 中文说明：ResolveGObjects()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::uintptr_t instruction{};
   std::int32_t displacement{};
   if (!ResolveSignature(context, kGObjectsPattern, instruction) ||
       !Read(context, instruction + kGObjectsResolveOffset, displacement))
@@ -2868,9 +2758,7 @@ bool ResolveGObjects(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：RefreshObjectRegistry() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RefreshObjectRegistry(Context &context) noexcept {
-  if (context.object_registry.items != 0)
+// 中文说明：RefreshObjectRegistry()：直接在函数体内完成计算与状态处理。  if (context.object_registry.items != 0)
     return true;
   if (context.g_objects_address == 0 && !ResolveGObjects(context))
     return false;
@@ -3156,9 +3044,7 @@ bool GetBoneIndexFName(Context &context,
   return true;
 }
 
-// 中文说明：RefreshBoneHierarchy() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void RefreshBoneHierarchy(Context &context) noexcept {
-  const auto count = context.runtime.local_space_count;
+// 中文说明：RefreshBoneHierarchy()：直接在函数体内完成计算与状态处理。  const auto count = context.runtime.local_space_count;
   context.bone_parents.assign(count, -1);
   if (context.bone_names.size() != count)
     return;
@@ -3182,9 +3068,7 @@ void RefreshBoneHierarchy(Context &context) noexcept {
   }
 }
 
-// 中文说明：RefreshBoneHierarchyDirect() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void RefreshBoneHierarchyDirect(Context &context) noexcept {
-  const auto count = context.runtime.local_space_count;
+// 中文说明：RefreshBoneHierarchyDirect()：直接在函数体内完成计算与状态处理。  const auto count = context.runtime.local_space_count;
   if (count == 0)
     return;
   if (context.bone_parents_ready &&
@@ -3269,9 +3153,7 @@ bool ApplyBoneRotationByName(Context &context, const std::uint32_t bone,
                               parameters.data(), parameters.size(), detail);
 }
 
-// 中文说明：ApplyPoseOverridesViaUFunction() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ApplyPoseOverridesViaUFunction(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：ApplyPoseOverridesViaUFunction()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
   if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
       state.mesh == 0)
     return;
@@ -3294,9 +3176,7 @@ void ApplyPoseOverridesViaUFunction(Context &context) noexcept {
   static_cast<void>(ForcePoseMeshObjectUpdate(context));
 }
 
-// 中文说明：CapturePoseBase() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool CapturePoseBase(Context &context) noexcept {
-  const auto mesh = context.runtime.mesh;
+// 中文说明：CapturePoseBase()：直接在函数体内完成计算与状态处理。  const auto mesh = context.runtime.mesh;
   const auto data = context.runtime.local_space_data;
   const auto count = context.runtime.local_space_count;
   if (mesh == 0 || data == 0 || count == 0)
@@ -3319,9 +3199,7 @@ bool CapturePoseBase(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：ApplyPoseOverridesDirect() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ApplyPoseOverridesDirect(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：ApplyPoseOverridesDirect()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
   if (!context.pose_override_enabled.load(std::memory_order_acquire) ||
       state.mesh == 0 || state.local_space_data == 0 ||
       state.local_space_count == 0 || state.component_space_data == 0 ||
@@ -3414,9 +3292,7 @@ struct MotionSample {
   std::vector<std::array<double, 3>> offsets;
 };
 
-// 中文说明：MotionDuration() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-double MotionDuration(const Context::MotionTrack &motion) noexcept {
-  if (motion.frame_count <= 1)
+// 中文说明：MotionDuration()：直接在函数体内完成计算与状态处理。  if (motion.frame_count <= 1)
     return 0.0;
   const double fps = motion.fps > 0.0 ? motion.fps : 30.0;
   return static_cast<double>(motion.frame_count - 1) / fps;
@@ -3425,9 +3301,7 @@ double MotionDuration(const Context::MotionTrack &motion) noexcept {
 // Maps the file's bone names onto this skeleton's bone indices. Needs the bone
 // name table, which can only be read on the game thread, so this runs from
 // Update rather than from the loading task.
-// 中文说明：ResolveMotionIndices() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ResolveMotionIndices(Context &context) noexcept {
-  if (!context.motion_loaded.load(std::memory_order_acquire))
+// 中文说明：ResolveMotionIndices()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!context.motion_loaded.load(std::memory_order_acquire))
     return false;
   std::lock_guard<std::mutex> lock(context.motion_mutex);
   auto &motion = context.motion;
@@ -3590,9 +3464,7 @@ bool SampleMotion(Context &context, const double seconds,
 // were stretched by that factor. The asset's own reference pose is preferred: it is the pose the
 // converter measured `mmdLegLength` against and it is readable before any motion has been applied,
 // which is the state a camera file is driven in on its own.
-// 中文说明：LiveLegLength() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-double LiveLegLength(Context &context) noexcept {
-  static constexpr const char *kChain[] = {"Bip001-L-Calf", "Bip001-L-Foot"};
+// 中文说明：LiveLegLength()：直接在函数体内完成计算与状态处理。  static constexpr const char *kChain[] = {"Bip001-L-Calf", "Bip001-L-Foot"};
   double total = 0.0;
   std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
   const std::vector<std::array<double, 12>> &source =
@@ -3615,9 +3487,7 @@ double LiveLegLength(Context &context) noexcept {
 }
 
 
-// 中文说明：ApplyMotionPoseDirect() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ApplyMotionPoseDirect(Context &context) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：ApplyMotionPoseDirect()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RuntimeState &state = context.runtime;
   if (state.mesh == 0 || state.local_space_data == 0 ||
       state.local_space_count == 0 || state.component_space_data == 0 ||
       state.component_space_count != state.local_space_count)
@@ -3755,9 +3625,7 @@ void ApplyMotionPoseDirect(Context &context) noexcept {
 // Walks the GObjects registry a slice at a time (never more than a fraction of a
 // tick) and collects every object whose class pointer equals our mesh's and
 // whose bone array holds the same bone count. Strictly read-only.
-// 中文说明：StepMeshScan() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void StepMeshScan(Context &context) noexcept {
-  if (!context.mesh_scan_requested.load(std::memory_order_acquire))
+// 中文说明：StepMeshScan()：直接在函数体内完成计算与状态处理。  if (!context.mesh_scan_requested.load(std::memory_order_acquire))
     return;
   if (context.runtime.mesh == 0) {
     context.mesh_scan_requested.store(false, std::memory_order_release);
@@ -3926,9 +3794,7 @@ void StepMeshScan(Context &context) noexcept {
   }
 }
 
-// 中文说明：UnloadMotion() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void UnloadMotion(Context &context) noexcept {
-  std::lock_guard<std::mutex> lock(context.motion_mutex);
+// 中文说明：UnloadMotion()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.motion_mutex);
   ++context.motion_load_epoch;
   context.motion_loaded.store(false, std::memory_order_release);
   context.motion_playing.store(false, std::memory_order_release);
@@ -4379,9 +4245,7 @@ bool DrivePoseableSocketPose(Context &context, Context::ExtraMesh &extra,
   return true;
 }
 
-// 中文说明：DestroyPoseableAccessories() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void DestroyPoseableAccessories(Context &context) noexcept {
-  for (auto &extra : context.extra_meshes) {
+// 中文说明：DestroyPoseableAccessories()：直接在函数体内完成计算与状态处理。  for (auto &extra : context.extra_meshes) {
     if (extra.poseable_component == 0)
       continue;
     std::string detail;
@@ -4490,9 +4354,7 @@ bool ObjectAtIndex(Context &context, const std::uint32_t index,
          object != 0;
 }
 
-// 中文说明：ClassNameOf() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string ClassNameOf(Context &context, const std::uintptr_t object) noexcept {
-  std::uintptr_t klass{};
+// 中文说明：ClassNameOf()：直接在函数体内完成计算与状态处理。  std::uintptr_t klass{};
   if (!Read(context, object + kObjectClassOffset, klass) || klass == 0)
     return {};
   const auto cached = context.mesh_scan_class_cache.find(klass);
@@ -4506,9 +4368,7 @@ std::string ClassNameOf(Context &context, const std::uintptr_t object) noexcept 
   return name;
 }
 
-// 中文说明：ObjectNameOf() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string ObjectNameOf(Context &context, const std::uintptr_t object) noexcept {
-  std::uint32_t name_id{};
+// 中文说明：ObjectNameOf()：直接在函数体内完成计算与状态处理。  std::uint32_t name_id{};
   std::string name;
   if (Read(context, object + kObjectNameOffset, name_id))
     static_cast<void>(ResolveName(context, name_id, name));
@@ -4655,14 +4515,10 @@ std::vector<Transformd> BindPoseTransforms(
   return out;
 }
 
-// 中文说明：QuatConjugate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Quatd QuatConjugate(const Quatd &q) noexcept {
-  return Quatd{-q.x, -q.y, -q.z, q.w};
+// 中文说明：QuatConjugate()：直接在函数体内完成计算与状态处理。  return Quatd{-q.x, -q.y, -q.z, q.w};
 }
 
-// 中文说明：TransformInverse() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Transformd TransformInverse(const Transformd &value) noexcept {
-  Transformd out;
+// 中文说明：TransformInverse()：直接在函数体内完成计算与状态处理。  Transformd out;
   out.rotation = QuatConjugate(value.rotation);
   out.scale = Vec3d{value.scale.x != 0.0 ? 1.0 / value.scale.x : 1.0,
                     value.scale.y != 0.0 ? 1.0 / value.scale.y : 1.0,
@@ -4676,9 +4532,7 @@ Transformd TransformInverse(const Transformd &value) noexcept {
 }
 
 // Normalised-lerp quaternion blend: stable, and a lag only ever asks for small angles.
-// 中文说明：QuatBlend() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Quatd QuatBlend(const Quatd &from, const Quatd &to, const double alpha) noexcept {
-  double dot = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
+// 中文说明：QuatBlend()：直接在函数体内完成计算与状态处理。  double dot = from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w;
   Quatd target = to;
   if (dot < 0.0) {                        // q and -q are the same rotation
     target = Quatd{-to.x, -to.y, -to.z, -to.w};
@@ -4699,9 +4553,7 @@ Quatd QuatBlend(const Quatd &from, const Quatd &to, const double alpha) noexcept
 }
 
 // Lower-case alphanumeric words of a bone name, camelCase and digits split out.
-// 中文说明：NameTokens() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::vector<std::string> NameTokens(const std::string &name) noexcept {
-  std::vector<std::string> tokens;
+// 中文说明：NameTokens()：直接在函数体内完成计算与状态处理。  std::vector<std::string> tokens;
   std::string current;
   const auto flush = [&tokens, &current]() {
     if (!current.empty()) {
@@ -4735,9 +4587,7 @@ std::vector<std::string> NameTokens(const std::string &name) noexcept {
 // to appear in the body name, digits have to appear *after* the words they qualify
 // (which is what keeps spine_01_adjust off Bip001-Spine2), and anatomical
 // Bip001-* bones win over helper bones. Returns kNoBone when nothing matches.
-// 中文说明：MatchBodyBone() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::uint32_t MatchBodyBone(Context &context, const std::string &name) noexcept {
-  std::vector<std::string> words;
+// 中文说明：MatchBodyBone()：直接在函数体内完成计算与状态处理。  std::vector<std::string> words;
   std::vector<std::string> digits;
   for (auto &token : NameTokens(name)) {
     if (token == "adjust" || token == "position" || token == "root" ||
@@ -4909,9 +4759,7 @@ bool TryAssetReferencePose(Context &context,
 // Find the character's mesh asset and read its reference pose. Called by the
 // skeleton export (and driven from the mesh scan, which already walks every
 // object, so it can also succeed there).
-// 中文说明：FindReferencePose() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool FindReferencePose(Context &context) noexcept {
-  if (!context.ref_locals.empty())
+// 中文说明：FindReferencePose()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  if (!context.ref_locals.empty())
     return true;
   context.ref_pose_object = 0;
   context.ref_pose_status = "mesh unavailable";
@@ -4984,9 +4832,7 @@ bool FindReferencePose(Context &context) noexcept {
 // candidate offset is only accepted when the index resolves through GObjects to
 // an object whose stored serial matches -- and when that holds for *every* probe
 // component at once, which random data never does.
-// 中文说明：StepAttachScan() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void StepAttachScan(Context &context) noexcept {
-  if (!context.attach_scan_requested.load(std::memory_order_acquire))
+// 中文说明：StepAttachScan()：直接在函数体内完成计算与状态处理。  if (!context.attach_scan_requested.load(std::memory_order_acquire))
     return;
   context.attach_scan_requested.store(false, std::memory_order_release);
   if (!RefreshObjectRegistry(context)) {
@@ -5096,9 +4942,7 @@ void StepAttachScan(Context &context) noexcept {
 
 // Diagnostics go to the runtime log so they can be read without asking the user
 // to transcribe (and OCR) a status line.
-// 中文说明：LogDiagnostic() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void LogDiagnostic(Context &context, const std::string &message) noexcept {
-  if (context.core == nullptr || context.core->log == nullptr)
+// 中文说明：LogDiagnostic()：直接在函数体内完成计算与状态处理。  if (context.core == nullptr || context.core->log == nullptr)
     return;
   context.core->log(context.core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO,
                     anomaly::sdk::StringView(message));
@@ -5106,9 +4950,7 @@ void LogDiagnostic(Context &context, const std::string &message) noexcept {
 
 
 
-// 中文说明：ResyncExtraMeshes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ResyncExtraMeshes(Context &context) noexcept {
-  // Log the *state* even when this returns early: a silent no-op is what made the
+// 中文说明：ResyncExtraMeshes()：直接在函数体内完成计算与状态处理。  // Log the *state* even when this returns early: a silent no-op is what made the
   // previous test unreadable ("还是没有" told us nothing about which precondition
   // was missing).
   const std::uint32_t parent_offset = context.attach_parent_offset;
@@ -5162,9 +5004,7 @@ void ResyncExtraMeshes(Context &context) noexcept {
   }
 }
 
-// 中文说明：BuildExtraMeshes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void BuildExtraMeshes(Context &context) noexcept {
-  // Never latch the result onto an empty mesh: runtime.mesh is zeroed on frames
+// 中文说明：BuildExtraMeshes()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  // Never latch the result onto an empty mesh: runtime.mesh is zeroed on frames
   // where the local character cannot be resolved, and a build that ran on such a
   // frame stored owner = 0 while clearing the pending flag, which disabled the
   // attach resync permanently.
@@ -5766,9 +5606,7 @@ void WriteExtraMeshes(Context &context,
   }
 }
 
-// 中文说明：RestoreExtraMeshes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RestoreExtraMeshes(Context &context) noexcept {
-  std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
+// 中文说明：RestoreExtraMeshes()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
   DestroyPoseableAccessories(context);
   for (auto &extra : context.extra_meshes) {
     if (extra.buffers_modified && extra.component_space_data != 0 && !extra.saved_component.empty())
@@ -5784,9 +5622,7 @@ bool RestoreExtraMeshes(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：DropExtraMeshes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool DropExtraMeshes(Context &context) noexcept {  // Put the original buffers back before forgetting about them: dropping them
-  // while our pose is still in place is what left a character stuck until a
+// 中文说明：DropExtraMeshes()：直接在函数体内完成计算与状态处理。  // while our pose is still in place is what left a character stuck until a
   // relog.
   static_cast<void>(RestoreExtraMeshes(context));
   std::lock_guard<std::mutex> lock(context.extra_mesh_mutex);
@@ -5819,9 +5655,7 @@ bool RefreshBoneNames(Context &context, std::vector<std::string> &names,
   return true;
 }
 
-// 中文说明：MaybeRefreshBoneNames() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void MaybeRefreshBoneNames(Context &context) noexcept {
-  const auto mesh = context.runtime.mesh;
+// 中文说明：MaybeRefreshBoneNames()：直接在函数体内完成计算与状态处理。  const auto mesh = context.runtime.mesh;
   const auto count = context.runtime.bone_space_count;
   if (mesh == 0 || count == 0)
     return;
@@ -5844,9 +5678,7 @@ void MaybeRefreshBoneNames(Context &context) noexcept {
   RefreshBoneHierarchy(context);
 }
 
-// 中文说明：ForcePoseCache() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool ForcePoseCache(Context &context, std::string &detail) noexcept {
-  detail.clear();
+// 中文说明：ForcePoseCache()：直接在函数体内完成计算与状态处理。  detail.clear();
   if (context.runtime.mesh == 0) {
     detail = "local mesh is unavailable";
     return false;
@@ -5884,9 +5716,7 @@ bool ForcePoseCache(Context &context, std::string &detail) noexcept {
   return true;
 }
 
-// 中文说明：EnsurePoseForcedLod() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool EnsurePoseForcedLod(Context &context, const bool enabled) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：EnsurePoseForcedLod()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
   if (state.mesh == 0)
     return false;
   if (!enabled) {
@@ -5894,9 +5724,7 @@ bool EnsurePoseForcedLod(Context &context, const bool enabled) noexcept {
       std::string detail;
       const std::int32_t original = state.original_forced_lod;
       if (CallVirtualUFunction(context, state.mesh, kFunctionSetForcedLodPath,
-// 中文说明：sizeof() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-                               &original, sizeof(original), detail)) {
-        state.forced_lod_applied = false;
+// 中文说明：sizeof()：直接在函数体内完成计算与状态处理。        state.forced_lod_applied = false;
         state.saved_forced_lod = false;
         state.original_forced_lod = 0;
       }
@@ -5926,9 +5754,7 @@ bool EnsurePoseForcedLod(Context &context, const bool enabled) noexcept {
   return true;
 }
 
-// 中文说明：EnsurePoseAnimationMode() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool EnsurePoseAnimationMode(Context &context, const bool enabled) noexcept {
-  RuntimeState &state = context.runtime;
+// 中文说明：EnsurePoseAnimationMode()：直接在函数体内完成计算与状态处理。  RuntimeState &state = context.runtime;
   if (state.mesh == 0)
     return false;
   if (!enabled) {
@@ -5964,9 +5790,7 @@ bool EnsurePoseAnimationMode(Context &context, const bool enabled) noexcept {
   const SetAnimationModeParameters parameters{kAnimationModeCustom, 0};
   std::string detail;
   if (CallVirtualUFunction(context, state.mesh, kFunctionSetAnimationModePath,
-// 中文说明：sizeof() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-                           &parameters, sizeof(parameters), detail)) {
-    state.animation_mode_applied = true;
+// 中文说明：sizeof()：直接在函数体内完成计算与状态处理。    state.animation_mode_applied = true;
     return true;
   }
 
@@ -5980,15 +5804,11 @@ bool EnsurePoseAnimationMode(Context &context, const bool enabled) noexcept {
   return true;
 }
 
-// 中文说明：SetReflectionStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void SetReflectionStatus(Context &context, const std::string_view message) {
-  std::scoped_lock lock(context.state_mutex);
+// 中文说明：SetReflectionStatus()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  std::scoped_lock lock(context.state_mutex);
   context.reflection_status.assign(message.data(), message.size());
 }
 
-// 中文说明：Utf8ToWide() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::wstring Utf8ToWide(const std::string_view value) {
-  if (value.empty() ||
+// 中文说明：Utf8ToWide()：直接在函数体内完成计算与状态处理。  if (value.empty() ||
       value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     return {};
   const int required = MultiByteToWideChar(
@@ -6004,9 +5824,7 @@ std::wstring Utf8ToWide(const std::string_view value) {
   return result;
 }
 
-// 中文说明：WideToUtf8() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string WideToUtf8(const std::wstring_view value) {
-  if (value.empty() ||
+// 中文说明：WideToUtf8()：直接在函数体内完成计算与状态处理。  if (value.empty() ||
       value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     return {};
   const int required = WideCharToMultiByte(
@@ -6029,9 +5847,7 @@ public:
     if (SUCCEEDED(result_))
       CoUninitialize();
   }
-// 中文说明：Usable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  [[nodiscard]] bool Usable() const noexcept {
-    return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE;
+// 中文说明：Usable()：直接在函数体内完成计算与状态处理。    return SUCCEEDED(result_) || result_ == RPC_E_CHANGED_MODE;
   }
 private:
   HRESULT result_{};
@@ -6078,9 +5894,7 @@ enum class FileKind { Json, Vmd, Audio, Motion };
 
 // A chosen motion path is either a source VMD, which has to be converted, or a document that was
 // converted earlier, which must not go through the converter again.
-// 中文说明：PathIsConvertedMotion() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool PathIsConvertedMotion(const std::string &path) noexcept {
-  const std::size_t dot = path.find_last_of('.');
+// 中文说明：PathIsConvertedMotion()：直接在函数体内完成计算与状态处理。  const std::size_t dot = path.find_last_of('.');
   if (dot == std::string::npos)
     return false;
   std::string extension = path.substr(dot);
@@ -6184,9 +5998,7 @@ struct Mp3FrameTable {
   bool valid = false;
 
   // Linear inside a frame (24 ms at 48 kHz), which is finer than anything the device resolves.
-// 中文说明：TimeForByte() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  double TimeForByte(const double offset) const {
-    if (!valid || byte.size() < 2)
+// 中文说明：TimeForByte()：直接在函数体内完成计算与状态处理。    if (!valid || byte.size() < 2)
       return 0.0;
     if (offset <= static_cast<double>(byte.front()))
       return time.front();
@@ -6206,9 +6018,7 @@ struct Mp3FrameTable {
     return time[low] + fraction * (time[low + 1] - time[low]);
   }
 
-// 中文说明：ByteForTime() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  double ByteForTime(const double seconds) const {
-    if (!valid || byte.size() < 2)
+// 中文说明：ByteForTime()：直接在函数体内完成计算与状态处理。    if (!valid || byte.size() < 2)
       return 0.0;
     if (seconds <= time.front())
       return static_cast<double>(byte.front());
@@ -6233,9 +6043,7 @@ struct Mp3FrameTable {
 // Walks the MPEG audio frames of an MP3. Layer III only, which is what every .mp3 in practice is; a
 // file that does not walk cleanly simply leaves the table invalid and the player stays on the
 // device's own clock, exactly as before.
-// 中文说明：BuildMp3FrameTable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool BuildMp3FrameTable(const std::wstring &path, Mp3FrameTable *out) {
-  std::error_code ec;
+// 中文说明：BuildMp3FrameTable()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::error_code ec;
   const std::uintmax_t size = std::filesystem::file_size(path, ec);
   if (ec || size == 0 || size > kMp3MaxBytes)
     return false;
@@ -6314,9 +6122,7 @@ class MusicPlayer {
   MusicPlayer &operator=(const MusicPlayer &) = delete;
   ~MusicPlayer() { Close(); }
 
-// 中文说明：Open() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool Open(const std::string &utf8_path, std::string *error) {
-    Close();
+// 中文说明：Open()：直接在函数体内完成计算与状态处理。    Close();
     std::error_code ec;
     const std::filesystem::path path = std::filesystem::path(Utf8ToWide(utf8_path));
     if (!std::filesystem::exists(path, ec) || ec) {
@@ -6391,9 +6197,7 @@ class MusicPlayer {
     return false;
   }
 
-// 中文说明：Close() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  void Close() {
-    if (!alias_.empty()) {
+// 中文说明：Close()：直接在函数体内完成计算与状态处理。    if (!alias_.empty()) {
       std::string ignored;
       static_cast<void>(Command(L"close " + Utf8ToWide(alias_), &ignored));
     }
@@ -6405,9 +6209,7 @@ class MusicPlayer {
     device_rate_ = 0.0;
   }
 
-// 中文说明：Play() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool Play(std::string *error) {
-    if (alias_.empty())
+// 中文说明：Play()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
       return false;
     origin_true_seconds_ = 0.0;
     origin_device_ms_ = 0;
@@ -6416,9 +6218,7 @@ class MusicPlayer {
 
   // Restarting from a known time is one command; seeking a *playing* mpegvideo device repeatedly
   // is what made the track stutter and die, so re-syncs always go through this.
-// 中文说明：PlayFrom() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool PlayFrom(const double seconds, std::string *error) {
-    if (alias_.empty())
+// 中文说明：PlayFrom()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
       return false;
     // `motion + lead` can land past the end of the track -- a 29.4 s song under a 29.4 s motion asks
     // for 29.55 s on the last frame, and a loop wrap asks again from the end -- and MCI answers that
@@ -6431,16 +6231,12 @@ class MusicPlayer {
     return Command(L"play " + Utf8ToWide(alias_) + L" from " + std::to_wstring(device_ms), error);
   }
 
-// 中文说明：Pause() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool Pause(std::string *error) {
-    if (alias_.empty())
+// 中文说明：Pause()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
       return false;
     return Command(L"pause " + Utf8ToWide(alias_), error);
   }
 
-// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool Stop(std::string *error) {
-    if (alias_.empty())
+// 中文说明：Stop()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
       return false;
     static_cast<void>(Command(L"stop " + Utf8ToWide(alias_), error));
     origin_true_seconds_ = 0.0;
@@ -6448,9 +6244,7 @@ class MusicPlayer {
     return Command(L"seek " + Utf8ToWide(alias_) + L" to start", error);
   }
 
-// 中文说明：Seek() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool Seek(const double seconds, std::string *error) {
-    if (alias_.empty())
+// 中文说明：Seek()：直接在函数体内完成计算与状态处理。    if (alias_.empty())
       return false;
     const double position = ClampToTrack(seconds);
     const long long device_ms = DeviceMilliseconds(position);
@@ -6460,9 +6254,7 @@ class MusicPlayer {
   }
 
   // Muting instead of pausing keeps the playhead running, so unmuting stays in sync.
-// 中文说明：SetMuted() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool SetMuted(const bool muted, std::string *error) {
-    if (alias_.empty())
+// 中文说明：SetMuted()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。    if (alias_.empty())
       return false;
     if (!Command(L"setaudio " + Utf8ToWide(alias_) + (muted ? L" off" : L" on"), error))
       return false;
@@ -6474,9 +6266,7 @@ class MusicPlayer {
   // the DirectShow device reports it back through `status ... volume` (measured: 100 and
   // 1000 round-trip exactly). The value is kept even when no track is open, so the panel can
   // show it and the next Open re-applies it.
-// 中文说明：SetVolume() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool SetVolume(const int percent, std::string *error) {
-    const int clamped = (std::max)(0, (std::min)(100, percent));
+// 中文说明：SetVolume()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。    const int clamped = (std::max)(0, (std::min)(100, percent));
     volume_percent_ = clamped;
     if (alias_.empty())
       return true;
@@ -6484,12 +6274,8 @@ class MusicPlayer {
                        std::to_wstring(clamped * 10),
                    error);
   }
-// 中文说明：Volume() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  int Volume() const { return volume_percent_; }
-
-// 中文说明：Position() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  double Position() const {
-    long long milliseconds{};
+// 中文说明：Volume()：直接在函数体内完成计算与状态处理。
+// 中文说明：Position()：直接在函数体内完成计算与状态处理。    long long milliseconds{};
     if (!Query(L"position", &milliseconds))
       return 0.0;
     const double seconds = static_cast<double>(milliseconds) / 1000.0;
@@ -6507,9 +6293,7 @@ class MusicPlayer {
     return seconds;
   }
 
-// 中文说明：Length() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  double Length() const {
-    if (frame_table_.valid)
+// 中文说明：Length()：直接在函数体内完成计算与状态处理。    if (frame_table_.valid)
       return frame_table_.total_seconds;
     long long milliseconds{};
     if (!Query(L"length", &milliseconds))
@@ -6519,9 +6303,7 @@ class MusicPlayer {
 
   // Ask the device instead of remembering: when a track ends on its own (or anything else stops
   // it) a cached flag would keep the follower from ever restarting it.
-// 中文说明：playing() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool playing() const {
-    wchar_t reply[32]{};
+// 中文说明：playing()：直接在函数体内完成计算与状态处理。    wchar_t reply[32]{};
     if (alias_.empty())
       return false;
     const std::wstring command =
@@ -6531,24 +6313,18 @@ class MusicPlayer {
     return std::wstring(reply) == L"playing";
   }
 
-// 中文说明：opened() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool opened() const { return !alias_.empty(); }
-  const std::string &name() const { return name_; }
+// 中文说明：opened()：实际调用 “empty()”。  const std::string &name() const { return name_; }
   const std::string &timing_note() const { return timing_note_; }
 
  private:
-// 中文说明：Set() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  static void Set(std::string *error, const std::string &text) {
-    if (error != nullptr)
+// 中文说明：Set()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。    if (error != nullptr)
       *error = text;
   }
 
   // A position for `play`/`seek`, expressed in the device's own time base. The device's clock and the
   // file's clock are the same thing on a CBR file and differ by the ratio of the two bitrates on one
   // whose header frame lies, which is exactly the case the frame table exists for (see Mp3FrameTable).
-// 中文说明：DeviceMilliseconds() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  long long DeviceMilliseconds(const double seconds) const {
-    const double clamped = (std::max)(0.0, seconds);
+// 中文说明：DeviceMilliseconds()：直接在函数体内完成计算与状态处理。    const double clamped = (std::max)(0.0, seconds);
     if (frame_table_.valid && device_rate_ > 0.0)
       return static_cast<long long>(frame_table_.ByteForTime(clamped) * 1000.0 / device_rate_);
     return static_cast<long long>(clamped * 1000.0);
@@ -6556,17 +6332,13 @@ class MusicPlayer {
 
   // MCI rejects a position at or past the end of the track ("the parameter is out of range for the
   // specified command"), so a request aimed there is pulled back to the last 50 ms.
-// 中文说明：ClampToTrack() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  double ClampToTrack(const double seconds) const {
-    const double length = Length();
+// 中文说明：ClampToTrack()：直接在函数体内完成计算与状态处理。    const double length = Length();
     if (length > 0.1)
       return (std::max)(0.0, (std::min)(seconds, length - 0.05));
     return (std::max)(0.0, seconds);
   }
 
-// 中文说明：Command() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool Command(const std::wstring &command, std::string *error) const {
-    wchar_t reply[128]{};
+// 中文说明：Command()：直接在函数体内完成计算与状态处理。    wchar_t reply[128]{};
     const MCIERROR code = ::mciSendStringW(command.c_str(), reply, ARRAYSIZE(reply), nullptr);
     if (code == 0)
       return true;
@@ -6578,9 +6350,7 @@ class MusicPlayer {
     return false;
   }
 
-// 中文说明：Query() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-  bool Query(const wchar_t *what, long long *out) const {
-    if (alias_.empty())
+// 中文说明：Query()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。    if (alias_.empty())
       return false;
     wchar_t reply[64]{};
     const std::wstring command = std::wstring(L"status ") + Utf8ToWide(alias_) + L" " + what;
@@ -6669,9 +6439,7 @@ void PublishMusicState(const bool opened, const bool playing, const double posit
 // was corrected in one audible lurch the moment the panel was drawn. A stall now forces the
 // correction, and the drift threshold is small enough to catch the device-start offset that the
 // old 1.5 s window never saw.
-// 中文说明：StepMusic() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void StepMusic(Context &context, const double delta_seconds) noexcept {
-  // Never block the game tick on the panel: skip this tick instead (its critical sections are
+// 中文说明：StepMusic()：直接在函数体内完成计算与状态处理。  // Never block the game tick on the panel: skip this tick instead (its critical sections are
   // short, so the next tick gets through).
   std::unique_lock<std::mutex> lock(g_music_mutex, std::try_to_lock);
   if (!lock.owns_lock())
@@ -6835,9 +6603,7 @@ void StepMusic(Context &context, const double delta_seconds) noexcept {
 // A track sitting next to the motion is almost always the right one, so offer it: the exact
 // basename first, then the same basename ignoring spaces (motions and songs are often named
 // "爱言叶4.vmd" / "爱言叶4 .mp3").
-// 中文说明：FindSiblingAudio() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string FindSiblingAudio(const std::string &motion_path) {
-  std::error_code ec;
+// 中文说明：FindSiblingAudio()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::error_code ec;
   const std::filesystem::path motion = std::filesystem::path(Utf8ToWide(motion_path));
   const std::filesystem::path folder = motion.parent_path();
   if (folder.empty() || !std::filesystem::is_directory(folder, ec) || ec)
@@ -6896,9 +6662,7 @@ struct PoseFileTaskData final {
 
 // Directory the plugin's own DLL lives in: the reference MMD bone table is shipped next
 // to it, and the plugin has no other way to find its own files.
-// 中文说明：ModuleDirectory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string ModuleDirectory() noexcept {
-  HMODULE module{};
+// 中文说明：ModuleDirectory()：直接在函数体内完成计算与状态处理。  HMODULE module{};
   if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                           reinterpret_cast<LPCWSTR>(&ModuleDirectory), &module) ||
@@ -6922,18 +6686,14 @@ std::string ModuleDirectory() noexcept {
   return WideToUtf8(buffer.substr(0, slash));
 }
 
-// 中文说明：ReferenceBoneTablePath() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string ReferenceBoneTablePath(bool unity_reference) noexcept {
-  const std::string directory = ModuleDirectory();
+// 中文说明：ReferenceBoneTablePath()：直接在函数体内完成计算与状态处理。  const std::string directory = ModuleDirectory();
   if (directory.empty())
     return std::string();
   return directory + (unity_reference ? "\\data\\reference-miku-unity.json"
                                       : "\\data\\reference-pmx.json");
 }
 
-// 中文说明：PoseFileTask() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ANOMALY_CALL PoseFileTask(void *value, AnomalyGenerationHandleV1) {
-  auto *data = static_cast<PoseFileTaskData *>(value);
+// 中文说明：PoseFileTask()：直接在函数体内完成计算与状态处理。  auto *data = static_cast<PoseFileTaskData *>(value);
   if (data == nullptr)
     return;
   Context *context = data->context;
@@ -7099,9 +6859,7 @@ void ANOMALY_CALL PoseFileTask(void *value, AnomalyGenerationHandleV1) {
 }
 
 // In-memory FTransform layout: rot(4 doubles) + translation(3) + pad + scale(3) + pad.
-// 中文说明：TransformToJson() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-nlohmann::json TransformToJson(const double *raw) noexcept {
-  nlohmann::json out = nlohmann::json::object();
+// 中文说明：TransformToJson()：直接在函数体内完成计算与状态处理。  nlohmann::json out = nlohmann::json::object();
   out["rotation"] = {raw[0], raw[1], raw[2], raw[3]};
   out["translation"] = {raw[4], raw[5], raw[6]};
   out["scale"] = {raw[8], raw[9], raw[10]};
@@ -7124,9 +6882,7 @@ nlohmann::json TransformToJson(const double *raw) noexcept {
 // converter derives from it inherit that posture, whereas the reference pose is the one the
 // geometry is actually skinned in. refLocal falling back to nothing is fine -- the converter then
 // uses baseLocal exactly as before.
-// 中文说明：BuildSkeletonDocument() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string BuildSkeletonDocument(Context &context) noexcept {
-  const auto count = context.runtime.local_space_count;
+// 中文说明：BuildSkeletonDocument()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const auto count = context.runtime.local_space_count;
   // Bone names are the prerequisite for mapping; load them now if never loaded (also refreshes
   // the parent chain).
   if (context.bone_names.size() != count ||
@@ -7201,9 +6957,7 @@ std::string BuildSkeletonDocument(Context &context) noexcept {
   return root.dump();
 }
 
-// 中文说明：ExecutePoseFileAction() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ExecutePoseFileAction(Context &context) noexcept {
-  const std::uint32_t action =
+// 中文说明：ExecutePoseFileAction()：直接在函数体内完成计算与状态处理。  const std::uint32_t action =
       context.pose_file_action_requested.exchange(0, std::memory_order_acquire);
   if (action == 0)
     return;
@@ -7337,9 +7091,7 @@ void ExecutePoseFileAction(Context &context) noexcept {
                                : action == 5 ? "motion convert queued"
                                              : "pose import queued");
 }
-// 中文说明：EnsureActiveCharacterProfile() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void EnsureActiveCharacterProfile(Context &context) noexcept {
-  if (context.runtime.mesh == 0 || !StorageReady(context.storage))
+// 中文说明：EnsureActiveCharacterProfile()：直接在函数体内完成计算与状态处理。  if (context.runtime.mesh == 0 || !StorageReady(context.storage))
     return;
   const std::string profile_id = Hex(context.runtime.mesh);
   if (profile_id.empty() || profile_id == context.active_character_id)
@@ -7353,9 +7105,7 @@ void EnsureActiveCharacterProfile(Context &context) noexcept {
   context.pose_settings_dirty.store(true, std::memory_order_release);
 }
 
-// 中文说明：ExecuteReflectionAction() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ExecuteReflectionAction(Context &context) noexcept {
-  const std::uint32_t action =
+// 中文说明：ExecuteReflectionAction()：直接在函数体内完成计算与状态处理。  const std::uint32_t action =
       context.reflection_action_requested.exchange(0, std::memory_order_acquire);
   if (action == 0 || context.runtime.mesh == 0)
     return;
@@ -7415,24 +7165,18 @@ void ExecuteReflectionAction(Context &context) noexcept {
   }
 }
 
-// 中文说明：Hex() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::string Hex(const std::uintptr_t value) noexcept {
-  std::array<char, 32> buffer{};
+// 中文说明：Hex()：直接在函数体内完成计算与状态处理。  std::array<char, 32> buffer{};
   std::snprintf(buffer.data(), buffer.size(), "0x%llX",
                 static_cast<unsigned long long>(value));
   return std::string(buffer.data());
 }
 
-// 中文说明：SetStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void SetStatus(RenderSnapshot &snapshot, const std::string_view message) {
-  const auto length = (std::min)(message.size(), snapshot.status.size() - 1U);
+// 中文说明：SetStatus()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  const auto length = (std::min)(message.size(), snapshot.status.size() - 1U);
   std::memcpy(snapshot.status.data(), message.data(), length);
   snapshot.status[length] = '\0';
 }
 
-// 中文说明：PublishSnapshot() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void PublishSnapshot(Context &context, const std::string_view status) {
-  RenderSnapshot next{};
+// 中文说明：PublishSnapshot()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  RenderSnapshot next{};
   next.active = context.runtime.character != 0 && context.runtime.mesh != 0;
   next.character = context.runtime.character;
   next.mesh = context.runtime.mesh;
@@ -7488,9 +7232,7 @@ void PublishSnapshot(Context &context, const std::string_view status) {
   context.snapshot = next;
 }
 
-// 中文说明：RefreshRuntime() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool RefreshRuntime(Context &context) noexcept {
-  if (context.runtime.g_world_address == 0 && !ResolveGWorld(context))
+// 中文说明：RefreshRuntime()：直接在函数体内完成计算与状态处理。  if (context.runtime.g_world_address == 0 && !ResolveGWorld(context))
     return false;
   if (!ResolveLocalCharacter(context))
     return false;
@@ -7523,9 +7265,7 @@ bool RefreshRuntime(Context &context) noexcept {
 constexpr std::string_view kFunctionSetMorphTargetPath =
     "/Script/Engine.SkeletalMeshComponent.SetMorphTarget";
 
-// 中文说明：BodyMeshAsset() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::uintptr_t BodyMeshAsset(Context &context, const std::uintptr_t mesh) noexcept {
-  for (std::uint32_t offset{}; offset + 8 <= 0x2000; offset += 8) {
+// 中文说明：BodyMeshAsset()：直接在函数体内完成计算与状态处理。  for (std::uint32_t offset{}; offset + 8 <= 0x2000; offset += 8) {
     std::uintptr_t candidate{};
     if (!ReadPointerAt(context, mesh, offset, candidate) || candidate == 0)
       continue;
@@ -7576,15 +7316,11 @@ bool ReadMorphCatalog(Context &context, const std::uintptr_t asset,
   return false;
 }
 
-// 中文说明：CaptureExpression() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-better_pose::history::ExpressionState CaptureExpression(Context &context) {
-  std::lock_guard<std::mutex> lock(context.morph_mutex);
+// 中文说明：CaptureExpression()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.morph_mutex);
   return {context.morph_weights.value, context.morph_weights.driven};
 }
 
-// 中文说明：RestoreExpression() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void RestoreExpression(Context &context, const better_pose::history::ExpressionState &state) {
-  std::lock_guard<std::mutex> lock(context.morph_mutex);
+// 中文说明：RestoreExpression()：直接在函数体内完成计算与状态处理。  std::lock_guard<std::mutex> lock(context.morph_mutex);
   auto &weights = context.morph_weights;
   const std::size_t count = weights.value.size();
   for (std::size_t i{}; i != count; ++i) {
@@ -7598,9 +7334,7 @@ void RestoreExpression(Context &context, const better_pose::history::ExpressionS
 
 // Game thread: undo/redo for the expression, the same settle-then-record
 // history as the pose (pose_history.hpp). A new mesh starts a fresh history.
-// 中文说明：StepExpressionHistory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void StepExpressionHistory(Context &context) noexcept {
-  try {
+// 中文说明：StepExpressionHistory()：直接在函数体内完成计算与状态处理。  try {
     if (context.morph_history_mesh != context.morph_mesh) {
       context.morph_history_mesh = context.morph_mesh;
       context.morph_history.Reset(CaptureExpression(context));
@@ -7628,9 +7362,7 @@ void StepExpressionHistory(Context &context) noexcept {
 // kilobytes), so it is written and read here rather than on a task.
 //   { "format": "betterpose-expression", "version": 1,
 //     "morphs": [ { "name": "jawOpen", "weight": 0.8 }, ... ] }
-// 中文说明：StepExpressionFile() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void StepExpressionFile(Context &context) noexcept {
-  const int request = context.morph_file_request.exchange(0, std::memory_order_acq_rel);
+// 中文说明：StepExpressionFile()：直接在函数体内完成计算与状态处理。  const int request = context.morph_file_request.exchange(0, std::memory_order_acq_rel);
   if (request == 0)
     return;
   // Every message goes through the localizer: `key`, English fallback, and
@@ -7752,9 +7484,7 @@ void StepExpressionFile(Context &context) noexcept {
 // Game thread, every update: (re)load the catalogue for a new body mesh, and
 // write every driven weight. A morph the user released is written to 0 once
 // and then left to the game again.
-// 中文说明：StepExpression() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void StepExpression(Context &context) noexcept {
-  try {
+// 中文说明：StepExpression()：直接在函数体内完成计算与状态处理。  try {
     const std::uintptr_t mesh = context.runtime.mesh;
     if (mesh == 0)
       return;
@@ -7904,9 +7634,7 @@ void StepExpression(Context &context) noexcept {
   }
 }
 
-// 中文说明：UpdateRuntime() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void UpdateRuntime(Context &context, const double delta_seconds) noexcept {
-  if (!RefreshRuntime(context)) {
+// 中文说明：UpdateRuntime()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!RefreshRuntime(context)) {
     PublishSnapshot(context, "local player character is unavailable");
     return;
   }
@@ -8213,9 +7941,7 @@ void UpdateRuntime(Context &context, const double delta_seconds) noexcept {
   }
 }
 
-// 中文说明：RestoreAll() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void RestoreAll(Context &context) noexcept {
-  auto& state = context.runtime;
+// 中文说明：RestoreAll()：直接在函数体内完成计算与状态处理。  auto& state = context.runtime;
   const auto active_character = state.character;
   const auto active_mesh = state.mesh;
   const auto active_instance = state.anim_instance;
@@ -8318,32 +8044,16 @@ constexpr float kOverlayDefaultRadius = 7.0F;
 constexpr float kOverlayMinimumRadius = 3.0F;
 constexpr float kOverlayMaximumRadius = 16.0F;
 
-// 中文说明：V3Sub() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Vec3d V3Sub(const Vec3d &a, const Vec3d &b) noexcept { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-// 中文说明：V3Add() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Vec3d V3Add(const Vec3d &a, const Vec3d &b) noexcept { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
-// 中文说明：V3Scale() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Vec3d V3Scale(const Vec3d &a, const double s) noexcept { return {a.x * s, a.y * s, a.z * s}; }
-// 中文说明：V3Dot() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-double V3Dot(const Vec3d &a, const Vec3d &b) noexcept { return a.x * b.x + a.y * b.y + a.z * b.z; }
-// 中文说明：V3Cross() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Vec3d V3Cross(const Vec3d &a, const Vec3d &b) noexcept {
-  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+// 中文说明：V3Sub()：直接在函数体内完成计算与状态处理。// 中文说明：V3Add()：直接在函数体内完成计算与状态处理。// 中文说明：V3Scale()：直接在函数体内完成计算与状态处理。// 中文说明：V3Dot()：直接在函数体内完成计算与状态处理。// 中文说明：V3Cross()：直接在函数体内完成计算与状态处理。  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
-// 中文说明：V3Length() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-double V3Length(const Vec3d &a) noexcept { return std::sqrt(V3Dot(a, a)); }
-
-// 中文说明：QuatNormalize() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Quatd QuatNormalize(const Quatd &q) noexcept {
-  const double length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+// 中文说明：V3Length()：实际调用 “std::sqrt()”、“V3Dot()”。
+// 中文说明：QuatNormalize()：直接在函数体内完成计算与状态处理。  const double length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
   if (!(length > 1e-12))
     return Quatd{};
   return Quatd{q.x / length, q.y / length, q.z / length, q.w / length};
 }
 
-// 中文说明：QuatFromRotationVector() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Quatd QuatFromRotationVector(const std::array<double, 3> &omega) noexcept {
-  const double angle =
+// 中文说明：QuatFromRotationVector()：直接在函数体内完成计算与状态处理。  const double angle =
       std::sqrt(omega[0] * omega[0] + omega[1] * omega[1] + omega[2] * omega[2]);
   if (angle < 1e-12)
     return QuatNormalize(Quatd{omega[0] * 0.5, omega[1] * 0.5, omega[2] * 0.5, 1.0});
@@ -8353,9 +8063,7 @@ Quatd QuatFromRotationVector(const std::array<double, 3> &omega) noexcept {
 
 // The inverse of RotatorToQuat, in UE's FQuat::Rotator convention, so the
 // result round-trips through the joint sliders. Degrees, each in [-180, 180].
-// 中文说明：QuatToRotator() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::array<double, 3> QuatToRotator(const Quatd &input) noexcept {
-  constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+// 中文说明：QuatToRotator()：直接在函数体内完成计算与状态处理。  constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
   const Quatd q = QuatNormalize(input);
   const auto normalize = [](double value) {
     while (value > 180.0)
@@ -8394,9 +8102,7 @@ std::array<double, 3> QuatToRotator(const Quatd &input) noexcept {
 // frame with three unknowns and two screen coordinates; the unconstrained one
 // drifted whenever the projection moved by a fraction of a pixel.)
 
-// 中文说明：WrapAngle() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-double WrapAngle(double radians) noexcept {
-  constexpr double kPi = 3.14159265358979323846;
+// 中文说明：WrapAngle()：直接在函数体内完成计算与状态处理。  constexpr double kPi = 3.14159265358979323846;
   while (radians > kPi)
     radians -= 2.0 * kPi;
   while (radians < -kPi)
@@ -8512,9 +8218,7 @@ bool ViewRotationAxis(Project &&project, const Vec3d &pivot, Vec3d &axis,
 // magnifies, so compare how far apart two points 1 cm apart land on screen
 // 20 cm either way along the ray.
 template <typename Project>
-// 中文说明：TowardCamera() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool TowardCamera(Project &&project, const Vec3d &point, Vec3d &toward) noexcept {
-  Vec3d ray;
+// 中文说明：TowardCamera()：直接在函数体内完成计算与状态处理。  Vec3d ray;
   double sense{};
   if (!ViewRotationAxis(project, point, ray, sense))
     return false;
@@ -8593,9 +8297,7 @@ bool IsControlBone(const std::string_view name, const std::int32_t parent,
 
 // Facial rig bones under the head: mouth, lips, teeth, eyebrows, eyelids,
 // eyeballs, cheeks. Real joints, but ~50 of them crowd the face into a blob.
-// 中文说明：IsFaceBone() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool IsFaceBone(const std::string_view name) {
-  const auto low = better_pose::secondary::Lower(name);
+// 中文说明：IsFaceBone()：直接在函数体内完成计算与状态处理。  const auto low = better_pose::secondary::Lower(name);
   for (const char *key : {"mouth", "zuiba", "yachi", "lip", "eyebrow", "eyelid", "eyeco",
                           "eyeball", "lianjia", "tongue", "jaw"})
     if (low.find(key) != std::string::npos)
@@ -8733,9 +8435,7 @@ Quatd ApplyWorldRotationToOffset(const Quatd &parent_world, const Quatd &world_r
 }
 
 // The shortest rotation taking direction `from` onto direction `to`.
-// 中文说明：QuatFromTo() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Quatd QuatFromTo(const Vec3d &from, const Vec3d &to) noexcept {
-  const double lf = V3Length(from);
+// 中文说明：QuatFromTo()：直接在函数体内完成计算与状态处理。  const double lf = V3Length(from);
   const double lt = V3Length(to);
   if (!(lf > 1e-12) || !(lt > 1e-12))
     return Quatd{};
@@ -8754,9 +8454,7 @@ Quatd QuatFromTo(const Vec3d &from, const Vec3d &to) noexcept {
 
 // The joints a drag moves by two-bone IK: hands and feet, which sit below a
 // hinge (forearm, calf). Fingers, toes and helper bones stay one-bone drags.
-// 中文说明：IsIkEndBone() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool IsIkEndBone(std::string_view name) {
-  const auto low = better_pose::secondary::Lower(name);
+// 中文说明：IsIkEndBone()：直接在函数体内完成计算与状态处理。  const auto low = better_pose::secondary::Lower(name);
   for (const char *skip : {"finger", "toe", "twist", "adjust", "ik", "nub", "prop"})
     if (low.find(skip) != std::string::npos)
       return false;
@@ -8824,9 +8522,7 @@ TwoBoneRotations SolveTwoBone(const Vec3d &root, const Vec3d &mid, const Vec3d &
   return out;
 }
 
-// 中文说明：ClearOverlayScreen() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ClearOverlayScreen(Context &context) noexcept {
-  if (!context.overlay_published)
+// 中文说明：ClearOverlayScreen()：直接在函数体内完成计算与状态处理。  if (!context.overlay_published)
     return;
   std::lock_guard<std::mutex> lock(context.overlay_mutex);
   context.overlay_screen_joints.clear();
@@ -8891,9 +8587,7 @@ Transformd OverlayJointWorld(const Context &context, const Transformd &component
 // Joint limits for a ball joint (shoulder, hip): with the switch on, pull an
 // offset the drag produced back inside the bone's range. Anything that is not
 // a ball joint, or with the switch off, passes through untouched.
-// 中文说明：LimitBallOffset() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-Quatd LimitBallOffset(Context &context, const std::uint32_t bone, const Quatd &offset) noexcept {
-  if (!context.overlay_limits_enabled.load(std::memory_order_acquire) ||
+// 中文说明：LimitBallOffset()：直接在函数体内完成计算与状态处理。  if (!context.overlay_limits_enabled.load(std::memory_order_acquire) ||
       bone >= context.bone_names.size())
     return offset;
   const auto ball = better_pose::limits::BallFor(context.bone_names[bone]);
@@ -9317,9 +9011,7 @@ struct DiscRow {
   float half_width;
 };
 
-// 中文说明：DiscRows() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-std::vector<DiscRow> DiscRows(const float radius, const float step) {
-  std::vector<DiscRow> rows;
+// 中文说明：DiscRows()：直接在函数体内完成计算与状态处理。  std::vector<DiscRow> rows;
   if (!(radius > 0.0F) || !(step > 0.0F))
     return rows;
   for (float top = -radius; top < radius; top += step) {
@@ -9343,9 +9035,7 @@ struct CircleDetail {
   int segments;
 };
 
-// 中文说明：CircleDetailFor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-CircleDetail CircleDetailFor(const float radius) noexcept {
-  CircleDetail detail;
+// 中文说明：CircleDetailFor()：直接在函数体内完成计算与状态处理。  CircleDetail detail;
   detail.strip = (std::max)(2.0F, radius * 0.4F);
   const int segments = static_cast<int>(std::ceil(2.0F * 3.14159265F * radius / 4.5F));
   detail.segments = std::clamp(segments, 8, 16);
@@ -9394,9 +9084,7 @@ bool JointWorldPosition(Context &context, const std::uint32_t bone,
 // step across the view at 100 cm lands on screen. Measured through the AHUD
 // projection (which already sees the pose camera), whether or not the
 // skeleton overlay is drawn.
-// 中文说明：MeasureOrbitFocal() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void MeasureOrbitFocal(Context &context, const AnomalyUe5AhudFrameV1 *frame) noexcept {
-  if (!context.orbit_enabled.load(std::memory_order_acquire))
+// 中文说明：MeasureOrbitFocal()：直接在函数体内完成计算与状态处理。  if (!context.orbit_enabled.load(std::memory_order_acquire))
     return;
   better_pose::orbit::View view;
   {
@@ -9587,9 +9275,7 @@ void ANOMALY_CALL DrawSkeletonOverlay(void *user,
   }
 }
 
-// 中文说明：SubscribeSkeletonOverlay() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool SubscribeSkeletonOverlay(Context &context) noexcept {
-  if (!AhudReady(context.ahud) || context.ahud_subscription.id != 0)
+// 中文说明：SubscribeSkeletonOverlay()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!AhudReady(context.ahud) || context.ahud_subscription.id != 0)
     return context.ahud_subscription.id != 0;
   AnomalyGenerationHandleV1 handle{};
   const auto status = context.ahud->subscribe(context.ahud->user,
@@ -9600,9 +9286,7 @@ bool SubscribeSkeletonOverlay(Context &context) noexcept {
   return true;
 }
 
-// 中文说明：UnsubscribeSkeletonOverlay() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void UnsubscribeSkeletonOverlay(Context &context) noexcept {
-  if (context.ahud_subscription.id == 0)
+// 中文说明：UnsubscribeSkeletonOverlay()：直接在函数体内完成计算与状态处理。  if (context.ahud_subscription.id == 0)
     return;
   const auto handle = context.ahud_subscription;
   context.ahud_subscription = {};
@@ -9775,9 +9459,7 @@ void UpdateSkeletonOverlayPicking(Context &context,
 // drag running) drives the orbit: right drag rotates, middle drag pans, the
 // wheel zooms. Every one is a mouse message the host keeps from the game while
 // the menu is open, so nothing here can make the character move.
-// 中文说明：UpdateOrbitCameraInput() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void UpdateOrbitCameraInput(Context &context, const AnomalyUiServiceV1 *ui) noexcept {
-  if (!context.orbit_enabled.load(std::memory_order_acquire) || !InputReady(context.input)) {
+// 中文说明：UpdateOrbitCameraInput()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!context.orbit_enabled.load(std::memory_order_acquire) || !InputReady(context.input)) {
     context.orbit_right_dragging = false;
     context.orbit_middle_was_down = false;
     return;
@@ -9851,9 +9533,7 @@ void UpdateOrbitCameraInput(Context &context, const AnomalyUiServiceV1 *ui) noex
 // Ctrl+Shift+Z) into undo/redo requests, on the press only. The keys are
 // ignored while a text field wants the keyboard, so Ctrl+Z inside the file
 // name box stays the text box's.
-// 中文说明：UpdatePoseHistoryInput() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void UpdatePoseHistoryInput(Context &context, const AnomalyUiServiceV1 *ui) noexcept {
-  if (!InputReady(context.input)) {
+// 中文说明：UpdatePoseHistoryInput()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  if (!InputReady(context.input)) {
     context.pose_edit_held.store(false, std::memory_order_release);
     return;
   }
@@ -9894,9 +9574,7 @@ void UpdatePoseHistoryInput(Context &context, const AnomalyUiServiceV1 *ui) noex
   context.pose_redo_key_was_down = redo_down;
 }
 
-// 中文说明：MirrorPose() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-bool MirrorPose(Context &context, const int request) noexcept {
-  try {
+// 中文说明：MirrorPose()：直接在函数体内完成计算与状态处理。  try {
     using namespace better_pose::mirror;
     if (!CapturePoseBase(context))
       return false;
@@ -10051,9 +9729,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
-  auto *context = static_cast<Context *>(plugin_context);
+// 中文说明：Start()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
     return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
   if (!ResolveGWorld(*context)) {
@@ -10068,9 +9744,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
-  auto *context = static_cast<Context *>(plugin_context);
+// 中文说明：Stop()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
     return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
   // First: the overlay callback reads runtime, which is reset below.
@@ -10090,9 +9764,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ANOMALY_CALL Unload(void *plugin_context) {
-  auto *context = static_cast<Context *>(plugin_context);
+// 中文说明：Unload()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
     return;
   // Release the music device with the plugin: MCI aliases outlive a hot reload, so leaving this
@@ -10118,9 +9790,7 @@ void ANOMALY_CALL Unload(void *plugin_context) {
   delete context;
 }
 
-// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) {
-  auto *context = static_cast<Context *>(plugin_context);
+// 中文说明：Update()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
     return;
   try {
@@ -10148,9 +9818,7 @@ bool ReadCurrentBoneTranslation(Context &context,
   return Read(context, transform, translation);
 }
 
-// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
-void ANOMALY_CALL Draw(void *plugin_context, const AnomalyUiServiceV1 *ui) {
-  auto *context = static_cast<Context *>(plugin_context);
+// 中文说明：Draw()：直接在函数体内完成计算与状态处理。  auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr || !UiReady(ui))
     return;
 
