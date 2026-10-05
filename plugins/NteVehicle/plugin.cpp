@@ -25,7 +25,7 @@ struct Context {
     const AnomalyUiServiceV1* ui{};
     std::mutex mutex;
     Snapshot snapshot{};
-    std::string status{"正在等待游戏进程中的 DT_VehicleData"};
+    std::string status{"正在读取游戏进程中的 Vehicle 数据"};
     std::string current_vehicle_class;
     std::string selected_vehicle_id;
     std::string pending_vehicle_id;
@@ -90,7 +90,7 @@ void RefreshCatalogOnGameThread() {
     const auto count_status = vehicle->vehicle_id_count(
         vehicle->user, &count);
     if (count_status.code != ANOMALY_STATUS_V1_OK) {
-        SetStatus("读取 DT_VehicleData 失败");
+        SetStatus("读取游戏进程中的 Vehicle 数据失败");
         return;
     }
 
@@ -116,7 +116,7 @@ void RefreshCatalogOnGameThread() {
         if (g_context.vehicle_ids.empty()) {
             g_context.selected_vehicle_id.clear();
             g_context.status =
-                "已定位 DT_VehicleData，但当前没有读取到包含 Vehicle 的行";
+                "游戏进程中当前没有读取到包含 Vehicle 的数据项";
         } else {
             const auto selected = std::ranges::find(
                 g_context.vehicle_ids, g_context.selected_vehicle_id);
@@ -125,7 +125,7 @@ void RefreshCatalogOnGameThread() {
                     g_context.vehicle_ids.front();
             }
             g_context.status =
-                "已读取 DT_VehicleData：" +
+                "已读取游戏进程中的 Vehicle 数据：" +
                 std::to_string(g_context.vehicle_ids.size()) + " 条";
         }
     }
@@ -184,7 +184,7 @@ void Update() {
             g_context.selected_vehicle_id = pending_id;
             g_context.status = "已选择：" + pending_id;
         } else {
-            SetStatus("Vehicle 选择失败：该 ID 不在实际 DT_VehicleData 表中");
+            SetStatus("Vehicle 选择失败：该 ID 不在当前游戏进程读取到的数据中");
         }
     }
 
@@ -300,7 +300,7 @@ void Draw() {
     DrawText(status);
 
     if (ui->button(
-            ui->user, anomaly::sdk::StringView("刷新 DT_VehicleData"),
+            ui->user, anomaly::sdk::StringView("刷新 Vehicle 数据"),
             0.0F, 0.0F)) {
         g_context.refresh_catalog.store(true, std::memory_order_release);
     }
@@ -419,7 +419,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     g_context.vehicle_ids.clear();
     g_context.speed_ratio = 1.0F;
     g_context.friction_enabled = true;
-    g_context.status = "正在读取游戏进程中的 DT_VehicleData";
+    g_context.status = "正在读取游戏进程中的 Vehicle 数据";
     *plugin_context = &g_context;
     return anomaly::sdk::Ok();
 }
