@@ -127,6 +127,7 @@ struct Context {
 };
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -140,6 +141,7 @@ AnomalyStatusV1 Status(std::uint32_t code, std::string_view message = {}) noexce
     return {code, 0, {message.data(), message.size()}};
 }
 
+// 中文说明：Log() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Log(Context& context, const std::string& message) {
     if (context.core != nullptr && context.core->log != nullptr) {
         context.core->log(context.core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO,
@@ -147,11 +149,13 @@ void Log(Context& context, const std::string& message) {
     }
 }
 
+// 中文说明：SetStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SetStatus(Context& context, std::string text) {
     std::scoped_lock lock(context.mutex);
     context.status = std::move(text);
 }
 
+// 中文说明：Lower() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string Lower(std::string_view value) {
     std::string result(value);
     std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
@@ -160,6 +164,7 @@ std::string Lower(std::string_view value) {
     return result;
 }
 
+// 中文说明：KindName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string_view KindName(std::uint32_t kind) noexcept {
     switch (kind) {
     case ANOMALY_NTE_UI_BUTTON_KIND_V1_UMG: return "UMG";
@@ -171,6 +176,7 @@ std::string_view KindName(std::uint32_t kind) noexcept {
     }
 }
 
+// 中文说明：CategoryName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string_view CategoryName(std::uint32_t category) noexcept {
     switch (category) {
     case ANOMALY_NTE_UI_BUTTON_CATEGORY_V1_CLICKABLE: return "可点击";
@@ -180,6 +186,7 @@ std::string_view CategoryName(std::uint32_t category) noexcept {
     }
 }
 
+// 中文说明：ResultName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string_view ResultName(std::uint32_t status) noexcept {
     switch (status) {
     case ANOMALY_STATUS_V1_OK: return "已调用";
@@ -192,6 +199,7 @@ std::string_view ResultName(std::uint32_t status) noexcept {
     }
 }
 
+// 中文说明：DescribeReasons() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string DescribeReasons(std::uint32_t reasons) {
     static constexpr std::array<std::pair<std::uint32_t, const char*>, 13> kNames{{
         {ANOMALY_NTE_UI_BUTTON_REASON_V1_COLLAPSED_SELF, "自身隐藏"},
@@ -217,6 +225,7 @@ std::string DescribeReasons(std::uint32_t reasons) {
     return text;
 }
 
+// 中文说明：MakeRow() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 Row MakeRow(const AnomalyNteUiButtonSnapshotV1& button) {
     Row row;
     row.button = button.button;
@@ -236,11 +245,13 @@ Row MakeRow(const AnomalyNteUiButtonSnapshotV1& button) {
     return row;
 }
 
+// 中文说明：Label() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string Label(const Row& row) {
     return row.name + (row.text.empty() ? "" : "「" + row.text + "」");
 }
 
 // 服务可能晚于插件加载才发布，也可能随 Host 代际撤销：每 tick 现查。
+// 中文说明：EnsureService() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool EnsureService(Context& context) {
     context.buttons = anomaly::sdk::Host(context.host)
                           .Query<AnomalyNteUiButtonsServiceV1>(
@@ -252,6 +263,7 @@ bool EnsureService(Context& context) {
             context.buttons, offsetof(AnomalyNteUiButtonsServiceV1, cancel));
 }
 
+// 中文说明：Busy() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Busy(const Context& context, std::uint32_t kind) {
     return std::any_of(context.pending.begin(), context.pending.end(),
                        [kind](const Pending& p) { return p.kind == kind; });
@@ -284,6 +296,7 @@ void Submit(Context& context, std::uint32_t kind, std::string label = {},
 }
 
 // 目录序列号变化时把 Host 目录复制成面板快照。
+// 中文说明：RefreshCatalog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RefreshCatalog(Context& context) {
     const auto* service = context.buttons;
     AnomalyNteUiButtonsStatusV1 status{sizeof(status)};
@@ -414,6 +427,7 @@ void FinishPick(Context& context, const Pending& pending,
     context.pick = std::move(pick);
 }
 
+// 中文说明：PollRequests() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void PollRequests(Context& context) {
     const auto* service = context.buttons;
     std::vector<Pending> remaining;
@@ -452,6 +466,7 @@ void PollRequests(Context& context) {
     context.pending = std::move(remaining);
 }
 
+// 中文说明：InputReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool InputReady(const AnomalyInputServiceV1* input) noexcept {
     return HasField<AnomalyInputServiceV1, decltype(AnomalyInputServiceV1::release_hotkey)>(
                input, offsetof(AnomalyInputServiceV1, release_hotkey)) &&
@@ -459,12 +474,14 @@ bool InputReady(const AnomalyInputServiceV1* input) noexcept {
         input->release_hotkey != nullptr;
 }
 
+// 中文说明：ValidPickKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ValidPickKey(std::uint32_t key) noexcept {
     return key != 0 && key < 256U && key != VK_ESCAPE &&
         !(key >= VK_LBUTTON && key <= VK_XBUTTON2) && key != VK_SHIFT && key != VK_CONTROL &&
         key != VK_MENU && !(key >= VK_LSHIFT && key <= VK_RMENU);
 }
 
+// 中文说明：KeyName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string KeyName(std::uint32_t key) {
     if (key == 0) return "未设置";
     if ((key >= '0' && key <= '9') || (key >= 'A' && key <= 'Z')) {
@@ -492,6 +509,7 @@ void ANOMALY_CALL PickHotkey(void* user, AnomalyGenerationHandleV1,
     }
 }
 
+// 中文说明：ReleasePickHotkey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReleasePickHotkey(Context& context) noexcept {
     if (context.pick_hotkey.id != 0 && InputReady(context.input)) {
         static_cast<void>(context.input->release_hotkey(context.input->user, context.pick_hotkey));
@@ -501,6 +519,7 @@ void ReleasePickHotkey(Context& context) noexcept {
 }
 
 // 注册拾取快捷键；失败时保留旧键。
+// 中文说明：RegisterPickHotkey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string RegisterPickHotkey(Context& context, std::uint32_t key) {
     if (!InputReady(context.input)) return "输入服务不可用，快捷键无效";
     if (!ValidPickKey(key)) return "不支持这个键";
@@ -526,6 +545,7 @@ std::string RegisterPickHotkey(Context& context, std::uint32_t key) {
 }
 
 // 重新绑定拾取键：在 Game 域轮询按键，Esc 取消。
+// 中文说明：CapturePickKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CapturePickKey(Context& context) {
     if (!InputReady(context.input)) {
         context.capturing_pick_key.store(false, std::memory_order_release);
@@ -552,6 +572,7 @@ void CapturePickKey(Context& context) {
     }
 }
 
+// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (host == nullptr || plugin_context == nullptr) {
         return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -575,6 +596,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -584,6 +606,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -602,10 +625,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* plugin_context) {
     delete static_cast<Context*>(plugin_context);
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -659,10 +684,12 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     }
 }
 
+// 中文说明：Text() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Text(const AnomalyUiServiceV1* ui, std::string_view value) {
     ui->text(ui->user, anomaly::sdk::StringView(value));
 }
 
+// 中文说明：Button() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Button(const AnomalyUiServiceV1* ui, std::string_view label, bool enabled = true) {
     if (UI_HAS(ui, button_enabled)) {
         return ui->button_enabled(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F,
@@ -671,18 +698,22 @@ bool Button(const AnomalyUiServiceV1* ui, std::string_view label, bool enabled =
     return enabled && ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F) != 0;
 }
 
+// 中文说明：SameLine() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SameLine(const AnomalyUiServiceV1* ui) {
     if (UI_HAS(ui, same_line)) ui->same_line(ui->user, 0.0F, -1.0F);
 }
 
+// 中文说明：Separator() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Separator(const AnomalyUiServiceV1* ui) {
     if (UI_HAS(ui, separator)) ui->separator(ui->user);
 }
 
+// 中文说明：Checkbox() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Checkbox(const AnomalyUiServiceV1* ui, std::string_view label, int& value) {
     if (UI_HAS(ui, checkbox)) ui->checkbox(ui->user, anomaly::sdk::StringView(label), &value);
 }
 
+// 中文说明：QueueClick() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void QueueClick(Context& context, const Row& row) {
     ClickIntent intent;
     intent.button = row.button;
@@ -742,6 +773,7 @@ void DrawRows(Context& context, const AnomalyUiServiceV1* ui, const Snapshot& sn
     }
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
