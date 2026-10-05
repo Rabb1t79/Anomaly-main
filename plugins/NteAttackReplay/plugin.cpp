@@ -1011,8 +1011,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replaying = true;
             context->waiting_for_damage = false;
             context->replay_target_count = context->replay_count + 1u;
-            context->replay_last_tick = 0;
-            context->status = "已提交重放，等待下一游戏帧";
+            context->replay_last_tick = context->captured_tick_sequence;
+            context->status = "已提交重放，等待原始伤害后的下一游戏帧";
         } else {
             context->status = context->captured
                 ? "无法开始重放：请先启用重放功能"
@@ -1153,7 +1153,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("重放次数"),
+            ui->user, anomaly::sdk::StringView("新增伤害次数 x"),
             &context->replay_count, 1, 10);
         context->replay_count = std::clamp(context->replay_count, 1u, 100000u);
     }
