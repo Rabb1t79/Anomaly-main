@@ -30,8 +30,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(anomaly_nte_attack_replay PRIVATE
         -fexceptions -frtti -Wall -Wextra -Wno-unused-parameter)
 endif()
-
-# The lightweight normal-attack replay path posts mouse input to the owned Unreal window.
-if(WIN32)
-    target_link_libraries(anomaly_nte_attack_replay PRIVATE user32)
-endif()
+ 
+# Normal-attack replay uses the Anomaly UE5 reflection/signature services and
+# ProcessEvent path; it does not depend on Win32 input injection.
