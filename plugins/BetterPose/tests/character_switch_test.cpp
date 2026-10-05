@@ -4,11 +4,11 @@
 #include <iostream>
 
 namespace fixture {
-// 中文说明：Check() 的实际功能是：调用 `Address()`、`data()`、`Set()`、`std::memcpy()`、`Get()`；并读取、解析或查找数据、更新状态、保存结果或发布状态。
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
 }
 struct Block {
   std::array<std::uint8_t,0x1000> bytes{};
-// 中文说明：Address() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
 struct Region { std::uintptr_t address; std::size_t size; };
 std::vector<Region> regions;
 // Register 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
@@ -18,13 +18,13 @@ std::vector<Region> regions;
 // ReadMemory 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
   std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size); return anomaly::sdk::Ok();
 }
-// 中文说明：WriteMemory() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
   std::memcpy(reinterpret_cast<void*>(address),bytes.data,bytes.size); return anomaly::sdk::Ok();
 }
 enum Function { Mode,Lod,Visibility,Destroy,Count };
 int functions[Count]{};
 unsigned destroyed{};
-// 中文说明：Event() 的实际功能是：调用 `Check()`；并按条件分支处理、用断言验证结果。
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
   if (function==&functions[Mode]) std::memcpy(bytes+kMeshAnimationModeOffset,parameters,1);
   if (function==&functions[Lod]) std::memcpy(bytes+kMeshForcedLodModelOffset,parameters,4);
   if (function==&functions[Visibility]) bytes[0x300]=*static_cast<std::uint8_t*>(parameters);
@@ -33,7 +33,7 @@ unsigned destroyed{};
     ++destroyed;
   }
 }
-// 中文说明：Find() 的实际功能是：调用 `size()`、`std::string_view()`、`anomaly::sdk::Ok()`；并遍历集合元素、按条件分支处理。
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
                                                kFunctionSceneSetVisibilityPath,kFunctionActorComponentDestroyPath};
   for (std::size_t i=0;i<names.size();++i) if (names[i]==std::string_view(path.data,path.size)) {
     handle->id=i+1; return anomaly::sdk::Ok();
@@ -73,7 +73,7 @@ struct Character {
 }
 }
 
-// 中文说明：main() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
   Context context;
   AnomalyCoreServiceV1 core{}; core.struct_size=sizeof(core); core.read_memory=ReadMemory; core.write_memory=WriteMemory;
   context.core=&core;
