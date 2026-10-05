@@ -1010,7 +1010,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            context->replay_target_count = context->replay_count + 1u;
+            context->replay_target_count = context->replay_count;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = "已提交重放，等待原始伤害后的下一游戏帧";
         } else {
@@ -1156,12 +1156,6 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             ui->user, anomaly::sdk::StringView("新增伤害次数 x"),
             &context->replay_count, 1, 10);
         context->replay_count = std::clamp(context->replay_count, 1u, 100000u);
-    }
-
-    if (ui->input_double != nullptr) {
-        ui->input_double(
-            ui->user, anomaly::sdk::StringView("重放速率（次/秒）"),
-            &context->replay_count, 1, 10);
     }
 
     if (context->captured) {
