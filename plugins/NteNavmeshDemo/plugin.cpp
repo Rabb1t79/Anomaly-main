@@ -45,10 +45,12 @@ struct Context final {
 } g_context;
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// 中文说明：StatusCode() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 constexpr AnomalyStatusV1 StatusCode(const std::uint32_t code) noexcept {
     return {code, 0, {}};
 }
@@ -58,6 +60,7 @@ struct ServiceQuery final {
     const Service* service{};
     AnomalyStatusV1 status{StatusCode(ANOMALY_STATUS_V1_UNAVAILABLE)};
 
+// 中文说明：bool() 负责执行这里的具体处理；保持现有调用关系与行为不变。
     [[nodiscard]] explicit operator bool() const noexcept { return service != nullptr; }
 };
 
@@ -88,6 +91,7 @@ ServiceQuery<Service> QueryService(
     return {service, StatusCode(ANOMALY_STATUS_V1_OK)};
 }
 
+// 中文说明：UiReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool UiReady(const AnomalyUiServiceV1* service) noexcept {
     return HasField<AnomalyUiServiceV1,
                decltype(AnomalyUiServiceV1::input_double)>(
@@ -98,6 +102,7 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
         service->input_double != nullptr;
 }
 
+// 中文说明：NavigationReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool NavigationReady(const AnomalyNteNavigationServiceV1* service) noexcept {
     return HasField<AnomalyNteNavigationServiceV1,
                decltype(AnomalyNteNavigationServiceV1::stop_movement)>(
@@ -106,6 +111,7 @@ bool NavigationReady(const AnomalyNteNavigationServiceV1* service) noexcept {
         service->move_to_location != nullptr && service->stop_movement != nullptr;
 }
 
+// 中文说明：StatusName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 const char* StatusName(const std::uint32_t code) noexcept {
     switch (code) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -122,6 +128,7 @@ const char* StatusName(const std::uint32_t code) noexcept {
     }
 }
 
+// 中文说明：RecordResult() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RecordResult(const AnomalyStatusV1 status) noexcept {
     std::scoped_lock lock(g_context.mutex);
     g_context.has_result = true;
@@ -133,6 +140,7 @@ void RecordResult(const AnomalyStatusV1 status) noexcept {
     std::memcpy(g_context.result_message.data(), status.message.data, count);
 }
 
+// 中文说明：QueueMove() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void QueueMove(const std::array<double, 3>& destination) noexcept {
     if (!std::isfinite(destination[0]) || !std::isfinite(destination[1]) ||
         !std::isfinite(destination[2])) {
@@ -146,6 +154,7 @@ void QueueMove(const std::array<double, 3>& destination) noexcept {
     g_context.result_message.fill('\0');
 }
 
+// 中文说明：QueueStop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void QueueStop() noexcept {
     std::scoped_lock lock(g_context.mutex);
     if (!g_context.started) return;
@@ -154,10 +163,12 @@ void QueueStop() noexcept {
     g_context.result_message.fill('\0');
 }
 
+// 中文说明：DrawText() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawText(const AnomalyUiServiceV1* ui, const std::string_view text) {
     ui->text(ui->user, anomaly::sdk::StringView(text));
 }
 
+// 中文说明：DrawStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawStatus(const AnomalyUiServiceV1* ui) {
     RequestKind pending{};
     bool has_result{};
@@ -231,6 +242,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (plugin_context != &g_context) {
         return StatusCode(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -244,6 +256,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     if (plugin_context != &g_context) {
         return StatusCode(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -254,6 +267,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* plugin_context) {
     if (plugin_context != &g_context) return;
     std::scoped_lock lock(g_context.mutex);
@@ -263,6 +277,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     g_context.started = false;
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void* plugin_context, double) {
     if (plugin_context != &g_context) return;
 
