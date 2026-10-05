@@ -14,9 +14,9 @@ struct Component {
   bool child_visible{};
   unsigned queries{}, visibility_writes{}, destroy_calls{};
 };
-// 中文说明：Check()：直接在函数体内完成计算与状态处理，并用断言检查处理结果。  if (!value) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
+// 中文说明：Check() 的实际功能是：调用 `std::memcpy()`；并按条件分支处理、用断言验证结果。
 }
-// 中文说明：Event()：直接在函数体内完成计算与状态处理。  auto& component=*static_cast<Component*>(object);
+// 中文说明：Event() 的实际功能是：调用 `Check()`、`std::memcpy()`；并按条件分支处理、用断言验证结果。
   auto* bytes=static_cast<std::uint8_t*>(parameters);
   if (function==&functions[IsVisible]) {
     // The verified native skinned-component getter checks both flags.
@@ -38,10 +38,10 @@ struct Component {
 // 中文说明：ReadMemory()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size);
   return anomaly::sdk::Ok();
 }
-// 中文说明：WriteMemory()：直接在函数体内完成计算与状态处理，并更新对象状态或持久化结果。  Check(false,"visibility handling must not write raw source buffers");
+// 中文说明：WriteMemory() 的实际功能是：直接执行函数体中的计算或状态操作。
   return anomaly::sdk::Ok();
 }
-// 中文说明：Find()：直接在函数体内完成计算与状态处理，并读取或解析输入数据。  const std::string_view path(name.data,name.size);
+// 中文说明：Find() 的实际功能是：直接执行函数体中的计算或状态操作。
   const std::array<std::string_view,Count> paths{
       kFunctionSceneIsVisiblePath,kFunctionSceneSetVisibilityPath,
       kFunctionSceneSetRelativeTransformPath,kFunctionPoseableSetBoneTransformByNamePath,
@@ -55,7 +55,7 @@ struct Component {
 }
 }
 
-// 中文说明：main()：直接在函数体内完成计算与状态处理。  using namespace fixture;
+// 中文说明：main() 的实际功能是：直接执行函数体中的计算或状态操作。
   Context context;
   AnomalyCoreServiceV1 core{};
   core.struct_size=sizeof(core); core.read_memory=ReadMemory; core.write_memory=WriteMemory;
