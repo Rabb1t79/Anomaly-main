@@ -1188,7 +1188,7 @@ struct IkPose {
     return total;
   }
 
-// 中文说明：EffectorGap() 的实际功能是：调用 `Length()`。
+// 实现 carry；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
     return Length(Vec3{effector.x - ik.x, effector.y - ik.y, effector.z - ik.z});
   }
 
