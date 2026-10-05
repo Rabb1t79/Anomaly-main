@@ -30,13 +30,20 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf tools/NteAttackReplay-NoVS/out/build tools/NteAttackReplay-NoVS/out/NteAttackReplay
+          set +e
           cmake -S tools/NteAttackReplay-NoVS -B tools/NteAttackReplay-NoVS/out/build \
             -G "Unix Makefiles" \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/llvm-mingw-toolchain.cmake" \
             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk" \
             -DAnomalySDK_DIR="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk/lib/cmake/AnomalySDK" \
-            -DANOMALY_SOURCE_ROOT="$GITHUB_WORKSPACE"
-          cmake --build tools/NteAttackReplay-NoVS/out/build --target anomaly_nte_attack_replay --parallel 2
+            -DANOMALY_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee cmake-configure.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 0 ]; then
+            cmake --build tools/NteAttackReplay-NoVS/out/build --target anomaly_nte_attack_replay --parallel 2 2>&1 | tee cmake-build.log
+            rc=${PIPESTATUS[0]}
+          fi
+          echo "build_rc=$rc" > build-result.txt
+          exit "$rc"
 
       - name: Stage package
         shell: bash
