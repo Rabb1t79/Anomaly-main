@@ -119,11 +119,13 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
 template <typename Service>
+// 中文说明：Query() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 const Service* Query(const AnomalyHostApiV1* host, const std::string_view id) noexcept {
     if (!HasField<AnomalyHostApiV1, decltype(AnomalyHostApiV1::query_service)>(
             host, offsetof(AnomalyHostApiV1, query_service)) ||
@@ -140,6 +142,7 @@ const Service* Query(const AnomalyHostApiV1* host, const std::string_view id) no
     return service->struct_size >= prefix && service->service_version >= 1 ? service : nullptr;
 }
 
+// 中文说明：CoreReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CoreReady(const Context& context) noexcept {
     return HasField<AnomalyCoreServiceV1, decltype(AnomalyCoreServiceV1::read_memory)>(
                context.core, offsetof(AnomalyCoreServiceV1, read_memory)) &&
@@ -147,6 +150,7 @@ bool CoreReady(const Context& context) noexcept {
 }
 
 template <typename Value>
+// 中文说明：Read() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Read(Context& context, const std::uintptr_t address, Value& value) noexcept {
     if (!CoreReady(context) || address == 0) return false;
     AnomalyMutableByteSpanV1 destination{
@@ -199,6 +203,7 @@ bool ResolveSignature(Context& context, const std::string_view pattern,
         ANOMALY_STATUS_V1_OK && address != 0;
 }
 
+// 中文说明：RefreshRegistry() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool RefreshRegistry(Context& context) noexcept {
     if (context.g_objects == 0) {
         std::uintptr_t instruction{};
@@ -225,6 +230,7 @@ bool RefreshRegistry(Context& context) noexcept {
     return true;
 }
 
+// 中文说明：ResolveName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string ResolveName(Context& context, const std::uint32_t name_id) {
     if (context.names == nullptr || name_id == 0 ||
         !HasField<AnomalyUe5NamesServiceV1, decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -244,6 +250,7 @@ std::string ResolveName(Context& context, const std::uint32_t name_id) {
     return value;
 }
 
+// 中文说明：RenderFName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string RenderFName(Context& context, const FNameValue value) {
     std::string result = ResolveName(context, value.comparison_index);
     if (result.empty() || value.number == 0) return result;
@@ -251,6 +258,7 @@ std::string RenderFName(Context& context, const FNameValue value) {
     return result;
 }
 
+// 中文说明：Lowercase() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string Lowercase(std::string value) {
     for (char& character : value) {
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
@@ -258,6 +266,7 @@ std::string Lowercase(std::string value) {
     return value;
 }
 
+// 中文说明：ReadObjectName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReadObjectName(Context& context, const std::uintptr_t object, std::string& name) {
     FNameValue value{};
     if (!Read(context, object + kObjectNameOffset, value)) return false;
@@ -265,6 +274,7 @@ bool ReadObjectName(Context& context, const std::uintptr_t object, std::string& 
     return !name.empty();
 }
 
+// 中文说明：IsDataTable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool IsDataTable(Context& context, const std::uintptr_t object) {
     std::uintptr_t class_object{};
     std::string class_name;
@@ -334,6 +344,7 @@ bool ReadDataTableRows(Context& context, const std::uintptr_t table,
     return !rows.empty();
 }
 
+// 中文说明：DiscoverDataTables() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool DiscoverDataTables(Context& context, std::vector<DataTableDescriptor>& tables) {
     tables.clear();
     if (!RefreshRegistry(context) || context.objects == nullptr ||
@@ -369,6 +380,7 @@ bool DiscoverDataTables(Context& context, std::vector<DataTableDescriptor>& tabl
     return !tables.empty();
 }
 
+// 中文说明：AppendUtf8() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void AppendUtf8(std::string& output, const std::uint32_t code_point) {
     if (code_point <= 0x7FU) output.push_back(static_cast<char>(code_point));
     else if (code_point <= 0x7FFU) {
@@ -386,6 +398,7 @@ void AppendUtf8(std::string& output, const std::uint32_t code_point) {
     }
 }
 
+// 中文说明：ReadUtf16Array() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReadUtf16Array(Context& context, const std::uintptr_t address, std::string& result) {
     result.clear();
     ArrayHeader header{};
@@ -408,12 +421,14 @@ bool ReadUtf16Array(Context& context, const std::uintptr_t address, std::string&
     return true;
 }
 
+// 中文说明：ReadTextAt() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string ReadTextAt(Context& context, const std::uintptr_t address) {
     std::string result;
     static_cast<void>(ReadUtf16Array(context, address, result));
     return result;
 }
 
+// 中文说明：FindObjectPointer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool FindObjectPointer(Context& context, const std::string_view path, std::uintptr_t& object) {
     object = 0;
     if (context.objects == nullptr ||
@@ -470,6 +485,7 @@ std::string ReadLevel(Context& context, const std::uintptr_t row,
     return {};
 }
 
+// 中文说明：AddUnique() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool AddUnique(std::vector<Point>& points, std::unordered_set<std::string>& keys, Point point) {
     if (points.size() >= kMaximumPoints || point.id.empty() ||
         !std::all_of(point.position.begin(), point.position.end(), [](const double value) {
@@ -691,6 +707,7 @@ bool ScanOracleStoneTable(Context& context, std::vector<Point>& output,
     return true;
 }
 
+// 中文说明：CategoryName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string CategoryName(const PointKind kind) {
     switch (kind) {
     case PointKind::teleport: return "teleport";
@@ -701,6 +718,7 @@ std::string CategoryName(const PointKind kind) {
     return "unknown";
 }
 
+// 中文说明：SetStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SetStatus(Context& context, std::string value) noexcept {
     try {
         std::scoped_lock lock(context.mutex);
@@ -709,6 +727,7 @@ void SetStatus(Context& context, std::string value) noexcept {
     }
 }
 
+// 中文说明：ScanAll() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ScanAll(Context& context) {
     if (!RefreshRegistry(context)) {
         SetStatus(context, "UE5 object registry is unavailable; static tables were not scanned");
@@ -766,6 +785,7 @@ void ScanAll(Context& context) {
     SetStatus(context, std::move(status));
 }
 
+// 中文说明：AppendJsonString() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void AppendJsonString(std::string& output, const std::string_view value) {
     output.push_back('"');
     for (const unsigned char character : value) {
@@ -788,6 +808,7 @@ void AppendJsonString(std::string& output, const std::string_view value) {
     output.push_back('"');
 }
 
+// 中文说明：BuildJson() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string BuildJson(const std::vector<Point>& points) {
     std::string output;
     output.reserve(points.size() * 180U + 128U);
@@ -810,6 +831,7 @@ std::string BuildJson(const std::vector<Point>& points) {
     return output;
 }
 
+// 中文说明：ExportJson() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ExportJson(Context& context) {
     if (context.storage == nullptr ||
         !HasField<AnomalyStorageServiceV1, decltype(AnomalyStorageServiceV1::write_atomic)>(
@@ -840,6 +862,7 @@ void ExportJson(Context& context) {
     SetStatus(context, detail);
 }
 
+// 中文说明：ExportJsonTask() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL ExportJsonTask(void* value, AnomalyGenerationHandleV1) {
     if (value == nullptr) return;
     auto& context = *static_cast<Context*>(value);
@@ -850,6 +873,7 @@ void ANOMALY_CALL ExportJsonTask(void* value, AnomalyGenerationHandleV1) {
     }
 }
 
+// 中文说明：ScheduleExport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ScheduleExport(Context& context) {
     if (context.scheduler == nullptr ||
         !HasField<AnomalySchedulerServiceV1, decltype(AnomalySchedulerServiceV1::schedule)>(
@@ -873,6 +897,7 @@ void ScheduleExport(Context& context) {
     SetStatus(context, detail);
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Draw(Context& context, const AnomalyUiServiceV1* ui) {
     if (ui == nullptr || !HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_window)>(
             ui, offsetof(AnomalyUiServiceV1, begin_window)) || ui->begin_window == nullptr ||
@@ -931,6 +956,7 @@ void Draw(Context& context, const AnomalyUiServiceV1* ui) {
     ui->end_window(ui->user);
 }
 
+// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (host == nullptr || plugin_context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     auto* context = new (std::nothrow) Context;
@@ -953,18 +979,22 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* value) {
     if (value == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     static_cast<Context*>(value)->scan_requested.store(true, std::memory_order_release);
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* value) { delete static_cast<Context*>(value); }
 
+// 中文说明：UpdateThunk() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL UpdateThunk(void* value, double) {
     if (value == nullptr) return;
     auto& context = *static_cast<Context*>(value);
@@ -989,6 +1019,7 @@ void ANOMALY_CALL UpdateThunk(void* value, double) {
     }
 }
 
+// 中文说明：DrawThunk() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL DrawThunk(void* value, const AnomalyUiServiceV1* ui) {
     if (value == nullptr) return;
     try {
