@@ -2,8 +2,8 @@
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
-
-#include <Windows.h>
+#include "anomaly/sdk/services/interop.h"
+#include "anomaly/sdk/services/ue5.h"
 
 #include <algorithm>
 #include <atomic>
@@ -18,11 +18,15 @@
 
 namespace {
 
+struct NormalAttackBinding { uintptr_t world{}; uintptr_t controller{}; uintptr_t triggered{}; uintptr_t completed{}; std::array<uint8_t,8> pressed{}; std::array<uint8_t,8> released{}; };
+
 struct Context final {
     const AnomalyNteCombatServiceV1* combat{};
     const AnomalyNteSkillsServiceV1* skills{};
     const AnomalyNteSkillInvocationServiceV1* invocation{};
     const AnomalyUiServiceV1* ui{};
+    const AnomalySignatureServiceV1* signature{};
+    const AnomalyUe5NamesServiceV1* names{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
@@ -70,6 +74,7 @@ struct Context final {
     uint64_t replay_damage_cursor{};
     std::chrono::steady_clock::time_point replay_damage_deadline{};
     bool waiting_for_damage{};
+    NormalAttackBinding normal_attack{};
 };
 
 template <typename Struct, typename Field>
