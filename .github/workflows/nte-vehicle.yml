@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - nte-vehicle-final-20261004
+      - vehicle-native-dump-20261005
   pull_request:
     branches:
       - main
@@ -21,24 +22,41 @@ jobs:
         shell: pwsh
         run: cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
 
+      - name: Build Anomaly runtime
+        shell: pwsh
+        run: cmake --build --preset windows-relwithdebinfo --parallel
+
+      - name: Configure NTE Vehicle
+        shell: pwsh
+        run: |
+          $b = "$env:GITHUB_WORKSPACE\.build\nte-vehicle"
+          $src = "$env:GITHUB_WORKSPACE\.build\nte-vehicle-src"
+          New-Item -ItemType Directory -Force $src | Out-Null
+          @"
+          cmake_minimum_required(VERSION 3.22)
+          project(NteVehicleStandalone LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(nte_vehicle SHARED "$env:GITHUB_WORKSPACE/plugins/NteVehicle/plugin.cpp")
+          target_include_directories(nte_vehicle PRIVATE "$env:GITHUB_WORKSPACE/include")
+          target_compile_definitions(nte_vehicle PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(nte_vehicle PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          "@ | Set-Content -LiteralPath "$src\CMakeLists.txt" -Encoding UTF8
+          cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
+
       - name: Build NTE Vehicle
         shell: pwsh
         run: |
-          cmake --build --preset windows-relwithdebinfo --target anomaly_builtin_nte_vehicle --parallel
-          $out = "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.8.1-windows-x64"
-          $src = "$env:GITHUB_WORKSPACE\.build\windows-vs2022\bin\RelWithDebInfo\builtin-plugins\NteVehicle"
-          New-Item -ItemType Directory -Force $out | Out-Null
-          Copy-Item "$src\plugin.dll" "$out\plugin.dll"
-          Copy-Item "$env:GITHUB_WORKSPACE\plugins\NteVehicle\manifest.json" "$out\manifest.json"
-          if (-not (Test-Path "$out\plugin.dll")) { throw "plugin.dll missing" }
-          if (-not (Test-Path "$out\manifest.json")) { throw "manifest.json missing" }
-          $files = Get-ChildItem -LiteralPath $out -File
-          if ($files.Count -ne 2 -or ($files.Name -notcontains "plugin.dll") -or ($files.Name -notcontains "manifest.json")) { throw "Output folder must contain exactly plugin.dll and manifest.json" }
-          Compress-Archive -Path "$out\*" -DestinationPath "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.8.1-windows-x64.zip" -Force
+          $b = "$env:GITHUB_WORKSPACE\.build\nte-vehicle"
+          cmake --build $b --config Release --parallel
+          New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64" | Out-Null
+          Copy-Item "$b\Release\plugin.dll" "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64\plugin.dll"
+          Copy-Item "$env:GITHUB_WORKSPACE\plugins\NteVehicle\manifest.json" "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64\manifest.json"
+          Compress-Archive -Path "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64\*" -DestinationPath "$env:GITHUB_WORKSPACE\dist\NteVehicle-0.7.0-windows-x64.zip" -Force
 
       - name: Upload plugin
         uses: actions/upload-artifact@v4
         with:
-          name: NteVehicle-0.8.1-windows-x64
-          path: dist/NteVehicle-0.8.1-windows-x64.zip
+          name: NteVehicle-0.7.0-windows-x64
+          path: dist/NteVehicle-0.7.0-windows-x64.zip
           if-no-files-found: error
