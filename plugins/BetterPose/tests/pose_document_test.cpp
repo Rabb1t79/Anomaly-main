@@ -6,7 +6,7 @@
 namespace {
 using namespace better_pose::pose_document;
 
-// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -17,7 +17,7 @@ void Check(const bool value, const char *message) {
 // The two measured skeletons at the indices pose1.json edits: the left arm
 // shares its index on both, the right arm does not (costume bones sit in
 // between on the second character).
-// 中文说明：SkeletonA() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SkeletonA()：调用 `names()`，结果用于完成该函数对应的数据处理。
 std::vector<std::string> SkeletonA() {
   std::vector<std::string> names(200, "Bn_other");
   names[7] = "Bip001-L-UpperArm";
@@ -31,7 +31,7 @@ std::vector<std::string> SkeletonA() {
   return names;
 }
 
-// 中文说明：SkeletonB() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SkeletonB()：调用 `names()`，结果用于完成该函数对应的数据处理。
 std::vector<std::string> SkeletonB() {
   std::vector<std::string> names(200, "Bn_costume");
   names[7] = "Bip001-L-UpperArm";
@@ -44,7 +44,7 @@ std::vector<std::string> SkeletonB() {
   return names;
 }
 
-// 中文说明：NamesWin() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：NamesWin()：调用 `Place()`、`SkeletonB()`、`Check()`、`empty()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void NamesWin() {
   const std::vector<SavedBone> saved{
       {7, "Bip001-L-UpperArm", 1, 2, 3},
@@ -59,7 +59,7 @@ void NamesWin() {
   Check(on_b.placed[2].bone == 77, "and so does the right hand");
 }
 
-// 中文说明：MissingNamesAreReportedNotGuessed() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MissingNamesAreReportedNotGuessed()：调用 `Place()`、`SkeletonB()`、`Check()`、`size()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void MissingNamesAreReportedNotGuessed() {
   const std::vector<SavedBone> saved{{128, "Bon_zuiba_R", 1, 0, 0},
                                      {7, "Bip001-L-UpperArm", 2, 0, 0}};
@@ -69,7 +69,7 @@ void MissingNamesAreReportedNotGuessed() {
   Check(on_b.missing.size() == 1 && on_b.missing[0] == "Bon_zuiba_R", "and reported by name");
 }
 
-// 中文说明：OldFilesFallBackToIndices() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：OldFilesFallBackToIndices()：调用 `Place()`、`SkeletonB()`、`Check()`、`empty()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void OldFilesFallBackToIndices() {
   // A file from before names were saved: only indices.
   const std::vector<SavedBone> saved{{7, "", 1, 0, 0}, {75, "", 2, 0, 0}};
@@ -86,7 +86,7 @@ void OldFilesFallBackToIndices() {
   Check(clipped.placed.empty(), "an index past the limit is dropped");
 }
 
-// 中文说明：SameCharacterIsUnchanged() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SameCharacterIsUnchanged()：调用 `Place()`、`SkeletonA()`、`Check()`、`size()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void SameCharacterIsUnchanged() {
   const std::vector<SavedBone> saved{{64, "Bip001-R-UpperArm", 4, 5, 6},
                                      {75, "Bip001-R-Finger13", 1, 1, 1}};
@@ -96,7 +96,7 @@ void SameCharacterIsUnchanged() {
 }
 }  // namespace
 
-// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：main()：调用 `NamesWin()`、`MissingNamesAreReportedNotGuessed()`、`OldFilesFallBackToIndices()`、`SameCharacterIsUnchanged()`，结果用于完成该函数对应的数据处理。
 int main() {
   NamesWin();
   MissingNamesAreReportedNotGuessed();
