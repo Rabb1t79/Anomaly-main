@@ -9,6 +9,7 @@
 namespace {
 using namespace better_pose::morph;
 
+// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -17,6 +18,7 @@ void Check(const bool value, const char *message) {
 }
 
 // Names as they appear on the live NTE body mesh.
+// 中文说明：Groups() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Groups() {
   Check(GroupOf("look_U") == Group::Gaze && GroupOf("look_LD") == Group::Gaze, "gaze");
   Check(GroupOf("EL_Happy_L_CLO") == Group::Eyes && GroupOf("eye_SF") == Group::Eyes &&
@@ -29,6 +31,7 @@ void Groups() {
   Check(GroupOf("TD_Imagination") == Group::Other && GroupOf("") == Group::Other, "other");
 }
 
+// 中文说明：OrderIsGroupedAndStable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OrderIsGroupedAndStable() {
   Catalog catalog;
   std::vector<Entry> list;
@@ -53,6 +56,7 @@ void OrderIsGroupedAndStable() {
         "group counts");
 }
 
+// 中文说明：WeightsDriveOnlyTouchedMorphs() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void WeightsDriveOnlyTouchedMorphs() {
   Weights weights;
   weights.Resize(4);
@@ -72,6 +76,7 @@ void WeightsDriveOnlyTouchedMorphs() {
   Check(weights.DrivenCount() == 0 && weights.value.size() == 2, "a new mesh starts clean");
 }
 
+// 中文说明：MakeCatalog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 Catalog MakeCatalog(const std::vector<const char *> &names) {
   std::vector<Entry> list;
   for (const char *name : names) {
@@ -84,6 +89,7 @@ Catalog MakeCatalog(const std::vector<const char *> &names) {
   return catalog;
 }
 
+// 中文说明：SaveAndLoad() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SaveAndLoad() {
   const auto catalog = MakeCatalog({"jawOpen", "look_U", "EL_Happy_L_CLO", "mouthPucker"});
   Weights weights;
@@ -108,6 +114,7 @@ void SaveAndLoad() {
   Check(loaded.driven[1] == 0 && loaded.value[1] == 0.0F,
         "loading replaces the expression instead of mixing into it");
 }
+// 中文说明：ExpressionHistory() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ExpressionHistory() {
   using better_pose::history::ExpressionState;
   better_pose::history::ExpressionHistory history;
@@ -127,6 +134,7 @@ void ExpressionHistory() {
   Check(!history.Observe(game_moved, false, 2400), "a weight the game owns is not recorded");
 }
 
+// 中文说明：MmdMapping() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void MmdMapping() {
   namespace mm = better_pose::mmd_morph;
   // The two measured NTE characters: one has vowel shapes, one does not.
@@ -193,6 +201,7 @@ void MmdMapping() {
 }
 }  // namespace
 
+// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 int main() {
   MmdMapping();
   Groups();
