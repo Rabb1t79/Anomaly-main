@@ -4,14 +4,17 @@
 
 using namespace better_pose::accessory;
 namespace {
+// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Check(bool value,const char* message) {
   if (!value) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
 }
+// 中文说明：RotationDegrees() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 double RotationDegrees(Quat a,Quat b) {
   const Quat delta=Multiply(a,Inverse(b));
   return 2.0*std::acos((std::min)(1.0,std::abs(delta.w)))*180.0/3.14159265358979323846;
 }
 Bone Make(Vec p,Quat q={}) { return {q.x,q.y,q.z,q.w,p.x,p.y,p.z,0,1,1,1,0}; }
+// 中文说明：Motion() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 Frame Motion(double t) {
   const double a=.45*std::sin(t*2);
   return {{20*std::sin(t*3),8*std::sin(t),170+4*std::sin(t*2)},
@@ -26,6 +29,7 @@ struct Rig {
       Make({18,0,-18}),Make({12,0,-30}),Make({24,0,-26}),Make({-12,0,0}),
       Make({-12,0,-11}),Make({-12,0,-22}),Make({0,0,10}),Make({14,0,-32})};
 };
+// 中文说明：CheckPose() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CheckPose(const Rig& rig,const std::vector<Bone>& pose) {
   Check(Length(Position(pose[0])-Position(rig.bind[0]))<1e-8,"root translated");
   Check(Length(Position(pose[10])-Position(rig.bind[10]))<1e-8,"ornament translated");
@@ -43,6 +47,7 @@ void CheckPose(const Rig& rig,const std::vector<Bone>& pose) {
   const Quat leaf=Multiply(Inverse(Rotation(pose[5])),Rotation(pose[11]));
   Check(std::abs(leaf.w-1)<1e-8,"rigid leaf failed to inherit parent rotation");
 }
+// 中文说明：Classifications() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Classifications() {
   for (const char* name:{"Bone_hair", "Bn_l_xiu", "cloth_01", "B_ribbon_00", "qun_01",
                          "piao", "gongpai", "lalian", "xiong", "tie", "skirt", "Bn_extra"}) {
@@ -60,6 +65,7 @@ void Classifications() {
   Check(!better_pose::secondary::IsSleeve("Bn_qunFxiuA_L"),"skirt weighted as sleeve");
   Check(better_pose::secondary::IsSwingOnly("Bn_kami"),"hair spelling rule");
 }
+// 中文说明：Run() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::vector<Bone> Run(int fps) {
   Rig rig; Dynamics d;
   Check(d.Configure(rig.bind,rig.parents,rig.names),"fork rig rejected");
@@ -78,6 +84,7 @@ std::vector<Bone> Run(int fps) {
   Check(d.LengthError()<1e-7,"solver stretched bones");
   return d.Pose();
 }
+// 中文说明：Resets() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Resets() {
   Rig rig; Dynamics d;
   d.Configure(rig.bind,rig.parents,rig.names);
@@ -110,6 +117,7 @@ void Resets() {
   Check(d.Configure({Make({}),Make({0,0,-5})},{-1,0},{"ribbon","tip"}),"character rebuild failed");
   Check(d.DrivenBones()==1 && d.Pose().size()==2,"old rig retained");
 }
+// 中文说明：Hang() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 double Hang(const char* name) {
   Dynamics d; d.Configure({Make({}),Make({10,0,0})},{-1,0},{name,"tip"});
   for (int i=0;i<=600;++i) d.Sample({},i/120.0,0,true);
@@ -120,6 +128,7 @@ double Hang(const char* name) {
   Check(Length(Position(settled[1])-Position(d.Pose()[1]))<.001,"spring did not settle");
   return std::atan2(-tip.z,tip.x)*180/3.14159265358979323846;
 }
+// 中文说明：GravityAndRoll() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void GravityAndRoll() {
   // Analytic equilibrium: normalized .85*X + .15*(-Z), and .55*X + .45*(-Z).
   Check(std::abs(Hang("hair")-10.00798)<.01,"regular gravity share differs from body");
@@ -138,6 +147,7 @@ void GravityAndRoll() {
   for (int i=0;i<=600;++i) side.Sample(frame,i/120.0,0,true);
   Check(frame.Point(Position(side.Pose()[1])).z<rest-1,"gravity used component down");
 }
+// 中文说明：Depth() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 double Depth(const std::vector<Bone>& pose,const Capsule& c) {
   double result=0;
   for (double t:{.5,.75,1.0}) {
@@ -146,6 +156,7 @@ double Depth(const std::vector<Bone>& pose,const Capsule& c) {
   }
   return result;
 }
+// 中文说明：Collisions() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Collisions() {
   const std::vector<Bone> bind{Make({2,0,20}),Make({2,0,0}),Make({3,0,-2})};
   Dynamics d; d.Configure(bind,{-1,0,1},{"hair","tip","marker"});
@@ -197,6 +208,7 @@ void Collisions() {
   ribbon.ConfigureCollisions({}, {}, {}, "Bip001-Pelvis");
   Check(ribbon.BodyCapsules(body.size(),[&](int i){return Position(body[i]);},{}).empty(),"missing body retained old capsules");
 }
+// 中文说明：Independence() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Independence() {
   Rig rig; Dynamics a,b; auto changed=rig.bind;
   changed[8][6]-=8; changed[9][6]-=16;
@@ -210,6 +222,7 @@ void Independence() {
     for (auto bone:{0,1,2,3,4,5,6,10,11}) Check(pa[bone]==pb[bone],"state leaked across separate branches/accessories");
   }
 }
+// 中文说明：HairSway() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void HairSway() {
   // Identical planar motion removes twist differences. Cloth retains the
   // previous spring response, so it is a reference for the requested increase.
@@ -237,6 +250,7 @@ void HairSway() {
   Check(amplitude<reference*2,"hair sway increase is excessive");
 }
 }
+// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 int main() {
   Classifications();
   const auto baseline=Run(120);
