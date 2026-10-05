@@ -8,40 +8,53 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download LLVM-MinGW 20260922 MSVCRT x64
-        shell: pwsh
+      - name: Install LLVM-MinGW 20260922 cross toolchain
+        shell: bash
         run: |
-          $url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip"
-          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\llvm-mingw.zip"
-          Expand-Archive "$env:RUNNER_TEMP\llvm-mingw.zip" -DestinationPath "$env:RUNNER_TEMP\llvm"
-          $root = Get-ChildItem "$env:RUNNER_TEMP\llvm" -Directory | Select-Object -First 1
-          "LLVM_ROOT=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          set -euo pipefail
+          curl -L --fail --retry 5 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
 
-      - name: Build NteAttackReplay with NoVS tool
-        shell: pwsh
+      - name: Configure and build
+        shell: bash
         run: |
-          powershell -ExecutionPolicy Bypass -File .\tools\NteAttackReplay-NoVS\build.ps1 -LlvmRoot "$env:LLVM_ROOT" -SdkRoot "$env:GITHUB_WORKSPACE\Anomaly-2.0.0-sdk"
+          set -euo pipefail
+          rm -rf tools/NteAttackReplay-NoVS/out/build tools/NteAttackReplay-NoVS/out/NteAttackReplay
+          cmake -S tools/NteAttackReplay-NoVS -B tools/NteAttackReplay-NoVS/out/build \
+            -G "Unix Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/llvm-mingw-toolchain.cmake" \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk" \
+            -DAnomalySDK_DIR="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk/lib/cmake/AnomalySDK" \
+            -DANOMALY_SOURCE_ROOT="$GITHUB_WORKSPACE"
+          cmake --build tools/NteAttackReplay-NoVS/out/build --target anomaly_nte_attack_replay --parallel 2
 
-      - name: Verify package
-        shell: pwsh
+      - name: Stage package
+        shell: bash
         run: |
-          $pkg = "$env:GITHUB_WORKSPACE\tools\NteAttackReplay-NoVS\out\NteAttackReplay"
-          if (!(Test-Path "$pkg\plugin.dll")) { throw "plugin.dll missing" }
-          if (!(Test-Path "$pkg\manifest.json")) { throw "manifest.json missing" }
-          & "$env:LLVM_ROOT\bin\llvm-readobj.exe" --file-headers "$pkg\plugin.dll"
-          & "$env:LLVM_ROOT\bin\llvm-readobj.exe" --coff-imports "$pkg\plugin.dll"
+          set -euo pipefail
+          build_pkg="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/out/build/package/NteAttackReplay"
+          pkg="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/out/NteAttackReplay"
+          test -f "$build_pkg/plugin.dll"
+          test -f "$build_pkg/manifest.json"
+          mkdir -p "$pkg"
+          cp "$build_pkg/plugin.dll" "$pkg/plugin.dll"
+          cp "$GITHUB_WORKSPACE/plugins/NteAttackReplay/manifest.json" "$pkg/manifest.json"
+          if [ -d "$GITHUB_WORKSPACE/plugins/NteAttackReplay/locales" ]; then cp -R "$GITHUB_WORKSPACE/plugins/NteAttackReplay/locales" "$pkg/locales"; fi
+          for dll in libc++.dll libc++abi.dll libunwind.dll; do
+            if [ -f "$LLVM_MINGW_ROOT/bin/$dll" ]; then cp "$LLVM_MINGW_ROOT/bin/$dll" "$pkg/$dll"; fi
+          done
+          "$LLVM_MINGW_ROOT/bin/llvm-readobj" --file-headers "$pkg/plugin.dll"
+          "$LLVM_MINGW_ROOT/bin/llvm-readobj" --coff-imports "$pkg/plugin.dll"
           git diff --check HEAD^ HEAD
-
-      - name: Package
-        shell: pwsh
-        run: |
-          $pkg = "$env:GITHUB_WORKSPACE\tools\NteAttackReplay-NoVS\out\NteAttackReplay"
-          Compress-Archive -Path "$pkg\*" -DestinationPath "$env:GITHUB_WORKSPACE\NteAttackReplay-NoVS-LLVM.zip" -Force
+          (cd "$pkg" && zip -r "$GITHUB_WORKSPACE/NteAttackReplay-NoVS-LLVM.zip" .)
 
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
