@@ -6,7 +6,7 @@
 namespace {
 using namespace better_pose::mirror;
 
-// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -14,10 +14,10 @@ void Check(const bool value, const char *message) {
   }
 }
 
-// 中文说明：Dot() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Dot()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 double Dot(const Vec &a, const Vec &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
-// 中文说明：AxisAngle() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AxisAngle()：调用 `std::sqrt()`、`Dot()`、`std::sin()`、`std::cos()`；遍历输入集合，结果用于完成该函数对应的数据处理。
 Quat AxisAngle(Vec axis, const double radians) {
   const double length = std::sqrt(Dot(axis, axis));
   for (auto &v : axis)
@@ -41,7 +41,7 @@ struct Body {
 };
 
 // Component space: +X is the body's left, +Y forward, +Z up.
-// 中文说明：MakeBody() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MakeBody()：调用 `AxisAngle()`、`Normalize()`、`Multiply()`、`axis()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
 Body MakeBody() {
   Body b;
   // name, parent, component rest rotation, component position
@@ -98,10 +98,10 @@ Body MakeBody() {
 
 // Where a bone's local +X axis points in component space (the "bone
 // direction"), and a second axis, for comparing orientations as geometry.
-// 中文说明：AxisOf() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：AxisOf()：调用 `Rotate()`，结果用于完成该函数对应的数据处理。
 Vec AxisOf(const Quat &world, const Vec &local) { return Rotate(world, local); }
 
-// 中文说明：ReflectX() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ReflectX()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 Vec ReflectX(const Vec &v) { return {-v[0], v[1], v[2]}; }
 
 // Mirror symmetry as geometry: the partner's frame must be the reflection
@@ -115,7 +115,7 @@ bool Symmetric(const Body &b, const std::vector<Quat> &world, const std::size_t 
   return Distance(expected, world[right]) < 1e-9;
 }
 
-// 中文说明：Names() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Names()：调用 `Check()`、`SwapSide()`、`Partners()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void Names() {
   std::string s;
   Check(SwapSide("Bip001-L-Thigh", s) && s == "Bip001-R-Thigh", "Biped side token");
@@ -131,7 +131,7 @@ void Names() {
         "partners: centre maps to itself, pairs to each other, orphans to none");
 }
 
-// 中文说明：RestIsFixed() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RestIsFixed()：调用 `MakeBody()`、`Check()`、`Apply()`、`size()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 void RestIsFixed() {
   const auto b = MakeBody();
   Check(b.rig.valid, "rig builds");
@@ -143,7 +143,7 @@ void RestIsFixed() {
           "flipping the rest pose changes nothing, even with mismatched right-side axes");
 }
 
-// 中文说明：RaisedArmMovesToTheOtherSide() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RaisedArmMovesToTheOtherSide()：调用 `MakeBody()`、`axis()`、`Components()`、`AxisAngle()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 void RaisedArmMovesToTheOtherSide() {
   const auto b = MakeBody();
   // Raise the left arm: rotate the upper arm 60 deg about the body's forward
@@ -191,7 +191,7 @@ void RaisedArmMovesToTheOtherSide() {
     Check(Distance(twice[i], locals[i]) < 1e-9, "flipping twice restores the pose");
 }
 
-// 中文说明：CentreBonesFlipTheirTwist() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：CentreBonesFlipTheirTwist()：调用 `MakeBody()`、`left()`、`Normalize()`、`Multiply()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void CentreBonesFlipTheirTwist() {
   const auto b = MakeBody();
   auto locals = b.rest_locals;
@@ -211,7 +211,7 @@ void CentreBonesFlipTheirTwist() {
   Check(Distance(after[1], rest_world[1]) < 1e-12, "Bip001 (where the body stands) is untouched");
 }
 
-// 中文说明：CopyOneSide() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：CopyOneSide()：调用 `MakeBody()`、`Normalize()`、`Multiply()`、`AxisAngle()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void CopyOneSide() {
   const auto b = MakeBody();
   auto locals = b.rest_locals;
@@ -230,7 +230,7 @@ void CopyOneSide() {
         "left to right writes the mirrored left arm onto the right");
 }
 
-// 中文说明：MeasuredNteLegs() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：MeasuredNteLegs()：调用 `capture()`、`Normalize()`、`Partners()`、`BuildRig()`；通过 `Check()` 校验结果，把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
 void MeasuredNteLegs() {
   // The live NTE capture (component rotations and positions of the rest
   // pose): mirroring the rest pose must stay the rest pose to within the
@@ -277,7 +277,7 @@ void MeasuredNteLegs() {
         "and about its own knee hinge (local Z)");
 }
 
-// 中文说明：DegenerateInput() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：DegenerateInput()：调用 `BuildRig()`、`Check()`、`Apply()`、`size()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void DegenerateInput() {
   const Rig bad = BuildRig({}, {}, {}, {}, {});
   Check(!bad.valid, "an empty rig is invalid");
@@ -288,7 +288,7 @@ void DegenerateInput() {
 }
 }  // namespace
 
-// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：main()：调用 `Names()`、`RestIsFixed()`、`RaisedArmMovesToTheOtherSide()`、`CentreBonesFlipTheirTwist()`，结果用于完成该函数对应的数据处理。
 int main() {
   Names();
   RestIsFixed();
