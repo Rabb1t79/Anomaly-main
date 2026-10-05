@@ -277,11 +277,13 @@ AnomalyStatusV1 Status(
     return {code, 0, {message.data(), message.size()}};
 }
 
+// 中文说明：Bytes() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -292,6 +294,7 @@ const Service* Query(
     return anomaly::sdk::Host(host).Query<Service>(id, version).get();
 }
 
+// 中文说明：ConfigReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ConfigReady(const AnomalyConfigServiceV1* service) noexcept {
     return HasField<AnomalyConfigServiceV1, decltype(AnomalyConfigServiceV1::write_atomic)>(
                service, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
@@ -299,18 +302,21 @@ bool ConfigReady(const AnomalyConfigServiceV1* service) noexcept {
         service->write_atomic != nullptr;
 }
 
+// 中文说明：SchedulerReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SchedulerReady(const AnomalySchedulerServiceV1* service) noexcept {
     return HasField<AnomalySchedulerServiceV1, decltype(AnomalySchedulerServiceV1::cancel)>(
                service, offsetof(AnomalySchedulerServiceV1, cancel)) &&
         service->schedule != nullptr && service->cancel != nullptr;
 }
 
+// 中文说明：SignatureReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SignatureReady(const AnomalySignatureServiceV1* service) noexcept {
     return HasField<AnomalySignatureServiceV1, decltype(AnomalySignatureServiceV1::resolve)>(
                service, offsetof(AnomalySignatureServiceV1, resolve)) &&
         service->resolve != nullptr;
 }
 
+// 中文说明：ObjectsReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* service) noexcept {
     return HasField<AnomalyUe5ObjectsServiceV1,
                decltype(AnomalyUe5ObjectsServiceV1::snapshot_by_handle)>(
@@ -319,6 +325,7 @@ bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* service) noexcept {
         service->snapshot_at != nullptr && service->snapshot_by_handle != nullptr;
 }
 
+// 中文说明：ObjectFindReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ObjectFindReady(const AnomalyUe5ObjectsServiceV1* service) noexcept {
     return HasField<AnomalyUe5ObjectsServiceV1,
                decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
@@ -326,6 +333,7 @@ bool ObjectFindReady(const AnomalyUe5ObjectsServiceV1* service) noexcept {
         service->find_exact != nullptr;
 }
 
+// 中文说明：NamesReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool NamesReady(const AnomalyUe5NamesServiceV1* service) noexcept {
     return HasField<AnomalyUe5NamesServiceV1,
                decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -333,6 +341,7 @@ bool NamesReady(const AnomalyUe5NamesServiceV1* service) noexcept {
         service->resolve_utf8 != nullptr;
 }
 
+// 中文说明：HookReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HookReady(const AnomalyHookServiceV1* service) noexcept {
     return HasField<AnomalyHookServiceV1,
                     decltype(AnomalyHookServiceV1::end_callback)>(
@@ -341,6 +350,7 @@ bool HookReady(const AnomalyHookServiceV1* service) noexcept {
         service->begin_callback != nullptr && service->end_callback != nullptr;
 }
 
+// 中文说明：WindowReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool WindowReady(const AnomalyWindowServiceV1* service) noexcept {
     return HasField<AnomalyWindowServiceV1, decltype(AnomalyWindowServiceV1::end)>(
                service, offsetof(AnomalyWindowServiceV1, end)) &&
@@ -413,10 +423,12 @@ void PublishSettings(
     context.settings.store(settings, std::memory_order_release);
 }
 
+// 中文说明：ReadSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::shared_ptr<const SettingsSnapshot> ReadSettings(const Context& context) noexcept {
     return context.settings.load(std::memory_order_acquire);
 }
 
+// 中文说明：ResetEditor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ResetEditor(Context& context) noexcept {
     const auto settings = ReadSettings(context);
     if (!settings) return;
@@ -469,6 +481,7 @@ void ANOMALY_CALL PersistSettingsTask(
     context->save_state.store(saved ? 2U : 3U, std::memory_order_release);
 }
 
+// 中文说明：ScheduleSettingsPersist() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ScheduleSettingsPersist(Context& context) noexcept {
     AnomalyGenerationHandleV1 task{};
     const AnomalyStatusV1 status = context.scheduler->schedule(
@@ -476,6 +489,7 @@ bool ScheduleSettingsPersist(Context& context) noexcept {
     return status.code == ANOMALY_STATUS_V1_OK && task.id != 0;
 }
 
+// 中文说明：RecordDetectedUid() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RecordDetectedUid(Context& context, const std::uint64_t detected) noexcept {
     if (detected == 0) return;
     const std::uint64_t previous =
@@ -525,6 +539,7 @@ bool ApplySettings(
     }
 }
 
+// 中文说明：LoadSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool LoadSettings(Context& context) noexcept {
     try {
         std::uint32_t version{};
@@ -630,6 +645,7 @@ bool ResolveRipRelative32(
     return true;
 }
 
+// 中文说明：ParseUid() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::uint64_t ParseUid(const std::string_view value) noexcept {
     if (value.empty() || value.size() > 20) return 0;
     std::uint64_t result{};
@@ -675,11 +691,13 @@ bool BuildValueReplacement(
     return replacement.size() + 1 <= 2048;
 }
 
+// 中文说明：CoreReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool CoreReady(const AnomalyCoreServiceV1* service) noexcept {
     return HasField<AnomalyCoreServiceV1, decltype(AnomalyCoreServiceV1::log)>(
                service, offsetof(AnomalyCoreServiceV1, log)) && service->log != nullptr;
 }
 
+// 中文说明：Log() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Log(Context& context, const std::uint32_t level, const std::string_view message) noexcept {
     if (!CoreReady(context.core)) return;
     context.core->log(context.core->user, level, anomaly::sdk::StringView(message));
@@ -699,6 +717,7 @@ void LogValueApplyFailure(
             " stage=" + std::to_string(stage) + " (" + std::string(message) + ")");
 }
 
+// 中文说明：LogValueApplySuccess() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void LogValueApplySuccess(Context& context, const std::uint64_t revision) noexcept {
     context.value_apply_failure_revision = revision;
     context.value_apply_failure_stage = 0;
@@ -775,6 +794,7 @@ void ANOMALY_CALL SetTextDetour(
 bool EnsureSetTextHook(Context& context) noexcept;
 bool ReleaseSetTextHook(Context& context) noexcept;
 
+// 中文说明：DropMismatchedPrefixWidgets() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DropMismatchedPrefixWidgets(Context& context) noexcept {
     for (std::size_t index = 0; index < context.widget_count;) {
         if (!context.widgets[index].prefix) {
@@ -932,6 +952,7 @@ bool ResolveWidgetAddress(
 // through the object registry with a matching serial and hangs off that exact
 // tree. Running once per Update tick prevents structural fallbacks from using
 // a stale anchor after a HUD teardown.
+// 中文说明：ValidateRoleIDAnchor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ValidateRoleIDAnchor(Context& context) noexcept {
     if (context.roleid_outer == 0 || context.roleid_panel == 0 ||
         !ObjectsReady(context.objects)) return;
@@ -1026,6 +1047,7 @@ bool ResolveTemplateNameId(
     return true;
 }
 
+// 中文说明：ArmTargetWidgetNames() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ArmTargetWidgetNames(Context& context) noexcept {
     static_cast<void>(ResolveTemplateNameId(
         context, kTargetWidgetTemplatePath, kTargetWidgetName,
@@ -1041,6 +1063,7 @@ void ArmTargetWidgetNames(Context& context) noexcept {
     }
 }
 
+// 中文说明：ScanForWidgets() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ScanForWidgets(Context& context) {
     if (!ObjectsReady(context.objects) || !NamesReady(context.names)) {
         return;
@@ -1643,6 +1666,7 @@ bool EnsureTextHookSnapshot(
 // lives in a separate TextBlock. Only a numeric payload can be a value write,
 // which keeps the name lookup in ArmHookValueName off every unrelated
 // TextBlock the engine re-texts.
+// 中文说明：LooksLikeUidValue() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool LooksLikeUidValue(const std::wstring_view text) noexcept {
     if (text.size() < 6 || text.size() > 20) return false;
     for (const wchar_t character : text) {
@@ -1658,6 +1682,7 @@ bool LooksLikeUidValue(const std::wstring_view text) noexcept {
 // name. FName indexes are stable for the whole process session, which lets one
 // cached index cover the replacement instances of a HUD rebuild while keeping
 // the string resolve off the hot path.
+// 中文说明：ArmHookValueName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ArmHookValueName(Context& context, const std::uintptr_t widget) noexcept {
     std::uint32_t name_id = 0;
     if (!ReadRoleIdObjectNameId(context, widget, name_id)) return false;
@@ -1884,6 +1909,7 @@ void ANOMALY_CALL SetTextDetour(
     EndSetTextCallback(hook_api, callback_lease);
 }
 
+// 中文说明：ReleaseSetTextHook() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReleaseSetTextHook(Context& context) noexcept {
     context.text_override.store({}, std::memory_order_release);
     Context* expected = &context;
@@ -1913,6 +1939,7 @@ bool ReleaseSetTextHook(Context& context) noexcept {
     return true;
 }
 
+// 中文说明：EnsureSetTextHook() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool EnsureSetTextHook(Context& context) noexcept {
     if (!HookReady(context.hook) || context.set_text == nullptr) return false;
     const auto target = reinterpret_cast<std::uintptr_t>(context.set_text);
@@ -1982,6 +2009,7 @@ bool SetWidgetText(
 // UObject::OuterPrivate lives at offset 0x20. The prefix label and the UID
 // value TextBlocks share the same HUD WidgetTree outer, which identifies the
 // prefix even after its text has been cleared.
+// 中文说明：ReadObjectOuter() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::uintptr_t ReadObjectOuter(const std::uintptr_t object) noexcept {
     if (object == 0) return 0;
     __try {
@@ -1995,6 +2023,7 @@ std::uintptr_t ReadObjectOuter(const std::uintptr_t object) noexcept {
 // CanvasPanel_0, so their slots have the same CanvasPanel outer. Pairing this
 // with the shared WidgetTree makes TextBlock_90 instance selection exact even
 // though that FName is reused by many unrelated blueprints.
+// 中文说明：ReadWidgetPanel() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::uintptr_t ReadWidgetPanel(const std::uintptr_t widget) noexcept {
     if (widget == 0) return 0;
     __try {
@@ -2015,6 +2044,7 @@ bool IsRoleIdPrefixInstance(
 }
 
 // UWidget::Visibility (ESlateVisibility, uint8) at the verified offset 0xDC.
+// 中文说明：ReadVisibilityField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::uint8_t ReadVisibilityField(const std::uintptr_t widget) noexcept {
     if (widget == 0) return 0;
     __try {
@@ -2028,6 +2058,7 @@ std::uint8_t ReadVisibilityField(const std::uintptr_t widget) noexcept {
 // Matches the localized "UID" prefix label (full-width/ASCII colon or space) but
 // not numeric UID values, our configured display text, or a full UID-plus-value
 // string that lives inside the value widget itself.
+// 中文说明：LooksLikeUidPrefix() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool LooksLikeUidPrefix(const std::wstring_view text) noexcept {
     std::size_t begin = 0;
     while (begin < text.size() && (text[begin] == L' ' || text[begin] == L'\t' ||
@@ -2197,6 +2228,7 @@ bool FindUFunctionObject(
     return true;
 }
 
+// 中文说明：ResolveTextWriteBindings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ResolveTextWriteBindings(Context& context) noexcept {
     if (context.process_event == nullptr || !ObjectFindReady(context.objects)) return false;
     const std::uint64_t generation = context.objects->generation(context.objects->user);
@@ -2276,6 +2308,7 @@ bool InvokeProcessEvent(
 // Both reflected functions are required: preserving the live Y coordinate
 // avoids replacing the layout with a guessed absolute position.
 // UE 5.6's FVector2D stores two doubles, hence ParmsSize 16.
+// 中文说明：ResolveSlotBindings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ResolveSlotBindings(Context& context) noexcept {
     if (context.process_event == nullptr || !ObjectFindReady(context.objects)) return false;
     const std::uint64_t generation = context.objects->generation(context.objects->user);
@@ -2368,6 +2401,7 @@ void AlignRoleIdSlot(
     }
 }
 
+// 中文说明：ResolveVisibilityBinding() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ResolveVisibilityBinding(Context& context) noexcept {
     if (context.process_event == nullptr || !ObjectFindReady(context.objects)) return false;
     const std::uint64_t generation = context.objects->generation(context.objects->user);
@@ -2607,6 +2641,7 @@ ApplyResult ApplyToWidget(
 
 AnomalyStatusV1 ANOMALY_CALL Start(void* user);
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void* user, double) {
     auto* const context = static_cast<Context*>(user);
     if (context == nullptr || context->stop_completed) return;
@@ -2680,6 +2715,7 @@ void ANOMALY_CALL Update(void* user, double) {
     }
 }
 
+// 中文说明：ReleaseWindow() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ReleaseWindow(Context& context) noexcept {
     if (context.window_handle.id == 0) return anomaly::sdk::Ok();
     const AnomalyStatusV1 status = context.window->release_window(
@@ -2692,6 +2728,7 @@ AnomalyStatusV1 ReleaseWindow(Context& context) noexcept {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：EnsureWindow() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool EnsureWindow(Context& context) {
     if (context.window_handle.id != 0) return true;
     if (!WindowReady(context.window)) {
@@ -2771,6 +2808,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* user) {
     auto* const context = static_cast<Context*>(user);
     if (context == nullptr) {
@@ -2888,14 +2926,17 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* user) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：DrawText() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawText(const AnomalyUiServiceV1& ui, const std::string_view value) {
     ui.text(ui.user, anomaly::sdk::StringView(value));
 }
 
+// 中文说明：Button() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Button(const AnomalyUiServiceV1& ui, const std::string_view label) {
     return ui.button(ui.user, anomaly::sdk::StringView(label), 0.0F, 0.0F) != 0;
 }
 
+// 中文说明：LocalizeUiStatus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string LocalizeUiStatus(Context& context, const std::string_view status) {
     if (status == "UID must contain 1-256 single-line Unicode characters") {
         return context.localizer.Text("status.invalid_uid", status);
@@ -2909,6 +2950,7 @@ std::string LocalizeUiStatus(Context& context, const std::string_view status) {
     return std::string(status);
 }
 
+// 中文说明：DrawEditor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawEditor(Context& context, const AnomalyUiServiceV1& ui) {
     const std::uint32_t save_state =
         context.save_state.exchange(0U, std::memory_order_acq_rel);
@@ -3002,6 +3044,7 @@ void DrawEditor(Context& context, const AnomalyUiServiceV1& ui) {
     }
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void* user, const AnomalyUiServiceV1* ui) {
     auto* const context = static_cast<Context*>(user);
     if (context == nullptr || ui == nullptr || !EnsureWindow(*context)) {
@@ -3029,6 +3072,7 @@ void ANOMALY_CALL Draw(void* user, const AnomalyUiServiceV1* ui) {
         context->window->user, context->window_handle));
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* user, std::uint32_t) {
     auto* const context = static_cast<Context*>(user);
     if (context == nullptr) {
@@ -3045,6 +3089,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* user, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* user) {
     auto* const context = static_cast<Context*>(user);
     if (context != nullptr && Stop(context, 0).code == ANOMALY_STATUS_V1_OK) {
