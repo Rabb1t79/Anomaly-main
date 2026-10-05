@@ -57,13 +57,13 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// HasField 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
 template <typename Service>
-// 中文说明：Query()：调用 `decltype()`、`offsetof()`、`query_service()`、`anomaly::sdk::StringView()`，结果用于完成该函数对应的数据处理。
+// Query 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 const Service* Query(const AnomalyHostApiV1* host, const std::string_view id) noexcept {
     if (!HasField<AnomalyHostApiV1, decltype(AnomalyHostApiV1::query_service)>(
             host, offsetof(AnomalyHostApiV1, query_service)) ||
@@ -80,7 +80,7 @@ const Service* Query(const AnomalyHostApiV1* host, const std::string_view id) no
     return service->struct_size >= prefix && service->service_version >= 1 ? service : nullptr;
 }
 
-// 中文说明：LandmarksReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// LandmarksReady 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* service) noexcept {
     return HasField<AnomalyNteMapLandmarksServiceV1,
                decltype(AnomalyNteMapLandmarksServiceV1::teleport)>(
@@ -89,7 +89,7 @@ bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* service) noexcept {
         service->teleport != nullptr;
 }
 
-// 中文说明：SetResult()：调用 `lock()`、`std::move()`，结果用于完成该函数对应的数据处理。
+// SetResult 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 void SetResult(Context& context, const std::uint32_t code, std::string message) noexcept {
     try {
         std::scoped_lock lock(context.mutex);
@@ -99,7 +99,7 @@ void SetResult(Context& context, const std::uint32_t code, std::string message) 
     }
 }
 
-// 中文说明：PositionText()：调用 `setf()`、`precision()`、`str()`，结果用于完成该函数对应的数据处理。
+// PositionText 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 std::string PositionText(const std::array<double, 3>& position) {
     std::ostringstream text;
     text.setf(std::ios::fixed, std::ios::floatfield);
@@ -108,7 +108,7 @@ std::string PositionText(const std::array<double, 3>& position) {
     return text.str();
 }
 
-// 中文说明：RefreshCatalog()：调用 `LandmarksReady()`、`SetResult()`、`sequence()`、`lock()`；把结果追加到输出容器，遍历输入集合，修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// RefreshCatalog 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 void RefreshCatalog(Context& context) {
     const auto* service = context.landmarks_service;
     if (!LandmarksReady(service)) {
@@ -167,7 +167,7 @@ void RefreshCatalog(Context& context) {
     context.result_message = "Map landmark catalog refreshed";
 }
 
-// 中文说明：Update()：调用 `RefreshCatalog()`、`lock()`、`load()`、`SetResult()`；修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// Update 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 void Update(Context& context) {
     RefreshCatalog(context);
     PendingTeleport pending;
@@ -198,12 +198,12 @@ void Update(Context& context) {
         : "Map landmark transfer was rejected");
 }
 
-// 中文说明：Draw()：调用 `decltype()`、`offsetof()`、`store()`、`developer_mode_enabled()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// Draw 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 void Draw(Context& context, const AnomalyUiServiceV1* ui) {
     if (ui == nullptr || !HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_window)>(
             ui, offsetof(AnomalyUiServiceV1, begin_window)) || ui->begin_window == nullptr ||
         !HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_window)>(
-// 中文说明：offsetof()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// offsetof 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
             ui, offsetof(AnomalyUiServiceV1, end_window)) || ui->end_window == nullptr) {
         return;
     }
@@ -341,7 +341,7 @@ void Draw(Context& context, const AnomalyUiServiceV1* ui) {
     ui->end_window(ui->user);
 }
 
-// 中文说明：Load()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// Load 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (host == nullptr || plugin_context == nullptr) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
@@ -354,14 +354,14 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
-// 中文说明：Start()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// Start 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 AnomalyStatusV1 ANOMALY_CALL Start(void*) { return {ANOMALY_STATUS_V1_OK, 0, {}}; }
-// 中文说明：Stop()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// Stop 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) { return {ANOMALY_STATUS_V1_OK, 0, {}}; }
-// 中文说明：Unload()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// Unload 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 void ANOMALY_CALL Unload(void* value) { delete static_cast<Context*>(value); }
 
-// 中文说明：UpdateThunk()：调用 `Update()`、`SetResult()`；修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// UpdateThunk 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 void ANOMALY_CALL UpdateThunk(void* value, double) {
     if (value == nullptr) return;
     try {
@@ -372,7 +372,7 @@ void ANOMALY_CALL UpdateThunk(void* value, double) {
     }
 }
 
-// 中文说明：DrawThunk()：调用 `Draw()`、`SetResult()`；修改对象或运行时状态，结果用于完成该函数对应的数据处理。
+// DrawThunk 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 void ANOMALY_CALL DrawThunk(void* value, const AnomalyUiServiceV1* ui) {
     if (value == nullptr) return;
     try {
