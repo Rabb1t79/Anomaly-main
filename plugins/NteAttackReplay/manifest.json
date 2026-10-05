@@ -31,7 +31,6 @@
   ],
   "capabilities": [
     "ui",
-    "nte-combat-read",
-    "nte-damage-replay"
+    "nte-combat-read"
   ]
 }
