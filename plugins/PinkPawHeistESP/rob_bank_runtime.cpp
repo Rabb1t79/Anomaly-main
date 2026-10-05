@@ -125,7 +125,7 @@ AnomalyStatusV1 Status(
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// HasField 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -174,7 +174,7 @@ struct UnrealString final {
 using TextToStringFunction = UnrealString*(ANOMALY_CALL*)(UnrealString*, const void*);
 using FreeStringFunction = void(ANOMALY_CALL*)(void*);
 
-// 中文说明：EncodeFName()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// EncodeFName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::uint64_t EncodeFName(const FNameValue value) noexcept {
     return static_cast<std::uint64_t>(value.comparison_index) |
         (static_cast<std::uint64_t>(value.number) << 32U);
@@ -241,7 +241,7 @@ struct PinkPawWorldGate::Impl final {
         return left.id == right.id && left.generation == right.generation;
     }
 
-// 中文说明：Complete()：调用 `return()`，结果用于完成该函数对应的数据处理。
+// Complete 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] static bool Complete(const std::uint32_t flags) noexcept {
         return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
             (flags & ANOMALY_NTE_SNAPSHOT_V1_PARTIAL) == 0;
@@ -468,7 +468,7 @@ struct RobBankRuntime::Impl final {
         return AddSignedAddress(base, offset, address) && Read(address, value) && value != 0;
     }
 
-// 中文说明：IsGameThread()：调用 `is_game_thread()`，结果用于完成该函数对应的数据处理。
+// IsGameThread 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool IsGameThread() const noexcept {
         return framework != nullptr && framework->is_game_thread != nullptr &&
             framework->is_game_thread(framework->user) != 0;
@@ -547,7 +547,7 @@ struct RobBankRuntime::Impl final {
         return ReadBytes(address, actual.data(), actual.size()) && actual == expected;
     }
 
-// 中文说明：ResolvePluginProfile()：调用 `ResolveRipRelative()`、`ResolveDirect()`、`AddAddress()`、`Matches()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ResolvePluginProfile 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool ResolvePluginProfile() noexcept {
         std::uintptr_t pickup{};
         std::uintptr_t text_to_string{};
@@ -575,7 +575,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
-// 中文说明：ResolveName()：调用 `size()`、`resolve_utf8()`、`data()`、`std::string()`，结果用于完成该函数对应的数据处理。
+// ResolveName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string ResolveName(const std::uint32_t name_id) const {
         if (name_id == 0 || names == nullptr || names->resolve_utf8 == nullptr) return {};
         std::array<char, 128> local{};
@@ -596,7 +596,7 @@ struct RobBankRuntime::Impl final {
         return value;
     }
 
-// 中文说明：ResolveObjectName()：调用 `AddSignedAddress()`、`Read()`、`ResolveName()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// ResolveObjectName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string ResolveObjectName(const std::uintptr_t object) const {
         std::uintptr_t address{};
         std::uint32_t name_id{};
@@ -607,7 +607,7 @@ struct RobBankRuntime::Impl final {
         return ResolveName(name_id);
     }
 
-// 中文说明：RenderFName()：调用 `ResolveName()`、`empty()`、`std::to_string()`，结果用于完成该函数对应的数据处理。
+// RenderFName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string RenderFName(const FNameValue value) const {
         std::string name = ResolveName(value.comparison_index);
         if (name.empty() || value.number == 0) return name;
@@ -616,7 +616,7 @@ struct RobBankRuntime::Impl final {
         return name;
     }
 
-// 中文说明：ReadText()：调用 `text_to_string()`、`free_string()`、`reserve()`、`push_back()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// ReadText 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string ReadText(const std::uintptr_t text) const {
         UnrealString converted;
         const auto text_to_string = reinterpret_cast<TextToStringFunction>(text_to_string_function);
@@ -658,7 +658,7 @@ struct RobBankRuntime::Impl final {
         return false;
     }
 
-// 中文说明：IsRobBankClass()：调用 `find()`、`end()`、`ClassIsOrDerivesFrom()`、`emplace()`，结果用于完成该函数对应的数据处理。
+// IsRobBankClass 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool IsRobBankClass(const std::uintptr_t class_object) {
         if (const auto found = rob_bank_classes.find(class_object);
             found != rob_bank_classes.end()) {
@@ -669,7 +669,7 @@ struct RobBankRuntime::Impl final {
         return matches;
     }
 
-// 中文说明：IsRobBankCloneDataAssetClass()：调用 `find()`、`end()`、`ClassIsOrDerivesFrom()`、`emplace()`，结果用于完成该函数对应的数据处理。
+// IsRobBankCloneDataAssetClass 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool IsRobBankCloneDataAssetClass(const std::uintptr_t class_object) {
         if (const auto found = rob_bank_clone_data_asset_classes.find(class_object);
             found != rob_bank_clone_data_asset_classes.end()) {
@@ -736,7 +736,7 @@ struct RobBankRuntime::Impl final {
             Read(object_address, object);
     }
 
-// 中文说明：LoadObjectRegistry()：调用 `ReadPointerAt()`、`AddSignedAddress()`、`Read()`、`ReadObjectChunk()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// LoadObjectRegistry 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool LoadObjectRegistry(ObjectRegistry& next) const noexcept {
         ObjectRegistry candidate;
         if (!ReadPointerAt(object_registry_address, kObjectItemsOffset, candidate.items)) {
@@ -810,7 +810,7 @@ struct RobBankRuntime::Impl final {
             ReadPointerAt(local_player, kLocalPlayerControllerOffset, next_controller);
     }
 
-// 中文说明：ResetWorldState()：调用 `clear()`，结果用于完成该函数对应的数据处理。
+// ResetWorldState 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     void ResetWorldState() noexcept {
         point_table = {};
         item_tables = {};
@@ -870,7 +870,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
-// 中文说明：RefreshPointTable()：调用 `FindExactObject()`、`BuildPointTable()`、`std::move()`、`ReadObjectPointer()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// RefreshPointTable 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     void RefreshPointTable() noexcept {
         try {
             if (registry.items == 0 || registry.count == 0) {
@@ -968,7 +968,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
-// 中文说明：BuildItemTables()：调用 `ReadPointerAt()`、`BuildDataTableRows()`、`BuildItemMetadata()`、`emplace()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// BuildItemTables 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool BuildItemTables(const std::uintptr_t data_asset) {
         std::uintptr_t table{};
         DataTableRows rows;
@@ -1025,7 +1025,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
-// 中文说明：RefreshItemTables()：调用 `FindExactObject()`、`BuildItemTables()`、`empty()`、`ReadObjectPointer()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// RefreshItemTables 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     void RefreshItemTables() noexcept {
         try {
             if (registry.items == 0 || registry.count == 0) {
@@ -1107,7 +1107,7 @@ struct RobBankRuntime::Impl final {
 
     }
 
-// 中文说明：RefreshKeyDoorContext()：调用 `ReadPointerAt()`、`AddSignedAddress()`、`Read()`、`values()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// RefreshKeyDoorContext 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool RefreshKeyDoorContext(bool* const changed = nullptr) {
         std::unordered_set<std::uint64_t> next_unlocked_key_doors;
         std::uintptr_t player_state{};
