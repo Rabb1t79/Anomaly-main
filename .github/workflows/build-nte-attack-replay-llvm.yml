@@ -1,0 +1,51 @@
+name: Build NteAttackReplay NoVS LLVM
+
+on:
+  push:
+    branches:
+      - nte-attack-replay-novs-20261004
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download LLVM-MinGW 20260922 MSVCRT x64
+        shell: pwsh
+        run: |
+          $url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Expand-Archive "$env:RUNNER_TEMP\llvm-mingw.zip" -DestinationPath "$env:RUNNER_TEMP\llvm"
+          $root = Get-ChildItem "$env:RUNNER_TEMP\llvm" -Directory | Select-Object -First 1
+          "LLVM_ROOT=$($root.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build NteAttackReplay with NoVS tool
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\tools\NteAttackReplay-NoVS\build.ps1 -LlvmRoot "$env:LLVM_ROOT" -SdkRoot "$env:GITHUB_WORKSPACE\Anomaly-2.0.0-sdk"
+
+      - name: Verify package
+        shell: pwsh
+        run: |
+          $pkg = "$env:GITHUB_WORKSPACE\tools\NteAttackReplay-NoVS\out\NteAttackReplay"
+          if (!(Test-Path "$pkg\plugin.dll")) { throw "plugin.dll missing" }
+          if (!(Test-Path "$pkg\manifest.json")) { throw "manifest.json missing" }
+          & "$env:LLVM_ROOT\bin\llvm-readobj.exe" --file-headers "$pkg\plugin.dll"
+          & "$env:LLVM_ROOT\bin\llvm-readobj.exe" --coff-imports "$pkg\plugin.dll"
+          git diff --check HEAD^ HEAD
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $pkg = "$env:GITHUB_WORKSPACE\tools\NteAttackReplay-NoVS\out\NteAttackReplay"
+          Compress-Archive -Path "$pkg\*" -DestinationPath "$env:GITHUB_WORKSPACE\NteAttackReplay-NoVS-LLVM.zip" -Force
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-NoVS-LLVM
+          path: NteAttackReplay-NoVS-LLVM.zip
+          if-no-files-found: error
