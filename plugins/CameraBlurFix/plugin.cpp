@@ -42,7 +42,7 @@ AnomalyStatusV1 Status(const std::uint32_t code,
 }
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// HasField 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool HasField(const Struct *value, const std::size_t offset) noexcept {
   return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -53,7 +53,7 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
   return anomaly::sdk::Host(host).Query<Service>(id, version).get();
 }
 
-// 中文说明：CoreReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// CoreReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
   return HasField<AnomalyCoreServiceV1,
                   decltype(AnomalyCoreServiceV1::read_memory)>(
@@ -64,7 +64,7 @@ bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
          service->read_memory != nullptr && service->write_memory != nullptr;
 }
 
-// 中文说明：SignatureReady()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// SignatureReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
   return HasField<AnomalySignatureServiceV1,
                   decltype(AnomalySignatureServiceV1::resolve)>(
@@ -80,7 +80,7 @@ void Log(Context &context, const std::uint32_t level,
 }
 
 template <typename T>
-// 中文说明：Read()：调用 `CoreReady()`、`read_memory()`，结果用于完成该函数对应的数据处理。
+// Read 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool Read(Context &context, const std::uintptr_t address, T &value) noexcept {
   if (!CoreReady(context.core) || address == 0) return false;
   AnomalyMutableByteSpanV1 destination{
@@ -107,7 +107,7 @@ bool AddAddress(const std::uintptr_t base, const std::uint64_t offset,
   return true;
 }
 
-// 中文说明：ResolveGWorld()：调用 `SignatureReady()`、`resolve()`、`anomaly::sdk::StringView()`、`Read()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// ResolveGWorld 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ResolveGWorld(Context &context) noexcept {
   if (!SignatureReady(context.signature)) return false;
   std::uintptr_t instruction{};
@@ -170,7 +170,7 @@ bool WriteNormalSetting(Context &context, const std::uintptr_t manager,
          WriteAt(context, settings, offset, value);
 }
 
-// 中文说明：RestoreState()：调用 `WriteAt()`、`WriteNormalSetting()`；写入运行时数据，结果用于完成该函数对应的数据处理。
+// RestoreState 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool RestoreState(Context &context) noexcept {
   if (!context.saved_state || context.patched_manager == 0) return true;
   const auto manager = context.patched_manager;
@@ -195,7 +195,7 @@ bool RestoreState(Context &context) noexcept {
   return ok;
 }
 
-// 中文说明：SaveState()：调用 `RestoreState()`、`AddAddress()`、`Read()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// SaveState 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool SaveState(Context &context, const std::uintptr_t manager) noexcept {
   if (context.saved_state && context.patched_manager == manager) return true;
   if (context.saved_state && !RestoreState(context)) return false;
@@ -223,7 +223,7 @@ bool SaveState(Context &context, const std::uintptr_t manager) noexcept {
   return true;
 }
 
-// 中文说明：Apply()：调用 `SaveState()`、`WriteAt()`、`WriteNormalSetting()`、`std::snprintf()`；写入运行时数据，结果用于完成该函数对应的数据处理。
+// Apply 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool Apply(Context &context, const std::uintptr_t manager) noexcept {
   if (!SaveState(context, manager)) return false;
   constexpr float kDisabledDistance = 0.0F;
@@ -253,7 +253,7 @@ bool Apply(Context &context, const std::uintptr_t manager) noexcept {
   return true;
 }
 
-// 中文说明：Load()：调用 `Status()`、`new()`、`Context()`、`CoreReady()`，结果用于完成该函数对应的数据处理。
+// Load 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 Load(const AnomalyHostApiV1 *host, void **plugin_context) {
   if (host == nullptr || plugin_context == nullptr)
     return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -274,7 +274,7 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1 *host, void **plugin_context) {
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：调用 `Status()`、`Log()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// Start 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 Start(void *plugin_context) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -287,14 +287,14 @@ AnomalyStatusV1 Start(void *plugin_context) noexcept {
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `RestoreState()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// Stop 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 Stop(void *plugin_context, std::uint32_t) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context != nullptr) static_cast<void>(RestoreState(*context));
   return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload()：调用 `Stop()`，结果用于完成该函数对应的数据处理。
+// Unload 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void Unload(void *plugin_context) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return;
@@ -302,7 +302,7 @@ void Unload(void *plugin_context) noexcept {
   delete context;
 }
 
-// 中文说明：Update()：调用 `ResolveGWorld()`、`Log()`、`ResolveCameraManager()`、`Apply()`，结果用于完成该函数对应的数据处理。
+// Update 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void Update(void *plugin_context, double) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return;
