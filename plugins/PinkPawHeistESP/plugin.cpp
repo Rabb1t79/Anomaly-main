@@ -277,22 +277,22 @@ std::atomic_bool g_websocket_map_enabled{true};
 std::atomic_bool g_developer_mode{};
 
 template <typename Struct, typename Field>
-// 中文说明：HasField()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// HasField 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 中文说明：Bytes()：调用 `data()`、`size()`，结果用于完成该函数对应的数据处理。
+// Bytes 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
     return {reinterpret_cast<const std::uint8_t*>(value.data()), value.size()};
 }
 
 class SettingsDocumentReader final {
 public:
-// 中文说明：SettingsDocumentReader()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// SettingsDocumentReader 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     explicit SettingsDocumentReader(const std::string_view document) noexcept : document_(document) {}
 
-// 中文说明：Read()：调用 `Consume()`、`ReadString()`、`ReadBoolean()`、`ReadUInt32()`；读取运行时数据，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// Read 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     bool Read(Settings& settings, const std::uint32_t schema_version) noexcept {
         if (!Consume('{')) return false;
 
@@ -411,7 +411,7 @@ public:
     }
 
 private:
-// 中文说明：SkipWhitespace()：调用 `size()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// SkipWhitespace 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     void SkipWhitespace() noexcept {
         while (cursor_ < document_.size()) {
             const char value = document_[cursor_];
@@ -420,7 +420,7 @@ private:
         }
     }
 
-// 中文说明：Consume()：调用 `SkipWhitespace()`、`size()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// Consume 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     bool Consume(const char expected) noexcept {
         SkipWhitespace();
         if (cursor_ == document_.size() || document_[cursor_] != expected) return false;
@@ -428,7 +428,7 @@ private:
         return true;
     }
 
-// 中文说明：ReadString()：调用 `SkipWhitespace()`、`size()`、`substr()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadString 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     bool ReadString(std::string_view& value) noexcept {
         SkipWhitespace();
         if (cursor_ == document_.size() || document_[cursor_] != '"') return false;
@@ -444,7 +444,7 @@ private:
         return false;
     }
 
-// 中文说明：ReadBoolean()：调用 `SkipWhitespace()`、`substr()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadBoolean 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     bool ReadBoolean(bool& value) noexcept {
         SkipWhitespace();
         if (document_.substr(cursor_, 4) == "true") {
@@ -460,7 +460,7 @@ private:
         return false;
     }
 
-// 中文说明：ReadUInt32()：调用 `SkipWhitespace()`、`size()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadUInt32 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     bool ReadUInt32(std::uint32_t& value) noexcept {
         SkipWhitespace();
         if (cursor_ == document_.size()) return false;
@@ -484,7 +484,7 @@ private:
         return true;
     }
 
-// 中文说明：ReadDouble()：调用 `SkipWhitespace()`、`size()`、`std::from_chars()`、`data()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadDouble 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     bool ReadDouble(double& value) noexcept {
         SkipWhitespace();
         const std::size_t start = cursor_;
@@ -540,7 +540,7 @@ private:
     std::size_t cursor_{};
 };
 
-// 中文说明：ConfigMethodsAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// ConfigMethodsAvailable 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool ConfigMethodsAvailable(const AnomalyConfigServiceV1* service) noexcept {
     return service != nullptr &&
         HasField<AnomalyConfigServiceV1, decltype(AnomalyConfigServiceV1::register_schema)>(
@@ -553,7 +553,7 @@ bool ConfigMethodsAvailable(const AnomalyConfigServiceV1* service) noexcept {
         service->write_atomic != nullptr;
 }
 
-// 中文说明：RequestConfiguredWebSocketPort()：调用 `decltype()`、`offsetof()`、`std::clamp()`、`set_port()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// RequestConfiguredWebSocketPort 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool RequestConfiguredWebSocketPort() noexcept {
     const AnomalyWebSocketServiceV1* const websocket = g_context.websocket;
     if (websocket == nullptr || !HasField<AnomalyWebSocketServiceV1,
@@ -569,7 +569,7 @@ bool RequestConfiguredWebSocketPort() noexcept {
         ANOMALY_STATUS_V1_OK;
 }
 
-// 中文说明：CurrentSettings()：调用 `std::clamp()`、`std::isfinite()`，结果用于完成该函数对应的数据处理。
+// CurrentSettings 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 Settings CurrentSettings() noexcept {
     return {
         g_context.menu_open != 0,
@@ -590,7 +590,7 @@ Settings CurrentSettings() noexcept {
             g_context.websocket_port, kMinimumWebSocketPort, kMaximumWebSocketPort)};
 }
 
-// 中文说明：CurrentDisplaySettings()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// CurrentDisplaySettings 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 DisplaySettings CurrentDisplaySettings() noexcept {
     return {
         g_context.enabled != 0,
@@ -603,14 +603,14 @@ DisplaySettings CurrentDisplaySettings() noexcept {
         g_context.minimum_value};
 }
 
-// 中文说明：PublishDisplaySettings()：调用 `store()`、`CurrentDisplaySettings()`，结果用于完成该函数对应的数据处理。
+// PublishDisplaySettings 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void PublishDisplaySettings() {
     g_display_settings.store(
         std::make_shared<const DisplaySettings>(CurrentDisplaySettings()),
         std::memory_order_release);
 }
 
-// 中文说明：ApplySettings()：调用 `std::clamp()`、`std::isfinite()`、`store()`，结果用于完成该函数对应的数据处理。
+// ApplySettings 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ApplySettings(const Settings& settings) noexcept {
     g_context.menu_open = settings.menu_open ? 1 : 0;
     g_context.enabled = settings.enabled ? 1 : 0;
@@ -634,7 +634,7 @@ void ApplySettings(const Settings& settings) noexcept {
     g_context.settings_dirty = false;
 }
 
-// 中文说明：FormatSettingsDouble()：调用 `std::to_chars()`、`std::string()`，结果用于完成该函数对应的数据处理。
+// FormatSettingsDouble 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string FormatSettingsDouble(const double value) {
     char buffer[64]{};
     const auto [end, error] = std::to_chars(
@@ -642,7 +642,7 @@ std::string FormatSettingsDouble(const double value) {
     return error == std::errc{} ? std::string(buffer, end) : "0";
 }
 
-// 中文说明：SerializeSettings()：调用 `CurrentSettings()`、`std::to_string()`、`FormatSettingsDouble()`，结果用于完成该函数对应的数据处理。
+// SerializeSettings 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string SerializeSettings() {
     const Settings settings = CurrentSettings();
     return std::string{"{\"menuOpen\":"} + (settings.menu_open ? "true" : "false") +
@@ -665,7 +665,7 @@ std::string SerializeSettings() {
         ",\"websocketPort\":" + std::to_string(settings.websocket_port) + "}";
 }
 
-// 中文说明：LoadSettings()：调用 `ConfigMethodsAvailable()`、`read()`、`anomaly::sdk::StringView()`、`document()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// LoadSettings 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool LoadSettings() {
     if (!ConfigMethodsAvailable(g_context.config)) return false;
 
@@ -709,7 +709,7 @@ bool LoadSettings() {
     return true;
 }
 
-// 中文说明：SaveSettings()：调用 `ConfigMethodsAvailable()`、`SerializeSettings()`、`write_atomic()`、`anomaly::sdk::StringView()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// SaveSettings 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool SaveSettings() {
     if (!g_context.settings_dirty) return true;
     if (!ConfigMethodsAvailable(g_context.config)) return false;
@@ -723,13 +723,13 @@ bool SaveSettings() {
     return true;
 }
 
-// 中文说明：IsCompleteSnapshot()：调用 `return()`，结果用于完成该函数对应的数据处理。
+// IsCompleteSnapshot 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool IsCompleteSnapshot(const std::uint32_t flags) noexcept {
     return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
         (flags & ANOMALY_NTE_SNAPSHOT_V1_PARTIAL) == 0;
 }
 
-// 中文说明：IsCurrentSnapshot()：调用 `return()`，结果用于完成该函数对应的数据处理。
+// IsCurrentSnapshot 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool IsCurrentSnapshot(const std::uint32_t flags) noexcept {
     return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
         (flags & (ANOMALY_NTE_SNAPSHOT_V1_STALE | ANOMALY_NTE_SNAPSHOT_V1_PARTIAL)) == 0;
@@ -758,7 +758,7 @@ bool AppendLootEntity(
     return true;
 }
 
-// 中文说明：CollectLootOnce()：调用 `host()`、`decltype()`、`get()`、`offsetof()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// CollectLootOnce 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool CollectLootOnce(AnomalyNteEntityFrameV1& frame, std::vector<LootEntity>& loot) {
     const anomaly::sdk::Host host(g_context.host);
     const auto service = host.Query<AnomalyNteEntitiesServiceV1>(
@@ -816,7 +816,7 @@ bool CollectLootOnce(AnomalyNteEntityFrameV1& frame, std::vector<LootEntity>& lo
     }
 }
 
-// 中文说明：CollectLoot()：调用 `CollectLootOnce()`、`std::move()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// CollectLoot 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool CollectLoot(AnomalyNteEntityFrameV1& frame, std::vector<LootEntity>& loot) {
     for (std::size_t attempt = 0; attempt < kCollectionAttempts; ++attempt) {
         AnomalyNteEntityFrameV1 candidate_frame{sizeof(candidate_frame)};
@@ -829,13 +829,13 @@ bool CollectLoot(AnomalyNteEntityFrameV1& frame, std::vector<LootEntity>& loot) 
     return false;
 }
 
-// 中文说明：HasCurrentIdentity()：调用 `return()`，结果用于完成该函数对应的数据处理。
+// HasCurrentIdentity 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool HasCurrentIdentity(const std::uint32_t flags) noexcept {
     return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
         (flags & ANOMALY_NTE_SNAPSHOT_V1_STALE) == 0;
 }
 
-// 中文说明：ExtractionServiceAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// ExtractionServiceAvailable 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool ExtractionServiceAvailable(const AnomalyNteActorsServiceV1* service) noexcept {
     return service != nullptr && service->service_version >= ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION &&
         HasField<AnomalyNteActorsServiceV1,
@@ -1025,7 +1025,7 @@ bool SameHandle(
     return left.id == right.id && left.generation == right.generation;
 }
 
-// 中文说明：CurrentWorld()：调用 `host()`、`decltype()`、`get()`、`offsetof()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// CurrentWorld 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool CurrentWorld(AnomalyGenerationHandleV1& world) {
     if (g_context.host == nullptr) return false;
     const anomaly::sdk::Host host(g_context.host);
@@ -1052,7 +1052,7 @@ bool CurrentWorld(AnomalyGenerationHandleV1& world) {
 
 std::string BuildExtractionLabel(const ExtractionPoint& point);
 
-// 中文说明：PublishExtractionSnapshotLocked()：调用 `BuildExtractionLabel()`、`store()`、`std::move()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// PublishExtractionSnapshotLocked 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void PublishExtractionSnapshotLocked() {
     auto snapshot = std::make_shared<ExtractionDisplaySnapshot>();
     snapshot->available = g_extractions.available;
@@ -1063,7 +1063,7 @@ void PublishExtractionSnapshotLocked() {
     g_extraction_snapshot.store(std::move(snapshot), std::memory_order_release);
 }
 
-// 中文说明：ResetExtractionData()：调用 `clear()`，结果用于完成该函数对应的数据处理。
+// ResetExtractionData 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ResetExtractionData() noexcept {
     g_extractions.frame = AnomalyNteEntityFrameV1{sizeof(g_extractions.frame)};
     g_extractions.points.clear();
@@ -1074,7 +1074,7 @@ void ResetExtractionData() noexcept {
     g_extractions.next_state_refresh = {};
 }
 
-// 中文说明：RefreshExtractionCacheIfDue()：调用 `Clock::now()`、`exchange()`、`lock()`、`CurrentWorld()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// RefreshExtractionCacheIfDue 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void RefreshExtractionCacheIfDue() {
     const Clock::time_point now = Clock::now();
     const bool forced =
@@ -1175,7 +1175,7 @@ void RefreshExtractionCacheIfDue() {
     }
 }
 
-// 中文说明：ClearExtractionCache()：调用 `lock()`、`ResetExtractionData()`、`store()`，结果用于完成该函数对应的数据处理。
+// ClearExtractionCache 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ClearExtractionCache() noexcept {
     std::scoped_lock lock(g_extractions.mutex);
     ResetExtractionData();
@@ -1186,7 +1186,7 @@ void ClearExtractionCache() noexcept {
     g_extraction_snapshot.store({}, std::memory_order_release);
 }
 
-// 中文说明：ClearCache()：调用 `store()`、`Clear()`、`Reset()`，结果用于完成该函数对应的数据处理。
+// ClearCache 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ClearCache() noexcept {
     g_loot_cache.store({}, std::memory_order_release);
     g_loot_refresh_requested.store(true, std::memory_order_release);
@@ -1225,7 +1225,7 @@ bool SameLootState(
     return true;
 }
 
-// 中文说明：RefreshCacheIfDue()：调用 `Clock::now()`、`exchange()`、`Begin()`、`load()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// RefreshCacheIfDue 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void RefreshCacheIfDue() {
     const Clock::time_point now = Clock::now();
     const bool forced =
@@ -1281,7 +1281,7 @@ struct KnownLootValidationChange final {
     pink_paw_heist_esp::KnownLootValidationState state;
 };
 
-// 中文说明：RefreshKnownLootIfDue()：调用 `Clock::now()`、`Available()`、`DiscoveryPending()`、`Refresh()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// RefreshKnownLootIfDue 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void RefreshKnownLootIfDue() {
     const Clock::time_point now = Clock::now();
     bool validate_all{};
@@ -1360,7 +1360,7 @@ bool PassesItemFilters(
         entry.rob_bank.fons_value >= settings.minimum_value;
 }
 
-// 中文说明：IsPickable()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// IsPickable 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool IsPickable(const LootEntity& entry) noexcept {
     return entry.rob_bank.pickability ==
         pink_paw_heist_esp::RobBankPickability::candidate;
@@ -1379,7 +1379,7 @@ bool IsVisibleLoot(
             entry.rob_bank.pickability, settings.show_pickable_only));
 }
 
-// 中文说明：FormatValue()：调用 `std::to_string()`、`reserve()`、`size()`、`push_back()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// FormatValue 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string FormatValue(const std::uint32_t value) {
     const std::string digits = std::to_string(value);
     std::string formatted;
@@ -1391,7 +1391,7 @@ std::string FormatValue(const std::uint32_t value) {
     return formatted;
 }
 
-// 中文说明：FormatCoordinate()：调用 `std::isfinite()`、`std::to_string()`、`std::llround()`，结果用于完成该函数对应的数据处理。
+// FormatCoordinate 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string FormatCoordinate(const double value) {
     if (!std::isfinite(value) ||
         value < static_cast<double>((std::numeric_limits<std::int64_t>::min)()) ||
@@ -1401,38 +1401,38 @@ std::string FormatCoordinate(const double value) {
     return std::to_string(std::llround(value));
 }
 
-// 中文说明：BuildWorldCoordinates()：调用 `FormatCoordinate()`，结果用于完成该函数对应的数据处理。
+// BuildWorldCoordinates 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string BuildWorldCoordinates(const AnomalyNteEntitySnapshotV1& snapshot) {
     return "X: " + FormatCoordinate(snapshot.bounds_center[0]) +
         "  Y: " + FormatCoordinate(snapshot.bounds_center[1]) +
         "  Z: " + FormatCoordinate(snapshot.bounds_center[2]);
 }
 
-// 中文说明：BuildWorldCoordinates()：调用 `BuildWorldCoordinates()`，结果用于完成该函数对应的数据处理。
+// BuildWorldCoordinates 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string BuildWorldCoordinates(const LootEntity& entry) {
     return BuildWorldCoordinates(entry.snapshot);
 }
 
-// 中文说明：LootDisplayName()：调用 `empty()`，结果用于完成该函数对应的数据处理。
+// LootDisplayName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string LootDisplayName(const LootEntity& entry) {
     return entry.rob_bank.name_utf8.empty()
         ? entry.class_name
         : entry.rob_bank.name_utf8;
 }
 
-// 中文说明：FonsValueText()：调用 `FormatValue()`，结果用于完成该函数对应的数据处理。
+// FonsValueText 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string FonsValueText(const LootEntity& entry) {
     if (entry.rob_bank.is_access_card) return "-";
     return FormatValue(entry.rob_bank.fons_value);
 }
 
-// 中文说明：PinkPawCoinValueText()：调用 `FormatValue()`，结果用于完成该函数对应的数据处理。
+// PinkPawCoinValueText 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string PinkPawCoinValueText(const LootEntity& entry) {
     if (entry.rob_bank.is_access_card) return "-";
     return FormatValue(entry.rob_bank.pink_paw_coin_value);
 }
 
-// 中文说明：BuildLootLabel()：调用 `BuildWorldCoordinates()`、`LootDisplayName()`、`std::string_view()`、`Format()`，结果用于完成该函数对应的数据处理。
+// BuildLootLabel 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string BuildLootLabel(const LootEntity& entry) {
     const std::string coordinates = BuildWorldCoordinates(entry);
     if (!entry.rob_bank.item_resolved && !entry.rob_bank.is_access_card) return {};
@@ -1452,7 +1452,7 @@ std::string BuildLootLabel(const LootEntity& entry) {
         "loot.label", "{0}\nFons {1}\nPink Paw Coin {2}\n{3}", arguments);
 }
 
-// 中文说明：RainbowColor()：调用 `Clock::now()`、`time_since_epoch()`、`count()`、`std::fmod()`，结果用于完成该函数对应的数据处理。
+// RainbowColor 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::uint32_t RainbowColor(const std::uint64_t phase_offset) noexcept {
     constexpr double kCycleSeconds = 2.0;
     constexpr double kHueSectors = 6.0;
@@ -1480,7 +1480,7 @@ std::uint32_t RainbowColor(const std::uint64_t phase_offset) noexcept {
     }
 }
 
-// 中文说明：LootColor()：调用 `ANOMALY_RGBA_V1()`、`RainbowColor()`，结果用于完成该函数对应的数据处理。
+// LootColor 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::uint32_t LootColor(const LootEntity& entry) noexcept {
     if (entry.rob_bank.is_access_card) return ANOMALY_RGBA_V1(255, 102, 0, 255);
     if (!entry.rob_bank.item_resolved) return ANOMALY_RGBA_V1(170, 170, 170, 255);
@@ -1519,14 +1519,14 @@ std::vector<const LootEntity*> CollectVisibleLoot(
     return visible;
 }
 
-// 中文说明：Text()：调用 `text()`、`anomaly::sdk::StringView()`，结果用于完成该函数对应的数据处理。
+// Text 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void Text(const AnomalyUiServiceV1* ui, const std::string_view value) {
     if (ui != nullptr && ui->text != nullptr) {
         ui->text(ui->user, anomaly::sdk::StringView(value));
     }
 }
 
-// 中文说明：Checkbox()：调用 `checkbox()`、`anomaly::sdk::StringView()`，结果用于完成该函数对应的数据处理。
+// Checkbox 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool Checkbox(const AnomalyUiServiceV1* ui, const std::string_view label, int* value) {
     return ui != nullptr && ui->checkbox != nullptr &&
         ui->checkbox(ui->user, anomaly::sdk::StringView(label), value) != 0;
@@ -1539,7 +1539,7 @@ bool Button(
         ui->button(ui->user, anomaly::sdk::StringView(label), width, height) != 0;
 }
 
-// 中文说明：DeveloperModeEnabled()：调用 `decltype()`、`offsetof()`、`developer_mode_enabled()`，结果用于完成该函数对应的数据处理。
+// DeveloperModeEnabled 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1,
                   decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -1548,7 +1548,7 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
          ui->developer_mode_enabled(ui->user) != 0;
 }
 
-// 中文说明：ButtonEnabledUi()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// ButtonEnabledUi 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const AnomalyUiServiceV1* ButtonEnabledUi(const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr || ui->service_version != ANOMALY_UI_SERVICE_V1_VERSION) return nullptr;
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::button_enabled)>(
@@ -1565,7 +1565,7 @@ bool ButtonEnabled(
         button_ui->user, anomaly::sdk::StringView(label), width, height, enabled ? 1 : 0) != 0;
 }
 
-// 中文说明：UInt32InputUi()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// UInt32InputUi 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const AnomalyUiServiceV1* UInt32InputUi(const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr || ui->service_version != ANOMALY_UI_SERVICE_V1_VERSION) return nullptr;
     const bool available =
@@ -1583,7 +1583,7 @@ bool InputUInt32(
         input_ui->user, anomaly::sdk::StringView(label), value, step, step_fast) != 0;
 }
 
-// 中文说明：DoubleInputUi()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// DoubleInputUi 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const AnomalyUiServiceV1* DoubleInputUi(const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr || ui->service_version != ANOMALY_UI_SERVICE_V1_VERSION) return nullptr;
     const bool available =
@@ -1601,7 +1601,7 @@ bool InputDouble(
         input_ui->user, anomaly::sdk::StringView(label), value, step, step_fast) != 0;
 }
 
-// 中文说明：StatusCode()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// StatusCode 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 constexpr AnomalyStatusV1 StatusCode(const std::uint32_t code) noexcept {
     return {code, 0, {}};
 }
@@ -1611,7 +1611,7 @@ struct ServiceQuery final {
     const Service* service{};
     AnomalyStatusV1 status{StatusCode(ANOMALY_STATUS_V1_UNAVAILABLE)};
 
-// 中文说明：bool()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// bool 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] explicit operator bool() const noexcept { return service != nullptr; }
 };
 
@@ -1641,14 +1641,14 @@ ServiceQuery<Service> QueryService(
     return {service, StatusCode(ANOMALY_STATUS_V1_OK)};
 }
 
-// 中文说明：DeveloperModeEnabled()：调用 `DeveloperModeEnabled()`，结果用于完成该函数对应的数据处理。
+// DeveloperModeEnabled 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool DeveloperModeEnabled(const AnomalyHostApiV1* host) noexcept {
     const auto ui = QueryService<AnomalyUiServiceV1>(
         host, ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION);
     return ui && DeveloperModeEnabled(ui.service);
 }
 
-// 中文说明：StatusName()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// StatusName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const char* StatusName(const std::uint32_t code) noexcept {
     switch (code) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -1665,27 +1665,27 @@ const char* StatusName(const std::uint32_t code) noexcept {
     }
 }
 
-// 中文说明：IsCurrentWorld()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// IsCurrentWorld 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool IsCurrentWorld(const AnomalyNteSessionSnapshotV1& snapshot) noexcept {
     return snapshot.struct_size >= sizeof(snapshot) &&
         snapshot.state == ANOMALY_NTE_SESSION_V1_WORLD_READY &&
         snapshot.world.id != 0 && snapshot.world.generation != 0;
 }
 
-// 中文说明：IsCurrentPlayer()：调用 `IsCurrentSnapshot()`，结果用于完成该函数对应的数据处理。
+// IsCurrentPlayer 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool IsCurrentPlayer(const AnomalyNtePlayerSnapshotV1& snapshot) noexcept {
     return snapshot.struct_size >= sizeof(snapshot) &&
         IsCurrentSnapshot(snapshot.flags) && snapshot.handle.id != 0 &&
         snapshot.handle.generation != 0;
 }
 
-// 中文说明：IsFinitePosition()：调用 `std::isfinite()`，结果用于完成该函数对应的数据处理。
+// IsFinitePosition 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool IsFinitePosition(const double position[3]) noexcept {
     return std::isfinite(position[0]) && std::isfinite(position[1]) &&
         std::isfinite(position[2]);
 }
 
-// 中文说明：AppendJsonString()：调用 `push_back()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// AppendJsonString 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void AppendJsonString(std::string& output, const std::string_view value) {
     constexpr std::string_view kHex = "0123456789abcdef";
     output.push_back('"');
@@ -1712,7 +1712,7 @@ void AppendJsonString(std::string& output, const std::string_view value) {
     output.push_back('"');
 }
 
-// 中文说明：AppendJsonNumber()：调用 `std::isfinite()`、`std::to_chars()`、`data()`、`size()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// AppendJsonNumber 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool AppendJsonNumber(std::string& output, const double value) {
     if (!std::isfinite(value)) return false;
     std::array<char, 64> buffer{};
@@ -1724,14 +1724,14 @@ bool AppendJsonNumber(std::string& output, const double value) {
     return true;
 }
 
-// 中文说明：AppendJsonUnsigned()：调用 `std::to_chars()`、`data()`、`size()`、`append()`，结果用于完成该函数对应的数据处理。
+// AppendJsonUnsigned 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void AppendJsonUnsigned(std::string& output, const std::uint64_t value) {
     std::array<char, 32> buffer{};
     const auto [end, error] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (error == std::errc{}) output.append(buffer.data(), end);
 }
 
-// 中文说明：BuildMapLootItemJson()：调用 `reserve()`、`size()`、`AppendJsonString()`、`AppendJsonUnsigned()`；把结果追加到输出容器，结果用于完成该函数对应的数据处理。
+// BuildMapLootItemJson 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string BuildMapLootItemJson(const LootEntity& entry, const std::string_view id) {
     std::string output;
     output.reserve(384U + entry.class_name.size() + entry.rob_bank.name_utf8.size());
@@ -1775,7 +1775,7 @@ std::string BuildMapLootItemJson(const LootEntity& entry, const std::string_view
     return output;
 }
 
-// 中文说明：BuildMapLootItems()：调用 `reserve()`、`size()`、`std::to_string()`、`push_back()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// BuildMapLootItems 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::vector<MapLootItem> BuildMapLootItems(const LootCache& cache) {
     std::vector<MapLootItem> items;
     items.reserve(cache.loot.size());
@@ -1800,7 +1800,7 @@ bool SameMapLootItems(
     return true;
 }
 
-// 中文说明：PublishMapText()：调用 `publish_text()`、`anomaly::sdk::StringView()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// PublishMapText 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool PublishMapText(const std::string_view text) noexcept {
     const AnomalyWebSocketServiceV1* const websocket = g_context.websocket;
     if (websocket == nullptr || websocket->publish_text == nullptr) return false;
@@ -1809,7 +1809,7 @@ bool PublishMapText(const std::string_view text) noexcept {
     return status.code == ANOMALY_STATUS_V1_OK;
 }
 
-// 中文说明：NewMapClientConnected()：调用 `decltype()`、`offsetof()`、`server_info()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// NewMapClientConnected 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool NewMapClientConnected() noexcept {
     const AnomalyWebSocketServiceV1* const websocket = g_context.websocket;
     if (websocket == nullptr || !HasField<AnomalyWebSocketServiceV1,
@@ -1827,13 +1827,13 @@ bool NewMapClientConnected() noexcept {
     return increased;
 }
 
-// 中文说明：MapTimestamp()：调用 `std::chrono::system_clock::now()`、`time_since_epoch()`、`count()`，结果用于完成该函数对应的数据处理。
+// MapTimestamp 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 double MapTimestamp() noexcept {
     return std::chrono::duration<double>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-// 中文说明：BuildNavigationStateJson()：调用 `reserve()`、`AppendJsonNumber()`、`MapTimestamp()`、`push_back()`；把结果追加到输出容器，结果用于完成该函数对应的数据处理。
+// BuildNavigationStateJson 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string BuildNavigationStateJson(const AnomalyNtePlayerSnapshotV1& player) {
     std::string output;
     output.reserve(192U);
@@ -1849,7 +1849,7 @@ std::string BuildNavigationStateJson(const AnomalyNtePlayerSnapshotV1& player) {
     return output;
 }
 
-// 中文说明：BuildNavigationClearJson()：调用 `AppendJsonNumber()`、`MapTimestamp()`、`push_back()`；把结果追加到输出容器，结果用于完成该函数对应的数据处理。
+// BuildNavigationClearJson 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string BuildNavigationClearJson() {
     std::string output{"{\"type\":\"navi-state\",\"version\":1,\"position\":null,"
                        "\"angle\":null,\"angleConfidence\":0,\"timestamp\":"};
@@ -1858,7 +1858,7 @@ std::string BuildNavigationClearJson() {
     return output;
 }
 
-// 中文说明：BuildLootSnapshotChunkEnds()：调用 `empty()`、`push_back()`、`size()`；把结果追加到输出容器，遍历输入集合，结果用于完成该函数对应的数据处理。
+// BuildLootSnapshotChunkEnds 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::vector<std::size_t> BuildLootSnapshotChunkEnds(const std::vector<MapLootItem>& items) {
     std::vector<std::size_t> ends;
     if (items.empty()) {
@@ -1907,7 +1907,7 @@ std::string BuildLootSnapshotChunkJson(
     return output;
 }
 
-// 中文说明：CancelLootSnapshot()：调用 `clear()`，结果用于完成该函数对应的数据处理。
+// CancelLootSnapshot 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void CancelLootSnapshot() noexcept {
     MapLootSnapshotTransfer& snapshot = g_map_sync.snapshot;
     snapshot.chunk_ends.clear();
@@ -1917,7 +1917,7 @@ void CancelLootSnapshot() noexcept {
     snapshot.active = false;
 }
 
-// 中文说明：BeginLootSnapshot()：调用 `BuildLootSnapshotChunkEnds()`、`std::move()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// BeginLootSnapshot 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool BeginLootSnapshot(const Clock::time_point now) {
     std::vector<std::size_t> chunk_ends;
     try {
@@ -1939,7 +1939,7 @@ bool BeginLootSnapshot(const Clock::time_point now) {
     return true;
 }
 
-// 中文说明：PublishNextLootSnapshotChunk()：调用 `size()`、`CancelLootSnapshot()`、`PublishMapText()`、`BuildLootSnapshotChunkJson()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// PublishNextLootSnapshotChunk 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool PublishNextLootSnapshotChunk(const Clock::time_point now) {
     MapLootSnapshotTransfer& snapshot = g_map_sync.snapshot;
     if (!snapshot.active || now < snapshot.next_chunk_publish) return false;
@@ -1979,7 +1979,7 @@ bool PublishNextLootSnapshotChunk(const Clock::time_point now) {
     return true;
 }
 
-// 中文说明：PublishLootDelta()：调用 `size()`、`push_back()`、`empty()`、`AppendJsonUnsigned()`；把结果追加到输出容器，遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// PublishLootDelta 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool PublishLootDelta() {
     std::vector<const MapLootItem*> upserts;
     std::vector<std::string_view> removed;
@@ -2030,7 +2030,7 @@ bool PublishLootDelta() {
     return true;
 }
 
-// 中文说明：FlushMapClear()：调用 `CancelLootSnapshot()`、`PublishMapText()`、`BuildNavigationClearJson()`、`reset()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// FlushMapClear 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool FlushMapClear() {
     if (!g_map_sync.clear_pending) return true;
     CancelLootSnapshot();
@@ -2045,7 +2045,7 @@ bool FlushMapClear() {
     return true;
 }
 
-// 中文说明：RequestMapClear()：调用 `CancelLootSnapshot()`，结果用于完成该函数对应的数据处理。
+// RequestMapClear 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void RequestMapClear() noexcept {
     g_map_sync.active = false;
     g_map_sync.clear_pending = true;
@@ -2054,7 +2054,7 @@ void RequestMapClear() noexcept {
     g_map_sync.next_snapshot_publish = {};
 }
 
-// 中文说明：SynchronizeMap()：调用 `FlushMapClear()`、`NewMapClientConnected()`、`Clock::now()`、`PublishMapText()`，结果用于完成该函数对应的数据处理。
+// SynchronizeMap 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void SynchronizeMap(const AnomalyNtePlayerSnapshotV1* const player) {
     if (!FlushMapClear()) return;
     if (!g_map_sync.active) {
@@ -2111,7 +2111,7 @@ void SynchronizeMap(const AnomalyNtePlayerSnapshotV1* const player) {
     }
 }
 
-// 中文说明：SynchronizeMapIfPossible()：调用 `load()`、`RequestMapClear()`、`FlushMapClear()`、`decltype()`，结果用于完成该函数对应的数据处理。
+// SynchronizeMapIfPossible 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void SynchronizeMapIfPossible() noexcept {
     if (g_context.websocket == nullptr || g_context.host == nullptr) return;
     try {
@@ -2139,7 +2139,7 @@ void SynchronizeMapIfPossible() noexcept {
     }
 }
 
-// 中文说明：RecordTeleportResult()：调用 `lock()`、`std::memcpy()`，结果用于完成该函数对应的数据处理。
+// RecordTeleportResult 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void RecordTeleportResult(const AnomalyStatusV1 status) noexcept {
     std::scoped_lock lock(g_teleport.mutex);
     g_teleport.has_result = true;
@@ -2152,7 +2152,7 @@ void RecordTeleportResult(const AnomalyStatusV1 status) noexcept {
     g_teleport.result_message[count] = '\0';
 }
 
-// 中文说明：RecordPickupResult()：调用 `lock()`、`std::memcpy()`，结果用于完成该函数对应的数据处理。
+// RecordPickupResult 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void RecordPickupResult(const AnomalyStatusV1 status) noexcept {
     std::scoped_lock lock(g_pickup.mutex);
     g_pickup.has_result = true;
@@ -2179,7 +2179,7 @@ void QueueTeleport(
     g_teleport.result_message[0] = '\0';
 }
 
-// 中文说明：TryQueueTeleport()：调用 `load()`、`RecordTeleportResult()`、`StatusCode()`、`IsFinitePosition()`，结果用于完成该函数对应的数据处理。
+// TryQueueTeleport 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void TryQueueTeleport(const AnomalyNteEntitySnapshotV1& snapshot) {
     if (!g_developer_mode.load(std::memory_order_acquire)) {
         RecordTeleportResult(StatusCode(ANOMALY_STATUS_V1_PERMISSION_DENIED));
@@ -2235,7 +2235,7 @@ void TryQueueTeleport(const AnomalyNteEntitySnapshotV1& snapshot) {
     QueueTeleport(session_snapshot, player_snapshot, position);
 }
 
-// 中文说明：TryQueueTeleport()：调用 `TryQueueTeleport()`，结果用于完成该函数对应的数据处理。
+// TryQueueTeleport 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void TryQueueTeleport(const LootEntity& entry) {
     TryQueueTeleport(entry.snapshot);
 }
@@ -2250,7 +2250,7 @@ void QueuePickup(
     g_pickup.result_message[0] = '\0';
 }
 
-// 中文说明：TryQueuePickup()：调用 `IsCompleteSnapshot()`、`IsPickable()`、`Valid()`、`RecordPickupResult()`，结果用于完成该函数对应的数据处理。
+// TryQueuePickup 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void TryQueuePickup(const LootEntity& entry) {
     if (!IsCompleteSnapshot(entry.snapshot.flags) || !IsPickable(entry) ||
         !entry.rob_bank.entity.Valid()) {
@@ -2267,7 +2267,7 @@ bool SameRobBankEntity(
         left.object_serial == right.object_serial;
 }
 
-// 中文说明：AutoTargetAttempted()：调用 `std::ranges::any_of()`、`SameRobBankEntity()`，结果用于完成该函数对应的数据处理。
+// AutoTargetAttempted 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool AutoTargetAttempted(const pink_paw_heist_esp::RobBankEntity entity) noexcept {
     return std::ranges::any_of(
         g_auto_teleport_pickup.attempted,
@@ -2276,7 +2276,7 @@ bool AutoTargetAttempted(const pink_paw_heist_esp::RobBankEntity entity) noexcep
         });
 }
 
-// 中文说明：FinishAutoTarget()：调用 `Valid()`、`AutoTargetAttempted()`、`push_back()`；把结果追加到输出容器，结果用于完成该函数对应的数据处理。
+// FinishAutoTarget 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void FinishAutoTarget() {
     if (g_auto_teleport_pickup.entity.Valid() &&
         !AutoTargetAttempted(g_auto_teleport_pickup.entity)) {
@@ -2289,7 +2289,7 @@ void FinishAutoTarget() {
     g_auto_teleport_pickup.pickup_due = {};
 }
 
-// 中文说明：ProcessAutoTeleportPickup()：调用 `load()`、`DeveloperModeEnabled()`、`Clock::now()`、`lock()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// ProcessAutoTeleportPickup 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ProcessAutoTeleportPickup() {
     if (!g_developer_mode.load(std::memory_order_acquire) ||
         !DeveloperModeEnabled(g_context.host) ||
@@ -2379,7 +2379,7 @@ void ProcessAutoTeleportPickup() {
     }
 }
 
-// 中文说明：DrawTeleportStatus()：调用 `lock()`、`std::memcpy()`、`Text()`、`StatusName()`，结果用于完成该函数对应的数据处理。
+// DrawTeleportStatus 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void DrawTeleportStatus(const AnomalyUiServiceV1* ui) {
     bool queued{};
     bool has_result{};
@@ -2408,7 +2408,7 @@ void DrawTeleportStatus(const AnomalyUiServiceV1* ui) {
     }
 }
 
-// 中文说明：DrawPickupStatus()：调用 `lock()`、`std::memcpy()`、`Text()`、`StatusName()`，结果用于完成该函数对应的数据处理。
+// DrawPickupStatus 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void DrawPickupStatus(const AnomalyUiServiceV1* ui) {
     bool queued{};
     bool has_result{};
@@ -2437,7 +2437,7 @@ void DrawPickupStatus(const AnomalyUiServiceV1* ui) {
     }
 }
 
-// 中文说明：TableUi()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// TableUi 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const AnomalyUiServiceV1* TableUi(const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr || ui->service_version != ANOMALY_UI_SERVICE_V1_VERSION) return nullptr;
     const bool complete =
@@ -2454,7 +2454,7 @@ const AnomalyUiServiceV1* TableUi(const AnomalyUiServiceV1* ui) noexcept {
     return complete ? ui : nullptr;
 }
 
-// 中文说明：ChildUi()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// ChildUi 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const AnomalyUiServiceV1* ChildUi(const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr || ui->service_version != ANOMALY_UI_SERVICE_V1_VERSION) return nullptr;
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_child)>(
@@ -2466,7 +2466,7 @@ const AnomalyUiServiceV1* ChildUi(const AnomalyUiServiceV1* ui) noexcept {
         : nullptr;
 }
 
-// 中文说明：InlineLayoutUi()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// InlineLayoutUi 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const AnomalyUiServiceV1* InlineLayoutUi(const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr || ui->service_version != ANOMALY_UI_SERVICE_V1_VERSION) return nullptr;
     const bool complete =
@@ -2481,7 +2481,7 @@ const AnomalyUiServiceV1* InlineLayoutUi(const AnomalyUiServiceV1* ui) noexcept 
     return complete ? ui : nullptr;
 }
 
-// 中文说明：TextLinkUi()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// TextLinkUi 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 const AnomalyUiServiceV1* TextLinkUi(const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr || ui->service_version != ANOMALY_UI_SERVICE_V1_VERSION) return nullptr;
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::text_link)>(
@@ -2491,7 +2491,7 @@ const AnomalyUiServiceV1* TextLinkUi(const AnomalyUiServiceV1* ui) noexcept {
         : nullptr;
 }
 
-// 中文说明：DrawWebSocketInstructions()：调用 `Text()`、`InlineLayoutUi()`、`TextLinkUi()`、`same_line()`，结果用于完成该函数对应的数据处理。
+// DrawWebSocketInstructions 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void DrawWebSocketInstructions(const AnomalyUiServiceV1* ui) {
     constexpr std::string_view kMapUrl = "https://pph.maante.org/";
     const std::string prefix = g_context.localizer.Text(
@@ -2699,7 +2699,7 @@ void DrawLootPagination(
     for (const PaginationAction& action : actions) draw_action(action);
 }
 
-// 中文说明：ExtractionActivationText()：调用 `Text()`，结果用于完成该函数对应的数据处理。
+// ExtractionActivationText 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string ExtractionActivationText(const ExtractionActivation activation) {
     switch (activation) {
     case ExtractionActivation::active:
@@ -2711,7 +2711,7 @@ std::string ExtractionActivationText(const ExtractionActivation activation) {
     }
 }
 
-// 中文说明：BuildExtractionLabel()：调用 `ExtractionActivationText()`、`BuildWorldCoordinates()`、`std::string_view()`、`Format()`，结果用于完成该函数对应的数据处理。
+// BuildExtractionLabel 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string BuildExtractionLabel(const ExtractionPoint& point) {
     const std::string activation = ExtractionActivationText(point.activation);
     const std::string coordinates = BuildWorldCoordinates(point.snapshot);
@@ -2722,7 +2722,7 @@ std::string BuildExtractionLabel(const ExtractionPoint& point) {
         "extraction.label", "Extraction {0}\n{1}\n{2}", arguments);
 }
 
-// 中文说明：ExtractionColor()：调用 `ANOMALY_RGBA_V1()`，结果用于完成该函数对应的数据处理。
+// ExtractionColor 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::uint32_t ExtractionColor(const ExtractionActivation activation) noexcept {
     switch (activation) {
     case ExtractionActivation::active: return ANOMALY_RGBA_V1(0, 255, 0, 255);
@@ -2803,7 +2803,7 @@ void DrawExtractionRows(
     }
 }
 
-// 中文说明：DrawMenu()：调用 `DeveloperModeEnabled()`、`store()`、`set_next_window_size()`、`Label()`，结果用于完成该函数对应的数据处理。
+// DrawMenu 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void DrawMenu(const AnomalyUiServiceV1* ui, const LootCache& loot_cache) {
     if (ui == nullptr || ui->begin_window == nullptr || ui->end_window == nullptr) return;
     const bool developer_mode = DeveloperModeEnabled(ui);
@@ -2995,7 +2995,7 @@ void DrawMenu(const AnomalyUiServiceV1* ui, const LootCache& loot_cache) {
     ui->end_window(ui->user);
 }
 
-// 中文说明：AhudServiceAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// AhudServiceAvailable 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool AhudServiceAvailable(const AnomalyUe5AhudServiceV1* service) noexcept {
     return service != nullptr &&
         HasField<AnomalyUe5AhudServiceV1,
@@ -3011,7 +3011,7 @@ bool AhudServiceAvailable(const AnomalyUe5AhudServiceV1* service) noexcept {
         service->subscribe != nullptr && service->unsubscribe != nullptr;
 }
 
-// 中文说明：AhudFrameAvailable()：调用 `decltype()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// AhudFrameAvailable 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool AhudFrameAvailable(const AnomalyUe5AhudFrameV1* frame) noexcept {
     return frame != nullptr &&
         HasField<AnomalyUe5AhudFrameV1,
@@ -3210,7 +3210,7 @@ void ANOMALY_CALL DrawAhud(
     }
 }
 
-// 中文说明：SubscribeAhud()：调用 `AhudServiceAvailable()`、`subscribe()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// SubscribeAhud 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 SubscribeAhud() noexcept {
     if (!AhudServiceAvailable(g_context.ahud)) {
         return {ANOMALY_STATUS_V1_UNAVAILABLE, 0, {}};
@@ -3226,7 +3226,7 @@ AnomalyStatusV1 SubscribeAhud() noexcept {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：UnsubscribeAhud()：调用 `anomaly::sdk::Ok()`、`AhudServiceAvailable()`、`unsubscribe()`，结果用于完成该函数对应的数据处理。
+// UnsubscribeAhud 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 UnsubscribeAhud() noexcept {
     if (g_ahud_subscription.id == 0) return anomaly::sdk::Ok();
     const AnomalyGenerationHandleV1 handle = g_ahud_subscription;
@@ -3244,7 +3244,7 @@ AnomalyStatusV1 UnsubscribeAhud() noexcept {
     return status;
 }
 
-// 中文说明：Load()：调用 `host_view()`、`decltype()`、`get()`、`offsetof()`，结果用于完成该函数对应的数据处理。
+// Load 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     *context = nullptr;
@@ -3318,7 +3318,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：调用 `store()`、`lock()`、`Start()`、`Reset()`，结果用于完成该函数对应的数据处理。
+// Start 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     g_developer_mode.store(false, std::memory_order_release);
     {
@@ -3352,7 +3352,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `store()`、`UnsubscribeAhud()`、`SaveSettings()`、`Reset()`，结果用于完成该函数对应的数据处理。
+// Stop 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     g_developer_mode.store(false, std::memory_order_release);
     const AnomalyStatusV1 ahud_status = UnsubscribeAhud();
@@ -3375,7 +3375,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
                  : AnomalyStatusV1{ANOMALY_STATUS_V1_FAILED, 0, {}};
 }
 
-// 中文说明：Unload()：调用 `store()`、`UnsubscribeAhud()`、`Reset()`、`RequestMapClear()`，结果用于完成该函数对应的数据处理。
+// Unload 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ANOMALY_CALL Unload(void*) {
     g_developer_mode.store(false, std::memory_order_release);
     static_cast<void>(UnsubscribeAhud());
@@ -3409,7 +3409,7 @@ void ANOMALY_CALL Unload(void*) {
     g_context = {};
 }
 
-// 中文说明：ProcessPendingTeleport()：调用 `lock()`、`load()`、`DeveloperModeEnabled()`、`RecordTeleportResult()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// ProcessPendingTeleport 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ProcessPendingTeleport() {
     PendingTeleport pending{};
     const AnomalyHostApiV1* host{};
@@ -3451,7 +3451,7 @@ void ProcessPendingTeleport() {
     RecordTeleportResult(teleport.service->teleport(teleport.service->user, &request));
 }
 
-// 中文说明：ProcessPendingPickup()：调用 `lock()`、`load()`、`DeveloperModeEnabled()`、`RecordPickupResult()`，结果用于完成该函数对应的数据处理。
+// ProcessPendingPickup 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ProcessPendingPickup() {
     PendingPickup pending{};
     const AnomalyHostApiV1* host{};
@@ -3512,7 +3512,7 @@ void ProcessPendingPickup() {
     }
 }
 
-// 中文说明：Update()：调用 `exchange()`、`Invalidate()`、`Refresh()`、`store()`，结果用于完成该函数对应的数据处理。
+// Update 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ANOMALY_CALL Update(void*, double) {
     if (g_world_gate_refresh_requested.exchange(false, std::memory_order_acq_rel)) {
         g_world_gate.Invalidate();
@@ -3546,7 +3546,7 @@ void ANOMALY_CALL Update(void*, double) {
     ProcessAutoTeleportPickup();
 }
 
-// 中文说明：Draw()：调用 `load()`、`DrawMenu()`，结果用于完成该函数对应的数据处理。
+// Draw 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
     const auto cache = g_loot_cache.load(std::memory_order_acquire);
     const LootCache empty;
