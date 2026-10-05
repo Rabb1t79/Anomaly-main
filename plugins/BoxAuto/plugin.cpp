@@ -171,6 +171,7 @@ struct Point final {
     std::string category;
 };
 
+// 中文说明：IsExcludedShopPoint() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool IsExcludedShopPoint(const std::string_view row_name) noexcept {
     return row_name == kShopExcludedPointB018 ||
         row_name == kShopExcludedPointA033;
@@ -327,10 +328,12 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// 中文说明：SignatureReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
     return HasField<AnomalySignatureServiceV1,
                decltype(AnomalySignatureServiceV1::resolve)>(
@@ -338,6 +341,7 @@ bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
         s->resolve != nullptr;
 }
 
+// 中文说明：NamesReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
     return HasField<AnomalyUe5NamesServiceV1,
                decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -345,6 +349,7 @@ bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
         s->resolve_utf8 != nullptr;
 }
 
+// 中文说明：ObjectsReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* s) noexcept {
     return HasField<AnomalyUe5ObjectsServiceV1,
                decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
@@ -352,6 +357,7 @@ bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* s) noexcept {
         s->find_exact != nullptr;
 }
 
+// 中文说明：NavigationReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool NavigationReady(const AnomalyNteNavigationServiceV1* s) noexcept {
     return HasField<AnomalyNteNavigationServiceV1,
                decltype(AnomalyNteNavigationServiceV1::move_to_location)>(
@@ -359,6 +365,7 @@ bool NavigationReady(const AnomalyNteNavigationServiceV1* s) noexcept {
         s->move_to_location != nullptr && s->stop_movement != nullptr;
 }
 
+// 中文说明：LandmarksReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
     return HasField<AnomalyNteMapLandmarksServiceV1,
                decltype(AnomalyNteMapLandmarksServiceV1::teleport)>(
@@ -367,6 +374,7 @@ bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
         s->snapshot_at != nullptr && s->teleport != nullptr;
 }
 
+// 中文说明：PickupReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool PickupReady(const AnomalyNtePickupServiceV1* service) noexcept {
     return HasField<AnomalyNtePickupServiceV1,
                decltype(AnomalyNtePickupServiceV1::snapshot)>(
@@ -374,15 +382,18 @@ bool PickupReady(const AnomalyNtePickupServiceV1* service) noexcept {
         service->request_nearby != nullptr && service->snapshot != nullptr;
 }
 
+// 中文说明：UsesPickupService() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool UsesPickupService(const std::string_view category) noexcept {
     return false;
 }
 
+// 中文说明：IsRelaxedPrefix() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool IsRelaxedPrefix(const std::string_view prefix) noexcept {
     return prefix == "PropBox_Yahaha" || prefix == "PropBox_Once" ||
         prefix == "Prison" || prefix == "InteractBox" || prefix == "ShopStealGoods_";
 }
 
+// 中文说明：DeveloperModeEnabled() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1,
                decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -391,6 +402,7 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
         ui->developer_mode_enabled(ui->user) != 0;
 }
 
+// 中文说明：SnapshotPlayerPosition() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     if (context.player == nullptr || context.player->snapshot == nullptr) {
         return false;
@@ -407,6 +419,7 @@ bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     return true;
 }
 
+// 中文说明：PlanarDistanceSquared() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 double PlanarDistanceSquared(double ax, double ay, double bx, double by) noexcept {
     const double dx = ax - bx;
     const double dy = ay - by;
@@ -414,6 +427,7 @@ double PlanarDistanceSquared(double ax, double ay, double bx, double by) noexcep
 }
 
 // Caller must hold context.mutex.
+// 中文说明：RefreshLandmarkCatalog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool RefreshLandmarkCatalog(Context& context) noexcept {
     const auto* service = context.map_landmarks;
     if (!LandmarksReady(service)) return false;
@@ -500,6 +514,7 @@ bool TryBeginLandmarkTransfer(Context& context, const Point& target,
     return true;
 }
 
+// 中文说明：ResetShopStealthSession() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ResetShopStealthSession(Context& context) noexcept {
     context.shop_stealth_ready = false;
     context.shop_safe_transfer_pending = false;
@@ -513,6 +528,7 @@ void ResetShopStealthSession(Context& context) noexcept {
     context.shop_exit_ready_at = std::chrono::steady_clock::time_point{};
 }
 
+// 中文说明：BeginShopExitRecovery() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void BeginShopExitRecovery(Context& context) noexcept {
     context.shop_stealth_ready = false;
     context.shop_safe_transfer_pending = false;
@@ -528,12 +544,14 @@ void BeginShopExitRecovery(Context& context) noexcept {
 
 // Spends one rescan of this point's budget. True means the budget is already gone, so the
 // caller skips the point instead of restarting the scan again.
+// 中文说明：ShopRescanBudgetSpent() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ShopRescanBudgetSpent(Context& context) noexcept {
     if (context.shop_rescan_cycles >= kShopRescanCycles) return true;
     ++context.shop_rescan_cycles;
     return false;
 }
 
+// 中文说明：ResetPointState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ResetPointState(Context& context) noexcept {
     context.teleported = false;
     context.moving = false;
@@ -622,6 +640,7 @@ bool StartManualNavigation(Context& context,
 }
 
 template <typename T>
+// 中文说明：Read() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Read(const void* address, T& value) noexcept {
     if (address == nullptr) return false;
     __try {
@@ -632,6 +651,7 @@ bool Read(const void* address, T& value) noexcept {
     }
 }
 
+// 中文说明：ReadPointer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void* ReadPointer(const void* address) noexcept {
     std::uintptr_t value{};
     return Read(address, value) ? reinterpret_cast<void*>(value) : nullptr;
@@ -648,6 +668,7 @@ bool ReadBytes(const void* address, void* destination,
     }
 }
 
+// 中文说明：ReadUtf16CString() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ReadUtf16CString(const void* address, std::string& result) noexcept {
     result.clear();
     if (address == nullptr) return false;
@@ -736,6 +757,7 @@ bool ResolveRipRelative(
     return address != 0;
 }
 
+// 中文说明：ObjectAt() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void* ObjectAt(const std::uintptr_t g_objects, const std::uint32_t index) noexcept {
     std::int32_t count{};
     std::int32_t num_chunks{};
@@ -910,6 +932,7 @@ struct Context {
 
 constexpr auto kOracleRetryInterval = std::chrono::seconds(5);
 
+// 中文说明：OracleLog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleLog(const Context& context, const std::string& message) {
     if (context.core != nullptr && context.core->log != nullptr) {
         context.core->log(context.core->user, ANOMALY_CORE_LOG_LEVEL_V1_WARNING,
@@ -918,10 +941,12 @@ void OracleLog(const Context& context, const std::string& message) {
 }
 
 // True when the step may run now.
+// 中文说明：OracleGateOpen() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool OracleGateOpen(const RetryGate& gate) noexcept {
     return !gate.failing || std::chrono::steady_clock::now() >= gate.next;
 }
 
+// 中文说明：OracleGateFailed() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleGateFailed(const Context& context, RetryGate& gate, const char* step) {
     if (!gate.failing)
         OracleLog(context, std::string(step) + " failed; retrying every 5 s instead of every frame");
@@ -929,6 +954,7 @@ void OracleGateFailed(const Context& context, RetryGate& gate, const char* step)
     gate.next = std::chrono::steady_clock::now() + kOracleRetryInterval;
 }
 
+// 中文说明：OracleGateSucceeded() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleGateSucceeded(const Context& context, RetryGate& gate, const char* step) {
     if (gate.failing) OracleLog(context, std::string(step) + " recovered");
     gate.failing = false;
@@ -976,6 +1002,7 @@ std::string OracleRenderFName(const AnomalyUe5NamesServiceV1* names,
     return result;
 }
 
+// 中文说明：OracleReadFString() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool OracleReadFString(const std::uintptr_t address, std::string& result) {
     NativeUtf16StringHeader header{};
     if (!Read(reinterpret_cast<const void*>(address), header) ||
@@ -986,6 +1013,7 @@ bool OracleReadFString(const std::uintptr_t address, std::string& result) {
     return ReadUtf16CString(reinterpret_cast<const void*>(header.data), result);
 }
 
+// 中文说明：OracleRefreshObjectRegistry() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool OracleRefreshObjectRegistry(Context& context) noexcept {
     if (context.g_objects_address == 0) {
         if (!OracleGateOpen(context.objects_gate)) return false;
@@ -1055,6 +1083,7 @@ bool OracleFindExactObject(Context& context, const std::string_view path,
     return OracleObjectFromHandle(context, handle, object);
 }
 
+// 中文说明：OracleResolvePlayerState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool OracleResolvePlayerState(Context& context) noexcept {
     if (context.player_state != 0) return true;
     if (context.g_world_address == 0) {
@@ -1093,6 +1122,7 @@ bool OracleResolvePlayerState(Context& context) noexcept {
 }
 
 
+// 中文说明：OracleScanCatalog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool OracleScanCatalog(Context& context) {
     if (context.scan_attempted) return context.scan_ready;
     if (!OracleGateOpen(context.scan_gate)) return false;
@@ -1197,6 +1227,7 @@ bool OracleScanCatalog(Context& context) {
     return true;
 }
 
+// 中文说明：OracleRefreshStates() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleRefreshStates(Context& context) {
     if (!context.scan_ready) return;
     // DISABLED. On the 9/26+ builds the function the old state-query pattern
@@ -1215,6 +1246,7 @@ void OracleRefreshStates(Context& context) {
     }
 }
 
+// 中文说明：OracleQueueTeleport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleQueueTeleport(Context& context, const double position[3]) {
     if (context.session == nullptr || context.player == nullptr ||
         context.player->snapshot == nullptr || context.session->snapshot == nullptr) {
@@ -1240,6 +1272,7 @@ void OracleQueueTeleport(Context& context, const double position[3]) {
     }
 }
 
+// 中文说明：OracleExecuteTeleport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleExecuteTeleport(Context& context) {
     if (context.teleport == nullptr || context.teleport->teleport == nullptr) return;
     PendingTeleport pending{};
@@ -1260,6 +1293,7 @@ void OracleExecuteTeleport(Context& context) {
     static_cast<void>(context.teleport->teleport(context.teleport->user, &request));
 }
 
+// 中文说明：OracleRunAutoTeleport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleRunAutoTeleport(Context& context, const double delta_seconds) {
     if (!context.auto_teleport.enabled.load(std::memory_order_acquire)) return;
     switch (context.auto_teleport.stage) {
@@ -1333,6 +1367,7 @@ void OracleRunAutoTeleport(Context& context, const double delta_seconds) {
     }
 }
 
+// 中文说明：OracleInitialize() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void OracleInitialize(Context& context, const AnomalyHostApiV1* host) {
     if (host == nullptr) return;
     const auto view = anomaly::sdk::Host(host);
@@ -1449,6 +1484,7 @@ bool FindPropertyOffset(const AnomalyUe5NamesServiceV1* names, const std::uintpt
 // every shop steal waited for the actor to be garbage-collected instead
 // (~25 s). Resolved by name per class and cached; the old offset is the
 // fallback when reflection is unavailable.
+// 中文说明：InteractFinishOffset() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::ptrdiff_t InteractFinishOffset(Context& context, const std::uintptr_t actor) noexcept {
     std::uintptr_t cls{};
     if (actor == 0 || !Read(reinterpret_cast<const void*>(actor + kObjectClassOffset), cls) ||
@@ -1465,6 +1501,7 @@ std::ptrdiff_t InteractFinishOffset(Context& context, const std::uintptr_t actor
     return resolved;
 }
 
+// 中文说明：Invoke() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Invoke(void* object, void* function, void* parameters) noexcept {
     if (!object || !function) return false;
     using ProcessEvent = void(__fastcall*)(void*, void*, void*);
@@ -1481,6 +1518,7 @@ bool Invoke(void* object, void* function, void* parameters) noexcept {
     }
 }
 
+// 中文说明：WriteUint32() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool WriteUint32(const void* address, const std::uint32_t value) noexcept {
     if (address == nullptr) return false;
     __try {
@@ -1532,6 +1570,7 @@ bool FindExactObject(Context& context, const std::string_view path,
     return object != nullptr;
 }
 
+// 中文说明：CategoryForChoice() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 constexpr std::string_view CategoryForChoice(const std::uint32_t choice) noexcept {
     switch (choice) {
         case 1: return "hunter";
@@ -1548,6 +1587,7 @@ constexpr std::string_view CategoryForChoice(const std::uint32_t choice) noexcep
     }
 }
 
+// 中文说明：ActorPrefixForChoice() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 constexpr std::string_view ActorPrefixForChoice(const std::uint32_t choice) noexcept {
     switch (choice) {
         case 1: return "HunterBox_";
@@ -1580,6 +1620,7 @@ constexpr std::string_view ActorPrefixForCategory(
 }
 
 // Caller must hold context.mutex.
+// 中文说明：RebuildFilteredLocked() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RebuildFilteredLocked(Context& context) noexcept {
     const std::string_view category = CategoryForChoice(context.type_choice);
     context.filtered_points.clear();
@@ -1590,6 +1631,7 @@ void RebuildFilteredLocked(Context& context) noexcept {
     context.type_prefix = std::string(ActorPrefixForChoice(context.type_choice));
 }
 
+// 中文说明：ReadRandomItemTable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReadRandomItemTable(Context& context, std::vector<Point>& points) {
     void* table_object{};
     if (!ObjectsReady(context.objects)) return;
@@ -1690,6 +1732,7 @@ void ReadRandomItemTable(Context& context, std::vector<Point>& points) {
     }
 }
 
+// 中文说明：ReadTable() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReadTable(Context& context) {
     std::vector<Point> points;
     void* table_object{};
@@ -1783,6 +1826,7 @@ void ReadTable(Context& context) {
         context.localizer.Format("status.read", "Read {0} points", read_args);
 }
 
+// 中文说明：ResolvePlayerState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ResolvePlayerState(Context& context, std::uintptr_t& player_state) noexcept {
     player_state = 0;
     if (context.controller == 0) return false;
@@ -1792,6 +1836,7 @@ bool ResolvePlayerState(Context& context, std::uintptr_t& player_state) noexcept
         player_state != 0;
 }
 
+// 中文说明：CallGetRecordOwner() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void* CallGetRecordOwner(std::uintptr_t fn, std::uintptr_t player_state) noexcept {
     using GetRecordOwner = void* (*)(void*);
     __try {
@@ -1802,6 +1847,7 @@ void* CallGetRecordOwner(std::uintptr_t fn, std::uintptr_t player_state) noexcep
     }
 }
 
+// 中文说明：CallFindRecord() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void* CallFindRecord(std::uintptr_t fn, void* owner, const char* name) noexcept {
     using FindRecord = void* (*)(void*, const char*);
     __try {
@@ -1821,6 +1867,7 @@ const char* CallGetString(std::uintptr_t fn, void* record, std::int32_t row,
     }
 }
 
+// 中文说明：ResolveRandomItemRecords() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ResolveRandomItemRecords(Context& context) noexcept {
     if (context.record_owner != 0 && context.fixed_record != 0 &&
         context.dynamic_record != 0) {
@@ -1926,11 +1973,13 @@ bool ReadRecordSelections(const std::uintptr_t record,
 
 // The row name carries the region and the kind: HTTargetPoint_PropBox_{Box|Item}_{REGION}_NNN.
 // The key ("Item|A") is what says whether a whole region is spent for the week.
+// 中文说明：LogBox() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void LogBox(Context& context, const std::string& message) {
     const auto* core = anomaly::sdk::Host(context.host).Query<AnomalyCoreServiceV1>(ANOMALY_CORE_SERVICE_V1_ID, 1).get();
     if (core && core->log) core->log(core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, anomaly::sdk::StringView("box-auto " + message));
 }
 
+// 中文说明：FoodGroupOf() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool FoodGroupOf(const std::string_view name, std::string& key) {
     constexpr std::string_view prefix = "HTTargetPoint_PropBox_";
     if (!name.starts_with(prefix)) return false;
@@ -1964,6 +2013,7 @@ void NoteFoodRegionSkipped(Context& context, const std::string& key,
     LogBox(context, "food region skip group=" + key + " rule=" + rule);
 }
 
+// 中文说明：NoteFoodPointEmpty() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void NoteFoodPointEmpty(Context& context, const std::string& name) noexcept {
     std::string key;
     if (!FoodGroupOf(name, key)) return;
@@ -1981,6 +2031,7 @@ void NoteFoodPointEmpty(Context& context, const std::string& name) noexcept {
 }
 
 // A point in this region had something in it, so the region is not empty after all.
+// 中文说明：NoteFoodPointFound() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void NoteFoodPointFound(Context& context, const std::string& name) noexcept {
     std::string key;
     if (!FoodGroupOf(name, key) || key != context.food_empty_group) return;
@@ -1992,6 +2043,7 @@ void NoteFoodPointFound(Context& context, const std::string& name) noexcept {
 // record is the only distance-independent signal: the available set holds what is near the
 // player, and the region being visited is by definition the near one, so it always shows
 // entries for a region that has just filled up.
+// 中文说明：RefreshFoodRegionState() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RefreshFoodRegionState(Context& context) noexcept {
     std::unordered_map<std::string, int> picked;
     std::string key;
@@ -2009,6 +2061,7 @@ void RefreshFoodRegionState(Context& context) noexcept {
     }
 }
 
+// 中文说明：RefreshUncollectedCatalog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool RefreshUncollectedCatalog(Context& context) noexcept {
     if (!ResolveRandomItemRecords(context)) return false;
     context.uncollected_points.clear();
@@ -2020,6 +2073,7 @@ bool RefreshUncollectedCatalog(Context& context) noexcept {
     return true;
 }
 
+// 中文说明：RefreshPickedUpCatalog() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool RefreshPickedUpCatalog(Context& context) noexcept {
     if (!ResolveRandomItemRecords(context)) return false;
     context.picked_up_points.clear();
@@ -2033,6 +2087,7 @@ bool RefreshPickedUpCatalog(Context& context) noexcept {
     return true;
 }
 
+// 中文说明：GetPlayerController() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool GetPlayerController(Context& context) noexcept {
     if (context.controller != 0) return true;
     if (context.g_world_address == 0 &&
@@ -2099,6 +2154,7 @@ bool GetPlayerController(Context& context) noexcept {
 
 
 
+// 中文说明：BuildClassMap() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void BuildClassMap(Context& context) noexcept {
     if (context.g_objects_address == 0) return;
     std::int32_t count{};
@@ -2298,6 +2354,7 @@ std::uintptr_t ScanForActor(Context& context, const Point& p,
     return best;
 }
 
+// 中文说明：Teleport() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool Teleport(Context& context, const Point& p) noexcept {
     if (context.session == nullptr || context.player == nullptr ||
         context.teleport == nullptr || context.teleport->teleport == nullptr) {
@@ -2331,6 +2388,7 @@ bool Teleport(Context& context, const Point& p) noexcept {
 
 bool HasShopStealthSkill(Context& context);
 
+// 中文说明：Begin() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Begin(Context& context) {
     std::lock_guard<std::mutex> lock(context.mutex);
     RebuildFilteredLocked(context);
@@ -2355,6 +2413,7 @@ void Begin(Context& context) {
     context.status = context.localizer.Text("status.started", "Started");
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Stop(Context& context) {
     std::lock_guard<std::mutex> lock(context.mutex);
     context.running = false;
@@ -2476,11 +2535,13 @@ bool TriggerInteractPickup(Context& context, const std::uintptr_t actor,
     return false;
 }
 
+// 中文说明：LogShop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void LogShop(Context& context, const std::string& message) {
     const auto* core = anomaly::sdk::Host(context.host).Query<AnomalyCoreServiceV1>(ANOMALY_CORE_SERVICE_V1_ID, 1).get();
     if (core && core->log) core->log(core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, anomaly::sdk::StringView("shop-collect " + message));
 }
 
+// 中文说明：HasShopStealthSkill() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasShopStealthSkill(Context& context) {
     if (!context.skills || !context.skills->frame || !context.skills->snapshot_at ||
         !context.skills->ability_path_utf8) return false;
@@ -2503,6 +2564,7 @@ bool HasShopStealthSkill(Context& context) {
     return false;
 }
 
+// 中文说明：RequestShopStealth() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool RequestShopStealth(Context& context) {
     if (!context.skills || !context.skill_invocation || !context.session || !context.session->snapshot ||
         !context.skills->frame || !context.skills->snapshot_at || !context.skills->ability_path_utf8 ||
@@ -2580,6 +2642,7 @@ bool StartShopExitTransfer(Context& context, const Point& target,
     return true;
 }
 
+// 中文说明：PrepareShopStealth() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool PrepareShopStealth(Context& context, const Point& target, const std::chrono::steady_clock::time_point now) {
     if (context.shop_exit_recovery_active) {
         if (context.shop_exit_transfer_pending) {
@@ -2695,6 +2758,7 @@ bool PrepareShopStealth(Context& context, const Point& target, const std::chrono
     return false;
 }
 
+// 中文说明：ShopProperty() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ShopProperty(Context& context, std::uintptr_t cls, std::string_view name, std::int32_t size, std::uintptr_t& field, std::int32_t& offset) {
     field = reinterpret_cast<std::uintptr_t>(ReadPointer(reinterpret_cast<void*>(cls + 112)));
     for (unsigned i = 0; field && i < 256; ++i) {
@@ -2766,6 +2830,7 @@ bool ReadActorLocation(Context& context, const std::uintptr_t actor,
                  root + kSceneComponentLocationOffset + 16), loc[2]);
 }
 
+// 中文说明：IsObjectInGObjects() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool IsObjectInGObjects(Context& context, const std::uintptr_t target) noexcept {
     if (target == 0) return false;
     if (context.g_objects_address == 0 &&
@@ -3363,6 +3428,7 @@ void TickFoodPickup(Context& context, const Point& p,
     }
 }
 
+// 中文说明：Tick() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Tick(Context& context) {
     std::lock_guard<std::mutex> lock(context.mutex);
     if (!context.running) return;
@@ -4148,6 +4214,7 @@ void Tick(Context& context) {
     }
 }
 
+// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (!host || !plugin_context || host->api_major != ANOMALY_PLUGIN_API_V1_MAJOR) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -4199,12 +4266,14 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return plugin_context ? anomaly::sdk::Ok()
                           : AnomalyStatusV1{ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0,
                                             {nullptr, 0}};
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     if (!plugin_context) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -4214,6 +4283,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context != nullptr) {
@@ -4223,6 +4293,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     delete context;
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void* plugin_context, const double delta_seconds) {
     if (!plugin_context) return;
     auto& context = *static_cast<Context*>(plugin_context);
@@ -4291,6 +4362,7 @@ void ANOMALY_CALL Update(void* plugin_context, const double delta_seconds) {
                 context.manual_landmark_target[1] = p.y;
                 context.manual_landmark_target[2] = p.z;
                 if (!StartManualNavigation(
+// 中文说明：std::chrono::steady_clock::now() 负责执行这里的具体处理；保持现有调用关系与行为不变。
                         context, std::chrono::steady_clock::now())) {
                     std::lock_guard<std::mutex> lock(context.mutex);
                     context.status = context.localizer.Text(
@@ -4431,6 +4503,7 @@ void ANOMALY_CALL Update(void* plugin_context, const double delta_seconds) {
     }
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
     if (!plugin_context) return;
     auto& context = *static_cast<Context*>(plugin_context);
