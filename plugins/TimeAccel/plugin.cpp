@@ -166,6 +166,7 @@ AnomalyGenerationHandleV1 g_hotkey_toggle{};
 AnomalyGenerationHandleV1 g_hotkey_restore{};
 
 // 只在「出错/不可用」时写提示，界面不显示进度类信息。
+// 中文说明：SetError() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SetError(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -176,6 +177,7 @@ void SetError(const char* format, ...) {
 // --------------------------- 极简安全内存读写 --------------------------------
 // 回调每帧进几千至上万次，这里只做内存读，不调服务，直接用 SEH 兜住。
 // 注意：含 __try 的函数里不能有需要析构的局部对象（C2712），所以只用 POD。
+// 中文说明：SafeReadPtr() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SafeReadPtr(std::uintptr_t address, std::uintptr_t* out) {
     if (out == nullptr) return false;
     __try {
@@ -186,6 +188,7 @@ bool SafeReadPtr(std::uintptr_t address, std::uintptr_t* out) {
     }
 }
 
+// 中文说明：SafeReadU32() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::uint32_t SafeReadU32(std::uintptr_t address) {
     __try {
         return *reinterpret_cast<const std::uint32_t*>(address);
@@ -194,6 +197,7 @@ std::uint32_t SafeReadU32(std::uintptr_t address) {
     }
 }
 
+// 中文说明：SafeReadF32() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool SafeReadF32(std::uintptr_t address, float* out) {
     if (out == nullptr) return false;
     __try {
@@ -205,6 +209,7 @@ bool SafeReadF32(std::uintptr_t address, float* out) {
 }
 
 // 只读一个方向性检查：地址看起来像本进程的用户态指针。
+// 中文说明：LooksLikePointer() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool LooksLikePointer(std::uintptr_t v) {
     return v > 0x10000ULL && v < 0x800000000000ULL;
 }
@@ -212,6 +217,7 @@ bool LooksLikePointer(std::uintptr_t v) {
 // --------------------------- 写世界倍率 --------------------------------------
 // 优先用官方 anomaly.core::write_memory（受 memory-write capability 约束）；
 // 服务不可用时退回直接写（同样用 SEH 兜住）。
+// 中文说明：WriteWorldDilation() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool WriteWorldDilation(float value) {
     State& s = g_state;
     if (!LooksLikePointer(s.ws)) return false;
@@ -248,6 +254,7 @@ bool WriteWorldDilation(float value) {
     return false;
 }
 
+// 中文说明：RestoreDilation() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool RestoreDilation() {
     State& s = g_state;
     const bool ok = WriteWorldDilation(1.0F);
@@ -258,6 +265,7 @@ bool RestoreDilation() {
     return ok;
 }
 
+// 中文说明：StopAccel() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void StopAccel(const char* reason) {
     State& s = g_state;
     const bool was_active = (s.active != 0) || (s.infinite != 0);
@@ -275,6 +283,7 @@ void StopAccel(const char* reason) {
 }
 
 // --------------------------- ProcessEvent 捕获控制器（锚）--------------------
+// 中文说明：ClassNameMatches() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ClassNameMatches(std::uintptr_t object, std::uint32_t name_id) {
     if (object == 0 || name_id == 0) return false;
     std::uintptr_t cls = 0;
@@ -296,6 +305,7 @@ void ANOMALY_CALL OnProcessEvent(void* user, std::uintptr_t object, std::uintptr
 }
 
 // 每帧沿指针链取 WorldSettings：换关卡/切场景会自动跟上。
+// 中文说明：ResolveWorldSettings() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ResolveWorldSettings() {
     State& s = g_state;
     if (!LooksLikePointer(s.controller)) return;
@@ -317,6 +327,7 @@ void ResolveWorldSettings() {
 }
 
 // 官方 nte.player 的「是否在世界中」判据，顺便记录位置。0.5 秒一次。
+// 中文说明：PollPlayerGate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void PollPlayerGate(double dt) {
     State& s = g_state;
     if (g_player == nullptr || g_player->snapshot == nullptr) {
@@ -344,6 +355,7 @@ void PollPlayerGate(double dt) {
 }
 
 // 服务可用时只有在世界中才动手；服务不可用时一律放行（不因服务缺失锁死功能）。
+// 中文说明：PlayerGateOpen() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool PlayerGateOpen() {
     return g_state.player_valid != 0;
 }
@@ -351,6 +363,7 @@ bool PlayerGateOpen() {
 // 开发者模式门禁：本插件会写游戏内存，只在开发者模式开启时放行
 // （对齐 BoxAuto / CameraTools 对 developer_mode_enabled 的用法）。
 // 宿主未暴露该字段时视为未开启，宁可不加速也不越界。
+// 中文说明：DeveloperModeEnabled() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool DeveloperModeEnabled() {
     if (g_ui == nullptr || !HAS(g_ui, developer_mode_enabled)) return false;
     return g_ui->developer_mode_enabled(g_ui->user) != 0;
@@ -359,6 +372,7 @@ bool DeveloperModeEnabled() {
 // --------------------------- 类名 id 解析 ------------------------------------
 // find_utf8 是有界搜索，BP 类名的 id 可能在名字池很深处 ⇒ 兜底遍历对象表。
 // 名字池 id 每局都会变，所以「找到就用」，不能硬编码。
+// 中文说明：ResolveControllerClassNameId() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ResolveControllerClassNameId() {
     State& s = g_state;
     if (s.controller_class_name_id != 0) return;
@@ -409,12 +423,14 @@ void ResolveControllerClassNameId() {
 }
 
 // --------------------------- 订阅与热键 --------------------------------------
+// 中文说明：SubscribeEvents() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void SubscribeEvents() {
     if (g_process_event == nullptr || g_process_event->subscribe == nullptr) return;
     if (g_events_handle.id != 0) return;
     g_process_event->subscribe(g_process_event->user, &OnProcessEvent, nullptr, &g_events_handle);
 }
 
+// 中文说明：UnsubscribeEvents() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void UnsubscribeEvents() {
     if (g_process_event != nullptr && g_process_event->unsubscribe != nullptr &&
         g_events_handle.id != 0) {
@@ -438,6 +454,7 @@ void ANOMALY_CALL OnHotkey(void* user, AnomalyGenerationHandleV1 hotkey,
     }
 }
 
+// 中文说明：RegisterHotkeys() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RegisterHotkeys() {
     if (g_input == nullptr || g_input->register_hotkey == nullptr) return;
     AnomalyHotkeySpecV1 spec{};
@@ -467,6 +484,7 @@ void RegisterHotkeys() {
     }
 }
 
+// 中文说明：ReleaseHotkeys() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReleaseHotkeys() {
     if (g_input != nullptr && g_input->release_hotkey != nullptr) {
         if (g_hotkey_once.id != 0) g_input->release_hotkey(g_input->user, g_hotkey_once);
@@ -483,16 +501,19 @@ void ReleaseHotkeys() {
 AnomalyStatusV1 SaveConfig();
 AnomalyStatusV1 SaveConfigImmediate();
 
+// 中文说明：BeginCapture() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void BeginCapture(int target) {
     g_state.capture_target = target;
     ReleaseHotkeys();
 }
 
+// 中文说明：CancelCapture() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CancelCapture() {
     g_state.capture_target = 0;
     RegisterHotkeys();
 }
 
+// 中文说明：FirstBitIndex() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::uint32_t FirstBitIndex(unsigned char bits) {
     for (std::uint32_t i = 0; i < 8; ++i) {
         if ((bits & (1u << i)) != 0) return i;
@@ -500,6 +521,7 @@ std::uint32_t FirstBitIndex(unsigned char bits) {
     return 0xFFFFFFFFu;
 }
 
+// 中文说明：CaptureTick() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CaptureTick() {
     State& s = g_state;
     if (g_input == nullptr || g_input->snapshot == nullptr) return;
@@ -548,6 +570,7 @@ void CaptureTick() {
 }
 
 // 把虚拟键码转成好认的名字（认不出就显示 VK 0xNN）。
+// 中文说明：KeyName() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void KeyName(std::uint32_t vk, std::uint32_t modifiers, char* out, std::size_t capacity) {
     char body[48]{};
     if (vk == 0) {
@@ -608,6 +631,7 @@ void KeyName(std::uint32_t vk, std::uint32_t modifiers, char* out, std::size_t c
 // 宿主允许的域执行；Stop / Unload 在 Lifecycle 域直接写。
 
 // 把当前配置序列化成文本。
+// 中文说明：FormatConfig() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::size_t FormatConfig(char* text, std::size_t capacity) {
     State& s = g_state;
     const int written =
@@ -623,6 +647,7 @@ std::size_t FormatConfig(char* text, std::size_t capacity) {
 }
 
 // 走宿主 storage 服务落盘。仅 Lifecycle 域（Stop / Unload）直接调用。
+// 中文说明：SaveConfig() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 SaveConfig() {
     if (g_storage == nullptr || g_storage->write_atomic == nullptr) {
         return AnomalyStatusV1{static_cast<std::uint32_t>(ANOMALY_STATUS_V1_UNAVAILABLE), 0, {}};
@@ -636,6 +661,7 @@ AnomalyStatusV1 SaveConfig() {
 }
 
 // 调度器任务：在宿主允许的线程域里真正写盘（配置文本现取现用，保证写的是最新值）。
+// 中文说明：PersistTask() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL PersistTask(void* user, AnomalyGenerationHandleV1 task) {
     (void)user;
     (void)task;
@@ -644,6 +670,7 @@ void ANOMALY_CALL PersistTask(void* user, AnomalyGenerationHandleV1 task) {
 
 // 立即落盘：任何线程域都能调用。用 scheduler 把写盘推迟到宿主允许的域执行，避免在
 // Game/Render 域同步做文件 I/O。调度器不可用时跳过（Stop/Unload 仍会兜底落盘）。
+// 中文说明：SaveConfigImmediate() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 SaveConfigImmediate() {
     if (g_scheduler == nullptr || g_scheduler->schedule == nullptr) {
         return AnomalyStatusV1{static_cast<std::uint32_t>(ANOMALY_STATUS_V1_UNAVAILABLE), 0, {}};
@@ -652,6 +679,7 @@ AnomalyStatusV1 SaveConfigImmediate() {
     return g_scheduler->schedule(g_scheduler->user, 0, PersistTask, nullptr, &task);
 }
 
+// 中文说明：LoadConfig() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void LoadConfig() {
     State& s = g_state;
     if (g_storage == nullptr || g_storage->read == nullptr) return;
@@ -711,11 +739,13 @@ void LoadConfig() {
 }
 
 // ------------------------------- 绘制 ---------------------------------------
+// 中文说明：Text() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void Text(const AnomalyUiServiceV1* ui, const char* utf8) {
     if (HAS(ui, text)) ui->text(ui->user, StringView(utf8));
 }
 
 // 量化到 1 位小数：避免 1.1+0.1 累积成 1.2000000000000002。
+// 中文说明：Quantize1() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 double Quantize1(double v) {
     return (v >= 0.0) ? std::floor(v * 10.0 + 0.5) / 10.0 : std::ceil(v * 10.0 - 0.5) / 10.0;
 }
@@ -835,6 +865,7 @@ bool DecimalField(const AnomalyUiServiceV1* ui, const char* label, const char* h
     return changed;
 }
 
+// 中文说明：DrawMain() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void DrawMain(const AnomalyUiServiceV1* ui) {
     State& s = g_state;
     char line[256];
@@ -943,6 +974,7 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
     }
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void* context, const AnomalyUiServiceV1* ui_v1) {
     (void)context;
     const AnomalyUiServiceV1* ui = (ui_v1 != nullptr) ? ui_v1 : g_ui;
@@ -965,6 +997,7 @@ void ANOMALY_CALL Draw(void* context, const AnomalyUiServiceV1* ui_v1) {
 }
 
 // ------------------------------- 生命周期 ------------------------------------
+// 中文说明：Load() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     *context = nullptr;
@@ -1017,6 +1050,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* context) {
     (void)context;
     g_state.capture_target = 0;
@@ -1029,6 +1063,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* context) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* context, std::uint32_t deadline_milliseconds) {
     (void)context;
     (void)deadline_milliseconds;
@@ -1042,6 +1077,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* context, std::uint32_t deadline_millisec
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* context) {
     (void)context;
     StopAccel(nullptr);
@@ -1059,6 +1095,7 @@ void ANOMALY_CALL Unload(void* context) {
     g_state = State{};
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void* context, double delta_seconds) {
     (void)context;
     State& s = g_state;
