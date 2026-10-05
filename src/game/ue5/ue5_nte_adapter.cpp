@@ -7819,8 +7819,13 @@ struct Ue5NteAdapter::State {
         bool owner_ok = false;
         if (EnsureVehicleOwnerBindingLocked()) {
             std::array<std::uint8_t, 8> owner_parameters{};
+            const auto owner = player_pawn;
+            if (owner == 0) {
+                pending_vehicle_summon.active = false;
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "player pawn is unavailable");
+            }
             std::memcpy(owner_parameters.data() + vehicle_bindings.set_owner.parameter_offset,
-                &player_controller, sizeof(player_controller));
+                &owner, sizeof(owner));
             owner_ok = InvokeProcessEventGuarded(process_event_invoker, best->actor,
                 vehicle_bindings.set_owner.function, owner_parameters.data(),
                 vehicle_bindings.set_owner.parms_size);
@@ -7880,8 +7885,10 @@ struct Ue5NteAdapter::State {
             }
             static constexpr std::array<std::string_view, 2> controller_outers{
                 "HTPlayerController", "HTPlayerCharacter"};
-            static constexpr std::array<std::string_view, 3> vehicle_outers{
-                "HTWheeledVehicle", "HTWheeledVehicleDrivable", "HTVehicleMovementComponent"};
+            static constexpr std::array<std::string_view, 5> vehicle_outers{
+                "HTWheeledVehicle", "HTWheeledVehicleDrivable",
+                "HTVehicleMovementComponent", "WheeledVehicleMovementComponent",
+                "ChaosWheeledVehicleMovementComponent"};
             if (vehicle_bindings.current_vehicle.function == 0 &&
                 !FindVehicleFunctionLocked("BP_GetCurrentDriveVehicle", controller_outers, "ObjectReturn",
                     vehicle_bindings.current_vehicle)) {
