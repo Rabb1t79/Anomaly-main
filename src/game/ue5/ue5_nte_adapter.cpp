@@ -13539,7 +13539,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             this, CombatantSnapshotThunk, LatestDamageSequenceThunk,
             NextDamageEventThunk, CombatStatisticsThunk, DamageSourceNameThunk,
             DamageParticipantPathThunk, LatestCombatEventSequenceThunk,
-            NextCombatEventThunk, CombatEventNameThunk, ParticipantDisplayNameThunk};
+            NextCombatEventThunk, CombatEventNameThunk, ParticipantDisplayNameThunk, ReplayDamage};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
