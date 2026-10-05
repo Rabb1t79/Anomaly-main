@@ -1146,7 +1146,7 @@ int LoadCharacterPoseProfile(Context &context,
   }
 }
 
-// 中文说明：ResetPoseValues() 的实际功能是：直接执行函数体中的计算或状态操作。
+// 实现 Add Address；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     for (auto &angle : context.bone_angles)
       angle = {0.0, 0.0, 0.0};
@@ -1166,7 +1166,7 @@ int LoadCharacterPoseProfile(Context &context,
   return state;
 }
 
-// 中文说明：RestorePoseState() 的实际功能是：调用 `assign()`。
+// 实现 Add Address；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
     std::lock_guard<std::mutex> lock(context.pose_angles_mutex);
     // Keep the table at least as long as the skeleton; the pose code reads
     // bone_angles[0 .. count) and the recorded table may be shorter.
