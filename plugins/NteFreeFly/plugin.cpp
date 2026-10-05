@@ -180,10 +180,10 @@ struct Context final {
     DisplayState display{};
 };
 
-// 中文说明：Fail()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// Fail 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 AnomalyStatusV1 Fail(const std::uint32_t code) noexcept { return {code, 0, {}}; }
 
-// 中文说明：Log()：调用 `log()`、`StringView()`，结果用于完成该函数对应的数据处理。
+// Log 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void Log(const Context& context, const std::uint32_t level, const char* message) noexcept {
     const auto* core = context.services.core;
     if (core == nullptr || core->log == nullptr) return;
@@ -208,20 +208,20 @@ constexpr std::string_view kSettingsSchema = R"json(
 {"type":"object","additionalProperties":false,"required":["toggleKey"],"properties":{"toggleKey":{"type":"integer","minimum":1,"maximum":255}}}
 )json";
 
-// 中文说明：ConfigMethodsAvailable()：调用 `HAS_FIELD()`，结果用于完成该函数对应的数据处理。
+// ConfigMethodsAvailable 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool ConfigMethodsAvailable(const AnomalyConfigServiceV1* service) noexcept {
     return HAS_FIELD(service, AnomalyConfigServiceV1, write_atomic) &&
            service->register_schema != nullptr && service->read != nullptr &&
            service->write_atomic != nullptr;
 }
 
-// 中文说明：SettingsAvailable()：调用 `ConfigMethodsAvailable()`，结果用于完成该函数对应的数据处理。
+// SettingsAvailable 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool SettingsAvailable(const Context& context) noexcept {
     return context.settings_schema_ready && ConfigMethodsAvailable(context.services.config);
 }
 
 // 文档是本插件自己写出去的固定形状，所以这里只做受约束的扫描，不引入 JSON 解析依赖。
-// 中文说明：ParseToggleKey()：调用 `find()`、`size()`；遍历输入集合，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ParseToggleKey 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool ParseToggleKey(const std::string_view document, std::uint32_t& key) noexcept {
     const std::size_t at = document.find("\"toggleKey\"");
     if (at == std::string_view::npos) return false;
@@ -242,7 +242,7 @@ bool ParseToggleKey(const std::string_view document, std::uint32_t& key) noexcep
     return true;
 }
 
-// 中文说明：RegisterSettingsSchema()：调用 `data()`、`size()`、`register_schema()`、`StringView()`，结果用于完成该函数对应的数据处理。
+// RegisterSettingsSchema 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void RegisterSettingsSchema(Context& context) noexcept {
     const auto* config = context.services.config;
     if (config == nullptr || config->register_schema == nullptr) return;
@@ -258,7 +258,7 @@ void RegisterSettingsSchema(Context& context) noexcept {
     if (!context.settings_schema_ready) context.settings_schema = {};
 }
 
-// 中文说明：LoadSettings()：调用 `SettingsAvailable()`、`read()`、`StringView()`、`ParseToggleKey()`，结果用于完成该函数对应的数据处理。
+// LoadSettings 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void LoadSettings(Context& context) noexcept {
     if (!SettingsAvailable(context)) return;
     const auto* config = context.services.config;
@@ -293,7 +293,7 @@ void LoadSettings(Context& context) noexcept {
     Log(context, ANOMALY_CORE_LOG_LEVEL_V1_INFO, message);
 }
 
-// 中文说明：SaveSettings()：调用 `SettingsAvailable()`、`std::snprintf()`、`load()`、`write_atomic()`，结果用于完成该函数对应的数据处理。
+// SaveSettings 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void SaveSettings(Context& context) noexcept {
     if (!context.settings_dirty || !SettingsAvailable(context)) return;
     const auto* config = context.services.config;
@@ -317,7 +317,7 @@ void SaveSettings(Context& context) noexcept {
 // 服务查询与快照读取（全部只在 Game 域调用）
 // ---------------------------------------------------------------------------
 
-// 中文说明：ResolveGameServices()：调用 `host()`、`get()`，结果用于完成该函数对应的数据处理。
+// ResolveGameServices 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ResolveGameServices(Context& context) noexcept {
     const anomaly::sdk::Host host(context.host);
     if (context.services.session == nullptr) {
@@ -340,7 +340,7 @@ void ResolveGameServices(Context& context) noexcept {
     }
 }
 
-// 中文说明：ReadWorld()：调用 `snapshot()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadWorld 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool ReadWorld(Context& context, AnomalyGenerationHandleV1& world) noexcept {
     const auto* session = context.services.session;
     if (session == nullptr || session->snapshot == nullptr) return false;
@@ -381,7 +381,7 @@ bool ReadPlayer(Context& context, AnomalyGenerationHandleV1& player,
 // 因此是 (cos yaw, sin yaw, 0) —— 与官方 NteTeleport 的前向传送取法一致。
 // 相机数据只在活动 Profile 验证了 Player 服务的可选 nte.player-esp 后才有值，
 // 拿不到就退化为世界轴向（飞行仍可用，只是方向不再跟随视角）。
-// 中文说明：ReadCameraYaw()：调用 `HAS_FIELD()`、`camera_snapshot()`、`std::isfinite()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// ReadCameraYaw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool ReadCameraYaw(Context& context, double& yaw_degrees) noexcept {
     const auto* player = context.services.player;
     if (!HAS_FIELD(player, AnomalyNtePlayerServiceV1, camera_snapshot)) return false;
@@ -403,13 +403,13 @@ bool ReadCameraYaw(Context& context, double& yaw_degrees) noexcept {
 // 输入（Game 域读取宿主的规范化键盘状态）
 // ---------------------------------------------------------------------------
 
-// 中文说明：KeyDown()：调用 `return()`，结果用于完成该函数对应的数据处理。
+// KeyDown 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool KeyDown(const AnomalyInputSnapshotV1& snapshot, const std::uint32_t virtual_key) noexcept {
     return (snapshot.keys[virtual_key / 8U] & (1U << (virtual_key % 8U))) != 0;
 }
 
 // 这些键在飞行中每帧都要读，绑成开关只会互相打架，所以捕获时直接拒绝。
-// 中文说明：IsReservedKey()：直接处理局部数据，结果用于完成该函数对应的数据处理。
+// IsReservedKey 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool IsReservedKey(const std::uint32_t key) noexcept {
     return key == kVkW || key == kVkA || key == kVkS || key == kVkD || key == kVkControl ||
            key == kVkSpace;
@@ -418,7 +418,7 @@ bool IsReservedKey(const std::uint32_t key) noexcept {
 // 虚拟键码 → 可读名字。刻意不用 Win32 的 GetKeyNameText：那需要 windows.h 与
 // user32.lib，而主仓库的 anomaly_add_plugin 不链接 user32，引入它会让插件在上游
 // 构建里链接失败。这里覆盖键盘常用键，其余退回 "键 0xNN"。
-// 中文说明：VirtualKeyName()：调用 `std::snprintf()`，结果用于完成该函数对应的数据处理。
+// VirtualKeyName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void VirtualKeyName(const std::uint32_t key, char* out, const std::size_t size) noexcept {
     if (out == nullptr || size == 0) return;
     if (key >= 0x41U && key <= 0x5AU) {  // A-Z
@@ -479,7 +479,7 @@ void VirtualKeyName(const std::uint32_t key, char* out, const std::size_t size) 
     std::snprintf(out, size, "键 0x%02X", key);
 }
 
-// 中文说明：ReadInput()：调用 `HAS_FIELD()`、`snapshot()`、`offsetof()`、`std::memcpy()`，结果用于完成该函数对应的数据处理。
+// ReadInput 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 InputState ReadInput(Context& context) noexcept {
     InputState state;
     const auto* input = context.services.input;
@@ -507,7 +507,7 @@ InputState ReadInput(Context& context) noexcept {
 }
 
 // 捕获开关快捷键：取这一帧新按下的第一个键。Esc 取消，飞行按键拒绝绑定（保持捕获）。
-// 中文说明：CaptureToggleKey()：调用 `IsReservedKey()`、`store()`、`SaveSettings()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// CaptureToggleKey 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void CaptureToggleKey(Context& context) noexcept {
     for (std::uint32_t key = 1; key < 256U; ++key) {
         const bool down = (context.current_keys[key / 8U] & (1U << (key % 8U))) != 0;
@@ -558,7 +558,7 @@ AnomalyStatusV1 SendTeleport(Context& context, const AnomalyGenerationHandleV1 w
 // hold_engage / hold_release / hold_snapshot 三件套。宿主按 Profile 校验结果二选一发布
 // —— 官方 NteMovementHold 走的就是表尾那条路，所以两条都必须试，只试一条会在另一条上
 // 拿到 UNAVAILABLE。
-// 中文说明：HasTailHold()：调用 `HAS_FIELD()`，结果用于完成该函数对应的数据处理。
+// HasTailHold 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool HasTailHold(const Context& context) noexcept {
     const auto* player = context.services.player;
     return HAS_FIELD(player, AnomalyNtePlayerServiceV1, hold_engage) &&
@@ -566,13 +566,13 @@ bool HasTailHold(const Context& context) noexcept {
            HAS_FIELD(player, AnomalyNtePlayerServiceV1, hold_snapshot);
 }
 
-// 中文说明：HoldAvailable()：调用 `HasTailHold()`，结果用于完成该函数对应的数据处理。
+// HoldAvailable 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool HoldAvailable(const Context& context) noexcept {
     const auto* hold = context.services.hold;
     return HasTailHold(context) || (hold != nullptr && hold->engage != nullptr);
 }
 
-// 中文说明：EngageHold()：调用 `HAS_FIELD()`、`hold_engage()`、`engage()`，结果用于完成该函数对应的数据处理。
+// EngageHold 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void EngageHold(Context& context) noexcept {
     const auto* hold = context.services.hold;
     const auto* player = context.services.player;
@@ -594,7 +594,7 @@ void EngageHold(Context& context) noexcept {
     context.hold_engaged = status.code == ANOMALY_STATUS_V1_OK;
 }
 
-// 中文说明：ReleaseHold()：调用 `HAS_FIELD()`、`hold_release()`、`release()`，结果用于完成该函数对应的数据处理。
+// ReleaseHold 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ReleaseHold(Context& context) noexcept {
     if (!context.hold_engaged) return;
     const auto* hold = context.services.hold;
@@ -609,7 +609,7 @@ void ReleaseHold(Context& context) noexcept {
     context.hold_engaged = false;
 }
 
-// 中文说明：StartFlying()：调用 `ResolveGameServices()`、`ReadWorld()`、`ReadPlayer()`、`Log()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
+// StartFlying 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool StartFlying(Context& context) noexcept {
     ResolveGameServices(context);
 
@@ -646,7 +646,7 @@ bool StartFlying(Context& context) noexcept {
     return true;
 }
 
-// 中文说明：StopFlying()：调用 `ReleaseHold()`、`Log()`，结果用于完成该函数对应的数据处理。
+// StopFlying 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void StopFlying(Context& context, const char* reason) noexcept {
     // 交还重力。传送只在 Game 域有效，从 Lifecycle 域（on_stop / on_unload）调用时
     // hold_release 会排队到 Game tick 执行，重力一定会回来。
@@ -658,7 +658,7 @@ void StopFlying(Context& context, const char* reason) noexcept {
         reason != nullptr ? reason : "free fly: stopped");
 }
 
-// 中文说明：UpdateFlight()：调用 `ReadWorld()`、`ReadPlayer()`、`StopFlying()`、`std::memcpy()`；读取运行时数据，遍历输入集合，结果用于完成该函数对应的数据处理。
+// UpdateFlight 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void UpdateFlight(Context& context, const InputState& input, const double delta_seconds) noexcept {
     AnomalyGenerationHandleV1 world{};
     AnomalyGenerationHandleV1 player{};
@@ -764,7 +764,7 @@ void UpdateFlight(Context& context, const InputState& input, const double delta_
     }
 }
 
-// 中文说明：PublishDisplay()：调用 `lock()`、`HoldAvailable()`、`SettingsAvailable()`、`VirtualKeyName()`；遍历输入集合，结果用于完成该函数对应的数据处理。
+// PublishDisplay 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void PublishDisplay(Context& context) noexcept {
     std::scoped_lock lock(context.display_mutex);
     DisplayState& display = context.display;
@@ -808,7 +808,7 @@ void PublishDisplay(Context& context) noexcept {
 // 生命周期
 // ---------------------------------------------------------------------------
 
-// 中文说明：Load()：调用 `Fail()`、`new()`、`Context()`、`view()`，结果用于完成该函数对应的数据处理。
+// 读取并校验 AttackReplay 所需的 Anomaly 战斗、技能、UI 服务，初始化上下文并注册配置；任一必需服务或 ABI 字段缺失时返回失败。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (host == nullptr || plugin_context == nullptr) return Fail(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     *plugin_context = nullptr;
@@ -860,7 +860,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Start()：调用 `Fail()`、`Log()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// 建立 AttackReplay 的运行状态并启动事件/输入轮询，使后续 Update 可以捕获并重放攻击；重复启动不会重新创建已经存在的状态。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Fail(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -869,7 +869,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Stop()：调用 `Fail()`、`StopFlying()`、`SaveSettings()`、`anomaly::sdk::Ok()`，结果用于完成该函数对应的数据处理。
+// 停止 AttackReplay 的事件捕获和重放状态，并清除待验证的攻击上下文，防止插件停止后继续消费战斗事件。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t /*deadline_milliseconds*/) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Fail(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -879,7 +879,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t /*deadline
     return anomaly::sdk::Ok();
 }
 
-// 中文说明：Unload()：调用 `StopFlying()`、`SaveSettings()`，结果用于完成该函数对应的数据处理。
+// Unload 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL Unload(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -888,7 +888,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     delete context;
 }
 
-// 中文说明：Update()：调用 `std::isfinite()`、`ReadInput()`、`exchange()`、`std::memcpy()`；读取运行时数据，结果用于完成该函数对应的数据处理。
+// Update 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL Update(void* plugin_context, double delta_seconds) noexcept {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -943,7 +943,7 @@ void ANOMALY_CALL Update(void* plugin_context, double delta_seconds) noexcept {
     }
 }
 
-// 中文说明：Draw()：调用 `HAS_FIELD()`、`lock()`、`begin_window()`、`StringView()`，结果用于完成该函数对应的数据处理。
+// Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui_v1) noexcept {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
