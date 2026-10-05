@@ -6,7 +6,7 @@
 namespace {
 using namespace better_pose::orbit;
 
-// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -14,7 +14,7 @@ void Check(const bool value, const char *message) {
   }
 }
 
-// 中文说明：Distance() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Distance()：调用 `std::sqrt()`，结果用于完成该函数对应的数据处理。
 double Distance(const std::array<double, 3> &a, const std::array<double, 3> &b) {
   return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) +
                    (a[2] - b[2]) * (a[2] - b[2]));
@@ -40,7 +40,7 @@ bool Project(const View &view, const std::array<double, 3> &point, const double 
   return true;
 }
 
-// 中文说明：StartsWhereThePlayerLooks() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：StartsWhereThePlayerLooks()：调用 `FromView()`、`ViewOf()`、`Check()`、`Distance()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void StartsWhereThePlayerLooks() {
   const std::array<double, 3> location{100.0, -50.0, 180.0};
   const std::array<double, 3> rotation{-12.0, 35.0, 0.0};
@@ -57,7 +57,7 @@ void StartsWhereThePlayerLooks() {
         "an out-of-range start is clamped");
 }
 
-// 中文说明：RotateKeepsTheFocus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：RotateKeepsTheFocus()：调用 `FromView()`、`Project()`、`ViewOf()`、`Rotate()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 void RotateKeepsTheFocus() {
   Orbit orbit = FromView({0, 0, 150}, {-10, 0, 0}, 300);
   const auto focus = orbit.focus;
@@ -78,7 +78,7 @@ void RotateKeepsTheFocus() {
   Check(std::abs(orbit.yaw) <= 180.0, "yaw stays wrapped");
 }
 
-// 中文说明：PanFollowsTheCursor() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：PanFollowsTheCursor()：调用 `FromView()`、`Project()`、`ViewOf()`、`Pan()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void PanFollowsTheCursor() {
   Orbit orbit = FromView({0, 0, 150}, {-20, 60, 0}, 250);
   const double focal = 1000.0;
@@ -95,7 +95,7 @@ void PanFollowsTheCursor() {
   Check(orbit.distance == distance, "no focal length, no pan");
 }
 
-// 中文说明：ZoomIsBounded() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ZoomIsBounded()：调用 `Zoom()`、`Check()`、`std::abs()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void ZoomIsBounded() {
   Orbit orbit;
   orbit.distance = 300.0;
@@ -109,7 +109,7 @@ void ZoomIsBounded() {
   Check(orbit.distance == kMaximumDistance, "zoom out stops at the maximum");
 }
 
-// 中文说明：FocusMovesOnlyTheFocus() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：FocusMovesOnlyTheFocus()：调用 `FromView()`、`Focus()`、`ViewOf()`、`Check()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void FocusMovesOnlyTheFocus() {
   Orbit orbit = FromView({0, 0, 150}, {-15, 30, 0}, 280);
   const double pitch = orbit.pitch;
@@ -125,13 +125,13 @@ void FocusMovesOnlyTheFocus() {
 }
 }  // namespace
 
-// 中文说明：FovBounds() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：FovBounds()：调用 `Check()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void FovBounds() {
   Check(kMinimumFov > 0.0F && kMinimumFov < kMaximumFov && kMaximumFov < 180.0F,
         "the lens range is a valid horizontal field of view");
 }
 
-// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：main()：调用 `FovBounds()`、`StartsWhereThePlayerLooks()`、`RotateKeepsTheFocus()`、`PanFollowsTheCursor()`，结果用于完成该函数对应的数据处理。
 int main() {
   FovBounds();
   StartsWhereThePlayerLooks();
