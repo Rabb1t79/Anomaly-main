@@ -7,7 +7,7 @@ namespace {
 using better_pose::history::PoseHistory;
 using better_pose::history::PoseState;
 
-// 中文说明：Check() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Check()：调用 `std::exit()`，结果用于完成该函数对应的数据处理。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -15,7 +15,7 @@ void Check(const bool value, const char *message) {
   }
 }
 
-// 中文说明：Pose() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Pose()：调用 `assign()`，结果用于完成该函数对应的数据处理。
 PoseState Pose(const double bone1_pitch, const double root_x = 0.0) {
   PoseState state;
   state.angles.assign(4, {0.0, 0.0, 0.0});
@@ -32,7 +32,7 @@ std::uint64_t Hold(PoseHistory &history, const PoseState &state, std::uint64_t n
   return now;
 }
 
-// 中文说明：DragIsOneStep() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：DragIsOneStep()：调用 `Hold()`、`Pose()`、`Observe()`、`Check()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 void DragIsOneStep() {
   PoseHistory history;
   std::uint64_t now = 1000;
@@ -53,7 +53,7 @@ void DragIsOneStep() {
   Check(history.Redo(Pose(0), out) && out.SameAs(Pose(30)), "redo returns the drag");
 }
 
-// 中文说明：SeparateEditsAreSeparateSteps() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：SeparateEditsAreSeparateSteps()：调用 `Hold()`、`Pose()`、`Check()`、`UndoCount()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void SeparateEditsAreSeparateSteps() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -75,7 +75,7 @@ void SeparateEditsAreSeparateSteps() {
   Check(history.UndoCount() == 1, "the new edit is the only step");
 }
 
-// 中文说明：UndoWhileSettlingClosesTheEdit() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：UndoWhileSettlingClosesTheEdit()：调用 `Hold()`、`Pose()`、`Check()`、`Undo()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void UndoWhileSettlingClosesTheEdit() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -91,7 +91,7 @@ void UndoWhileSettlingClosesTheEdit() {
   Check(history.UndoCount() == 1 && history.RedoCount() == 1, "applying undo is not an edit");
 }
 
-// 中文说明：ChangedBackIsNothing() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：ChangedBackIsNothing()：调用 `Hold()`、`Pose()`、`Check()`、`UndoCount()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void ChangedBackIsNothing() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -101,7 +101,7 @@ void ChangedBackIsNothing() {
   Check(history.UndoCount() == 0, "a change that returns to the start records nothing");
 }
 
-// 中文说明：TrailingZerosAndReset() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：TrailingZerosAndReset()：调用 `assign()`、`resize()`、`Check()`、`SameAs()`；通过 `Check()` 校验结果，结果用于完成该函数对应的数据处理。
 void TrailingZerosAndReset() {
   PoseState short_state;
   short_state.angles.assign(2, {0.0, 0.0, 0.0});
@@ -120,7 +120,7 @@ void TrailingZerosAndReset() {
   Check(!history.Undo(Pose(99), out), "nothing to undo after a reset");
 }
 
-// 中文说明：Bounded() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：Bounded()：调用 `Hold()`、`Pose()`、`Check()`、`UndoCount()`；通过 `Check()` 校验结果，遍历输入集合，结果用于完成该函数对应的数据处理。
 void Bounded() {
   PoseHistory history;
   std::uint64_t now = 0;
@@ -136,7 +136,7 @@ void Bounded() {
 }
 }  // namespace
 
-// 中文说明：main() 负责执行这里的具体处理；保持现有调用关系与行为不变。
+// 中文说明：main()：调用 `DragIsOneStep()`、`SeparateEditsAreSeparateSteps()`、`UndoWhileSettlingClosesTheEdit()`、`ChangedBackIsNothing()`，结果用于完成该函数对应的数据处理。
 int main() {
   DragIsOneStep();
   SeparateEditsAreSeparateSteps();
