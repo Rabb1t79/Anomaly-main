@@ -63,6 +63,7 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
+// 中文说明：HasField() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -73,12 +74,14 @@ AnomalyStatusV1 Status(
     return {code, 0, {message.data(), message.size()}};
 }
 
+// 中文说明：InputReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool InputReady(const AnomalyInputServiceV1* service) noexcept {
     return HasField<AnomalyInputServiceV1, decltype(AnomalyInputServiceV1::release_hotkey)>(
                service, offsetof(AnomalyInputServiceV1, release_hotkey)) &&
         service->register_hotkey != nullptr && service->release_hotkey != nullptr;
 }
 
+// 中文说明：UiReady() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool UiReady(const AnomalyUiServiceV1* service) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_window)>(
                service, offsetof(AnomalyUiServiceV1, end_window)) &&
@@ -86,6 +89,7 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
         service->text != nullptr;
 }
 
+// 中文说明：IsOwnedWindow() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool IsOwnedWindow(const HWND window) noexcept {
     if (window == nullptr) return false;
     DWORD process_id{};
@@ -93,6 +97,7 @@ bool IsOwnedWindow(const HWND window) noexcept {
         process_id == GetCurrentProcessId();
 }
 
+// 中文说明：ResolveGameWindow() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 HWND ResolveGameWindow() noexcept {
     const HWND foreground = GetForegroundWindow();
     if (!IsOwnedWindow(foreground)) return nullptr;
@@ -105,6 +110,7 @@ HWND ResolveGameWindow() noexcept {
     return foreground;
 }
 
+// 中文说明：ExtendedKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ExtendedKey(const std::uint32_t virtual_key) noexcept {
     switch (virtual_key) {
     case VK_RMENU:
@@ -147,22 +153,26 @@ bool PostKey(
                window, message, static_cast<WPARAM>(virtual_key), lparam) != FALSE;
 }
 
+// 中文说明：EnsureWindow() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool EnsureWindow(Context& context) noexcept {
     if (IsWindow(context.sequence_window)) return true;
     context.sequence_window = ResolveGameWindow();
     return context.sequence_window != nullptr;
 }
 
+// 中文说明：SlotKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::uint32_t SlotKey(const std::uint32_t slot) noexcept {
     return kFirstSlotKey + slot - 1U;
 }
 
+// 中文说明：ComboHeld() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ComboHeld(const std::uint32_t slot) noexcept {
     if (slot < 1U || slot > kSlotCount) return false;
     return (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 &&
         (GetAsyncKeyState(static_cast<int>(SlotKey(slot))) & 0x8000) != 0;
 }
 
+// 中文说明：RestoreAltIfHeld() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void RestoreAltIfHeld(Context& context) noexcept {
     if (!context.alt_cleared) return;
     if ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0 && IsWindow(context.sequence_window)) {
@@ -172,6 +182,7 @@ void RestoreAltIfHeld(Context& context) noexcept {
     context.alt_cleared = false;
 }
 
+// 中文说明：ApplyCommand() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 bool ApplyCommand(Context& context, const std::uint32_t slot, const Command command) noexcept {
     if (!EnsureWindow(context)) return false;
 
@@ -203,6 +214,7 @@ bool ApplyCommand(Context& context, const std::uint32_t slot, const Command comm
     return false;
 }
 
+// 中文说明：CleanupPostedKeys() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void CleanupPostedKeys(Context& context) noexcept {
     if (EnsureWindow(context)) {
         if (context.ultimate_down) {
@@ -221,6 +233,7 @@ void CleanupPostedKeys(Context& context) noexcept {
     context.sequence_window = nullptr;
 }
 
+// 中文说明：ReleaseHotkeys() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ReleaseHotkeys(Context& context) noexcept {
     if (!InputReady(context.input)) {
         context.hotkeys.fill({});
@@ -234,6 +247,7 @@ void ReleaseHotkeys(Context& context) noexcept {
     }
 }
 
+// 中文说明：RegisterHotkeys() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 RegisterHotkeys(Context& context) noexcept {
     ReleaseHotkeys(context);
     for (std::uint32_t slot = 1; slot <= kSlotCount; ++slot) {
@@ -301,6 +315,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Start() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -315,6 +330,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return RegisterHotkeys(*context);
 }
 
+// 中文说明：Stop() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -328,6 +344,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// 中文说明：Unload() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Unload(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -335,6 +352,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     delete context;
 }
 
+// 中文说明：Update() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -381,6 +399,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     context->active_slot.store(state.active_slot, std::memory_order_release);
 }
 
+// 中文说明：PhaseMessageKey() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string_view PhaseMessageKey(const Phase phase) noexcept {
     switch (phase) {
     case Phase::Idle:
@@ -402,6 +421,7 @@ std::string_view PhaseMessageKey(const Phase phase) noexcept {
     return "state.ready";
 }
 
+// 中文说明：PhaseFallback() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 std::string_view PhaseFallback(const Phase phase) noexcept {
     switch (phase) {
     case Phase::Idle:
@@ -423,6 +443,7 @@ std::string_view PhaseFallback(const Phase phase) noexcept {
     return "Ready";
 }
 
+// 中文说明：Draw() 负责执行这里的具体处理；保持现有调用关系与行为不变。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
