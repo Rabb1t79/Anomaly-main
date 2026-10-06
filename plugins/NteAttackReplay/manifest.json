@@ -60,7 +60,6 @@
     "nte-skill-invocation",
     "interop-signature",
     "ue5-names",
-    "game-events",
-    "ue5-process-event"
+    "game-events"
   ]
 }
