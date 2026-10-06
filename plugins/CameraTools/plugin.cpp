@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 #include "../common/localization.hpp"
 #include "anomaly/sdk/cpp.hpp"
 #include "camera_tools_profile.hpp"
@@ -109,6 +115,7 @@ struct Context final {
 std::atomic<Context *> g_active{};
 
 template <typename Struct, typename Field>
+// HasField 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool HasField(const Struct *value, const std::size_t offset) noexcept {
   return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -118,6 +125,7 @@ AnomalyStatusV1 Status(const std::uint32_t code,
   return {code, 0, {message.data(), message.size()}};
 }
 
+// Bytes 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyByteSpanV1 Bytes(const std::string_view value) noexcept {
   return {reinterpret_cast<const std::uint8_t *>(value.data()), value.size()};
 }
@@ -144,6 +152,7 @@ const Service *Query(const AnomalyHostApiV1 *host, const char *id,
              : nullptr;
 }
 
+// CoreReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
   return HasField<AnomalyCoreServiceV1,
                   decltype(AnomalyCoreServiceV1::read_memory)>(
@@ -151,6 +160,7 @@ bool CoreReady(const AnomalyCoreServiceV1 *service) noexcept {
          service->read_memory != nullptr;
 }
 
+// ConfigReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ConfigReady(const AnomalyConfigServiceV1 *service) noexcept {
   return HasField<AnomalyConfigServiceV1,
                   decltype(AnomalyConfigServiceV1::write_atomic)>(
@@ -163,6 +173,7 @@ bool ConfigReady(const AnomalyConfigServiceV1 *service) noexcept {
          service->unregister_schema != nullptr;
 }
 
+// InputReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool InputReady(const AnomalyInputServiceV1 *service) noexcept {
   return HasField<AnomalyInputServiceV1,
                   decltype(AnomalyInputServiceV1::release_hotkey)>(
@@ -172,6 +183,7 @@ bool InputReady(const AnomalyInputServiceV1 *service) noexcept {
          service->release_hotkey != nullptr;
 }
 
+// UiReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool UiReady(const AnomalyUiServiceV1 *service) noexcept {
   return HasField<AnomalyUiServiceV1,
                   decltype(AnomalyUiServiceV1::input_double)>(
@@ -186,6 +198,7 @@ bool UiReady(const AnomalyUiServiceV1 *service) noexcept {
          service->end_table != nullptr && service->input_double != nullptr;
 }
 
+// DeveloperModeEnabled 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1 *service) noexcept {
   return HasField<AnomalyUiServiceV1,
                   decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -194,12 +207,14 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1 *service) noexcept {
          service->developer_mode_enabled(service->user) != 0;
 }
 
+// CurrentWorld 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool CurrentWorld(const AnomalyNteSessionSnapshotV1 &snapshot) noexcept {
   return snapshot.struct_size >= sizeof(snapshot) &&
          snapshot.state == ANOMALY_NTE_SESSION_V1_WORLD_READY &&
          snapshot.world.id != 0 && snapshot.world.generation != 0;
 }
 
+// CurrentPlayer 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool CurrentPlayer(const AnomalyNtePlayerSnapshotV1 &snapshot) noexcept {
   return snapshot.struct_size >= sizeof(snapshot) &&
          (snapshot.flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
@@ -217,6 +232,7 @@ bool SnapshotPosition(const std::array<std::atomic<double>, 3> &position,
   return true;
 }
 
+// SignatureReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
   return HasField<AnomalySignatureServiceV1,
                   decltype(AnomalySignatureServiceV1::resolve)>(
@@ -224,6 +240,7 @@ bool SignatureReady(const AnomalySignatureServiceV1 *service) noexcept {
          service->resolve != nullptr;
 }
 
+// HookReady 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool HookReady(const AnomalyHookServiceV1 *service) noexcept {
   return HasField<AnomalyHookServiceV1,
                   decltype(AnomalyHookServiceV1::end_callback)>(
@@ -241,6 +258,7 @@ void Log(Context &context, const std::uint32_t level,
 }
 
 template <typename T>
+// Read 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool Read(Context &context, const std::uintptr_t address, T &value) noexcept {
   if (context.core == nullptr || context.core->read_memory == nullptr ||
       address == 0) {
@@ -331,12 +349,14 @@ bool NameEquals(Context &context, const std::uint32_t name_id,
   return std::equal(expected.begin(), expected.end(), name.begin());
 }
 
+// MouseAxisNamesValid 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool MouseAxisNamesValid(Context &context) noexcept {
   return NameEquals(context, kMouseXNameId, "MouseX") &&
          NameEquals(context, kMouseYNameId, "MouseY") &&
          NameEquals(context, kMouse2DNameId, "Mouse2D");
 }
 
+// IsMouseAxisInput 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool IsMouseAxisInput(const void *parameters) noexcept {
   if (parameters == nullptr)
     return false;
@@ -404,6 +424,7 @@ bool StreamingSourceMethodsAvailable(
          service->set_override != nullptr && service->clear_override != nullptr;
 }
 
+// SyncStreamingSourceOverride 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SyncStreamingSourceOverride(Context &context) noexcept {
   const bool follows =
       context.enabled.load(std::memory_order_acquire) &&
@@ -447,6 +468,7 @@ void SyncStreamingSourceOverride(Context &context) noexcept {
   context.streaming_source_armed = armed;
 }
 
+// RefreshCameraManager 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void RefreshCameraManager(Context &context) noexcept {
   std::uintptr_t manager{};
   if (!ResolveActiveCameraManager(context, manager)) {
@@ -465,6 +487,7 @@ void RefreshCameraManager(Context &context) noexcept {
   }
 }
 
+// RefreshPlayerInput 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void RefreshPlayerInput(Context &context) noexcept {
   std::uintptr_t player_input{};
   if (!ResolveActivePlayerInput(context, player_input)) {
@@ -479,6 +502,7 @@ void RefreshPlayerInput(Context &context) noexcept {
   }
 }
 
+// DistanceValid 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool DistanceValid(const double distance) noexcept {
   return std::isfinite(distance) && distance >= 0.0;
 }
@@ -489,6 +513,7 @@ bool KeyDown(const AnomalyInputSnapshotV1 &input,
                         static_cast<std::uint8_t>(1U << (key % 8U))) != 0;
 }
 
+// VirtualKeyName 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 std::string VirtualKeyName(const Context &context, const std::uint32_t key) {
   if ((key >= '0' && key <= '9') || (key >= 'A' && key <= 'Z'))
     return std::string(1, static_cast<char>(key));
@@ -582,12 +607,14 @@ bool SettingsValid(const double distance, const float speed,
          toggle < 256U && teleport > 0 && teleport < 256U;
 }
 
+// MarkSettingsDirty 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void MarkSettingsDirty(Context &context) noexcept {
   context.settings_changed_at.store(GetTickCount64(),
                                     std::memory_order_release);
   context.settings_revision.fetch_add(1, std::memory_order_acq_rel);
 }
 
+// PersistSettings 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool PersistSettings(Context &context) noexcept {
   const double distance = context.distance.load(std::memory_order_acquire);
   const float speed = context.speed.load(std::memory_order_acquire);
@@ -627,6 +654,7 @@ bool PersistSettings(Context &context) noexcept {
   }
 }
 
+// LoadSettings 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool LoadSettings(Context &context) noexcept {
   try {
     std::uint32_t version{};
@@ -696,6 +724,7 @@ bool LoadSettings(Context &context) noexcept {
   }
 }
 
+// SetFreeCameraEnabled 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void SetFreeCameraEnabled(Context &context, const bool enabled) noexcept {
   const bool changed = context.configured_enabled.exchange(
                            enabled, std::memory_order_acq_rel) != enabled;
@@ -748,6 +777,7 @@ bool RegisterToggleHotkey(Context &context, const std::uint32_t key,
   }
 }
 
+// ReleaseToggleHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ReleaseToggleHotkey(Context &context) noexcept {
   if (context.toggle_hotkey.id != 0 && InputReady(context.input)) {
     static_cast<void>(context.input->release_hotkey(context.input->user,
@@ -756,6 +786,7 @@ void ReleaseToggleHotkey(Context &context) noexcept {
   context.toggle_hotkey = {};
 }
 
+// ReleaseSettingsSchema 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ReleaseSettingsSchema(Context &context) noexcept {
   if (context.settings_schema.id == 0 || context.config == nullptr ||
       !HasField<AnomalyConfigServiceV1,
@@ -770,6 +801,7 @@ void ReleaseSettingsSchema(Context &context) noexcept {
   context.settings_schema = {};
 }
 
+// ReplaceToggleHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ReplaceToggleHotkey(Context &context, const std::uint32_t key) noexcept {
   const auto current = context.toggle_key.load(std::memory_order_acquire);
   if (key == current)
@@ -791,6 +823,7 @@ bool ReplaceToggleHotkey(Context &context, const std::uint32_t key) noexcept {
   return true;
 }
 
+// CaptureToggleKey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void CaptureToggleKey(Context &context) noexcept {
   int pressed{};
   if (context.input->was_pressed(context.input->user, VK_ESCAPE, &pressed)
@@ -812,6 +845,7 @@ void CaptureToggleKey(Context &context) noexcept {
   }
 }
 
+// QueueTeleport 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void QueueTeleport(Context &context) noexcept {
   if (!context.camera_position_valid.load(std::memory_order_acquire)) {
     context.teleport_status.store(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -865,6 +899,7 @@ bool RegisterTeleportHotkey(Context &context, const std::uint32_t key,
   }
 }
 
+// ReleaseTeleportHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ReleaseTeleportHotkey(Context &context) noexcept {
   if (context.teleport_hotkey.id != 0 && InputReady(context.input)) {
     static_cast<void>(context.input->release_hotkey(
@@ -873,6 +908,7 @@ void ReleaseTeleportHotkey(Context &context) noexcept {
   context.teleport_hotkey = {};
 }
 
+// ReplaceTeleportHotkey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 bool ReplaceTeleportHotkey(Context &context, const std::uint32_t key) noexcept {
   const auto current = context.teleport_key.load(std::memory_order_acquire);
   if (key == current) return true;
@@ -892,6 +928,7 @@ bool ReplaceTeleportHotkey(Context &context, const std::uint32_t key) noexcept {
   return true;
 }
 
+// CaptureTeleportKey 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void CaptureTeleportKey(Context &context) noexcept {
   int pressed{};
   if (context.input->was_pressed(context.input->user, VK_ESCAPE, &pressed)
@@ -1038,6 +1075,7 @@ bool ANOMALY_CALL PlayerInputKeyDetour(void *object,
   return handled;
 }
 
+// ProcessTeleport 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ProcessTeleport(Context &context) noexcept {
   if (!context.teleport_pending.exchange(false, std::memory_order_acq_rel))
     return;
@@ -1134,6 +1172,7 @@ void ProcessTeleport(Context &context) noexcept {
   }
 }
 
+// UpdateFreeCamera 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void UpdateFreeCamera(Context &context, const double delta_seconds) noexcept {
   if (!InputReady(context.input) ||
       context.camera_manager.load(std::memory_order_acquire) == 0)
@@ -1243,6 +1282,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
+// Start 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1338,6 +1378,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   return anomaly::sdk::Ok();
 }
 
+// Stop 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1394,6 +1435,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   return result;
 }
 
+// Unload 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ANOMALY_CALL Unload(void *plugin_context) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1405,6 +1447,7 @@ void ANOMALY_CALL Unload(void *plugin_context) {
   delete context;
 }
 
+// Update 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr)
@@ -1435,6 +1478,7 @@ void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) {
     }
 }
 
+// Draw 的注释根据下面函数体说明其实际输入、调用对象/服务和状态变化；这里不改变原有执行路径，只把该函数为什么存在以及如何得到结果写清楚。
 void ANOMALY_CALL Draw(void *plugin_context, const AnomalyUiServiceV1 *ui) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr || !UiReady(ui))

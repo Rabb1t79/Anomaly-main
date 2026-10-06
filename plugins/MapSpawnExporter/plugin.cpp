@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 #include "anomaly/sdk/anomaly_sdk.h"
 #include "anomaly/sdk/cpp.hpp"
 #include "scanner_profile.hpp"
@@ -113,11 +119,13 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
+// HasField 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
 template <typename Service>
+// Query 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 const Service* Query(const AnomalyHostApiV1* host, const std::string_view id) noexcept {
     if (!HasField<AnomalyHostApiV1, decltype(AnomalyHostApiV1::query_service)>(
             host, offsetof(AnomalyHostApiV1, query_service)) ||
@@ -134,6 +142,7 @@ const Service* Query(const AnomalyHostApiV1* host, const std::string_view id) no
     return service->struct_size >= prefix && service->service_version >= 1 ? service : nullptr;
 }
 
+// CoreReady 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool CoreReady(const Context& context) noexcept {
     return HasField<AnomalyCoreServiceV1, decltype(AnomalyCoreServiceV1::read_memory)>(
                context.core, offsetof(AnomalyCoreServiceV1, read_memory)) &&
@@ -141,6 +150,7 @@ bool CoreReady(const Context& context) noexcept {
 }
 
 template <typename Value>
+// Read 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool Read(Context& context, const std::uintptr_t address, Value& value) noexcept {
     if (!CoreReady(context) || address == 0) return false;
     AnomalyMutableByteSpanV1 destination{
@@ -193,6 +203,7 @@ bool ResolveSignature(Context& context, const std::string_view pattern,
         ANOMALY_STATUS_V1_OK && address != 0;
 }
 
+// RefreshRegistry 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool RefreshRegistry(Context& context) noexcept {
     if (context.g_objects == 0) {
         std::uintptr_t instruction{};
@@ -219,6 +230,7 @@ bool RefreshRegistry(Context& context) noexcept {
     return true;
 }
 
+// ResolveName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 std::string ResolveName(Context& context, const std::uint32_t name_id) {
     if (context.names == nullptr || name_id == 0 ||
         !HasField<AnomalyUe5NamesServiceV1, decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -238,6 +250,7 @@ std::string ResolveName(Context& context, const std::uint32_t name_id) {
     return value;
 }
 
+// RenderFName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 std::string RenderFName(Context& context, const FNameValue value) {
     std::string result = ResolveName(context, value.comparison_index);
     if (result.empty() || value.number == 0) return result;
@@ -245,6 +258,7 @@ std::string RenderFName(Context& context, const FNameValue value) {
     return result;
 }
 
+// Lowercase 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 std::string Lowercase(std::string value) {
     for (char& character : value) {
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
@@ -252,6 +266,7 @@ std::string Lowercase(std::string value) {
     return value;
 }
 
+// ReadObjectName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool ReadObjectName(Context& context, const std::uintptr_t object, std::string& name) {
     FNameValue value{};
     if (!Read(context, object + kObjectNameOffset, value)) return false;
@@ -259,6 +274,7 @@ bool ReadObjectName(Context& context, const std::uintptr_t object, std::string& 
     return !name.empty();
 }
 
+// IsDataTable 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool IsDataTable(Context& context, const std::uintptr_t object) {
     std::uintptr_t class_object{};
     std::string class_name;
@@ -328,6 +344,7 @@ bool ReadDataTableRows(Context& context, const std::uintptr_t table,
     return !rows.empty();
 }
 
+// DiscoverDataTables 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool DiscoverDataTables(Context& context, std::vector<DataTableDescriptor>& tables) {
     tables.clear();
     if (!RefreshRegistry(context) || context.objects == nullptr ||
@@ -363,6 +380,7 @@ bool DiscoverDataTables(Context& context, std::vector<DataTableDescriptor>& tabl
     return !tables.empty();
 }
 
+// AppendUtf8 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void AppendUtf8(std::string& output, const std::uint32_t code_point) {
     if (code_point <= 0x7FU) output.push_back(static_cast<char>(code_point));
     else if (code_point <= 0x7FFU) {
@@ -380,6 +398,7 @@ void AppendUtf8(std::string& output, const std::uint32_t code_point) {
     }
 }
 
+// ReadUtf16Array 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool ReadUtf16Array(Context& context, const std::uintptr_t address, std::string& result) {
     result.clear();
     ArrayHeader header{};
@@ -402,12 +421,14 @@ bool ReadUtf16Array(Context& context, const std::uintptr_t address, std::string&
     return true;
 }
 
+// ReadTextAt 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 std::string ReadTextAt(Context& context, const std::uintptr_t address) {
     std::string result;
     static_cast<void>(ReadUtf16Array(context, address, result));
     return result;
 }
 
+// FindObjectPointer 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool FindObjectPointer(Context& context, const std::string_view path, std::uintptr_t& object) {
     object = 0;
     if (context.objects == nullptr ||
@@ -464,6 +485,7 @@ std::string ReadLevel(Context& context, const std::uintptr_t row,
     return {};
 }
 
+// AddUnique 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool AddUnique(std::vector<Point>& points, std::unordered_set<std::string>& keys, Point point) {
     if (points.size() >= kMaximumPoints || point.id.empty() ||
         !std::all_of(point.position.begin(), point.position.end(), [](const double value) {
@@ -685,6 +707,7 @@ bool ScanOracleStoneTable(Context& context, std::vector<Point>& output,
     return true;
 }
 
+// CategoryName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 std::string CategoryName(const PointKind kind) {
     switch (kind) {
     case PointKind::teleport: return "teleport";
@@ -695,6 +718,7 @@ std::string CategoryName(const PointKind kind) {
     return "unknown";
 }
 
+// SetStatus 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void SetStatus(Context& context, std::string value) noexcept {
     try {
         std::scoped_lock lock(context.mutex);
@@ -703,6 +727,7 @@ void SetStatus(Context& context, std::string value) noexcept {
     }
 }
 
+// ScanAll 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ScanAll(Context& context) {
     if (!RefreshRegistry(context)) {
         SetStatus(context, "UE5 object registry is unavailable; static tables were not scanned");
@@ -760,6 +785,7 @@ void ScanAll(Context& context) {
     SetStatus(context, std::move(status));
 }
 
+// AppendJsonString 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void AppendJsonString(std::string& output, const std::string_view value) {
     output.push_back('"');
     for (const unsigned char character : value) {
@@ -782,6 +808,7 @@ void AppendJsonString(std::string& output, const std::string_view value) {
     output.push_back('"');
 }
 
+// BuildJson 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 std::string BuildJson(const std::vector<Point>& points) {
     std::string output;
     output.reserve(points.size() * 180U + 128U);
@@ -804,6 +831,7 @@ std::string BuildJson(const std::vector<Point>& points) {
     return output;
 }
 
+// ExportJson 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ExportJson(Context& context) {
     if (context.storage == nullptr ||
         !HasField<AnomalyStorageServiceV1, decltype(AnomalyStorageServiceV1::write_atomic)>(
@@ -834,6 +862,7 @@ void ExportJson(Context& context) {
     SetStatus(context, detail);
 }
 
+// ExportJsonTask 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL ExportJsonTask(void* value, AnomalyGenerationHandleV1) {
     if (value == nullptr) return;
     auto& context = *static_cast<Context*>(value);
@@ -844,6 +873,7 @@ void ANOMALY_CALL ExportJsonTask(void* value, AnomalyGenerationHandleV1) {
     }
 }
 
+// ScheduleExport 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ScheduleExport(Context& context) {
     if (context.scheduler == nullptr ||
         !HasField<AnomalySchedulerServiceV1, decltype(AnomalySchedulerServiceV1::schedule)>(
@@ -867,6 +897,7 @@ void ScheduleExport(Context& context) {
     SetStatus(context, detail);
 }
 
+// Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void Draw(Context& context, const AnomalyUiServiceV1* ui) {
     if (ui == nullptr || !HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_window)>(
             ui, offsetof(AnomalyUiServiceV1, begin_window)) || ui->begin_window == nullptr ||
@@ -925,6 +956,7 @@ void Draw(Context& context, const AnomalyUiServiceV1* ui) {
     ui->end_window(ui->user);
 }
 
+// 读取并校验 AttackReplay 所需的 Anomaly 战斗、技能、UI 服务，初始化上下文并注册配置；任一必需服务或 ABI 字段缺失时返回失败。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (host == nullptr || plugin_context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     auto* context = new (std::nothrow) Context;
@@ -947,18 +979,22 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
+// 建立 AttackReplay 的运行状态并启动事件/输入轮询，使后续 Update 可以捕获并重放攻击；重复启动不会重新创建已经存在的状态。
 AnomalyStatusV1 ANOMALY_CALL Start(void* value) {
     if (value == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     static_cast<Context*>(value)->scan_requested.store(true, std::memory_order_release);
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
+// 停止 AttackReplay 的事件捕获和重放状态，并清除待验证的攻击上下文，防止插件停止后继续消费战斗事件。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
+// Unload 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL Unload(void* value) { delete static_cast<Context*>(value); }
 
+// UpdateThunk 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL UpdateThunk(void* value, double) {
     if (value == nullptr) return;
     auto& context = *static_cast<Context*>(value);
@@ -983,6 +1019,7 @@ void ANOMALY_CALL UpdateThunk(void* value, double) {
     }
 }
 
+// DrawThunk 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL DrawThunk(void* value, const AnomalyUiServiceV1* ui) {
     if (value == nullptr) return;
     try {

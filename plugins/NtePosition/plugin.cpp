@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 #include "anomaly/sdk/cpp.hpp"
 #include "plugins/common/localization.hpp"
 
@@ -17,10 +23,12 @@ struct Context {
 } g_context;
 
 template <typename Struct, typename Field>
+// HasField 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// StatusCode 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 constexpr AnomalyStatusV1 StatusCode(const std::uint32_t code) noexcept {
     return {code, 0, {}};
 }
@@ -30,6 +38,7 @@ struct ServiceQuery {
     const Service* service{};
     AnomalyStatusV1 status{StatusCode(ANOMALY_STATUS_V1_UNAVAILABLE)};
 
+// bool 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     [[nodiscard]] explicit operator bool() const noexcept { return service != nullptr; }
 };
 
@@ -57,6 +66,7 @@ ServiceQuery<Service> QueryService(
     return {service, StatusCode(ANOMALY_STATUS_V1_OK)};
 }
 
+// StatusName 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 const char* StatusName(const std::uint32_t code) noexcept {
     switch (code) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -73,6 +83,7 @@ const char* StatusName(const std::uint32_t code) noexcept {
     }
 }
 
+// SnapshotState 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 const char* SnapshotState(const std::uint32_t flags) noexcept {
     if ((flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) == 0) return "UNAVAILABLE";
     const bool stale = (flags & ANOMALY_NTE_SNAPSHOT_V1_STALE) != 0;
@@ -83,6 +94,7 @@ const char* SnapshotState(const std::uint32_t flags) noexcept {
     return "VALID";
 }
 
+// SessionStateName 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 const char* SessionStateName(const std::uint32_t state) noexcept {
     switch (state) {
     case ANOMALY_NTE_SESSION_V1_WORLD_READY: return "WORLD_READY";
@@ -91,6 +103,7 @@ const char* SessionStateName(const std::uint32_t state) noexcept {
     }
 }
 
+// SessionEventName 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 std::string SessionEventName(const std::uint32_t kind) {
     switch (kind) {
     case ANOMALY_NTE_SESSION_EVENT_V1_WORLD_READY:
@@ -104,6 +117,7 @@ std::string SessionEventName(const std::uint32_t kind) {
     }
 }
 
+// HasUiFrameFunctions 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool HasUiFrameFunctions(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::begin_window)>(
                ui, offsetof(AnomalyUiServiceV1, begin_window)) &&
@@ -114,6 +128,7 @@ bool HasUiFrameFunctions(const AnomalyUiServiceV1* ui) noexcept {
         ui->begin_window != nullptr && ui->end_window != nullptr && ui->text != nullptr;
 }
 
+// DrawText 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawText(const AnomalyUiServiceV1* ui, const std::string_view text) {
     if (!HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::text)>(
             ui, offsetof(AnomalyUiServiceV1, text)) ||
@@ -165,6 +180,7 @@ bool DrawSnapshotState(
     return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0;
 }
 
+// Load 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     const auto ui = QueryService<AnomalyUiServiceV1>(
@@ -177,14 +193,17 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     return anomaly::sdk::Ok();
 }
 
+// Start 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Start(void* context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     static_cast<Context*>(context)->session_cursor = 0;
     return anomaly::sdk::Ok();
 }
 
+// Stop 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) { return anomaly::sdk::Ok(); }
 
+// Unload 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL Unload(void*) { g_context = {}; }
 
 void DrawSessionSnapshot(
@@ -261,6 +280,7 @@ void DrawSessionEvents(
         "Session event cursor: STALE; resynchronized to #{0}", arguments));
 }
 
+// DrawSession 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawSession(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     const auto session = QueryService<AnomalyNteSessionServiceV1>(
         host,
@@ -348,6 +368,7 @@ void DrawCameraSnapshot(
         arguments));
 }
 
+// DrawPlayer 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawPlayer(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     const auto player = QueryService<AnomalyNtePlayerServiceV1>(
         host,
@@ -361,6 +382,7 @@ void DrawPlayer(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     DrawCameraSnapshot(player.service, ui);
 }
 
+// DrawMetrics 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawMetrics(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
     const auto metrics = QueryService<AnomalyNteMetricsServiceV1>(
         host,
@@ -404,6 +426,7 @@ void DrawMetrics(const AnomalyHostApiV1* host, const AnomalyUiServiceV1* ui) {
         arguments));
 }
 
+// Draw 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
     if (g_context.host == nullptr) return;
     if (!HasUiFrameFunctions(ui)) {

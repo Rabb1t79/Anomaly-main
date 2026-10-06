@@ -125,6 +125,7 @@ AnomalyStatusV1 Status(
 }
 
 template <typename Struct, typename Field>
+// HasField 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -173,6 +174,7 @@ struct UnrealString final {
 using TextToStringFunction = UnrealString*(ANOMALY_CALL*)(UnrealString*, const void*);
 using FreeStringFunction = void(ANOMALY_CALL*)(void*);
 
+// EncodeFName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::uint64_t EncodeFName(const FNameValue value) noexcept {
     return static_cast<std::uint64_t>(value.comparison_index) |
         (static_cast<std::uint64_t>(value.number) << 32U);
@@ -239,6 +241,7 @@ struct PinkPawWorldGate::Impl final {
         return left.id == right.id && left.generation == right.generation;
     }
 
+// Complete 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] static bool Complete(const std::uint32_t flags) noexcept {
         return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
             (flags & ANOMALY_NTE_SNAPSHOT_V1_PARTIAL) == 0;
@@ -399,11 +402,13 @@ PinkPawWorldState PinkPawWorldGate::Refresh(
     }
 }
 
+// 中文说明：PinkPawWorldGate::Invalidate()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 void PinkPawWorldGate::Invalidate() noexcept {
     impl_->world = {};
     impl_->state = PinkPawWorldState::unavailable;
 }
 
+// 中文说明：PinkPawWorldGate::Reset()：调用 `Invalidate()`，结果用于完成该函数对应的数据处理。
 void PinkPawWorldGate::Reset() noexcept {
     Invalidate();
     impl_->marker_name_id = 0;
@@ -463,6 +468,7 @@ struct RobBankRuntime::Impl final {
         return AddSignedAddress(base, offset, address) && Read(address, value) && value != 0;
     }
 
+// IsGameThread 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool IsGameThread() const noexcept {
         return framework != nullptr && framework->is_game_thread != nullptr &&
             framework->is_game_thread(framework->user) != 0;
@@ -541,6 +547,7 @@ struct RobBankRuntime::Impl final {
         return ReadBytes(address, actual.data(), actual.size()) && actual == expected;
     }
 
+// ResolvePluginProfile 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool ResolvePluginProfile() noexcept {
         std::uintptr_t pickup{};
         std::uintptr_t text_to_string{};
@@ -568,6 +575,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
+// ResolveName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string ResolveName(const std::uint32_t name_id) const {
         if (name_id == 0 || names == nullptr || names->resolve_utf8 == nullptr) return {};
         std::array<char, 128> local{};
@@ -588,6 +596,7 @@ struct RobBankRuntime::Impl final {
         return value;
     }
 
+// ResolveObjectName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string ResolveObjectName(const std::uintptr_t object) const {
         std::uintptr_t address{};
         std::uint32_t name_id{};
@@ -598,6 +607,7 @@ struct RobBankRuntime::Impl final {
         return ResolveName(name_id);
     }
 
+// RenderFName 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string RenderFName(const FNameValue value) const {
         std::string name = ResolveName(value.comparison_index);
         if (name.empty() || value.number == 0) return name;
@@ -606,6 +616,7 @@ struct RobBankRuntime::Impl final {
         return name;
     }
 
+// ReadText 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] std::string ReadText(const std::uintptr_t text) const {
         UnrealString converted;
         const auto text_to_string = reinterpret_cast<TextToStringFunction>(text_to_string_function);
@@ -647,6 +658,7 @@ struct RobBankRuntime::Impl final {
         return false;
     }
 
+// IsRobBankClass 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool IsRobBankClass(const std::uintptr_t class_object) {
         if (const auto found = rob_bank_classes.find(class_object);
             found != rob_bank_classes.end()) {
@@ -657,6 +669,7 @@ struct RobBankRuntime::Impl final {
         return matches;
     }
 
+// IsRobBankCloneDataAssetClass 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool IsRobBankCloneDataAssetClass(const std::uintptr_t class_object) {
         if (const auto found = rob_bank_clone_data_asset_classes.find(class_object);
             found != rob_bank_clone_data_asset_classes.end()) {
@@ -723,6 +736,7 @@ struct RobBankRuntime::Impl final {
             Read(object_address, object);
     }
 
+// LoadObjectRegistry 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool LoadObjectRegistry(ObjectRegistry& next) const noexcept {
         ObjectRegistry candidate;
         if (!ReadPointerAt(object_registry_address, kObjectItemsOffset, candidate.items)) {
@@ -796,6 +810,7 @@ struct RobBankRuntime::Impl final {
             ReadPointerAt(local_player, kLocalPlayerControllerOffset, next_controller);
     }
 
+// ResetWorldState 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     void ResetWorldState() noexcept {
         point_table = {};
         item_tables = {};
@@ -855,6 +870,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
+// RefreshPointTable 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     void RefreshPointTable() noexcept {
         try {
             if (registry.items == 0 || registry.count == 0) {
@@ -952,6 +968,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
+// BuildItemTables 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool BuildItemTables(const std::uintptr_t data_asset) {
         std::uintptr_t table{};
         DataTableRows rows;
@@ -1008,6 +1025,7 @@ struct RobBankRuntime::Impl final {
         return true;
     }
 
+// RefreshItemTables 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     void RefreshItemTables() noexcept {
         try {
             if (registry.items == 0 || registry.count == 0) {
@@ -1089,6 +1107,7 @@ struct RobBankRuntime::Impl final {
 
     }
 
+// RefreshKeyDoorContext 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
     [[nodiscard]] bool RefreshKeyDoorContext(bool* const changed = nullptr) {
         std::unordered_set<std::uint64_t> next_unlocked_key_doors;
         std::uintptr_t player_state{};
@@ -1293,6 +1312,7 @@ RobBankRuntime::RobBankRuntime() : impl_(std::make_unique<Impl>()) {}
 
 RobBankRuntime::~RobBankRuntime() = default;
 
+// 中文说明：RobBankRuntime::Start()：调用 `Stop()`、`services()`、`get()`、`decltype()`；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool RobBankRuntime::Start(const AnomalyHostApiV1* const host) noexcept {
     Stop();
     if (host == nullptr) return false;
@@ -1346,6 +1366,7 @@ bool RobBankRuntime::Start(const AnomalyHostApiV1* const host) noexcept {
     }
 }
 
+// 中文说明：RobBankRuntime::Stop()：调用 `clear()`，结果用于完成该函数对应的数据处理。
 void RobBankRuntime::Stop() noexcept {
     impl_->core = nullptr;
     impl_->signatures = nullptr;
@@ -1372,6 +1393,7 @@ void RobBankRuntime::Stop() noexcept {
     impl_->native_object_find_available = false;
 }
 
+// 中文说明：RobBankRuntime::Refresh()：调用 `IsGameThread()`、`ReadWorldAndController()`、`LoadObjectRegistry()`、`ResetWorldState()`；读取运行时数据，按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool RobBankRuntime::Refresh() noexcept {
     impl_->refreshed = false;
     if (!impl_->started || !impl_->IsGameThread()) return false;
@@ -1404,6 +1426,7 @@ bool RobBankRuntime::Refresh() noexcept {
     }
 }
 
+// 中文说明：RobBankRuntime::RefreshPickabilityContext()：调用 `IsGameThread()`、`ReadWorldAndController()`、`RefreshKeyDoorContext()`；读取运行时数据，结果用于完成该函数对应的数据处理。
 RobBankContextRefresh RobBankRuntime::RefreshPickabilityContext() noexcept {
     if (!impl_->started || !impl_->refreshed || !impl_->IsGameThread()) {
         return RobBankContextRefresh::unavailable;
@@ -1438,6 +1461,7 @@ RobBankInspection RobBankRuntime::Inspect(
     return impl_->Inspect(entity_id, expected_class_name);
 }
 
+// 中文说明：RobBankRuntime::Pickup()：调用 `Status()`、`IsGameThread()`、`ResolveEntity()`、`EvaluatePickability()`；读取运行时数据，结果用于完成该函数对应的数据处理。
 AnomalyStatusV1 RobBankRuntime::Pickup(const RobBankEntity entity) noexcept {
     if (!impl_->started || !impl_->refreshed) {
         return Status(
@@ -1520,14 +1544,17 @@ AnomalyStatusV1 RobBankRuntime::Pickup(const RobBankEntity entity) noexcept {
     }
 }
 
+// 中文说明：RobBankRuntime::Available()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool RobBankRuntime::Available() const noexcept {
     return impl_->started;
 }
 
+// 中文说明：RobBankRuntime::CanInspect()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool RobBankRuntime::CanInspect() const noexcept {
     return impl_->started && impl_->refreshed;
 }
 
+// 中文说明：RobBankRuntime::DiscoveryPending()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool RobBankRuntime::DiscoveryPending() const noexcept {
     return impl_->started &&
         (!impl_->refreshed ||
@@ -1535,6 +1562,7 @@ bool RobBankRuntime::DiscoveryPending() const noexcept {
          (!impl_->item_tables.available && !impl_->item_tables.discovery_complete));
 }
 
+// 中文说明：RobBankRuntime::PickabilityReady()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 bool RobBankRuntime::PickabilityReady() const noexcept {
     return impl_->started && impl_->refreshed && impl_->point_table.available &&
         impl_->key_door_context_available;

@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 #include "anomaly/sdk/cpp.hpp"
 #include "plugins/common/localization.hpp"
 
@@ -155,10 +161,12 @@ std::uint64_t g_reconciled_cache_generation{};
 AnomalyGenerationHandleV1 g_ahud_subscription{};
 
 template <typename Struct, typename Field>
+// 按服务结构体的 struct_size 检查指定字段是否实际存在；它用 offset 加字段大小与 ABI 提供的结构长度比较，避免访问旧版本服务结构中尚未提供的成员。
 bool HasField(const Struct* value, std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// LogSettingsFailure 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void LogSettingsFailure(const std::string_view operation) {
     if (!HasField<AnomalyCoreServiceV1, decltype(AnomalyCoreServiceV1::log)>(
             g_context.core, offsetof(AnomalyCoreServiceV1, log)) ||
@@ -171,8 +179,10 @@ void LogSettingsFailure(const std::string_view operation) {
         anomaly::sdk::StringView(message));
 }
 
+// 验证整数配置值是否严格等于 0 或 1；其他值被拒绝，防止非法布尔值进入设置状态。
 bool ValidBoolean(int value) noexcept { return value == 0 || value == 1; }
 
+// 逐项验证 EntityESP 设置中的布尔字段、有限浮点数和范围约束；任一配置值越界或不是有限数时返回 false。
 bool ValidSettings(const Context& settings) noexcept {
     return ValidBoolean(settings.menu_open) && ValidBoolean(settings.enabled) &&
         ValidBoolean(settings.draw_2d) && ValidBoolean(settings.draw_3d) &&
@@ -197,8 +207,10 @@ bool ValidSettings(const Context& settings) noexcept {
 
 class SettingsJsonReader final {
 public:
+// SettingsJsonReader 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
     explicit SettingsJsonReader(const std::string_view input) noexcept : input_(input) {}
 
+// Consume 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
     bool Consume(const char expected) noexcept {
         SkipWhitespace();
         if (position_ == input_.size() || input_[position_] != expected) return false;
@@ -206,6 +218,7 @@ public:
         return true;
     }
 
+// ParseBoolean 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
     bool ParseBoolean(int& value) noexcept {
         SkipWhitespace();
         if (input_.substr(position_, 4) == "true") {
@@ -221,6 +234,7 @@ public:
         return false;
     }
 
+// ParseNumber 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
     bool ParseNumber(float& value) noexcept {
         SkipWhitespace();
         const std::size_t begin = position_;
@@ -266,6 +280,7 @@ public:
             std::isfinite(value);
     }
 
+// ParseString 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
     bool ParseString(std::string& value, const std::size_t maximum_size) {
         if (!Consume('"')) return false;
         value.clear();
@@ -281,12 +296,14 @@ public:
         return false;
     }
 
+// AtEnd 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
     bool AtEnd() noexcept {
         SkipWhitespace();
         return position_ == input_.size();
     }
 
 private:
+// SkipWhitespace 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
     void SkipWhitespace() noexcept {
         while (position_ < input_.size() &&
                (input_[position_] == ' ' || input_[position_] == '\n' ||
@@ -299,6 +316,7 @@ private:
     std::size_t position_{};
 };
 
+// ParseFilterId 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool ParseFilterId(const std::string_view text, std::uint64_t& value) noexcept {
     if (text.empty() || text.size() > 20 || (text.size() > 1 && text.front() == '0')) {
         return false;
@@ -334,6 +352,7 @@ bool ParseFilterMap(
     }
 }
 
+// ParseColor 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool ParseColor(SettingsJsonReader& reader, float (&color)[4]) noexcept {
     if (!reader.Consume('[')) return false;
     for (std::size_t index = 0; index < std::size(color); ++index) {
@@ -347,6 +366,7 @@ bool ParseColor(SettingsJsonReader& reader, float (&color)[4]) noexcept {
     return true;
 }
 
+// 把解析得到的设置快照逐字段复制到全局运行时 Context，使下一帧 UI/ESP 绘制立即使用新配置。
 void ApplySettings(Context& loaded) {
     g_context.menu_open = loaded.menu_open;
     g_context.enabled = loaded.enabled;
@@ -369,6 +389,7 @@ void ApplySettings(Context& loaded) {
     g_context.settings_dirty = false;
 }
 
+// 按预定义 JSON 字段逐项读取菜单、启用状态、绘制参数和颜色等配置，完成类型、范围和文档尾部校验后才调用 ApplySettings。
 bool ParseSettingsDocument(const std::string_view document) {
     constexpr std::uint32_t kMenuOpen = 1U << 0U;
     constexpr std::uint32_t kEnabled = 1U << 1U;
@@ -467,6 +488,7 @@ bool ParseSettingsDocument(const std::string_view document) {
     return true;
 }
 
+// AppendNumber 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool AppendNumber(std::string& document, const float value) {
     if (!std::isfinite(value)) return false;
     std::array<char, 64> buffer{};
@@ -506,6 +528,7 @@ bool AppendFilterMap(
     return true;
 }
 
+// BuildSettingsDocument 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool BuildSettingsDocument(std::string& document) {
     if (!ValidSettings(g_context)) return false;
     document.clear();
@@ -546,6 +569,7 @@ bool BuildSettingsDocument(std::string& document) {
     return document.size() <= kMaximumSettingsBytes;
 }
 
+// HasConfigFunctions 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool HasConfigFunctions(const AnomalyConfigServiceV1* config) noexcept {
     return HasField<AnomalyConfigServiceV1, decltype(AnomalyConfigServiceV1::write_atomic)>(
                config, offsetof(AnomalyConfigServiceV1, write_atomic)) &&
@@ -556,6 +580,7 @@ bool HasConfigFunctions(const AnomalyConfigServiceV1* config) noexcept {
 
 enum class SettingsLoadResult { Loaded, Missing, Failed };
 
+// 从 config 服务读取保存的 schema 文档，检查版本和长度后解析设置并发布新的 SettingsSnapshot；读取、解析或版本校验失败时保留当前设置。
 SettingsLoadResult LoadSettings() {
     const auto* config = g_context.config;
     if (!HasConfigFunctions(config)) return SettingsLoadResult::Failed;
@@ -589,6 +614,7 @@ SettingsLoadResult LoadSettings() {
     }
 }
 
+// 在持锁状态下取得当前配置路径和编辑内容，把设置序列化后通过 config->write_atomic 写入配置文件；写入失败返回对应错误状态。
 bool SaveSettings() {
     const auto* config = g_context.config;
     if (!HasConfigFunctions(config)) return false;
@@ -606,11 +632,13 @@ bool SaveSettings() {
     }
 }
 
+// IsCompleteSnapshot 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool IsCompleteSnapshot(const std::uint32_t flags) noexcept {
     return (flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
         (flags & ANOMALY_NTE_SNAPSHOT_V1_PARTIAL) == 0;
 }
 
+// CurrentDisplaySettings 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 DisplaySettings CurrentDisplaySettings() {
     DisplaySettings settings;
     settings.enabled = g_context.enabled;
@@ -632,12 +660,14 @@ DisplaySettings CurrentDisplaySettings() {
     return settings;
 }
 
+// PublishDisplaySettings 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void PublishDisplaySettings() {
     g_display_settings.store(
         std::make_shared<const DisplaySettings>(CurrentDisplaySettings()),
         std::memory_order_release);
 }
 
+// MobilityName 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 std::string MobilityName(std::uint32_t flags) {
     if ((flags & ANOMALY_NTE_ENTITY_V1_MOVABLE) != 0) return "Movable";
     if ((flags & ANOMALY_NTE_ENTITY_V1_STATIONARY) != 0) return "Stationary";
@@ -645,10 +675,12 @@ std::string MobilityName(std::uint32_t flags) {
     return "Unknown";
 }
 
+// CategoryLabel 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 const std::string& CategoryLabel(const EntityView& entity) noexcept {
     return entity.category;
 }
 
+// MobilityVisible 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool MobilityVisible(std::uint32_t flags) noexcept {
     if ((flags & ANOMALY_NTE_ENTITY_V1_MOVABLE) != 0) return g_context.show_movable != 0;
     if ((flags & ANOMALY_NTE_ENTITY_V1_STATIONARY) != 0) return g_context.show_stationary != 0;
@@ -656,6 +688,7 @@ bool MobilityVisible(std::uint32_t flags) noexcept {
     return g_context.show_unknown != 0;
 }
 
+// MobilityVisible 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool MobilityVisible(const DisplaySettings& settings, std::uint32_t flags) noexcept {
     if ((flags & ANOMALY_NTE_ENTITY_V1_MOVABLE) != 0) return settings.show_movable != 0;
     if ((flags & ANOMALY_NTE_ENTITY_V1_STATIONARY) != 0) {
@@ -666,6 +699,7 @@ bool MobilityVisible(const DisplaySettings& settings, std::uint32_t flags) noexc
 }
 
 template <typename Resolve>
+// ResolveUtf8 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 std::string ResolveUtf8(Resolve&& resolve) {
     std::size_t size{};
     if (resolve(nullptr, &size).code != ANOMALY_STATUS_V1_OK ||
@@ -694,6 +728,7 @@ std::string ResolveCategory(
     return value;
 }
 
+// CollectEntities 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool CollectEntities(AnomalyNteEntityFrameV1& frame, std::vector<EntityView>& entities) {
     const anomaly::sdk::Host host(g_context.host);
     const auto service = host.Query<AnomalyNteEntitiesServiceV1>(
@@ -761,6 +796,7 @@ bool CollectEntities(AnomalyNteEntityFrameV1& frame, std::vector<EntityView>& en
         offset = result.next_offset;
     }
 }
+// SetAll 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void SetAll(std::unordered_map<std::uint64_t, int>& values, int enabled) {
     for (auto& [id, value] : values) {
         static_cast<void>(id);
@@ -768,6 +804,7 @@ void SetAll(std::unordered_map<std::uint64_t, int>& values, int enabled) {
     }
 }
 
+// AnyEnabled 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool AnyEnabled(const std::unordered_map<std::uint64_t, int>& values) {
     return values.empty() || std::ranges::any_of(values, [](const auto& entry) {
         return entry.second != 0;
@@ -781,28 +818,33 @@ bool FilterEnabled(
     return found == filters.end() || found->second != 0;
 }
 
+// HasVisibleMobility 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool HasVisibleMobility() noexcept {
     return g_context.show_static != 0 || g_context.show_stationary != 0 ||
         g_context.show_movable != 0 || g_context.show_unknown != 0;
 }
 
+// HasVisibleMobility 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool HasVisibleMobility(const DisplaySettings& settings) noexcept {
     return settings.show_static != 0 || settings.show_stationary != 0 ||
         settings.show_movable != 0 || settings.show_unknown != 0;
 }
 
+// HasActiveRendering 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool HasActiveRendering() {
     return g_context.enabled != 0 && (g_context.draw_2d != 0 || g_context.draw_3d != 0) &&
         HasVisibleMobility() && AnyEnabled(g_context.class_enabled) &&
         AnyEnabled(g_context.entity_enabled);
 }
 
+// HasActiveRendering 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool HasActiveRendering(const DisplaySettings& settings) {
     return settings.enabled != 0 && (settings.draw_2d != 0 || settings.draw_3d != 0) &&
         HasVisibleMobility(settings) && AnyEnabled(settings.class_enabled) &&
         AnyEnabled(settings.entity_enabled);
 }
 
+// ReconcileEntityFilters 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool ReconcileEntityFilters(const EntityCache& cache) {
     if (!cache.available || cache.entities.empty()) return false;
     g_context.class_enabled.reserve(
@@ -819,6 +861,7 @@ bool ReconcileEntityFilters(const EntityCache& cache) {
     return changed;
 }
 
+// BuildClassSummaries 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 std::vector<ClassSummary> BuildClassSummaries(const std::vector<EntityView>& entities) {
     std::map<std::uint64_t, ClassSummary> by_id;
     for (const auto& entity : entities) {
@@ -841,6 +884,7 @@ std::vector<ClassSummary> BuildClassSummaries(const std::vector<EntityView>& ent
     return result;
 }
 
+// MobilityVisibilityKey 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 std::uint32_t MobilityVisibilityKey() noexcept {
     return (g_context.show_static != 0 ? 1u : 0u) |
         (g_context.show_stationary != 0 ? 1u << 1u : 0u) |
@@ -848,6 +892,7 @@ std::uint32_t MobilityVisibilityKey() noexcept {
         (g_context.show_unknown != 0 ? 1u << 3u : 0u);
 }
 
+// CachedClassSummaries 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 const std::vector<ClassSummary>& CachedClassSummaries(const EntityCache& cache) {
     const std::uint32_t visibility = MobilityVisibilityKey();
     if (cache.frame.generation != g_context.class_summary_generation ||
@@ -859,6 +904,7 @@ const std::vector<ClassSummary>& CachedClassSummaries(const EntityCache& cache) 
     return g_context.class_summaries;
 }
 
+// PageCount 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 std::size_t PageCount(std::size_t item_count) noexcept {
     return std::max<std::size_t>(1, (item_count + kPageSize - 1) / kPageSize);
 }
@@ -887,6 +933,7 @@ void PageButtons(
     ui->text(ui->user, anomaly::sdk::StringView(page_text));
 }
 
+// DrawMenu 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool DrawMenu(const AnomalyUiServiceV1* ui, const EntityCache& cache) {
     if (ui == nullptr || ui->begin_window == nullptr || ui->end_window == nullptr) return false;
     bool settings_changed{};
@@ -1063,11 +1110,13 @@ bool DrawMenu(const AnomalyUiServiceV1* ui, const EntityCache& cache) {
     return settings_changed;
 }
 
+// ClearEntityCache 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ClearEntityCache() noexcept {
     g_entity_cache.store({}, std::memory_order_release);
     g_class_names.clear();
 }
 
+// RefreshCacheIfDue 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void RefreshCacheIfDue() {
     const auto now = Clock::now();
     if (!g_refresh_requested.exchange(false, std::memory_order_acq_rel) &&
@@ -1090,6 +1139,7 @@ void RefreshCacheIfDue() {
         std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / rate));
 }
 
+// AhudServiceAvailable 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool AhudServiceAvailable(const AnomalyUe5AhudServiceV1* service) noexcept {
     return service != nullptr &&
         HasField<AnomalyUe5AhudServiceV1,
@@ -1105,6 +1155,7 @@ bool AhudServiceAvailable(const AnomalyUe5AhudServiceV1* service) noexcept {
         service->subscribe != nullptr && service->unsubscribe != nullptr;
 }
 
+// AhudFrameAvailable 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool AhudFrameAvailable(const AnomalyUe5AhudFrameV1* frame) noexcept {
     return frame != nullptr &&
         HasField<AnomalyUe5AhudFrameV1,
@@ -1447,6 +1498,7 @@ void DrawLabel(
         frame->user, anomaly::sdk::StringView(label), x, y, color, scale));
 }
 
+// PackColor 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 std::uint32_t PackColor(const std::array<float, 4>& rgba) noexcept {
     const auto channel = [](const float value) {
         return static_cast<std::uint32_t>(std::lround(
@@ -1492,6 +1544,7 @@ void ANOMALY_CALL DrawAhud(
     }
 }
 
+// SubscribeAhud 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 SubscribeAhud() noexcept {
     if (!AhudServiceAvailable(g_context.ahud)) {
         return {ANOMALY_STATUS_V1_UNAVAILABLE, 0, {}};
@@ -1507,6 +1560,7 @@ AnomalyStatusV1 SubscribeAhud() noexcept {
     return anomaly::sdk::Ok();
 }
 
+// UnsubscribeAhud 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 UnsubscribeAhud() noexcept {
     if (g_ahud_subscription.id == 0) return anomaly::sdk::Ok();
     const AnomalyGenerationHandleV1 handle = g_ahud_subscription;
@@ -1522,6 +1576,7 @@ AnomalyStatusV1 UnsubscribeAhud() noexcept {
     return status;
 }
 
+// Load 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     *context = nullptr;
@@ -1570,6 +1625,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     return anomaly::sdk::Ok();
 }
 
+// Start 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     ClearEntityCache();
     g_refresh_requested.store(true, std::memory_order_release);
@@ -1585,6 +1641,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     return anomaly::sdk::Ok();
 }
 
+// Stop 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     const AnomalyStatusV1 ahud_status = UnsubscribeAhud();
     const bool saved = !g_context.settings_dirty || SaveSettings();
@@ -1596,6 +1653,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     return saved ? anomaly::sdk::Ok() : AnomalyStatusV1{ANOMALY_STATUS_V1_FAILED, 0, {}};
 }
 
+// Unload 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ANOMALY_CALL Unload(void*) {
     static_cast<void>(UnsubscribeAhud());
     ClearEntityCache();
@@ -1604,6 +1662,7 @@ void ANOMALY_CALL Unload(void*) {
     g_context = {};
 }
 
+// Update 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ANOMALY_CALL Update(void*, double) {
     const auto settings = g_display_settings.load(std::memory_order_acquire);
     if (!settings || !HasActiveRendering(*settings)) {
@@ -1615,6 +1674,7 @@ void ANOMALY_CALL Update(void*, double) {
     RefreshCacheIfDue();
 }
 
+// Draw 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
     const auto cache = g_entity_cache.load(std::memory_order_acquire);
     const EntityCache empty;

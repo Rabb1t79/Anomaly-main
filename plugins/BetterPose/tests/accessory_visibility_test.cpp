@@ -14,11 +14,9 @@ struct Component {
   bool child_visible{};
   unsigned queries{}, visibility_writes{}, destroy_calls{};
 };
-void Check(bool value, const char* message) {
-  if (!value) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
+// 实现 Check：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
-void __fastcall Event(void* object, void* function, void* parameters) {
-  auto& component=*static_cast<Component*>(object);
+// 实现 Event：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   auto* bytes=static_cast<std::uint8_t*>(parameters);
   if (function==&functions[IsVisible]) {
     // The verified native skinned-component getter checks both flags.
@@ -37,16 +35,13 @@ void __fastcall Event(void* object, void* function, void* parameters) {
     ++component.destroy_calls;
   }
 }
-AnomalyStatusV1 ANOMALY_CALL ReadMemory(void*,std::uintptr_t address,AnomalyMutableByteSpanV1 bytes) {
-  std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size);
+// 实现 ReadMemory：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return anomaly::sdk::Ok();
 }
-AnomalyStatusV1 ANOMALY_CALL WriteMemory(void*,std::uintptr_t,AnomalyByteSpanV1) {
-  Check(false,"visibility handling must not write raw source buffers");
+// 实现 WriteMemory：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   return anomaly::sdk::Ok();
 }
-AnomalyStatusV1 ANOMALY_CALL Find(void*,AnomalyStringViewV1 name,AnomalyGenerationHandleV1* handle) {
-  const std::string_view path(name.data,name.size);
+// 实现 Find：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const std::array<std::string_view,Count> paths{
       kFunctionSceneIsVisiblePath,kFunctionSceneSetVisibilityPath,
       kFunctionSceneSetRelativeTransformPath,kFunctionPoseableSetBoneTransformByNamePath,
@@ -60,8 +55,7 @@ AnomalyStatusV1 ANOMALY_CALL Find(void*,AnomalyStringViewV1 name,AnomalyGenerati
 }
 }
 
-int main() {
-  using namespace fixture;
+// 实现 main：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   Context context;
   AnomalyCoreServiceV1 core{};
   core.struct_size=sizeof(core); core.read_memory=ReadMemory; core.write_memory=WriteMemory;

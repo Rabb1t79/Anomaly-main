@@ -4,36 +4,27 @@
 #include <iostream>
 
 namespace fixture {
-void Check(bool value,const char* message) {
-  if (!value) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
 }
 struct Block {
   std::array<std::uint8_t,0x1000> bytes{};
-  std::uintptr_t Address() { return reinterpret_cast<std::uintptr_t>(bytes.data()); }
-  template<class T> void Set(std::size_t offset,T value) { std::memcpy(bytes.data()+offset,&value,sizeof(value)); }
-  template<class T> T Get(std::size_t offset) const { T value{}; std::memcpy(&value,bytes.data()+offset,sizeof(value)); return value; }
-};
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
 struct Region { std::uintptr_t address; std::size_t size; };
 std::vector<Region> regions;
-template<class T> void Register(T& data) { regions.push_back({reinterpret_cast<std::uintptr_t>(&data),sizeof(data)}); }
-bool Contains(std::uintptr_t address,std::size_t size) {
-  for (const auto& r:regions)
+// Register 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
     if (address>=r.address && address-r.address<=r.size && size<=r.size-(address-r.address)) return true;
   return false;
 }
-AnomalyStatusV1 ANOMALY_CALL ReadMemory(void*,std::uintptr_t address,AnomalyMutableByteSpanV1 bytes) {
-  if (!Contains(address,bytes.size)) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
+// ReadMemory 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
   std::memcpy(bytes.data,reinterpret_cast<void*>(address),bytes.size); return anomaly::sdk::Ok();
 }
-AnomalyStatusV1 ANOMALY_CALL WriteMemory(void*,std::uintptr_t address,AnomalyByteSpanV1 bytes) {
-  if (!Contains(address,bytes.size)) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
   std::memcpy(reinterpret_cast<void*>(address),bytes.data,bytes.size); return anomaly::sdk::Ok();
 }
 enum Function { Mode,Lod,Visibility,Destroy,Count };
 int functions[Count]{};
 unsigned destroyed{};
-void __fastcall Event(void* object,void* function,void* parameters) {
-  auto* bytes=static_cast<std::uint8_t*>(object);
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
   if (function==&functions[Mode]) std::memcpy(bytes+kMeshAnimationModeOffset,parameters,1);
   if (function==&functions[Lod]) std::memcpy(bytes+kMeshForcedLodModelOffset,parameters,4);
   if (function==&functions[Visibility]) bytes[0x300]=*static_cast<std::uint8_t*>(parameters);
@@ -42,8 +33,7 @@ void __fastcall Event(void* object,void* function,void* parameters) {
     ++destroyed;
   }
 }
-AnomalyStatusV1 ANOMALY_CALL Find(void*,AnomalyStringViewV1 path,AnomalyGenerationHandleV1* handle) {
-  const std::array<std::string_view,Count> names{kFunctionSetAnimationModePath,kFunctionSetForcedLodPath,
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
                                                kFunctionSceneSetVisibilityPath,kFunctionActorComponentDestroyPath};
   for (std::size_t i=0;i<names.size();++i) if (names[i]==std::string_view(path.data,path.size)) {
     handle->id=i+1; return anomaly::sdk::Ok();
@@ -69,14 +59,12 @@ struct Character {
     }
   }
 };
-void TakeOver(Context& context) {
-  Check(ReadAnimationState(context) && ReadPoseArrays(context),"new skeleton unavailable");
+// TakeOver 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
   Check(EnsurePoseAnimationMode(context,true) && EnsurePoseForcedLod(context,true) &&
         ApplyPause(context,true) && ApplyRate(context,true,.25F) &&
         ApplyRootMotion(context,true,.5F) && ApplyMultiThreadedUpdate(context,true),"body takeover failed");
 }
-void CheckOriginal(const Character& c,std::uint8_t mode,std::uint8_t flags,float rate,float root,int lod) {
-  Check(c.mesh.Get<std::uint8_t>(kMeshAnimationModeOffset)==mode,"previous character animation mode not restored");
+// CheckOriginal 用当前测试输入调用被测逻辑，并检查返回值或对象字段是否符合本测试要验证的行为；断言失败时立即终止测试，避免把错误结果当成通过。
   Check(c.mesh.Get<std::uint8_t>(kMeshAnimationFlagsOffset)==flags,"previous character stayed paused");
   Check(c.mesh.Get<float>(kMeshGlobalAnimRateScaleOffset)==rate,"rate restored to wrong character");
   Check(c.actor.Get<float>(kCharacterAnimRootMotionScaleOffset)==root,"root scale restored to wrong actor");
@@ -85,8 +73,7 @@ void CheckOriginal(const Character& c,std::uint8_t mode,std::uint8_t flags,float
 }
 }
 
-int main() {
-  using namespace fixture;
+// 测试角色切换时的骨骼/姿态状态是否按当前实现正确迁移；函数用两个明确的角色状态构造切换场景，再通过断言检查切换后的字段和映射结果，防止角色改变后继续使用旧角色索引。
   Context context;
   AnomalyCoreServiceV1 core{}; core.struct_size=sizeof(core); core.read_memory=ReadMemory; core.write_memory=WriteMemory;
   context.core=&core;

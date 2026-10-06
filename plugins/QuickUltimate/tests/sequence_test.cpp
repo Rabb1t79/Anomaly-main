@@ -11,12 +11,14 @@ using anomaly::plugins::quick_ultimate::Phase;
 using anomaly::plugins::quick_ultimate::Sequencer;
 using Clock = Sequencer::Clock;
 
+// Check 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool Check(const bool condition, const char* message) {
     if (condition) return true;
     std::fprintf(stderr, "FAIL: %s\n", message);
     return false;
 }
 
+// Equals 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool Equals(const std::optional<Command> value, const Command expected) {
     return value.has_value() && *value == expected;
 }
@@ -50,6 +52,7 @@ bool AdvanceToFirstUltimate(
         "first ultimate must begin immediately after digit release");
 }
 
+// HeldComboRepeatsUltimateEveryHundredMilliseconds 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool HeldComboRepeatsUltimateEveryHundredMilliseconds() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -87,6 +90,7 @@ bool HeldComboRepeatsUltimateEveryHundredMilliseconds() {
         "repeated ultimate must release before the next gap");
 }
 
+// ReleaseBeforeUltimateStopsWithoutQ 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool ReleaseBeforeUltimateStopsWithoutQ() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -120,6 +124,7 @@ bool ReleaseBeforeUltimateStopsWithoutQ() {
         "release before the first Q must not send Q");
 }
 
+// ReleaseDuringUltimateStopsAfterKeyUp 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool ReleaseDuringUltimateStopsAfterKeyUp() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -141,6 +146,7 @@ bool ReleaseDuringUltimateStopsAfterKeyUp() {
         "release during Q down must restore Alt");
 }
 
+// ReleaseDuringRepeatWaitStops 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool ReleaseDuringRepeatWaitStops() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -166,6 +172,7 @@ bool ReleaseDuringRepeatWaitStops() {
         "release during repeat wait must not send another Q");
 }
 
+// LatestSlotReplacesTarget 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool LatestSlotReplacesTarget() {
     Sequencer sequencer;
     const Clock::time_point start{};
@@ -192,6 +199,7 @@ bool LatestSlotReplacesTarget() {
         "only the latest slot may remain active");
 }
 
+// CancelAndFailureClearPostedState 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 bool CancelAndFailureClearPostedState() {
     Sequencer cancelled;
     const Clock::time_point start{};
@@ -232,6 +240,7 @@ bool CancelAndFailureClearPostedState() {
 
 }  // namespace
 
+// main 用当前函数体构造的输入驱动序列/时间状态逻辑，并直接检查目标状态、时间倍率或序列游标的变化；失败条件由现有返回值或测试断言传递，不修改原有行为。
 int main() {
     if (!HeldComboRepeatsUltimateEveryHundredMilliseconds()) return 1;
     if (!ReleaseBeforeUltimateStopsWithoutQ()) return 1;

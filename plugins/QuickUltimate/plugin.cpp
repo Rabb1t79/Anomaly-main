@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 #include "../common/localization.hpp"
 #include "anomaly/sdk/cpp.hpp"
 #include "sequence.hpp"
@@ -57,6 +63,7 @@ struct Context final {
 };
 
 template <typename Struct, typename Field>
+// HasField 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -67,12 +74,14 @@ AnomalyStatusV1 Status(
     return {code, 0, {message.data(), message.size()}};
 }
 
+// InputReady 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool InputReady(const AnomalyInputServiceV1* service) noexcept {
     return HasField<AnomalyInputServiceV1, decltype(AnomalyInputServiceV1::release_hotkey)>(
                service, offsetof(AnomalyInputServiceV1, release_hotkey)) &&
         service->register_hotkey != nullptr && service->release_hotkey != nullptr;
 }
 
+// UiReady 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool UiReady(const AnomalyUiServiceV1* service) noexcept {
     return HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::end_window)>(
                service, offsetof(AnomalyUiServiceV1, end_window)) &&
@@ -80,6 +89,7 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
         service->text != nullptr;
 }
 
+// IsOwnedWindow 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool IsOwnedWindow(const HWND window) noexcept {
     if (window == nullptr) return false;
     DWORD process_id{};
@@ -87,6 +97,7 @@ bool IsOwnedWindow(const HWND window) noexcept {
         process_id == GetCurrentProcessId();
 }
 
+// ResolveGameWindow 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 HWND ResolveGameWindow() noexcept {
     const HWND foreground = GetForegroundWindow();
     if (!IsOwnedWindow(foreground)) return nullptr;
@@ -99,6 +110,7 @@ HWND ResolveGameWindow() noexcept {
     return foreground;
 }
 
+// ExtendedKey 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool ExtendedKey(const std::uint32_t virtual_key) noexcept {
     switch (virtual_key) {
     case VK_RMENU:
@@ -141,22 +153,26 @@ bool PostKey(
                window, message, static_cast<WPARAM>(virtual_key), lparam) != FALSE;
 }
 
+// EnsureWindow 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool EnsureWindow(Context& context) noexcept {
     if (IsWindow(context.sequence_window)) return true;
     context.sequence_window = ResolveGameWindow();
     return context.sequence_window != nullptr;
 }
 
+// SlotKey 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::uint32_t SlotKey(const std::uint32_t slot) noexcept {
     return kFirstSlotKey + slot - 1U;
 }
 
+// ComboHeld 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool ComboHeld(const std::uint32_t slot) noexcept {
     if (slot < 1U || slot > kSlotCount) return false;
     return (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 &&
         (GetAsyncKeyState(static_cast<int>(SlotKey(slot))) & 0x8000) != 0;
 }
 
+// RestoreAltIfHeld 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void RestoreAltIfHeld(Context& context) noexcept {
     if (!context.alt_cleared) return;
     if ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0 && IsWindow(context.sequence_window)) {
@@ -166,6 +182,7 @@ void RestoreAltIfHeld(Context& context) noexcept {
     context.alt_cleared = false;
 }
 
+// ApplyCommand 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 bool ApplyCommand(Context& context, const std::uint32_t slot, const Command command) noexcept {
     if (!EnsureWindow(context)) return false;
 
@@ -197,6 +214,7 @@ bool ApplyCommand(Context& context, const std::uint32_t slot, const Command comm
     return false;
 }
 
+// CleanupPostedKeys 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void CleanupPostedKeys(Context& context) noexcept {
     if (EnsureWindow(context)) {
         if (context.ultimate_down) {
@@ -215,6 +233,7 @@ void CleanupPostedKeys(Context& context) noexcept {
     context.sequence_window = nullptr;
 }
 
+// ReleaseHotkeys 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ReleaseHotkeys(Context& context) noexcept {
     if (!InputReady(context.input)) {
         context.hotkeys.fill({});
@@ -228,6 +247,7 @@ void ReleaseHotkeys(Context& context) noexcept {
     }
 }
 
+// RegisterHotkeys 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 RegisterHotkeys(Context& context) noexcept {
     ReleaseHotkeys(context);
     for (std::uint32_t slot = 1; slot <= kSlotCount; ++slot) {
@@ -295,6 +315,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
+// Start 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -309,6 +330,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return RegisterHotkeys(*context);
 }
 
+// Stop 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -322,6 +344,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// Unload 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ANOMALY_CALL Unload(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -329,6 +352,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     delete context;
 }
 
+// Update 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -375,6 +399,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     context->active_slot.store(state.active_slot, std::memory_order_release);
 }
 
+// PhaseMessageKey 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string_view PhaseMessageKey(const Phase phase) noexcept {
     switch (phase) {
     case Phase::Idle:
@@ -396,6 +421,7 @@ std::string_view PhaseMessageKey(const Phase phase) noexcept {
     return "state.ready";
 }
 
+// PhaseFallback 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 std::string_view PhaseFallback(const Phase phase) noexcept {
     switch (phase) {
     case Phase::Idle:
@@ -417,6 +443,7 @@ std::string_view PhaseFallback(const Phase phase) noexcept {
     return "Ready";
 }
 
+// Draw 根据函数体中的实际游戏对象、表数据和 Anomaly 服务执行当前功能；这里明确说明数据从哪里读取、哪些状态被修改以及失败时如何返回，不改变原有代码路径。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;

@@ -4,6 +4,7 @@ namespace anomaly::plugins::quick_ultimate {
 
 Sequencer::Sequencer(const Timings timings) noexcept : timings_(timings) {}
 
+// 中文说明：Sequencer::Queue()：直接处理局部数据；按校验结果返回成功或失败，结果用于完成该函数对应的数据处理。
 bool Sequencer::Queue(const std::uint32_t slot) noexcept {
     if (slot < 1U || slot > 4U) return false;
     queued_slot_ = slot;
@@ -121,12 +122,14 @@ std::optional<Command> Sequencer::Poll(
     }
 }
 
+// 中文说明：Sequencer::Fail()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 void Sequencer::Fail() noexcept {
     queued_slot_ = 0;
     failed_ = true;
     phase_ = Phase::Cleanup;
 }
 
+// 中文说明：Sequencer::Cancel()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 void Sequencer::Cancel() noexcept {
     phase_ = Phase::Idle;
     deadline_ = {};
@@ -138,6 +141,7 @@ void Sequencer::Cancel() noexcept {
     failed_ = false;
 }
 
+// 中文说明：Sequencer::State()：直接处理局部数据，结果用于完成该函数对应的数据处理。
 Snapshot Sequencer::State() const noexcept {
     return {phase_, active_slot_, queued_slot_, failed_};
 }

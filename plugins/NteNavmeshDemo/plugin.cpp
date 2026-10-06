@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 #include "anomaly/sdk/cpp.hpp"
 #include "../common/localization.hpp"
 
@@ -39,10 +45,12 @@ struct Context final {
 } g_context;
 
 template <typename Struct, typename Field>
+// HasField 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// StatusCode 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 constexpr AnomalyStatusV1 StatusCode(const std::uint32_t code) noexcept {
     return {code, 0, {}};
 }
@@ -52,6 +60,7 @@ struct ServiceQuery final {
     const Service* service{};
     AnomalyStatusV1 status{StatusCode(ANOMALY_STATUS_V1_UNAVAILABLE)};
 
+// bool 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
     [[nodiscard]] explicit operator bool() const noexcept { return service != nullptr; }
 };
 
@@ -82,6 +91,7 @@ ServiceQuery<Service> QueryService(
     return {service, StatusCode(ANOMALY_STATUS_V1_OK)};
 }
 
+// UiReady 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool UiReady(const AnomalyUiServiceV1* service) noexcept {
     return HasField<AnomalyUiServiceV1,
                decltype(AnomalyUiServiceV1::input_double)>(
@@ -92,6 +102,7 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
         service->input_double != nullptr;
 }
 
+// NavigationReady 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 bool NavigationReady(const AnomalyNteNavigationServiceV1* service) noexcept {
     return HasField<AnomalyNteNavigationServiceV1,
                decltype(AnomalyNteNavigationServiceV1::stop_movement)>(
@@ -100,6 +111,7 @@ bool NavigationReady(const AnomalyNteNavigationServiceV1* service) noexcept {
         service->move_to_location != nullptr && service->stop_movement != nullptr;
 }
 
+// StatusName 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 const char* StatusName(const std::uint32_t code) noexcept {
     switch (code) {
     case ANOMALY_STATUS_V1_OK: return "OK";
@@ -116,6 +128,7 @@ const char* StatusName(const std::uint32_t code) noexcept {
     }
 }
 
+// RecordResult 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void RecordResult(const AnomalyStatusV1 status) noexcept {
     std::scoped_lock lock(g_context.mutex);
     g_context.has_result = true;
@@ -127,6 +140,7 @@ void RecordResult(const AnomalyStatusV1 status) noexcept {
     std::memcpy(g_context.result_message.data(), status.message.data, count);
 }
 
+// QueueMove 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void QueueMove(const std::array<double, 3>& destination) noexcept {
     if (!std::isfinite(destination[0]) || !std::isfinite(destination[1]) ||
         !std::isfinite(destination[2])) {
@@ -140,6 +154,7 @@ void QueueMove(const std::array<double, 3>& destination) noexcept {
     g_context.result_message.fill('\0');
 }
 
+// QueueStop 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void QueueStop() noexcept {
     std::scoped_lock lock(g_context.mutex);
     if (!g_context.started) return;
@@ -148,10 +163,12 @@ void QueueStop() noexcept {
     g_context.result_message.fill('\0');
 }
 
+// DrawText 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawText(const AnomalyUiServiceV1* ui, const std::string_view text) {
     ui->text(ui->user, anomaly::sdk::StringView(text));
 }
 
+// DrawStatus 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void DrawStatus(const AnomalyUiServiceV1* ui) {
     RequestKind pending{};
     bool has_result{};
@@ -225,6 +242,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
+// Start 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (plugin_context != &g_context) {
         return StatusCode(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -238,6 +256,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
+// Stop 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     if (plugin_context != &g_context) {
         return StatusCode(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -248,6 +267,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// Unload 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL Unload(void* plugin_context) {
     if (plugin_context != &g_context) return;
     std::scoped_lock lock(g_context.mutex);
@@ -257,6 +277,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     g_context.started = false;
 }
 
+// Update 根据函数体中的具体游戏对象、Anomaly 服务和运行时状态完成当前位置/导航/拾取/传送流程；函数的返回值或状态字段直接反映目标对象不存在、服务不可用或调用成功等结果。
 void ANOMALY_CALL Update(void* plugin_context, double) {
     if (plugin_context != &g_context) return;
 

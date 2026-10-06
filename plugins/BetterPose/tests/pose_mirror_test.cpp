@@ -6,6 +6,7 @@
 namespace {
 using namespace better_pose::mirror;
 
+// Check 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -13,8 +14,10 @@ void Check(const bool value, const char *message) {
   }
 }
 
+// Dot 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 double Dot(const Vec &a, const Vec &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
+// AxisAngle 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 Quat AxisAngle(Vec axis, const double radians) {
   const double length = std::sqrt(Dot(axis, axis));
   for (auto &v : axis)
@@ -38,6 +41,7 @@ struct Body {
 };
 
 // Component space: +X is the body's left, +Y forward, +Z up.
+// MakeBody 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 Body MakeBody() {
   Body b;
   // name, parent, component rest rotation, component position
@@ -94,8 +98,10 @@ Body MakeBody() {
 
 // Where a bone's local +X axis points in component space (the "bone
 // direction"), and a second axis, for comparing orientations as geometry.
+// AxisOf 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 Vec AxisOf(const Quat &world, const Vec &local) { return Rotate(world, local); }
 
+// ReflectX 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 Vec ReflectX(const Vec &v) { return {-v[0], v[1], v[2]}; }
 
 // Mirror symmetry as geometry: the partner's frame must be the reflection
@@ -109,6 +115,7 @@ bool Symmetric(const Body &b, const std::vector<Quat> &world, const std::size_t 
   return Distance(expected, world[right]) < 1e-9;
 }
 
+// Names 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void Names() {
   std::string s;
   Check(SwapSide("Bip001-L-Thigh", s) && s == "Bip001-R-Thigh", "Biped side token");
@@ -124,6 +131,7 @@ void Names() {
         "partners: centre maps to itself, pairs to each other, orphans to none");
 }
 
+// RestIsFixed 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void RestIsFixed() {
   const auto b = MakeBody();
   Check(b.rig.valid, "rig builds");
@@ -135,6 +143,7 @@ void RestIsFixed() {
           "flipping the rest pose changes nothing, even with mismatched right-side axes");
 }
 
+// RaisedArmMovesToTheOtherSide 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void RaisedArmMovesToTheOtherSide() {
   const auto b = MakeBody();
   // Raise the left arm: rotate the upper arm 60 deg about the body's forward
@@ -182,6 +191,7 @@ void RaisedArmMovesToTheOtherSide() {
     Check(Distance(twice[i], locals[i]) < 1e-9, "flipping twice restores the pose");
 }
 
+// CentreBonesFlipTheirTwist 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void CentreBonesFlipTheirTwist() {
   const auto b = MakeBody();
   auto locals = b.rest_locals;
@@ -201,6 +211,7 @@ void CentreBonesFlipTheirTwist() {
   Check(Distance(after[1], rest_world[1]) < 1e-12, "Bip001 (where the body stands) is untouched");
 }
 
+// CopyOneSide 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void CopyOneSide() {
   const auto b = MakeBody();
   auto locals = b.rest_locals;
@@ -219,6 +230,7 @@ void CopyOneSide() {
         "left to right writes the mirrored left arm onto the right");
 }
 
+// MeasuredNteLegs 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void MeasuredNteLegs() {
   // The live NTE capture (component rotations and positions of the rest
   // pose): mirroring the rest pose must stay the rest pose to within the
@@ -265,6 +277,7 @@ void MeasuredNteLegs() {
         "and about its own knee hinge (local Z)");
 }
 
+// DegenerateInput 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 void DegenerateInput() {
   const Rig bad = BuildRig({}, {}, {}, {}, {});
   Check(!bad.valid, "an empty rig is invalid");
@@ -275,6 +288,7 @@ void DegenerateInput() {
 }
 }  // namespace
 
+// main 用本函数构造的确定性输入验证对应的相机/姿态/文档/历史逻辑，并直接检查返回值、计算结果或状态字段；任一预期不成立都会通过 Check() 终止测试。
 int main() {
   Names();
   RestIsFixed();

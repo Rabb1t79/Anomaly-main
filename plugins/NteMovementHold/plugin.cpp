@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 // Movement-hold probe: an on-screen panel that flips the Host's character hold, so the pin the
 // teleport arrival window uses can be exercised on a live client without going through a
 // teleport and without claiming a keyboard key. The panel reports the live gravity scale, velocity
@@ -28,11 +34,13 @@ struct Context final {
   double report_accumulator{};
 };
 
+// Held 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool Held(const Context &context) noexcept {
   return context.snapshot_valid &&
          (context.snapshot.flags & ANOMALY_NTE_PLAYER_HOLD_V1_HELD) != 0;
 }
 
+// Refused 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool Refused(const Context &context) noexcept {
   return context.snapshot_valid &&
          (context.snapshot.flags & ANOMALY_NTE_PLAYER_HOLD_V1_REFUSED) != 0;
@@ -58,6 +66,7 @@ void Log(Context &context, const std::uint32_t level,
 
 // The hold entry points live on the player service, so they are present only when the Host
 // published a struct_size that covers them.
+// HoldReady 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool HoldReady(const AnomalyNtePlayerServiceV1 *service) noexcept {
   return service != nullptr &&
          service->struct_size >=
@@ -67,6 +76,7 @@ bool HoldReady(const AnomalyNtePlayerServiceV1 *service) noexcept {
          service->hold_snapshot != nullptr;
 }
 
+// ResolvePlayer 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ResolvePlayer(Context &context) noexcept {
   if (HoldReady(context.player)) return;
   context.player = Query<AnomalyNtePlayerServiceV1>(
@@ -74,6 +84,7 @@ void ResolvePlayer(Context &context) noexcept {
       ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION);
 }
 
+// CaptureSnapshot 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void CaptureSnapshot(Context &context) noexcept {
   context.snapshot_valid = false;
   if (!HoldReady(context.player)) return;
@@ -86,6 +97,7 @@ void CaptureSnapshot(Context &context) noexcept {
   context.snapshot_valid = true;
 }
 
+// Toggle 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void Toggle(Context &context) noexcept {
   ResolvePlayer(context);
   if (!HoldReady(context.player)) {
@@ -140,6 +152,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1 *host,
   return anomaly::sdk::Ok();
 }
 
+// 建立 AttackReplay 的运行状态并启动事件/输入轮询，使后续 Update 可以捕获并重放攻击；重复启动不会重新创建已经存在的状态。
 AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -148,6 +161,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void *plugin_context) {
   return anomaly::sdk::Ok();
 }
 
+// 停止 AttackReplay 的事件捕获和重放状态，并清除待验证的攻击上下文，防止插件停止后继续消费战斗事件。
 AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -159,10 +173,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void *plugin_context, std::uint32_t) {
   return anomaly::sdk::Ok();
 }
 
+// Unload 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL Unload(void *plugin_context) {
   delete static_cast<Context *>(plugin_context);
 }
 
+// Update 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr) return;
@@ -186,6 +202,7 @@ void ANOMALY_CALL Update(void *plugin_context, const double delta_seconds) noexc
   }
 }
 
+// Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ANOMALY_CALL Draw(void *plugin_context, const AnomalyUiServiceV1 *ui) noexcept {
   auto *context = static_cast<Context *>(plugin_context);
   if (context == nullptr || ui == nullptr) return;

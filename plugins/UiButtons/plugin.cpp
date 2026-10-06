@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 // UI 按钮调试面板：anomaly.nte.ui-buttons 服务的消费者。
 //
 // 扫描、可点击判定、遮挡判定、鼠标拾取和点击全部由 Host 完成；插件只提交请求、轮询请求状态，
@@ -121,6 +127,7 @@ struct Context {
 };
 
 template <typename Struct, typename Field>
+// HasField 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
@@ -134,6 +141,7 @@ AnomalyStatusV1 Status(std::uint32_t code, std::string_view message = {}) noexce
     return {code, 0, {message.data(), message.size()}};
 }
 
+// Log 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void Log(Context& context, const std::string& message) {
     if (context.core != nullptr && context.core->log != nullptr) {
         context.core->log(context.core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO,
@@ -141,11 +149,13 @@ void Log(Context& context, const std::string& message) {
     }
 }
 
+// SetStatus 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void SetStatus(Context& context, std::string text) {
     std::scoped_lock lock(context.mutex);
     context.status = std::move(text);
 }
 
+// Lower 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string Lower(std::string_view value) {
     std::string result(value);
     std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
@@ -154,6 +164,7 @@ std::string Lower(std::string_view value) {
     return result;
 }
 
+// KindName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string_view KindName(std::uint32_t kind) noexcept {
     switch (kind) {
     case ANOMALY_NTE_UI_BUTTON_KIND_V1_UMG: return "UMG";
@@ -165,6 +176,7 @@ std::string_view KindName(std::uint32_t kind) noexcept {
     }
 }
 
+// CategoryName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string_view CategoryName(std::uint32_t category) noexcept {
     switch (category) {
     case ANOMALY_NTE_UI_BUTTON_CATEGORY_V1_CLICKABLE: return "可点击";
@@ -174,6 +186,7 @@ std::string_view CategoryName(std::uint32_t category) noexcept {
     }
 }
 
+// ResultName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string_view ResultName(std::uint32_t status) noexcept {
     switch (status) {
     case ANOMALY_STATUS_V1_OK: return "已调用";
@@ -186,6 +199,7 @@ std::string_view ResultName(std::uint32_t status) noexcept {
     }
 }
 
+// DescribeReasons 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string DescribeReasons(std::uint32_t reasons) {
     static constexpr std::array<std::pair<std::uint32_t, const char*>, 13> kNames{{
         {ANOMALY_NTE_UI_BUTTON_REASON_V1_COLLAPSED_SELF, "自身隐藏"},
@@ -211,6 +225,7 @@ std::string DescribeReasons(std::uint32_t reasons) {
     return text;
 }
 
+// MakeRow 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 Row MakeRow(const AnomalyNteUiButtonSnapshotV1& button) {
     Row row;
     row.button = button.button;
@@ -230,11 +245,13 @@ Row MakeRow(const AnomalyNteUiButtonSnapshotV1& button) {
     return row;
 }
 
+// Label 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string Label(const Row& row) {
     return row.name + (row.text.empty() ? "" : "「" + row.text + "」");
 }
 
 // 服务可能晚于插件加载才发布，也可能随 Host 代际撤销：每 tick 现查。
+// EnsureService 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool EnsureService(Context& context) {
     context.buttons = anomaly::sdk::Host(context.host)
                           .Query<AnomalyNteUiButtonsServiceV1>(
@@ -246,6 +263,7 @@ bool EnsureService(Context& context) {
             context.buttons, offsetof(AnomalyNteUiButtonsServiceV1, cancel));
 }
 
+// Busy 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool Busy(const Context& context, std::uint32_t kind) {
     return std::any_of(context.pending.begin(), context.pending.end(),
                        [kind](const Pending& p) { return p.kind == kind; });
@@ -278,6 +296,7 @@ void Submit(Context& context, std::uint32_t kind, std::string label = {},
 }
 
 // 目录序列号变化时把 Host 目录复制成面板快照。
+// RefreshCatalog 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void RefreshCatalog(Context& context) {
     const auto* service = context.buttons;
     AnomalyNteUiButtonsStatusV1 status{sizeof(status)};
@@ -408,6 +427,7 @@ void FinishPick(Context& context, const Pending& pending,
     context.pick = std::move(pick);
 }
 
+// PollRequests 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void PollRequests(Context& context) {
     const auto* service = context.buttons;
     std::vector<Pending> remaining;
@@ -446,6 +466,7 @@ void PollRequests(Context& context) {
     context.pending = std::move(remaining);
 }
 
+// InputReady 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool InputReady(const AnomalyInputServiceV1* input) noexcept {
     return HasField<AnomalyInputServiceV1, decltype(AnomalyInputServiceV1::release_hotkey)>(
                input, offsetof(AnomalyInputServiceV1, release_hotkey)) &&
@@ -453,12 +474,14 @@ bool InputReady(const AnomalyInputServiceV1* input) noexcept {
         input->release_hotkey != nullptr;
 }
 
+// ValidPickKey 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool ValidPickKey(std::uint32_t key) noexcept {
     return key != 0 && key < 256U && key != VK_ESCAPE &&
         !(key >= VK_LBUTTON && key <= VK_XBUTTON2) && key != VK_SHIFT && key != VK_CONTROL &&
         key != VK_MENU && !(key >= VK_LSHIFT && key <= VK_RMENU);
 }
 
+// KeyName 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string KeyName(std::uint32_t key) {
     if (key == 0) return "未设置";
     if ((key >= '0' && key <= '9') || (key >= 'A' && key <= 'Z')) {
@@ -486,6 +509,7 @@ void ANOMALY_CALL PickHotkey(void* user, AnomalyGenerationHandleV1,
     }
 }
 
+// ReleasePickHotkey 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ReleasePickHotkey(Context& context) noexcept {
     if (context.pick_hotkey.id != 0 && InputReady(context.input)) {
         static_cast<void>(context.input->release_hotkey(context.input->user, context.pick_hotkey));
@@ -495,6 +519,7 @@ void ReleasePickHotkey(Context& context) noexcept {
 }
 
 // 注册拾取快捷键；失败时保留旧键。
+// RegisterPickHotkey 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 std::string RegisterPickHotkey(Context& context, std::uint32_t key) {
     if (!InputReady(context.input)) return "输入服务不可用，快捷键无效";
     if (!ValidPickKey(key)) return "不支持这个键";
@@ -520,6 +545,7 @@ std::string RegisterPickHotkey(Context& context, std::uint32_t key) {
 }
 
 // 重新绑定拾取键：在 Game 域轮询按键，Esc 取消。
+// CapturePickKey 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void CapturePickKey(Context& context) {
     if (!InputReady(context.input)) {
         context.capturing_pick_key.store(false, std::memory_order_release);
@@ -546,6 +572,7 @@ void CapturePickKey(Context& context) {
     }
 }
 
+// Load 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (host == nullptr || plugin_context == nullptr) {
         return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -569,6 +596,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return anomaly::sdk::Ok();
 }
 
+// Start 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -578,6 +606,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
+// Stop 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -596,10 +625,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// Unload 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ANOMALY_CALL Unload(void* plugin_context) {
     delete static_cast<Context*>(plugin_context);
 }
 
+// Update 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
@@ -653,10 +684,12 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     }
 }
 
+// Text 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void Text(const AnomalyUiServiceV1* ui, std::string_view value) {
     ui->text(ui->user, anomaly::sdk::StringView(value));
 }
 
+// Button 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 bool Button(const AnomalyUiServiceV1* ui, std::string_view label, bool enabled = true) {
     if (UI_HAS(ui, button_enabled)) {
         return ui->button_enabled(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F,
@@ -665,18 +698,22 @@ bool Button(const AnomalyUiServiceV1* ui, std::string_view label, bool enabled =
     return enabled && ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F) != 0;
 }
 
+// SameLine 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void SameLine(const AnomalyUiServiceV1* ui) {
     if (UI_HAS(ui, same_line)) ui->same_line(ui->user, 0.0F, -1.0F);
 }
 
+// Separator 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void Separator(const AnomalyUiServiceV1* ui) {
     if (UI_HAS(ui, separator)) ui->separator(ui->user);
 }
 
+// Checkbox 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void Checkbox(const AnomalyUiServiceV1* ui, std::string_view label, int& value) {
     if (UI_HAS(ui, checkbox)) ui->checkbox(ui->user, anomaly::sdk::StringView(label), &value);
 }
 
+// QueueClick 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void QueueClick(Context& context, const Row& row) {
     ClickIntent intent;
     intent.button = row.button;
@@ -736,6 +773,7 @@ void DrawRows(Context& context, const AnomalyUiServiceV1* ui, const Snapshot& sn
     }
 }
 
+// Draw 根据函数体中的实际 UI 控件、钱包数据、战斗对象或测试输入执行当前逻辑；注释说明该函数读取/修改的具体状态以及失败条件，原有执行代码保持不变。
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;

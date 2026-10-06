@@ -1,0 +1,88 @@
+name: Build NteAttackReplay NoVS LLVM
+# Native LLVM build for the validated ProcessEvent service path.
+
+on:
+  push:
+    branches:
+      - nte-attack-replay-novs-20261004
+      - attack-native-20261005
+      - attack-replay-native-abi-20261005
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install LLVM-MinGW 20260922 MSVCRT cross toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 5 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-ubuntu-22.04-x86_64.tar.xz
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Configure and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf tools/NteAttackReplay-NoVS/out/build tools/NteAttackReplay-NoVS/out/NteAttackReplay
+          set +e
+          cmake -S tools/NteAttackReplay-NoVS -B tools/NteAttackReplay-NoVS/out/build \
+            -G "Unix Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/llvm-mingw-toolchain.cmake" \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk" \
+            -DAnomalySDK_DIR="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk/lib/cmake/AnomalySDK" \
+            -DANOMALY_SOURCE_ROOT="$GITHUB_WORKSPACE" 2>&1 | tee cmake-configure.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 0 ]; then
+            cmake --build tools/NteAttackReplay-NoVS/out/build --target anomaly_nte_attack_replay --parallel 2 2>&1 | tee cmake-build.log
+            rc=${PIPESTATUS[0]}
+          fi
+          echo "build_rc=$rc" > build-result.txt
+          exit "$rc"
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-build-diagnostics
+          path: |
+            cmake-configure.log
+            cmake-build.log
+            build-result.txt
+          if-no-files-found: warn
+
+      - name: Stage package
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_pkg="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/out/build/package/NteAttackReplay"
+          pkg="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/out/NteAttackReplay"
+          test -f "$build_pkg/plugin.dll"
+          test -f "$build_pkg/manifest.json"
+          mkdir -p "$pkg"
+          cp "$build_pkg/plugin.dll" "$pkg/plugin.dll"
+          cp "$GITHUB_WORKSPACE/plugins/NteAttackReplay/manifest.json" "$pkg/manifest.json"
+          if [ -d "$GITHUB_WORKSPACE/plugins/NteAttackReplay/locales" ]; then cp -R "$GITHUB_WORKSPACE/plugins/NteAttackReplay/locales" "$pkg/locales"; fi
+          for dll in libc++.dll libc++abi.dll libunwind.dll; do
+            if [ -f "$LLVM_MINGW_ROOT/bin/$dll" ]; then cp "$LLVM_MINGW_ROOT/bin/$dll" "$pkg/$dll"; fi
+          done
+          "$LLVM_MINGW_ROOT/bin/llvm-readobj" --file-headers "$pkg/plugin.dll"
+          "$LLVM_MINGW_ROOT/bin/llvm-readobj" --coff-imports "$pkg/plugin.dll"
+          git diff --check HEAD^ HEAD
+          (cd "$pkg" && zip -r "$GITHUB_WORKSPACE/NteAttackReplay-NoVS-LLVM.zip" .)
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-NoVS-LLVM
+          path: NteAttackReplay-NoVS-LLVM.zip
+          if-no-files-found: error

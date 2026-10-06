@@ -6,6 +6,7 @@
 namespace {
 using namespace better_pose::orbit;
 
+// 统一测试断言入口：条件失败时把具体失败信息写到标准错误并以退出码 1 终止测试，条件成立时继续执行后续断言。
 void Check(const bool value, const char *message) {
   if (!value) {
     std::cerr << "FAIL: " << message << '\n';
@@ -13,6 +14,7 @@ void Check(const bool value, const char *message) {
   }
 }
 
+// 验证 Distance 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 double Distance(const std::array<double, 3> &a, const std::array<double, 3> &b) {
   return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) +
                    (a[2] - b[2]) * (a[2] - b[2]));
@@ -38,6 +40,7 @@ bool Project(const View &view, const std::array<double, 3> &point, const double 
   return true;
 }
 
+// 实现 Starts Where The Player Looks 的运行时操作；函数直接使用函数体中的服务、对象和状态字段推进当前流程，并在必要的输入无效、目标不存在或底层调用失败时提前返回，成功时更新对应输出或运行时状态。
 void StartsWhereThePlayerLooks() {
   const std::array<double, 3> location{100.0, -50.0, 180.0};
   const std::array<double, 3> rotation{-12.0, 35.0, 0.0};
@@ -54,6 +57,7 @@ void StartsWhereThePlayerLooks() {
         "an out-of-range start is clamped");
 }
 
+// 验证 Rotate Keeps The Focus 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void RotateKeepsTheFocus() {
   Orbit orbit = FromView({0, 0, 150}, {-10, 0, 0}, 300);
   const auto focus = orbit.focus;
@@ -74,6 +78,7 @@ void RotateKeepsTheFocus() {
   Check(std::abs(orbit.yaw) <= 180.0, "yaw stays wrapped");
 }
 
+// 验证 Pan Follows The Cursor 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void PanFollowsTheCursor() {
   Orbit orbit = FromView({0, 0, 150}, {-20, 60, 0}, 250);
   const double focal = 1000.0;
@@ -90,6 +95,7 @@ void PanFollowsTheCursor() {
   Check(orbit.distance == distance, "no focal length, no pan");
 }
 
+// 验证 Zoom Is Bounded 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void ZoomIsBounded() {
   Orbit orbit;
   orbit.distance = 300.0;
@@ -103,6 +109,7 @@ void ZoomIsBounded() {
   Check(orbit.distance == kMaximumDistance, "zoom out stops at the maximum");
 }
 
+// 验证 Focus Moves Only The Focus 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void FocusMovesOnlyTheFocus() {
   Orbit orbit = FromView({0, 0, 150}, {-15, 30, 0}, 280);
   const double pitch = orbit.pitch;
@@ -118,11 +125,13 @@ void FocusMovesOnlyTheFocus() {
 }
 }  // namespace
 
+// 验证 Fov Bounds 的具体行为：构造函数体中使用的输入状态，调用被测逻辑，并通过当前断言检查返回值、对象字段或集合内容是否符合预期；断言失败即停止测试。
 void FovBounds() {
   Check(kMinimumFov > 0.0F && kMinimumFov < kMaximumFov && kMaximumFov < 180.0F,
         "the lens range is a valid horizontal field of view");
 }
 
+// 测试程序入口：按顺序执行本文件覆盖的功能测试；所有断言通过后输出 PASS 并以 0 返回，任一断言失败都会由 Check() 终止进程。
 int main() {
   FovBounds();
   StartsWhereThePlayerLooks();

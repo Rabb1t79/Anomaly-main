@@ -36,17 +36,14 @@ struct Quat {
 
 // Quaternion product; mmd2bip's qmul is the same conventional product (verified against
 // its own output), so this is a straight transcription.
-Quat Multiply(const Quat &a, const Quat &b) {
-  return Quat{a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+// 实现 Multiply：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
               a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
               a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
               a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
 }
 
-Quat Conjugate(const Quat &q) { return Quat{-q.x, -q.y, -q.z, q.w}; }
-
-Quat Normalize(const Quat &q) {
-  const double norm = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+// 实现 Conjugate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
+// 实现 Normalize：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (norm == 0.0)
     return Quat{};
   return Quat{q.x / norm, q.y / norm, q.z / norm, q.w / norm};
@@ -58,8 +55,7 @@ struct Vec3 {
   double z = 0.0;
 };
 
-Vec3 Rotate(const Quat &q, const Vec3 &v) {
-  const double tx = 2.0 * (q.y * v.z - q.z * v.y);
+// 实现 Rotate：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const double ty = 2.0 * (q.z * v.x - q.x * v.z);
   const double tz = 2.0 * (q.x * v.y - q.y * v.x);
   return Vec3{v.x + q.w * tx + q.y * tz - q.z * ty,
@@ -67,21 +63,17 @@ Vec3 Rotate(const Quat &q, const Vec3 &v) {
               v.z + q.w * tz + q.x * ty - q.y * tx};
 }
 
-double Length(const Vec3 &v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
-
+// 实现 Length：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 Vec3 operator+(const Vec3 &a, const Vec3 &b) { return Vec3{a.x + b.x, a.y + b.y, a.z + b.z}; }
 
-Vec3 Unit(const Vec3 &v) {
-  const double length = Length(v);
+// 实现 Unit：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (length < 1e-12)
     return Vec3{};
   return Vec3{v.x / length, v.y / length, v.z / length};
 }
 
-double Dot(const Vec3 &a, const Vec3 &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
-
-double AngleBetween(const Vec3 &a, const Vec3 &b) {
-  const double na = Length(a);
+// 实现 Dot：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
+// 实现 AngleBetween：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const double nb = Length(b);
   if (na < 1e-9 || nb < 1e-9)
     return 0.0;
@@ -90,8 +82,7 @@ double AngleBetween(const Vec3 &a, const Vec3 &b) {
 }
 
 // Minimal rotation taking unit vector u to unit vector v (mmd2bip.py:85-100).
-Quat Swing(const Vec3 &u, const Vec3 &v) {
-  const double d = Dot(u, v);
+// 实现 Swing：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (d > 1.0 - 1e-12)
     return Quat{};
   if (d < -1.0 + 1e-12) {
@@ -198,12 +189,10 @@ bool ReadShiftJisName(const std::uint8_t *bytes, std::size_t size, std::size_t &
 }
 
 template <typename T>
-bool ReadPod(const std::uint8_t *bytes, std::size_t size, std::size_t &offset, T &out) {
-  return ReadBytes(bytes, size, offset, &out, sizeof(T));
+// 实现 ReadPod：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
 
-void QuaternionNormalize(double q[4]) {
-  const double norm = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+// 实现 QuaternionNormalize：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   if (norm == 0.0) {
     q[0] = q[1] = q[2] = 0.0;
     q[3] = 1.0;
@@ -213,8 +202,7 @@ void QuaternionNormalize(double q[4]) {
     q[i] /= norm;
 }
 
-void QuaternionSlerp(const double a[4], const double b[4], double t, double out[4]) {
-  double to[4] = {b[0], b[1], b[2], b[3]};
+// 实现 QuaternionSlerp：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   double dot = 0.0;
   for (int i = 0; i < 4; ++i)
     dot += a[i] * to[i];
@@ -290,8 +278,7 @@ struct ReferenceBone {
   ReferenceIk ik;
 };
 
-bool LoadSkeleton(const std::string &document, Skeleton &out) {
-  json root;
+// 实现 LoadSkeleton：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   try {
     root = json::parse(document);
   } catch (const std::exception &error) {
@@ -450,8 +437,7 @@ bool LoadReference(const std::string &document, std::vector<ReferenceBone> &out,
 
 // MMD full-width digits against the target's plain ones: without the normalisation every
 // finger joint silently fails to map (mmd2bip.py:203-208).
-std::string NormalizeDigits(const std::string &name) {
-  static const char *kFullWidth[] = {"０", "１", "２", "３", "４",
+// 实现 NormalizeDigits：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
                                      "５", "６", "７", "８", "９"};
   std::string out = name;
   for (int digit = 0; digit < 10; ++digit) {
@@ -537,8 +523,7 @@ const FingerGroup kFingers[] = {
 
 }  // namespace
 
-VmdDocument ParseVmd(const std::vector<std::uint8_t> &bytes) {
-  VmdDocument document;
+// 实现 ParseVmd：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   document.file_size = bytes.size();
   const std::uint8_t *data = bytes.data();
   const std::size_t size = bytes.size();
@@ -828,10 +813,8 @@ bool SampleTrack(const VmdTrack &track, double frame, double out_rotation[4],
 
 namespace {
 
-double Round6(double value) { return std::round(value * 1e6) / 1e6; }
-
-json ToArray4(const Quat &q) {
-  return json::array({Round6(q.x), Round6(q.y), Round6(q.z), Round6(q.w)});
+// 实现 Round6：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
+// 实现 ToArray4：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
 }
 
 // ------------------------------------------------------------------ rest directions
@@ -845,8 +828,7 @@ json ToArray4(const Quat &q) {
 // and used to define the whole torso), and a bone whose only children are accessories
 // continues the segment that arrives at it instead -- taking a 14.8 cm hair strand as the
 // head's direction swung the head 37 degrees (mmd2bip.py:379-425).
-Vec3 BoneDirectionLocal(const Skeleton &skeleton, std::size_t index) {
-  const Bone &bone = skeleton.bones[index];
+// 实现 BoneDirectionLocal：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   std::vector<std::size_t> children;
   for (std::size_t i = 0; i < skeleton.bones.size(); ++i) {
     if (skeleton.bones[i].parent == static_cast<int>(bone.index))
@@ -1005,8 +987,7 @@ std::unordered_map<std::string, Vec3> ReferenceDirections(
 }
 
 // Cumulative length fractions of a bone chain (mmd2bip.py:157-166).
-std::vector<double> CumulativeFractions(const std::vector<double> &lengths) {
-  double total = 0.0;
+// 实现 CumulativeFractions：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   for (double value : lengths)
     total += value;
   std::vector<double> out;
@@ -1033,8 +1014,7 @@ std::vector<double> CumulativeFractions(const std::vector<double> &lengths) {
 //     world = parent_world * T(rest_offset) * T(vmd_position) * R(vmd_rotation)
 // with `rest_offset` = position - parent.position in MMD (Y-up) coordinates.
 
-Quat FromAxisAngle(const Vec3 &axis, double angle) {
-  const double half = angle * 0.5;
+// 实现 FromAxisAngle：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const double sine = std::sin(half);
   return Quat{axis.x * sine, axis.y * sine, axis.z * sine, std::cos(half)};
 }
@@ -1042,8 +1022,7 @@ Quat FromAxisAngle(const Vec3 &axis, double angle) {
 // Euler angles of R = Rx * Ry * Rz. The PMX limits are a local XYZ triple, and the knee's
 // `[-pi, 0, 0] .. [0, 0, 0]` is exactly one degree of freedom -- which is what stops a leg
 // IK from bending the knee forwards (mmd2bip.py quat_euler_xyz).
-Vec3 EulerXyz(const Quat &q) {
-  const double xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+// 实现 EulerXyz：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const double xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
   const double wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
   const double m02 = 2.0 * (xz + wy);
@@ -1059,14 +1038,12 @@ Vec3 EulerXyz(const Quat &q) {
   return Vec3{std::atan2(-m12, m22), std::asin(sy), std::atan2(-m01, m00)};
 }
 
-Quat FromEulerXyz(const Vec3 &euler) {
-  return Multiply(Multiply(FromAxisAngle(Vec3{1.0, 0.0, 0.0}, euler.x),
+// 实现 FromEulerXyz：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
                            FromAxisAngle(Vec3{0.0, 1.0, 0.0}, euler.y)),
                   FromAxisAngle(Vec3{0.0, 0.0, 1.0}, euler.z));
 }
 
-Quat ClampToLimits(const Quat &q, const ReferenceIkLink &link) {
-  const Vec3 euler = EulerXyz(q);
+// 实现 ClampToLimits：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const Vec3 low = link.limit_min;
   const Vec3 high = link.limit_max;
   return FromEulerXyz(Vec3{(std::max)(low.x, (std::min)(high.x, euler.x)),
@@ -1074,8 +1051,7 @@ Quat ClampToLimits(const Quat &q, const ReferenceIkLink &link) {
                            (std::max)(low.z, (std::min)(high.z, euler.z))});
 }
 
-double QuatAngle(const Quat &a, const Quat &b) {
-  const double na = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
+// 实现 QuatAngle：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const double nb = std::sqrt(b.x * b.x + b.y * b.y + b.z * b.z + b.w * b.w);
   if (na < 1e-12 || nb < 1e-12)
     return 0.0;
@@ -1112,8 +1088,7 @@ struct IkPose {
   std::vector<Vec3> wpos;
   std::vector<IkChain> chains;
 
-  void Build(const std::vector<ReferenceBone> &reference) {
-    count = reference.size();
+// 实现 Build：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     name.resize(count);
     parent.resize(count);
     rest.resize(count);
@@ -1160,8 +1135,7 @@ struct IkPose {
     }
   }
 
-  void Refresh(const std::vector<std::uint32_t> &indices) {
-    for (std::uint32_t index : indices) {
+// 实现 Refresh：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       const int p = parent[index];
       Quat prot{};
       Vec3 ppos{};
@@ -1180,8 +1154,7 @@ struct IkPose {
     }
   }
 
-  void SetFrame(const std::vector<const VmdTrack *> &tracks, double frame) {
-    double rotation[4] = {};
+// 实现 SetFrame：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     double position[3] = {};
     for (std::size_t i = 0; i < count; ++i) {
       const VmdTrack *track = tracks[i];
@@ -1205,8 +1178,7 @@ struct IkPose {
   // adding it again would double-count it. Each bone's translation is applied in its
   // parent's frame, so the displacement is the parent's world rotation applied to it, and
   // the rotations below leave the accumulated vector alone.
-  Vec3 ChainTranslation(const std::vector<std::uint32_t> &chain) const {
-    Vec3 total{};
+// 实现 ChainTranslation：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
     for (std::uint32_t index : chain) {
       const int p = parent[index];
       const Quat frame = p >= 0 ? wrot[static_cast<std::size_t>(p)] : Quat{};
@@ -1216,13 +1188,11 @@ struct IkPose {
     return total;
   }
 
-  double EffectorGap(const IkChain &chain) const {    const Vec3 &effector = wpos[chain.target];
-    const Vec3 &ik = wpos[chain.bone];
+// 实现 carry；函数依据当前函数体中的输入和状态执行实际对象/数据操作，并通过返回值或状态字段把成功、失败或结果传递给调用方。
     return Length(Vec3{effector.x - ik.x, effector.y - ik.y, effector.z - ik.z});
   }
 
-  void SolveChain(const IkChain &chain) {
-    for (int iteration = 0; iteration < chain.loop; ++iteration) {
+// 实现 SolveChain：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       bool moved = false;
       for (std::size_t slot = 0; slot < chain.links.size(); ++slot) {
         const std::uint32_t link = chain.links[slot];
@@ -1262,8 +1232,7 @@ struct IkPose {
     }
   }
 
-  void Solve(std::vector<IkReport> &report, const std::vector<std::string> &disabled) {
-    for (const IkChain &chain : chains) {
+// 实现 Solve：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
       if (std::find(disabled.begin(), disabled.end(), name[chain.bone]) !=
           disabled.end())
         continue;
@@ -1459,8 +1428,7 @@ std::vector<MappingEntry> BuildMapping(const std::vector<ReferenceBone> &referen
 
 }  // namespace
 
-Result BuildMotion(const Input &input) {
-  Result result;
+// 实现 BuildMotion：根据函数体中的输入、状态和服务接口完成实际操作，并通过返回值或状态字段把结果传递给调用方。
   const auto fail = [&result](const std::string &message) {
     result.ok = false;
     result.error = message;

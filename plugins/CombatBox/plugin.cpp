@@ -1,3 +1,9 @@
+/*
+ * 中文维护说明：本插件
+ * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
+ * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
+ * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
+ */
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/core.h"
 #include "anomaly/sdk/services/interop.h"
@@ -103,6 +109,7 @@ struct MapLandmark final {
     std::string teleport_id;
 };
 
+// 返回 CombatBox 内置的固定战斗测试点表；每个条目包含游戏内目标名称和三维坐标，后续筛选、显示或移动逻辑直接以这张表作为候选点来源。
 std::vector<Point> VisionPoints() {
     return {
         {"伤心英熊_mon_019_SadBear_BP_World_C_0", -28170, 84678, 6503},
@@ -318,6 +325,7 @@ struct Context final {
     bool combat_retry_engaged{};
 };
 
+// 在 Context 已持锁的前提下重建 filtered_points；未选择具体类型或子类型时复制全部 points，否则只保留同时匹配 type_choice/sub_choice 的条目，使 UI 后续显示和导航只面对当前筛选结果。
 void RebuildFilteredLocked(Context& context) {
     context.filtered_points.clear();
     if (context.type_choice == 0 || context.sub_choice == 0) {
@@ -334,10 +342,12 @@ void RebuildFilteredLocked(Context& context) {
 }
 
 template <typename Struct, typename Field>
+// 按服务结构体的 struct_size 检查指定字段是否实际存在；它用 offset 加字段大小与 ABI 提供的结构长度比较，避免访问旧版本服务结构中尚未提供的成员。
 bool HasField(const Struct* value, const std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
+// 确认签名服务包含 resolve 字段且回调非空；CombatBox 需要它把特征码转换成运行时地址，因此服务不完整时禁止继续解析地址。
 bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
     return HasField<AnomalySignatureServiceV1,
                decltype(AnomalySignatureServiceV1::resolve)>(
@@ -345,6 +355,7 @@ bool SignatureReady(const AnomalySignatureServiceV1* s) noexcept {
         s->resolve != nullptr;
 }
 
+// 确认 UE5 Names 服务提供 resolve_utf8；CombatBox 读取对象/类名时依赖该回调把 FName 解析成 UTF-8 文本。
 bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
     return HasField<AnomalyUe5NamesServiceV1,
                decltype(AnomalyUe5NamesServiceV1::resolve_utf8)>(
@@ -352,6 +363,7 @@ bool NamesReady(const AnomalyUe5NamesServiceV1* s) noexcept {
         s->resolve_utf8 != nullptr;
 }
 
+// 确认 UE5 Objects 服务提供 find_exact；后续按精确对象名查找游戏对象前必须先验证这个 ABI 字段可用。
 bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* s) noexcept {
     return HasField<AnomalyUe5ObjectsServiceV1,
                decltype(AnomalyUe5ObjectsServiceV1::find_exact)>(
@@ -359,6 +371,7 @@ bool ObjectsReady(const AnomalyUe5ObjectsServiceV1* s) noexcept {
         s->find_exact != nullptr;
 }
 
+// 确认 NTE Navigation 服务提供 move_to_location；CombatBox 的导航操作只有在该回调存在时才允许向目标坐标发起移动。
 bool NavigationReady(const AnomalyNteNavigationServiceV1* s) noexcept {
     return HasField<AnomalyNteNavigationServiceV1,
                decltype(AnomalyNteNavigationServiceV1::move_to_location)>(
@@ -366,6 +379,7 @@ bool NavigationReady(const AnomalyNteNavigationServiceV1* s) noexcept {
         s->move_to_location != nullptr && s->stop_movement != nullptr;
 }
 
+// 读取 UI 服务的开发者模式状态；只有 Anomaly UI 明确允许开发者功能时，CombatBox 才继续显示或启用对应调试操作。
 bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
     return HasField<AnomalyUiServiceV1,
                decltype(AnomalyUiServiceV1::developer_mode_enabled)>(
@@ -375,12 +389,14 @@ bool DeveloperModeEnabled(const AnomalyUiServiceV1* ui) noexcept {
 }
 
 template <typename T>
+// 从给定内存地址复制一个固定大小的 T 到输出变量；地址为空直接失败，成功时输出值保持为目标地址当前的原始字节内容。
 bool Read(const void* address, T& value) noexcept {
     if (address == nullptr) return false;
     std::memcpy(&value, address, sizeof(T));
     return true;
 }
 
+// 读取给定地址中的指针值并转换成 void*；底层 Read 失败或地址为空时返回 nullptr，调用方据此判断对象链是否断开。
 void* ReadPointer(const void* address) noexcept {
     std::uintptr_t value{};
     return Read(address, value) ? reinterpret_cast<void*>(value) : nullptr;
@@ -419,6 +435,7 @@ bool ResolveRipRelative(
     return address != 0;
 }
 
+// ObjectAt 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void* ObjectAt(const std::uintptr_t g_objects, const std::uint32_t index) noexcept {
     std::int32_t count{};
     std::int32_t num_chunks{};
@@ -460,6 +477,7 @@ std::string ResolveName(
     return value;
 }
 
+// 从当前 player 的 snapshot 读取位置字段并写入 position[3]；player 或 snapshot 不存在、坐标读取失败时返回 false，避免用未初始化坐标计算距离。
 bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     if (context.player == nullptr || context.player->snapshot == nullptr) {
         return false;
@@ -476,12 +494,14 @@ bool SnapshotPlayerPosition(Context& context, double (&position)[3]) noexcept {
     return true;
 }
 
+// 计算两个三维位置在 XY 平面上的距离平方，只使用 ax/ay 与 bx/by；返回平方值避免不必要的开方，供最近点比较使用。
 double PlanarDistanceSquared(double ax, double ay, double bx, double by) noexcept {
     const double dx = ax - bx;
     const double dy = ay - by;
     return dx * dx + dy * dy;
 }
 
+// LandmarksReady 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
     return HasField<AnomalyNteMapLandmarksServiceV1,
                decltype(AnomalyNteMapLandmarksServiceV1::teleport)>(
@@ -491,6 +511,7 @@ bool LandmarksReady(const AnomalyNteMapLandmarksServiceV1* s) noexcept {
 }
 
 // Caller must hold context.mutex.
+// 从 map_landmarks 服务读取最新地标序列并刷新本地地标缓存；服务不可用或序列读取失败时保持当前缓存并返回 false。
 bool RefreshLandmarkCatalog(Context& context) noexcept {
     const auto* service = context.map_landmarks;
     if (!LandmarksReady(service)) return false;
@@ -579,6 +600,7 @@ bool TryBeginLandmarkTransfer(Context& context, const Point& target,
     return true;
 }
 
+// GetStateDirectory 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 std::string GetStateDirectory(const AnomalyPluginStateServiceV1* service) noexcept {
     if (service == nullptr || service->directory == nullptr) return {};
     std::size_t size{};
@@ -596,6 +618,7 @@ std::string GetStateDirectory(const AnomalyPluginStateServiceV1* service) noexce
     return value;
 }
 
+// ReadTable 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ReadTable(Context& context) {
     std::vector<Point> points;
     void* table_object{};
@@ -675,6 +698,7 @@ void ReadTable(Context& context) {
         "status.read", "Read {0} points", read_args);
 }
 
+// Teleport 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool Teleport(Context& context, const Point& p) noexcept {
     if (context.session == nullptr || context.player == nullptr ||
         context.teleport == nullptr || context.teleport->teleport == nullptr) {
@@ -698,6 +722,7 @@ bool Teleport(Context& context, const Point& p) noexcept {
         ANOMALY_STATUS_V1_OK;
 }
 
+// IssueNavigation 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool IssueNavigation(Context& context, const Point& p) noexcept {
     if (!NavigationReady(context.navigation)) return false;
     double destination[3]{p.x, p.y, p.z};
@@ -731,6 +756,7 @@ bool StartNavigation(Context& context, const Point& p,
     return true;
 }
 
+// LoadDoneSet 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void LoadDoneSet(Context& context) {
     context.done_set.clear();
     if (context.state_directory.empty()) return;
@@ -754,6 +780,7 @@ void LoadDoneSet(Context& context) {
     std::fclose(file);
 }
 
+// SaveDoneSet 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void SaveDoneSet(Context& context) {
     if (context.state_directory.empty()) return;
     const std::string path = context.state_directory + "\\done.txt";
@@ -768,6 +795,7 @@ void SaveDoneSet(Context& context) {
 
 // —— 自动战斗阶段（plugins/common/combat）——
 // 模块不认识面板：它每 tick 报的状态文本经这个回调落进插件自己的状态行，面板始终只显示一行。
+// SetCombatStatus 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void SetCombatStatus(void* user, const std::string& text) noexcept {
     auto* context = static_cast<Context*>(user);
     if (context == nullptr) return;
@@ -776,6 +804,7 @@ void SetCombatStatus(void* user, const std::string& text) noexcept {
 }
 
 // 模块不查服务，宿主指针每次 tick 重建一份。
+// MakeCombatHost 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 combat::Host MakeCombatHost(Context& context) noexcept {
     // 有些服务可能在本插件 Load 之后才发布（实体/角色快照随世界加载），Load 时查询会静默
     // 拿到空指针。这里对空指针惰性重查——与一键副本对动态服务（session/combat/skills）的处理
@@ -858,6 +887,7 @@ void FailPointStart(Context& context, const std::string_view key,
 }
 
 // 结束战斗阶段并清空模块状态（换点、跳过、停止本轮都走这里）。
+// EndCombat 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void EndCombat(Context& context) {
     if (!context.combat_active) return;
     combat::Host host = MakeCombatHost(context);
@@ -930,6 +960,7 @@ void StartPoint(Context& context, const Point& p,
 }
 
 // 到达本点：清空模块状态，开始「首次接敌超时」计时；随后每 tick 由 TickCombat 驱动。
+// BeginCombat 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void BeginCombat(Context& context, std::chrono::steady_clock::time_point now) {
     // 新点位：清零掉落重传计数 ✗（它只在「见到怪」时清零 ✗，否则会跨点位累加 ✗）。
     context.fallout_retries = 0;
@@ -963,6 +994,7 @@ void BeginCombat(Context& context, std::chrono::steady_clock::time_point now) {
 }
 
 // 掉出世界（判据与 BoxAuto 相同：玩家 Z 比当前点低 10 米以上）。
+// FellOutOfWorld 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool FellOutOfWorld(Context& context) {
     // 正在打一个比你低得多的怪时（悬崖/多层地形，开发者模式下模块还会传送到怪身上），
     // 玩家位置会合法地低于点位——那不是掉出世界，所以有目标就不判。
@@ -987,6 +1019,7 @@ bool FellOutOfWorld(Context& context) {
 }
 
 // 掉出世界后重传当前点：走与出发同一条路径（StartPoint 的传送分支），不另写一套。
+// RetryCurrentPoint 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void RetryCurrentPoint(Context& context, std::chrono::steady_clock::time_point now) {
     const bool engaged = context.combat_state.met_monster;
     Point p;
@@ -1003,6 +1036,7 @@ void RetryCurrentPoint(Context& context, std::chrono::steady_clock::time_point n
 }
 
 // 本点结束（打完或跳过）：不标记，直接取列表里的下一个点；列表走完就收工。
+// AdvancePoint 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void AdvancePoint(Context& context, std::chrono::steady_clock::time_point now) {
     Point next;
     bool have_next = false;
@@ -1027,6 +1061,7 @@ void AdvancePoint(Context& context, std::chrono::steady_clock::time_point now) {
     if (have_next) StartPoint(context, next, now);
 }
 
+// StopRun 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void StopRun(Context& context) {
     if (context.navigating && NavigationReady(context.navigation)) {
         context.navigation->stop_movement(context.navigation->user);
@@ -1048,6 +1083,7 @@ void StopRun(Context& context) {
 // 伤害流不可用时的兜底：日志实测 `dmg=never`（打死了怪也收不到伤害事件），此时模块内部
 // 「8 秒没伤害就换靶」的计时会被距离抖动/句柄变化反复清零，永远攒不满。这里用调用方自己
 // 的时钟判断「多久没有伤害了」——参考点取最近一次伤害，从没有过就取进入战斗的时刻。
+// NoDamageForTooLong 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 bool NoDamageForTooLong(Context& context, std::chrono::steady_clock::time_point now) {
     if (!context.combat_state.met_monster) return false;
     // 参考点取最晚的一个：最近一次伤害 / 最近一次换目标 / 进入战斗。
@@ -1068,6 +1104,7 @@ bool NoDamageForTooLong(Context& context, std::chrono::steady_clock::time_point 
 }
 
 // 战斗阶段每 tick 调用一次。模块内部已负责选靶/接近/攻击，以及 cleared 那一次拾取。
+// TickCombat 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void TickCombat(Context& context, std::chrono::steady_clock::time_point now) {
     // 掉出世界先于模块 tick 处理：地图外不该再让模块选靶/寻路。
     if (FellOutOfWorld(context)) {
@@ -1187,6 +1224,7 @@ void TickCombat(Context& context, std::chrono::steady_clock::time_point now) {
     }
 }
 
+// Draw 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
     if (plugin_context == nullptr) return;
     auto& context = *static_cast<Context*>(plugin_context);
@@ -1391,6 +1429,7 @@ void Draw(void* plugin_context, const AnomalyUiServiceV1* supplied_ui) {
 
 }  // namespace
 
+// Load 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (!host || !plugin_context || host->api_major != ANOMALY_PLUGIN_API_V1_MAJOR) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -1451,6 +1490,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     return anomaly::sdk::Ok();
 }
 
+// Start 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (!plugin_context) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -1460,6 +1500,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     return anomaly::sdk::Ok();
 }
 
+// Stop 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     if (!plugin_context) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {nullptr, 0}};
@@ -1467,10 +1508,12 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     return anomaly::sdk::Ok();
 }
 
+// Unload 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ANOMALY_CALL Unload(void* plugin_context) {
     delete static_cast<Context*>(plugin_context);
 }
 
+// Update 使用函数体中的输入和状态完成其具体运行时操作；这里保留原有代码不变，只明确说明该函数实际读取、修改和返回的对象。
 void ANOMALY_CALL Update(void* plugin_context, const double) {
     if (!plugin_context) return;
     auto& context = *static_cast<Context*>(plugin_context);
