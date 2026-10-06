@@ -1,4 +1,5 @@
 name: Build NteAttackReplay NoVS LLVM
+# Native LLVM build for the validated ProcessEvent service path.
 
 on:
   push:
