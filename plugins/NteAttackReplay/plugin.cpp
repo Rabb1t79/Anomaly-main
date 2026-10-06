@@ -186,7 +186,6 @@ constexpr ptrdiff_t kFPropertyOffsetInternalOffset = 68;
 constexpr ptrdiff_t kFPropertyPropertyLinkNextOffset = 72;
 constexpr ptrdiff_t kDataTableRowMapOffset = 48;
 constexpr size_t kDataTableRowStride = 24;
-constexpr size_t kProcessEventVtableIndex = 0x4C;
 constexpr size_t kMaximumNameBytes = 1024;
 constexpr std::string_view kGWorldPattern =
     "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
