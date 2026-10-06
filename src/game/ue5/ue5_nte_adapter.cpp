@@ -14624,8 +14624,7 @@ private:
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
                           "invalid ProcessEvent invocation arguments");
         }
-        if (!state->framework || !state->framework->is_game_thread ||
-            state->framework->is_game_thread(state->framework->user) == 0) {
+        if (GetCurrentThreadId() != state->game_thread_id.load(std::memory_order_acquire)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                           "ProcessEvent invocation requires the UE Game thread");
         }
