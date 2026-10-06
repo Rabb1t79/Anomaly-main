@@ -6,7 +6,7 @@
  */
 /*
  * 中文维护说明：
- * 1. 本文件是 NTE Attack Replay 插件的实现。
+ * 1. 本文件是 NTE Attack Replay 插件的实现；本分支不修改 Anomaly 宿主核心。
  * 2. 插件始终监听玩家对目标产生的真实 DamageEvent，并记录攻击上下文。
  * 3. 普通攻击不依赖技能句柄；其重放路径依据 HTGame 中已确认的
  *    DT_AbilityInput / HTAbilityInputRow / MeleeAtack / InputID / Param
