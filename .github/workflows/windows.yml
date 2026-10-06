@@ -83,6 +83,47 @@ jobs:
             .build/release/Anomaly-*-tools.zip
             .build/release/Anomaly-*-sdk.zip
           if-no-files-found: error
+  attack_replay:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/attack-replay-native-abi-20261005'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM-MinGW 20260922 MSVCRT
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 5 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-ubuntu-22.04-x86_64.tar.xz
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+      - name: Configure and build NteAttackReplay
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tools/NteAttackReplay-NoVS -B tools/NteAttackReplay-NoVS/out/build             -G "Unix Makefiles"             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/llvm-mingw-toolchain.cmake"             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk"             -DAnomalySDK_DIR="$GITHUB_WORKSPACE/Anomaly-2.0.0-sdk/lib/cmake/AnomalySDK"             -DANOMALY_SOURCE_ROOT="$GITHUB_WORKSPACE"
+          cmake --build tools/NteAttackReplay-NoVS/out/build --target anomaly_nte_attack_replay --parallel 2
+      - name: Package NteAttackReplay
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/out/NteAttackReplay"
+          mkdir -p "$pkg"
+          cp "$GITHUB_WORKSPACE/tools/NteAttackReplay-NoVS/out/build/package/NteAttackReplay/plugin.dll" "$pkg/plugin.dll"
+          cp "$GITHUB_WORKSPACE/plugins/NteAttackReplay/manifest.json" "$pkg/manifest.json"
+          for dll in libc++.dll libc++abi.dll libunwind.dll; do
+            if [ -f "$LLVM_MINGW_ROOT/bin/$dll" ]; then cp "$LLVM_MINGW_ROOT/bin/$dll" "$pkg/$dll"; fi
+          done
+          (cd "$pkg" && zip -r "$GITHUB_WORKSPACE/NteAttackReplay-NoVS-LLVM.zip" .)
+      - name: Upload NteAttackReplay
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-NoVS-LLVM
+          path: NteAttackReplay-NoVS-LLVM.zip
+          if-no-files-found: error
+
   release:
     if: github.ref_type == 'tag'
     needs: build
