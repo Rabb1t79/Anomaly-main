@@ -1,0 +1,69 @@
+name: NTE Vehicle LLVM-MinGW
+
+on:
+  push:
+    branches:
+      - work/nte-vehicle-plugin-20261006
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM-MinGW 20260922 MSVCRT
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 5 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-ubuntu-22.04-x86_64.tar.xz
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build/nte-vehicle
+          cat > .build/nte-vehicle/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(NteVehicle LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(nte_vehicle SHARED "${CMAKE_SOURCE_DIR}/../../plugins/NteVehicle/plugin.cpp")
+          target_include_directories(nte_vehicle PRIVATE "${CMAKE_SOURCE_DIR}/../../include")
+          target_compile_definitions(nte_vehicle PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(nte_vehicle PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          EOF
+          cat > .build/nte-vehicle/toolchain.cmake <<EOF
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_SYSTEM_PROCESSOR AMD64)
+          set(CMAKE_C_COMPILER "$LLVM_MINGW_ROOT/bin/clang.exe")
+          set(CMAKE_CXX_COMPILER "$LLVM_MINGW_ROOT/bin/clang++.exe")
+          set(CMAKE_C_COMPILER_TARGET x86_64-w64-windows-gnu)
+          set(CMAKE_CXX_COMPILER_TARGET x86_64-w64-windows-gnu)
+          set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+          EOF
+          cmake -S .build/nte-vehicle -B .build/nte-vehicle/out -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=.build/nte-vehicle/toolchain.cmake
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build .build/nte-vehicle/out --parallel 2
+          test -f .build/nte-vehicle/out/plugin.dll
+          mkdir -p dist/NteVehicle-0.7.0-windows-x64
+          cp .build/nte-vehicle/out/plugin.dll dist/NteVehicle-0.7.0-windows-x64/plugin.dll
+          cp plugins/NteVehicle/manifest.json dist/NteVehicle-0.7.0-windows-x64/manifest.json
+          (cd dist/NteVehicle-0.7.0-windows-x64 && zip -r ../NteVehicle-0.7.0-windows-x64.zip .)
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteVehicle-0.7.0-windows-x64
+          path: dist/NteVehicle-0.7.0-windows-x64.zip
