@@ -5,7 +5,7 @@
   "description": "Native Anomaly NTE attack capture and replay for normal and skill attacks.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -47,6 +47,10 @@
     {
       "id": "anomaly.ue5.framework",
       "minVersion": 1
+    },
+    {
+      "id": "anomaly.ue5.process-event",
+      "minVersion": 1
     }
   ],
   "capabilities": [
@@ -56,6 +60,7 @@
     "nte-skill-invocation",
     "interop-signature",
     "ue5-names",
-    "game-events"
+    "game-events",
+    "ue5-process-event"
   ]
 }
