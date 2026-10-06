@@ -82,6 +82,11 @@ typedef struct AnomalyUe5ProcessEventServiceV1 {
         void* callback_user, AnomalyGenerationHandleV1* handle);
     AnomalyStatusV1 (ANOMALY_CALL *unsubscribe)(
         void* user, AnomalyGenerationHandleV1 handle);
+    // Valid only from the Game callback domain. Invokes the Profile-validated
+    // ProcessEvent target; never falls back to a UObject vtable slot.
+    AnomalyStatusV1 (ANOMALY_CALL *invoke)(
+        void* user, uintptr_t object, uintptr_t function,
+        void* parameters, size_t parameter_size);
 } AnomalyUe5ProcessEventServiceV1;
 typedef struct AnomalyUe5NamesServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
