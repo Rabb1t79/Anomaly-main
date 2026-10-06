@@ -14532,7 +14532,7 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
         : state_(std::move(state)), generation_(generation == 0 ? 1 : generation) {
         service = {sizeof(AnomalyUe5ProcessEventServiceV1),
                    ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_VERSION, this,
-                   SubscribeThunk, UnsubscribeThunk};
+                   SubscribeThunk, UnsubscribeThunk, InvokeThunk};
         subscriptions_snapshot_.store(
             std::make_shared<const SubscriptionList>(), std::memory_order_release);
     }
@@ -14593,6 +14593,51 @@ struct Ue5NteAdapter::State::ProcessEventServiceEndpoint final {
 private:
     static AnomalyStatusV1 StoppedStatus() noexcept {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "ProcessEvent service is stopped");
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL InvokeThunk(
+        void* const user,
+        const std::uintptr_t object,
+        const std::uintptr_t function,
+        void* const parameters,
+        const std::size_t parameter_size) noexcept {
+        auto* const endpoint = static_cast<ProcessEventServiceEndpoint*>(user);
+        auto lease = endpoint->Acquire();
+        return lease
+            ? endpoint->Invoke(lease.StateOwner(), object, function, parameters, parameter_size)
+            : StoppedStatus();
+    }
+
+    AnomalyStatusV1 Invoke(
+        const std::shared_ptr<State>& state,
+        const std::uintptr_t object,
+        const std::uintptr_t function,
+        void* const parameters,
+        const std::size_t parameter_size) noexcept {
+        if (!state->started.load(std::memory_order_acquire) ||
+            !state->framework_hook_ready || !state->process_event_hook_ready ||
+            !state->process_event_invoker) {
+            return StoppedStatus();
+        }
+        if (object == 0 || function == 0 || parameter_size > 4096U ||
+            (parameter_size != 0 && parameters == nullptr)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                          "invalid ProcessEvent invocation arguments");
+        }
+        if (!state->framework || !state->framework->is_game_thread ||
+            state->framework->is_game_thread(state->framework->user) == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                          "ProcessEvent invocation requires the UE Game thread");
+        }
+        std::uint32_t fault_code{};
+        if (!InvokeProcessEventGuarded(
+                state->process_event_invoker, object, function,
+                parameters, parameter_size, &fault_code)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                          fault_code == 0 ? "validated ProcessEvent invocation failed"
+                                          : "validated ProcessEvent invocation faulted");
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 Subscribe(const std::shared_ptr<State>& state,
