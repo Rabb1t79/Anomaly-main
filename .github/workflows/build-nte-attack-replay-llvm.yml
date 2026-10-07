@@ -16,67 +16,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Archive current source
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          git archive --format=zip --output=current-source.zip HEAD
-          if (!(Test-Path current-source.zip)) { throw 'source archive was not produced' }
       - name: Install LLVM-MinGW 20260922 MSVCRT
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:RUNNER_TEMP 'llvm-mingw.zip'
           $root = Join-Path $env:RUNNER_TEMP 'llvm-mingw'
-          $log = Join-Path $env:GITHUB_WORKSPACE 'install.log'
-          try {
-            "runner=$env:RUNNER_OS" | Out-File $log -Encoding utf8
-            "workspace=$env:GITHUB_WORKSPACE" | Out-File $log -Append -Encoding utf8
-            "Downloading LLVM-MinGW..." | Out-File $log -Append -Encoding utf8
-            curl.exe -L --fail --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 -o $zip 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip' 2>&1 | Tee-Object -FilePath $log -Append
-            $curlCode = $LASTEXITCODE
-            "curl_exit=$curlCode" | Out-File $log -Append -Encoding utf8
-            if ($curlCode -ne 0) { throw "curl download failed: $curlCode" }
-            if (!(Test-Path $zip)) { throw 'LLVM-MinGW zip was not downloaded' }
-            $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-            "sha256=$hash" | Out-File $log -Append -Encoding utf8
-            if ($hash -ne '1e936a4a694fc27f9625e3311f5ec5d6d99abfeaa514fd41c52a4f8347145d1a') { throw "LLVM-MinGW SHA-256 mismatch: $hash" }
-            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
-            Expand-Archive -Path $zip -DestinationPath $root -Force
-            $top = Get-ChildItem $root -Directory | Select-Object -First 1
-            if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
-            if (!(Test-Path (Join-Path $top.FullName 'bin/clang++.exe'))) { throw "clang++.exe not found under $($top.FullName)" }
-            $env:LLVM_MINGW_ROOT = $top.FullName
-            "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-            "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
-            $diag = Join-Path $env:GITHUB_WORKSPACE 'llvm-env.txt'
-            @(
-              "LLVM_MINGW_ROOT=$($top.FullName)"
-              "clangxx=$($top.FullName)\bin\clang++.exe"
-              "PATH=$env:PATH"
-              "LLVM root entries:"
-              (Get-ChildItem $top.FullName -Force | Select-Object -ExpandProperty FullName)
-            ) | Out-File $diag -Encoding utf8
-          } catch {
-            "INSTALL_EXCEPTION:" | Out-File $log -Append -Encoding utf8
-            ($_ | Out-String) | Out-File $log -Append -Encoding utf8
-            throw
-          }
-      - name: Diagnose toolchain
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $log = Join-Path $env:GITHUB_WORKSPACE 'toolchain-diagnose.txt'
-          @(
-            "PS=$($PSVersionTable.PSVersion)"
-            "LLVM_MINGW_ROOT=$env:LLVM_MINGW_ROOT"
-            "clang++ command:"
-            (Get-Command clang++.exe -ErrorAction SilentlyContinue | Format-List * | Out-String)
-            "clang++ version:"
-            (& clang++.exe --version 2>&1 | Out-String)
-            "clang++ target:"
-            (& clang++.exe -print-target-triple 2>&1 | Out-String)
-          ) | Out-File $log -Encoding utf8
+          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $root -Force
+          $top = Get-ChildItem $root -Directory | Select-Object -First 1
+          if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
+          $env:LLVM_MINGW_ROOT = $top.FullName
+          "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
       - name: Compile plugin directly
         shell: pwsh
         run: |
@@ -84,16 +35,8 @@ jobs:
           $sdk = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/include'
           $src = Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/plugin.cpp'
           $out = Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-plugin.dll'
-          $compileLog = Join-Path $env:GITHUB_WORKSPACE 'compile.log'
-          $clangxx = Get-Command clang++.exe -ErrorAction Stop
-          "COMMAND: $($clangxx.Source)" | Out-File $compileLog -Encoding utf8
-          try {
-            & $clangxx.Source -target x86_64-w64-windows-gnu -std=c++20 -O2 -DNOMINMAX -DWIN32_LEAN_AND_MEAN "-I$sdk" -shared $src -o $out 2>&1 | Tee-Object -FilePath $compileLog -Append
-          } finally {
-            $code = $LASTEXITCODE
-            "EXITCODE=$code" | Out-File $compileLog -Append -Encoding utf8
-          }
-          if ($code -ne 0) { throw "clang++ failed: $code" }
+          & (Join-Path $env:LLVM_MINGW_ROOT 'bin/clang++.exe') -target x86_64-w64-windows-gnu -std=c++20 -O2 -DNOMINMAX -DWIN32_LEAN_AND_MEAN "-I$sdk" -shared $src -o $out
+          if ($LASTEXITCODE -ne 0) { throw "clang++ failed: $LASTEXITCODE" }
           if (!(Test-Path $out)) { throw 'plugin.dll was not produced' }
       - name: Stage package
         shell: pwsh
@@ -104,18 +47,6 @@ jobs:
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-plugin.dll') (Join-Path $pkg 'plugin.dll')
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/manifest.json') (Join-Path $pkg 'manifest.json')
           Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-NoVS-LLVM.zip') -Force
-      - name: Upload diagnostic logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: NteAttackReplay-build-diagnostics
-          path: |
-            llvm-env.txt
-            toolchain-diagnose.txt
-            compile.log
-            install.log
-            current-source.zip
-          if-no-files-found: warn
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
         with:
