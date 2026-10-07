@@ -26,6 +26,13 @@
 #define ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_ENTITY_PAGE_V1_MAX_CAPACITY 256u
 #define ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY 128u
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID "anomaly.nte.attack-input"
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION 1u
+typedef struct AnomalyNteAttackInputServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    // Host-side bridge validated against Dumper-7 HTPlayerController ABI.
+    AnomalyStatusV1 (ANOMALY_CALL *activate_melee)(void* user);
+} AnomalyNteAttackInputServiceV1;
 #define ANOMALY_NTE_METRICS_SERVICE_V1_ID "anomaly.nte.metrics"
 #define ANOMALY_NTE_METRICS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID "anomaly.nte.esc-menu-button"
