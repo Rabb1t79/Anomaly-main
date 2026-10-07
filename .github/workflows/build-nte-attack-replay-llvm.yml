@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - work/nte-attack-replay-plugin-20261006
+      - work/nte-attack-replay-plugin-20261008
   workflow_dispatch:
   pull_request:
     branches:
@@ -25,31 +26,27 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $root -Force
           $top = Get-ChildItem $root -Directory | Select-Object -First 1
           if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
-          "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $env:LLVM_MINGW_ROOT = $top.FullName
           "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
-      - name: Configure and build
+      - name: Compile plugin directly
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $src = Join-Path $env:GITHUB_WORKSPACE 'tools/NteAttackReplay-NoVS'
-          $out = Join-Path $src 'out/build'
-          if (Test-Path $out) { Remove-Item $out -Recurse -Force }
-          cmake -S $src -B $out -G 'MinGW Makefiles' -DCMAKE_C_COMPILER="$env:LLVM_MINGW_ROOT/bin/clang.exe" -DCMAKE_CXX_COMPILER="$env:LLVM_MINGW_ROOT/bin/clang++.exe" -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-w64-windows-gnu -DCMAKE_PREFIX_PATH="$env:GITHUB_WORKSPACE/Anomaly-2.0.0-sdk" -DAnomalySDK_DIR="$env:GITHUB_WORKSPACE/Anomaly-2.0.0-sdk/lib/cmake/AnomalySDK" -DANOMALY_SOURCE_ROOT="$env:GITHUB_WORKSPACE"
-          cmake --build $out --target anomaly_nte_attack_replay --parallel 2
+          $sdk = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/include'
+          $src = Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/plugin.cpp'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-plugin.dll'
+          & (Join-Path $env:LLVM_MINGW_ROOT 'bin/clang++.exe') -target x86_64-w64-windows-gnu -std=c++20 -O2 -DNOMINMAX -DWIN32_LEAN_AND_MEAN "-I$sdk" -shared $src -o $out
+          if ($LASTEXITCODE -ne 0) { throw "clang++ failed: $LASTEXITCODE" }
+          if (!(Test-Path $out)) { throw 'plugin.dll was not produced' }
       - name: Stage package
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $buildPkg = Join-Path $env:GITHUB_WORKSPACE 'tools/NteAttackReplay-NoVS/out/build/package/NteAttackReplay'
-          $pkg = Join-Path $env:GITHUB_WORKSPACE 'tools/NteAttackReplay-NoVS/out/NteAttackReplay'
-          if (!(Test-Path (Join-Path $buildPkg 'plugin.dll'))) { throw 'plugin.dll was not produced' }
-          if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
-          New-Item -ItemType Directory -Path $pkg | Out-Null
-          Copy-Item (Join-Path $buildPkg 'plugin.dll') (Join-Path $pkg 'plugin.dll')
+          $pkg = Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-NoVS-LLVM'
+          New-Item -ItemType Directory -Path $pkg -Force | Out-Null
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-plugin.dll') (Join-Path $pkg 'plugin.dll')
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/manifest.json') (Join-Path $pkg 'manifest.json')
-          $zip = Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-NoVS-LLVM.zip'
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath $zip
+          Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-NoVS-LLVM.zip') -Force
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
         with:
