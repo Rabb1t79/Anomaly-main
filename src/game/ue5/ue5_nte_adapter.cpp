@@ -2588,6 +2588,7 @@ struct Ue5NteAdapter::State {
         ahud_demand.store(false, std::memory_order_release);
         combat_demand.store(false, std::memory_order_release);
         skill_demand.store(false, std::memory_order_release);
+        attack_input_demand.store(false, std::memory_order_release);
         combat_capture_read.store(0, std::memory_order_release);
         combat_capture_write.store(0, std::memory_order_release);
         combat_capture_drop_count.store(0, std::memory_order_release);
