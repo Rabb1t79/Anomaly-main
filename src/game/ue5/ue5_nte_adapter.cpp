@@ -1350,6 +1350,9 @@ struct Ue5NteAdapter::State {
             NteFunctionParameterSpec{
                 "InAbilityToActivate", "ClassProperty", 8, false},
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
+        static constexpr std::array normal_attack_input{
+            NteFunctionParameterSpec{"InputID", "ByteProperty", 1, false},
+            NteFunctionParameterSpec{"Param", "IntProperty", 4, false}};
         static constexpr std::array cooldown{
             NteFunctionParameterSpec{
                 "GameplayEffect", "ClassProperty", 8, false},
@@ -1427,6 +1430,12 @@ struct Ue5NteAdapter::State {
         case NteFunctionKind::ActivateAbilityByClass:
             return {kind, "HTTryActivateAbilityByClass", "HTAbilitySystemComponent", 9,
                 activate};
+        case NteFunctionKind::ActivateAbilityFromId:
+            return {kind, "ActivateAbilityFromID", "HTPlayerController", 8,
+                normal_attack_input};
+        case NteFunctionKind::ReleaseAbilityFromId:
+            return {kind, "ReleaseAbilityFromID", "HTPlayerController", 8,
+                normal_attack_input};
         case NteFunctionKind::ShowDamageFloaties:
             return {kind, "ShowDamageFloaties", "HTUI_DamageFloatiesForm", 72, damage_text};
         case NteFunctionKind::MulticastShowMonsterDamageInfo:
@@ -2296,6 +2305,10 @@ struct Ue5NteAdapter::State {
         if (id == ANOMALY_NTE_SKILLS_SERVICE_V1_ID) {
             return framework_hook_ready && NteSkillsProfileAvailable();
         }
+        if (id == ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID) {
+            return framework_hook_ready && process_event_hook_ready &&
+                resolution.FeatureAvailable(kUe5ProcessEventFeature);
+        }
         if (id == ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID) {
             return framework_hook_ready &&
                 SemanticFeatureAvailable("nte.skill-invocation");
@@ -2575,6 +2588,7 @@ struct Ue5NteAdapter::State {
         ahud_demand.store(false, std::memory_order_release);
         combat_demand.store(false, std::memory_order_release);
         skill_demand.store(false, std::memory_order_release);
+        attack_input_demand.store(false, std::memory_order_release);
         combat_capture_read.store(0, std::memory_order_release);
         combat_capture_write.store(0, std::memory_order_release);
         combat_capture_drop_count.store(0, std::memory_order_release);
@@ -8853,7 +8867,8 @@ struct Ue5NteAdapter::State {
             // no consumer has requested a combat or skill sample.
             const bool combat_requested = combat_demand.load(std::memory_order_acquire);
             const bool skills_requested = skill_demand.load(std::memory_order_acquire);
-            if (!combat_requested && !skills_requested) return;
+            const bool attack_input_requested = attack_input_demand.load(std::memory_order_acquire);
+            if (!combat_requested && !skills_requested && !attack_input_requested) return;
             const bool combat_profile = NteCombatProfileAvailable();
             const bool skills_profile = NteSkillsProfileAvailable();
             if ((!combat_profile && !skills_profile) || object_registry.items == 0 ||
@@ -9041,6 +9056,10 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::AddMonsterBufferControl);
                     lookup_optional(NteFunctionKind::GetMonsterStaticData);
                     combat_skill_discovery.combat_event_bindings_attempted = true;
+                }
+                if (attack_input_requested) {
+                    lookup_optional(NteFunctionKind::ActivateAbilityFromId);
+                    lookup_optional(NteFunctionKind::ReleaseAbilityFromId);
                 }
                 if (skills_profile) {
                     if (!combat_skill_discovery.functions[NteIndex(
@@ -13265,6 +13284,136 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    static AnomalyStatusV1 ANOMALY_CALL ActivateMeleeInput(void* user) noexcept {
+        auto& state = *static_cast<State*>(user);
+        state.attack_input_demand.store(true, std::memory_order_release);
+        const DWORD expected_thread = state.game_thread_id.load(std::memory_order_acquire);
+        if (expected_thread == 0 || expected_thread != GetCurrentThreadId()) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "attack input requires the Game thread");
+        }
+        std::unique_lock lock(state.mutex);
+        if (!state.framework_hook_ready || !state.process_event_hook_ready ||
+            !state.process_event_invoker || state.player_controller == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "normal attack input binding is unavailable");
+        }
+        const auto& activate = state.combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ActivateAbilityFromId)];
+        const auto& release = state.combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ReleaseAbilityFromId)];
+        if (!activate || !release || activate->parms_size != 8U || release->parms_size != 8U) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "ActivateAbilityFromID/ReleaseAbilityFromID binding is unavailable");
+        }
+
+        // Dumper-7 confirmed: HTPlayerController::DT_AbilityInput +0x1978;
+        // FHTAbilityInputRow: InputID +0x08, InputAction +0x10, Param +0x2C.
+        constexpr std::uintptr_t kDtAbilityInputOffset = 0x1978U;
+        constexpr std::int32_t kInputIdRowOffset = 0x08;
+        constexpr std::int32_t kInputActionRowOffset = 0x10;
+        constexpr std::int32_t kParamRowOffset = 0x2C;
+
+        std::uintptr_t table{};
+        if (!ReadPointerAt(*state.memory, state.player_controller,
+                kDtAbilityInputOffset, table) || table == 0) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "DT_AbilityInput is unavailable");
+        }
+        const auto row_struct_offset = Layout(state.profile, "dataTable.rowStruct", -1);
+        const auto row_map_offset = Layout(state.profile, "dataTable.rowMap", -1);
+        if (row_struct_offset < 0 || row_map_offset < 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "DT_AbilityInput layout is unavailable");
+        }
+        std::uintptr_t row_struct{};
+        if (!ReadPointerAt(*state.memory, table, row_struct_offset, row_struct) || row_struct == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "DT_AbilityInput row struct is unavailable");
+        }
+
+        auto validate_row_field = [&](std::string_view name, std::string_view type,
+                                      std::int32_t size, std::int32_t offset) {
+            std::uintptr_t property{};
+            if (!ReadPointerAt(*state.memory, row_struct,
+                    Layout(state.profile, "ustruct.propertyLink"), property)) return false;
+            for (std::size_t count{}; property != 0 && count < 128U; ++count) {
+                ReflectedPropertyInfo info;
+                if (!state.ReadReflectedPropertyLocked(property, info)) return false;
+                if (info.name == name)
+                    return info.type == type && info.element_size == size && info.offset == offset;
+                property = info.next;
+            }
+            return false;
+        };
+        if (!validate_row_field("InputID", "ByteProperty", 1, kInputIdRowOffset) ||
+            !validate_row_field("InputAction", "ObjectProperty", 8, kInputActionRowOffset) ||
+            !validate_row_field("Param", "IntProperty", 4, kParamRowOffset)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTAbilityInputRow layout validation failed");
+        }
+
+        SparseMapView map;
+        if (!ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), map) ||
+            map.num <= 0 || map.row_offset + sizeof(std::uintptr_t) > map.stride) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "DT_AbilityInput RowMap is unavailable");
+        }
+        const auto bytes = static_cast<std::size_t>(map.num) * static_cast<std::size_t>(map.stride);
+        if (bytes == 0 || bytes > 4U * 1024U * 1024U || map.num > 4096) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "DT_AbilityInput RowMap size is invalid");
+        }
+        std::vector<std::uint8_t> elements(bytes);
+        if (!state.memory->Read(map.data, elements.data(), elements.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "DT_AbilityInput RowMap read failed");
+        }
+
+        std::uint8_t input_id{};
+        std::int32_t input_param{};
+        bool found{};
+        for (std::int32_t slot{}; slot < map.num; ++slot) {
+            const auto uslot = static_cast<std::uint32_t>(slot);
+            if ((map.flags[static_cast<std::size_t>(uslot) / 32U] &
+                    (1U << (uslot & 31U))) == 0) continue;
+            const auto* element = elements.data() +
+                static_cast<std::size_t>(slot) * static_cast<std::size_t>(map.stride);
+            std::uint32_t comparison_index{}, number{};
+            std::uintptr_t row{};
+            std::memcpy(&comparison_index, element, sizeof(comparison_index));
+            std::memcpy(&number, element + sizeof(comparison_index), sizeof(number));
+            std::memcpy(&row, element + map.row_offset, sizeof(row));
+            if (row == 0) continue;
+            std::string row_name;
+            if (!state.ResolveFNameLocked(comparison_index, number, row_name) ||
+                row_name != "MeleeAtack") continue;
+            std::uintptr_t action{};
+            if (!ReadValue(*state.memory, row + kInputActionRowOffset, action) || action == 0)
+                continue;
+            std::string action_name;
+            if (!state.ReadReflectedObjectNameLocked(action, action_name) ||
+                action_name != "IA_MeleeAttack") continue;
+            if (!ReadValue(*state.memory, row + kInputIdRowOffset, input_id) ||
+                !ReadValue(*state.memory, row + kParamRowOffset, input_param)) {
+                return Status(ANOMALY_STATUS_V1_FAILED, "MeleeAtack row read failed");
+            }
+            found = true;
+            break;
+        }
+        if (!found) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "MeleeAtack row was not found");
+
+        std::array<std::uint8_t, 8> pressed{}, released{};
+        const auto ai = activate->offsets[0], ap = activate->offsets[1];
+        const auto ri = release->offsets[0], rp = release->offsets[1];
+        if (ai >= 8U || ap + sizeof(input_param) > 8U ||
+            ri >= 8U || rp + sizeof(input_param) > 8U) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "normal attack parameter layout is invalid");
+        }
+        pressed[ai] = input_id;
+        std::memcpy(pressed.data() + ap, &input_param, sizeof(input_param));
+        released[ri] = input_id;
+        std::memcpy(released.data() + rp, &input_param, sizeof(input_param));
+        if (!state.InvokeNativeProcessEventLocked(
+                state.player_controller, activate->function, pressed.data(), pressed.size()) ||
+            !state.InvokeNativeProcessEventLocked(
+                state.player_controller, release->function, released.data(), released.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "normal attack input invocation failed");
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     static AnomalyStatusV1 ANOMALY_CALL MetricsSnapshot(
         void* user, AnomalyNteSnapshotMetricsV1* metrics) noexcept {
         if (metrics == nullptr || metrics->struct_size < sizeof(*metrics)) {
@@ -13413,6 +13562,10 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteSkillInvocationServiceV1),
             ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION,
             this, ActivateSkillThunk};
+        attack_input_service = {
+            sizeof(AnomalyNteAttackInputServiceV1),
+            ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
+            this, ActivateMeleeInputThunk};
         metrics_service = {
             sizeof(AnomalyNteMetricsServiceV1), ANOMALY_NTE_METRICS_SERVICE_V1_VERSION,
             this, MetricsSnapshotThunk};
@@ -13457,6 +13610,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteCombatServiceV1 combat_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
+    AnomalyNteAttackInputServiceV1 attack_input_service{};
     AnomalyNteMetricsServiceV1 metrics_service{};
 
 private:
@@ -15061,6 +15215,20 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             semantic_lifetime)) {
         return false;
     }
+    if (framework_hook_ready && process_event_hook_ready &&
+        resolution.FeatureAvailable(kUe5ProcessEventFeature) &&
+        !PublishIfMissing(
+            ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
+            ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
+            &endpoint->attack_input_service,
+            [self, observer_endpoint] {
+                const locked = self.lock();
+                const observed = observer_endpoint.lock();
+                if (!locked || !observed ||
+                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) return;
+                locked->attack_input_demand.store(true, std::memory_order_release);
+            },
+            semantic_lifetime)) return false;
     if (framework_hook_ready && SemanticFeatureAvailable("nte.skill-invocation") &&
         !PublishIfMissing(
             ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
