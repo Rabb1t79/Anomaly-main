@@ -9122,6 +9122,14 @@ struct Ue5NteAdapter::State {
                 if (attack_input_requested) {
                     lookup_optional(NteFunctionKind::ActivateAbilityFromId);
                     lookup_optional(NteFunctionKind::ReleaseAbilityFromId);
+                    const auto& attack_activate =
+                        combat_skill_discovery.functions[NteIndex(NteFunctionKind::ActivateAbilityFromId)];
+                    const auto& attack_release =
+                        combat_skill_discovery.functions[NteIndex(NteFunctionKind::ReleaseAbilityFromId)];
+                    if (attack_activate && attack_release &&
+                        attack_activate->parms_size == 8U && attack_release->parms_size == 8U) {
+                        attack_input_demand.store(false, std::memory_order_release);
+                    }
                 }
                 if (skills_profile) {
                     if (!combat_skill_discovery.functions[NteIndex(
@@ -13376,10 +13384,19 @@ struct Ue5NteAdapter::State {
                 "previous melee input is still pending release");
         }
 
-        const auto& activate = state.combat_skill_discovery.functions[
-            NteIndex(NteFunctionKind::ActivateAbilityFromId)];
-        const auto& release = state.combat_skill_discovery.functions[
-            NteIndex(NteFunctionKind::ReleaseAbilityFromId)];
+        // The service may be called immediately after publication, before the next Game tick
+        // has run the demand-driven reflection pass. Discover the two input bindings here once
+        // when they are missing, instead of reporting a false unavailable state on the first call.
+        const auto binding_index_activate = NteIndex(NteFunctionKind::ActivateAbilityFromId);
+        const auto binding_index_release = NteIndex(NteFunctionKind::ReleaseAbilityFromId);
+        const auto& current_activate = state.combat_skill_discovery.functions[binding_index_activate];
+        const auto& current_release = state.combat_skill_discovery.functions[binding_index_release];
+        if (!current_activate || !current_release ||
+            current_activate->parms_size != 8U || current_release->parms_size != 8U) {
+            state.RefreshCombatSkillBindingsLocked();
+        }
+        const auto& activate = state.combat_skill_discovery.functions[binding_index_activate];
+        const auto& release = state.combat_skill_discovery.functions[binding_index_release];
         if (!activate || !release ||
             activate->parms_size != 8U ||
             release->parms_size != 8U) {
