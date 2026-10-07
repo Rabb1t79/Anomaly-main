@@ -692,9 +692,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (damage_status.code == ANOMALY_STATUS_V1_OK) {
             context->replay_damage_cursor = event.sequence;
             if (event.kind == ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE &&
+                SameHandle(event.world, context->world) &&
                 SameHandle(event.source, context->character) &&
-                event.target.id != 0 &&
-                !SameHandle(event.target, context->character)) {
+                SameHandle(event.target, context->captured_target)) {
+                // A replay invocation is verified against the exact target captured from the
+                // original hit. Unrelated player damage must never advance the replay counter.
                 context->waiting_for_damage = false;
                 ++context->replay_done;
                 context->replay_last_tick = event.tick_sequence;
