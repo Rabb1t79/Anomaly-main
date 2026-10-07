@@ -887,6 +887,15 @@ typedef struct AnomalyNteSkillInvocationServiceV1 {
         AnomalyNteSkillInvocationResultV1* result);
 } AnomalyNteSkillInvocationServiceV1;
 
+// Normal melee input bridge. The Host resolves HTPlayerController::DT_AbilityInput
+// at runtime and invokes the verified ActivateAbilityFromID/ReleaseAbilityFromID path.
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID "anomaly.nte.attack-input"
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION 1u
+typedef struct AnomalyNteAttackInputServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *activate_melee)(void* user);
+} AnomalyNteAttackInputServiceV1;
+
 // Sampling metrics describe Host work, not a per-plugin traversal. The active Profile's
 // feature matrix remains available through AnomalyNteBuildServiceV1::feature_state. A page
 // cache hit records service from the current immutable Entity-frame cache, not a separately

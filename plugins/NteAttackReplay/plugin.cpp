@@ -9,7 +9,7 @@
  * 1. 本文件是 NTE Attack Replay 插件的实现；本分支不修改 Anomaly 宿主核心。
  * 2. 插件始终监听玩家对目标产生的真实 DamageEvent，并记录攻击上下文。
  * 3. 普通攻击不依赖技能句柄；其重放路径依据 HTGame 中已确认的
- *    DT_AbilityInput / HTAbilityInputRow / MeleeAtack / InputID / Param
+ *    AHTPlayerController::AbilitiesInput / FHTAbilityInputRow / IA_MeleeAttack / InputID / Param
  *    以及 ActivateAbilityFromID、ReleaseAbilityFromID 反射函数执行。
  * 4. 技能攻击继续通过 Anomaly NTE skill-invocation 服务执行。
  * 5. Draw 只产生请求；真正的游戏调用在 Update 的 Game 域执行，避免跨线程
@@ -21,7 +21,8 @@
  *
  * 本次改动行为说明：
  * - 新增/完善普通攻击原生输入绑定与重放路径。
- * - 增加对 DataTable 行结构、属性类型、参数大小的运行时校验。
+ * - 当 DamageSource 已可读但无法与当前技能目录匹配时，明确回退到普通攻击路径，避免 active skill 误分类。
+ * - 增加对 AbilitiesInput 数组与行结构、属性类型、参数大小的运行时校验。
  * - 增加重放后的真实 DamageEvent 验证。
  * - 保留自动捕获、技能重放和 UI 请求/游戏线程分离行为。
  */
@@ -158,249 +159,6 @@ bool SameHandle(AnomalyGenerationHandleV1 a, AnomalyGenerationHandleV1 b) noexce
     return a.id == b.id && a.generation == b.generation;
 }
 
-
-/* 中文说明：以下常量和函数实现已从当前 HTGame/Anomaly 证据中确定的普通攻击原生调用链。 */
-constexpr ptrdiff_t kWorldGameInstanceOffset = 560;
-constexpr ptrdiff_t kGameInstanceLocalPlayersOffset = 56;
-constexpr ptrdiff_t kLocalPlayerControllerOffset = 48;
-constexpr ptrdiff_t kObjectClassOffset = 16;
-constexpr ptrdiff_t kObjectNameOffset = 24;
-constexpr ptrdiff_t kUStructChildrenOffset = 72;
-constexpr ptrdiff_t kUStructSuperStructOffset = 64;
-constexpr ptrdiff_t kUFieldNextOffset = 40;
-constexpr ptrdiff_t kUFunctionNumParmsOffset = 180;
-constexpr ptrdiff_t kUFunctionParmsSizeOffset = 182;
-constexpr ptrdiff_t kUStructPropertyLinkOffset = 112;
-constexpr ptrdiff_t kFFieldNameOffset = 32;
-constexpr ptrdiff_t kFFieldClassOffset = 8;
-constexpr ptrdiff_t kFPropertyElementSizeOffset = 52;
-constexpr ptrdiff_t kFPropertyOffsetInternalOffset = 68;
-constexpr ptrdiff_t kFPropertyPropertyLinkNextOffset = 72;
-constexpr ptrdiff_t kDataTableRowMapOffset = 48;
-constexpr size_t kDataTableRowStride = 24;
-constexpr size_t kMaximumNameBytes = 1024;
-constexpr std::string_view kGWorldPattern =
-    "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
-
-// NativeRead 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool NativeRead(const void* address, void* destination, size_t size) noexcept {
-    if (!address || !destination) return false;
-    __try { std::memcpy(destination, address, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-template <typename T>
-// NativeRead 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool NativeRead(const void* address, T& value) noexcept {
-    return NativeRead(address, &value, sizeof(value));
-}
-// NativePointer 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-void* NativePointer(const void* address) noexcept {
-    uintptr_t value{};
-    return NativeRead(address, value) ? reinterpret_cast<void*>(value) : nullptr;
-}
-
-// NativeName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-std::string NativeName(const Context& c, uint32_t id) {
-    if (!c.names || !c.names->resolve_utf8 || id == 0) return {};
-    size_t size{};
-    if (c.names->resolve_utf8(c.names->user, id, nullptr, &size).code != ANOMALY_STATUS_V1_OK ||
-        size <= 1 || size > kMaximumNameBytes) return {};
-    std::string value(size, '\0');
-    if (c.names->resolve_utf8(c.names->user, id, value.data(), &size).code != ANOMALY_STATUS_V1_OK)
-        return {};
-    value.resize(size - 1);
-    return value;
-}
-// NativeObjectName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-std::string NativeObjectName(const Context& c, uintptr_t object) {
-    uint32_t id{};
-    if (!NativeRead(reinterpret_cast<const void*>(object + kObjectNameOffset), id)) return {};
-    return NativeName(c, id);
-}
-// NativeFName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-std::string NativeFName(const Context& c, uint32_t cmp, uint32_t number) {
-    auto value = NativeName(c, cmp);
-    if (number != 0) value += "_" + std::to_string(number - 1);
-    return value;
-}
-
-// ResolveNativeWorld 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool ResolveNativeWorld(const Context& c, uintptr_t& address) noexcept {
-    address = 0;
-    if (!c.signature || !c.signature->resolve) return false;
-    uintptr_t instruction{};
-    if (c.signature->resolve(
-            c.signature->user, anomaly::sdk::StringView("HTGame.exe"),
-            anomaly::sdk::StringView(".text"),
-            anomaly::sdk::StringView(kGWorldPattern), &instruction).code != ANOMALY_STATUS_V1_OK)
-        return false;
-    int32_t displacement{};
-    if (!NativeRead(reinterpret_cast<const void*>(instruction + 3), displacement)) return false;
-    address = static_cast<uintptr_t>(
-        static_cast<intptr_t>(instruction) + 7 + displacement);
-    return address != 0;
-}
-// GetNativeController 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool GetNativeController(const Context& c, uintptr_t& world, uintptr_t& controller) noexcept {
-    uintptr_t g_world{};
-    if (!ResolveNativeWorld(c, g_world)) return false;
-    if (!NativeRead(reinterpret_cast<const void*>(g_world), world) || !world) return false;
-    uintptr_t game_instance{}, locals{}, local_player{};
-    int32_t count{};
-    if (!NativeRead(reinterpret_cast<const void*>(world + kWorldGameInstanceOffset), game_instance) ||
-        !game_instance ||
-        !NativeRead(reinterpret_cast<const void*>(game_instance + kGameInstanceLocalPlayersOffset), locals) ||
-        !locals ||
-        !NativeRead(reinterpret_cast<const void*>(game_instance + kGameInstanceLocalPlayersOffset + 8), count) ||
-        count < 1 ||
-        !NativeRead(reinterpret_cast<const void*>(locals), local_player) ||
-        !local_player ||
-        !NativeRead(reinterpret_cast<const void*>(local_player + kLocalPlayerControllerOffset), controller) ||
-        !controller)
-        return false;
-    return true;
-}
-
-bool FindNativeFunction(const Context& c, uintptr_t cls, std::string_view target,
-                        uint8_t num_params, uint16_t params_size,
-                        uintptr_t& result) noexcept {
-    for (unsigned depth{}; cls && depth < 64; ++depth) {
-        uintptr_t field{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructChildrenOffset), field))
-            return false;
-        for (unsigned count{}; field && count < 4096; ++count) {
-            uintptr_t next{}, field_class{};
-            if (!NativeRead(reinterpret_cast<const void*>(field + kUFieldNextOffset), next) ||
-                !NativeRead(reinterpret_cast<const void*>(field + kObjectClassOffset), field_class))
-                break;
-            if (NativeObjectName(c, field_class) == "Function" &&
-                NativeObjectName(c, field) == target) {
-                uint8_t np{};
-                uint16_t ps{};
-                NativeRead(reinterpret_cast<const void*>(field + kUFunctionNumParmsOffset), np);
-                NativeRead(reinterpret_cast<const void*>(field + kUFunctionParmsSizeOffset), ps);
-                if (np == num_params && ps == params_size) {
-                    result = field;
-                    return true;
-                }
-            }
-            if (!next || next == field) break;
-            field = next;
-        }
-        uintptr_t super{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructSuperStructOffset), super) ||
-            !super || super == cls) break;
-        cls = super;
-    }
-    return false;
-}
-
-bool NativePropertyOffset(const Context& c, uintptr_t owner, std::string_view name,
-                          std::string_view type, int32_t expected_size,
-                          int32_t& offset, uint16_t buffer_size = 0) noexcept {
-    uintptr_t property{};
-    if (!NativeRead(reinterpret_cast<const void*>(owner + kUStructPropertyLinkOffset), property))
-        return false;
-    for (unsigned i{}; property && i < 64; ++i) {
-        uint32_t name_id{};
-        if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id))
-            break;
-        if (NativeName(c, name_id) == name) {
-            uintptr_t field_class{};
-            uint32_t type_id{};
-            int32_t actual_size{};
-            if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
-                !field_class ||
-                !NativeRead(reinterpret_cast<const void*>(field_class), type_id) ||
-                NativeName(c, type_id) != type ||
-                !NativeRead(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), actual_size) ||
-                actual_size != expected_size ||
-                !NativeRead(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
-                offset < 0 ||
-                (buffer_size != 0 &&
-                 (expected_size > buffer_size ||
-                  offset > static_cast<int32_t>(buffer_size - expected_size))))
-                return false;
-            return true;
-        }
-        uintptr_t next{};
-        if (!NativeRead(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) ||
-            next == property)
-            break;
-        property = next;
-    }
-    return false;
-}
-
-uintptr_t NativeObjectProperty(const Context& c, uintptr_t object,
-                               std::string_view property_name) noexcept {
-    if (!object) return 0;
-    uintptr_t cls{};
-    if (!NativeRead(reinterpret_cast<const void*>(object + kObjectClassOffset), cls))
-        return 0;
-    for (unsigned depth{}; cls && depth < 64; ++depth) {
-        uintptr_t property{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructPropertyLinkOffset), property))
-            return 0;
-        for (unsigned count{}; property && count < 4096; ++count) {
-            uint32_t name_id{};
-            if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id))
-                return 0;
-            if (NativeName(c, name_id) == property_name) {
-                uintptr_t field_class{}, value{};
-                uint32_t type_id{};
-                int32_t size{}, offset{};
-                if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
-                    !field_class ||
-                    !NativeRead(reinterpret_cast<const void*>(field_class), type_id) ||
-                    NativeName(c, type_id) != "ObjectProperty" ||
-                    !NativeRead(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), size) ||
-                    size != 8 ||
-                    !NativeRead(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
-                    offset < 0 ||
-                    !NativeRead(reinterpret_cast<const void*>(object + offset), value))
-                    return 0;
-                return value;
-            }
-            uintptr_t next{};
-            if (!NativeRead(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) ||
-                next == property)
-                break;
-            property = next;
-        }
-        uintptr_t super{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructSuperStructOffset), super) ||
-            super == cls)
-            break;
-        cls = super;
-    }
-    return 0;
-}
-
-bool ReadNativeDataTable(uintptr_t table,
-                         std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>>& rows) noexcept {
-    uintptr_t data{};
-    int32_t num{}, max{};
-    if (!table ||
-        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset), data) ||
-        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset + 8), num) ||
-        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset + 12), max) ||
-        !data || num <= 0 || num > 4096 || max < num)
-        return false;
-    rows.clear();
-    rows.reserve(static_cast<size_t>(num));
-    for (int32_t i{}; i < num; ++i) {
-        const auto at = data + static_cast<size_t>(i) * kDataTableRowStride;
-        std::array<uint32_t, 2> key{};
-        uintptr_t row{};
-        if (NativeRead(reinterpret_cast<const void*>(at), key[0]) &&
-            NativeRead(reinterpret_cast<const void*>(at + 4), key[1]) &&
-            NativeRead(reinterpret_cast<const void*>(at + 8), row) &&
-            key[0] != 0 && row != 0)
-            rows.emplace_back(key, row);
-    }
-    return !rows.empty();
-}
 
 // 普通攻击调用只经过 Host 已验证的 attack-input ABI；插件不直接调用 UObject::ProcessEvent。
 bool InvokeNativeNormalAttack(Context& c) {
@@ -690,14 +448,16 @@ bool CaptureNextAttack(Context& context) {
             ReadDamageSourceName(context.combat, event);
         if (!context.captured_damage_source_name.empty() &&
             SkillsReady(context.skills)) {
+            bool skill_scan_succeeded = false;
+            bool skill_match_found = false;
             AnomalyNteSkillFrameV1 frame{};
-    frame.struct_size = sizeof(frame);
+            frame.struct_size = sizeof(frame);
             std::array<AnomalyNteSkillSnapshotV1,
                        ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> source_skills{};
             AnomalyNteSkillPageRequestV1 request{};
-    request.struct_size = sizeof(request);
+            request.struct_size = sizeof(request);
             AnomalyNteSkillPageResultV1 result{};
-    result.struct_size = sizeof(result);
+            result.struct_size = sizeof(result);
             if (context.skills->frame(context.skills->user, &frame).code ==
                 ANOMALY_STATUS_V1_OK) {
                 request.generation = frame.generation;
@@ -706,6 +466,7 @@ bool CaptureNextAttack(Context& context) {
                 if (context.skills->page(
                         context.skills->user, &request,
                         source_skills.data(), &result).code == ANOMALY_STATUS_V1_OK) {
+                    skill_scan_succeeded = true;
                     for (uint32_t j = 0; j < result.returned; ++j) {
                         const auto& skill = source_skills[j];
                         if (!SameHandle(skill.character, combatant.character)) continue;
@@ -716,10 +477,21 @@ bool CaptureNextAttack(Context& context) {
                             context.captured_skill = skill.handle;
                             context.captured_ability = skill.ability_class;
                             context.captured_input_id = skill.input_id;
+                            skill_match_found = true;
                             break;
                         }
                     }
                 }
+            }
+
+            // Once the Host successfully enumerates the current skill catalog and the
+            // concrete DamageSource matches none of those abilities, do not fall back to
+            // an unrelated active skill. That path is what distinguishes ordinary melee
+            // input from an ability replay.
+            if (skill_scan_succeeded && !skill_match_found) {
+                context.captured_skill = {};
+                context.captured_ability = {};
+                context.captured_input_id = -1;
             }
         }
 
@@ -852,7 +624,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
-            "attack replay requires NTE combat, skills, skill-invocation and UI services");
+            "attack replay requires NTE combat, skills, skill-invocation, attack-input and UI services");
     }
 
     *plugin_context = context;
@@ -935,9 +707,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (damage_status.code == ANOMALY_STATUS_V1_OK) {
             context->replay_damage_cursor = event.sequence;
             if (event.kind == ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE &&
+                SameHandle(event.world, context->world) &&
                 SameHandle(event.source, context->character) &&
-                event.target.id != 0 &&
-                !SameHandle(event.target, context->character)) {
+                SameHandle(event.target, context->captured_target)) {
+                // A replay invocation is verified against the exact target captured from the
+                // original hit. Unrelated player damage must never advance the replay counter.
                 context->waiting_for_damage = false;
                 ++context->replay_done;
                 context->replay_last_tick = event.tick_sequence;
@@ -1116,7 +890,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.1.0"),
+        anomaly::sdk::StringView("1.3.0"),
         Load,
         Start,
         Stop,

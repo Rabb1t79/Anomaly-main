@@ -11,7 +11,7 @@ struct ServiceCapabilityMapping {
     std::string_view capability;
 };
 
-constexpr std::array<std::string_view, 45> kKnownCapabilities{
+constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "commands",
     "configuration",
     "diagnostics",
@@ -37,6 +37,7 @@ constexpr std::array<std::string_view, 45> kKnownCapabilities{
     "nte-pickup",
     "nte-ui-buttons",
     "nte-skill-invocation",
+    "nte-attack-input",
     "nte-skills-read",
     "nte-session-snapshot",
     "nte-snapshot-metrics",
@@ -59,7 +60,7 @@ constexpr std::array<std::string_view, 45> kKnownCapabilities{
     "websocket",
 };
 
-constexpr std::array<ServiceCapabilityMapping, 45> kServiceCapabilities{{
+constexpr std::array<ServiceCapabilityMapping, 46> kServiceCapabilities{{
     {"anomaly.plugin-state", "configuration"},
     {"anomaly.config", "configuration"},
     {"anomaly.storage", "storage"},
@@ -103,6 +104,7 @@ constexpr std::array<ServiceCapabilityMapping, 45> kServiceCapabilities{{
     {"anomaly.nte.combat", "nte-combat-read"},
     {"anomaly.nte.skills", "nte-skills-read"},
     {"anomaly.nte.skill-invocation", "nte-skill-invocation"},
+    {"anomaly.nte.attack-input", "nte-attack-input"},
     {"anomaly.nte.esc-menu-button", "nte-esc-menu-button"},
     {"anomaly.nte.actors", "nte-actor-snapshot"},
 }};
