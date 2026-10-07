@@ -1,6 +1,9 @@
 name: Build NteVehicle NoVS LLVM Temp
 
 on:
+  push:
+    branches:
+      - work/nte-attack-replay-plugin-20261008
   workflow_dispatch:
 
 jobs:
