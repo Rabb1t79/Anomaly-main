@@ -22,20 +22,40 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:RUNNER_TEMP 'llvm-mingw.zip'
           $root = Join-Path $env:RUNNER_TEMP 'llvm-mingw'
-          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip' -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath $root -Force
-          $top = Get-ChildItem $root -Directory | Select-Object -First 1
-          if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
-          $env:LLVM_MINGW_ROOT = $top.FullName
-          "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
-          $diag = Join-Path $env:GITHUB_WORKSPACE 'llvm-env.txt'
-          @(
-            "LLVM_MINGW_ROOT=$($top.FullName)"
-            "PATH=$env:PATH"
-            "LLVM root entries:"
-            (Get-ChildItem $top.FullName -Force | Select-Object -ExpandProperty FullName)
-          ) | Out-File $diag -Encoding utf8
+          $log = Join-Path $env:GITHUB_WORKSPACE 'install.log'
+          try {
+            "runner=$env:RUNNER_OS" | Out-File $log -Encoding utf8
+            "workspace=$env:GITHUB_WORKSPACE" | Out-File $log -Append -Encoding utf8
+            "Downloading LLVM-MinGW..." | Out-File $log -Append -Encoding utf8
+            curl.exe -L --fail --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 -o $zip 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip' 2>&1 | Tee-Object -FilePath $log -Append
+            $curlCode = $LASTEXITCODE
+            "curl_exit=$curlCode" | Out-File $log -Append -Encoding utf8
+            if ($curlCode -ne 0) { throw "curl download failed: $curlCode" }
+            if (!(Test-Path $zip)) { throw 'LLVM-MinGW zip was not downloaded' }
+            $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+            "sha256=$hash" | Out-File $log -Append -Encoding utf8
+            if ($hash -ne '1e936a4a694fc27f9625e3311f5ec5d6d99abfeaa514fd41c52a4f8347145d1a') { throw "LLVM-MinGW SHA-256 mismatch: $hash" }
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+            Expand-Archive -Path $zip -DestinationPath $root -Force
+            $top = Get-ChildItem $root -Directory | Select-Object -First 1
+            if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
+            if (!(Test-Path (Join-Path $top.FullName 'bin/clang++.exe'))) { throw "clang++.exe not found under $($top.FullName)" }
+            $env:LLVM_MINGW_ROOT = $top.FullName
+            "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+            $diag = Join-Path $env:GITHUB_WORKSPACE 'llvm-env.txt'
+            @(
+              "LLVM_MINGW_ROOT=$($top.FullName)"
+              "clangxx=$($top.FullName)\bin\clang++.exe"
+              "PATH=$env:PATH"
+              "LLVM root entries:"
+              (Get-ChildItem $top.FullName -Force | Select-Object -ExpandProperty FullName)
+            ) | Out-File $diag -Encoding utf8
+          } catch {
+            "INSTALL_EXCEPTION:" | Out-File $log -Append -Encoding utf8
+            ($_ | Out-String) | Out-File $log -Append -Encoding utf8
+            throw
+          }
       - name: Diagnose toolchain
         shell: pwsh
         run: |
@@ -87,6 +107,7 @@ jobs:
             llvm-env.txt
             toolchain-diagnose.txt
             compile.log
+            install.log
           if-no-files-found: warn
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
