@@ -27,6 +27,7 @@ jobs:
           $top = Get-ChildItem $root -Directory | Select-Object -First 1
           if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
           $env:LLVM_MINGW_ROOT = $top.FullName
+          "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
       - name: Compile plugin directly
         shell: pwsh
@@ -35,7 +36,8 @@ jobs:
           $sdk = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/include'
           $src = Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/plugin.cpp'
           $out = Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-plugin.dll'
-          & (Join-Path $env:LLVM_MINGW_ROOT 'bin/clang++.exe') -target x86_64-w64-windows-gnu -std=c++20 -O2 -DNOMINMAX -DWIN32_LEAN_AND_MEAN "-I$sdk" -shared $src -o $out
+          $clangxx = Get-Command clang++.exe -ErrorAction Stop
+          & $clangxx.Source -target x86_64-w64-windows-gnu -std=c++20 -O2 -DNOMINMAX -DWIN32_LEAN_AND_MEAN "-I$sdk" -shared $src -o $out
           if ($LASTEXITCODE -ne 0) { throw "clang++ failed: $LASTEXITCODE" }
           if (!(Test-Path $out)) { throw 'plugin.dll was not produced' }
       - name: Stage package
