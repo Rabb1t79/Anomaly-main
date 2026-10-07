@@ -9,7 +9,7 @@
  * 1. 本文件是 NTE Attack Replay 插件的实现；本分支不修改 Anomaly 宿主核心。
  * 2. 插件始终监听玩家对目标产生的真实 DamageEvent，并记录攻击上下文。
  * 3. 普通攻击不依赖技能句柄；其重放路径依据 HTGame 中已确认的
- *    DT_AbilityInput / HTAbilityInputRow / MeleeAtack / InputID / Param
+ *    AHTPlayerController::AbilitiesInput / FHTAbilityInputRow / IA_MeleeAttack / InputID / Param
  *    以及 ActivateAbilityFromID、ReleaseAbilityFromID 反射函数执行。
  * 4. 技能攻击继续通过 Anomaly NTE skill-invocation 服务执行。
  * 5. Draw 只产生请求；真正的游戏调用在 Update 的 Game 域执行，避免跨线程
@@ -21,7 +21,7 @@
  *
  * 本次改动行为说明：
  * - 新增/完善普通攻击原生输入绑定与重放路径。
- * - 增加对 DataTable 行结构、属性类型、参数大小的运行时校验。
+ * - 增加对 AbilitiesInput 数组与行结构、属性类型、参数大小的运行时校验。
  * - 增加重放后的真实 DamageEvent 验证。
  * - 保留自动捕获、技能重放和 UI 请求/游戏线程分离行为。
  */
@@ -1116,7 +1116,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.1.0"),
+        anomaly::sdk::StringView("1.3.0"),
         Load,
         Start,
         Stop,
