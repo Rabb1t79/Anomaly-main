@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - work/nte-attack-replay-plugin-20261008
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
