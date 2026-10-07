@@ -26,6 +26,16 @@
 #define ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_ENTITY_PAGE_V1_MAX_CAPACITY 256u
 #define ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY 128u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES 128u
+#define ANOMALY_NTE_VEHICLE_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_SPEED (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO (1u << 2u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION (1u << 3u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON (1u << 4u)
+typedef struct AnomalyNteVehicleSnapshotV1 { uint32_t struct_size; uint32_t flags; AnomalyGenerationHandleV1 vehicle; double speed_kmh; float top_speed_ratio; uint32_t wheel_friction_enabled; } AnomalyNteVehicleSnapshotV1;
+typedef struct AnomalyNteVehicleServiceV1 { uint32_t struct_size; uint32_t service_version; void* user; AnomalyStatusV1 (ANOMALY_CALL *snapshot)(void*, AnomalyNteVehicleSnapshotV1*); AnomalyStatusV1 (ANOMALY_CALL *set_top_speed_ratio)(void*, float); AnomalyStatusV1 (ANOMALY_CALL *set_wheel_friction_enabled)(void*, uint32_t); AnomalyStatusV1 (ANOMALY_CALL *reset)(void*); AnomalyStatusV1 (ANOMALY_CALL *summon_vehicle)(void*); AnomalyStatusV1 (ANOMALY_CALL *vehicle_id_count)(void*, uint32_t*); AnomalyStatusV1 (ANOMALY_CALL *vehicle_id_at)(void*, uint32_t, char*, size_t*); AnomalyStatusV1 (ANOMALY_CALL *set_summon_vehicle_id)(void*, AnomalyStringViewV1); } AnomalyNteVehicleServiceV1;
 #define ANOMALY_NTE_METRICS_SERVICE_V1_ID "anomaly.nte.metrics"
 #define ANOMALY_NTE_METRICS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID "anomaly.nte.esc-menu-button"
