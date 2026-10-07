@@ -1065,6 +1065,8 @@ struct Ue5NteAdapter::State {
     };
     std::vector<SkillRecord> skills;
     std::atomic_bool skill_demand{};
+    // Normal-attack input requests are demand-driven so reflection is refreshed only when a consumer needs it.
+    std::atomic_bool attack_input_demand{};
     std::uint64_t skill_generation{};
     std::uint64_t skill_next_id{1};
     std::uint64_t skill_attempt_sequence{};
@@ -2307,7 +2309,10 @@ struct Ue5NteAdapter::State {
         }
         if (id == ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID) {
             return framework_hook_ready && process_event_hook_ready &&
-                resolution.FeatureAvailable(kUe5ProcessEventFeature);
+                resolution.FeatureAvailable(kUe5ProcessEventFeature) &&
+                resolution.FeatureAvailable("ue5.names") &&
+                resolution.FeatureAvailable("ue5.objects") &&
+                SemanticFeatureAvailable("nte.player");
         }
         if (id == ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID) {
             return framework_hook_ready &&
@@ -2492,6 +2497,10 @@ struct Ue5NteAdapter::State {
     void InvalidateCombatSkillDiscoveryLocked() noexcept {
         combat_skill_discovery = {};
         combat_skill_discovery.object_generation = object_generation;
+        pending_melee_release = false;
+        pending_melee_input_id = 0;
+        pending_melee_param = 0;
+        pending_melee_controller = 0;
         combat_capture_bindings.store(nullptr, std::memory_order_release);
         InvalidateCombatSnapshot();
         InvalidateSkills();
@@ -2589,6 +2598,10 @@ struct Ue5NteAdapter::State {
         combat_demand.store(false, std::memory_order_release);
         skill_demand.store(false, std::memory_order_release);
         attack_input_demand.store(false, std::memory_order_release);
+        pending_melee_release = false;
+        pending_melee_input_id = 0;
+        pending_melee_param = 0;
+        pending_melee_controller = 0;
         combat_capture_read.store(0, std::memory_order_release);
         combat_capture_write.store(0, std::memory_order_release);
         combat_capture_drop_count.store(0, std::memory_order_release);
@@ -8860,6 +8873,55 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    // Release one previously issued melee input on the next Game tick. Keeping the
+    // release on a later tick mirrors the controller's explicit activate/release lifecycle and
+    // avoids a same-tick press+release that can be consumed as an empty input.
+    void ReleasePendingMeleeInputLocked() noexcept {
+        if (!pending_melee_release) return;
+
+        const auto& release = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ReleaseAbilityFromId)];
+        if (!release ||
+            release->parms_size != 8U ||
+            pending_melee_controller == 0 ||
+            pending_melee_controller != player_controller) {
+            pending_melee_release = false;
+            pending_melee_input_id = 0;
+            pending_melee_param = 0;
+            pending_melee_controller = 0;
+            return;
+        }
+
+        std::array<std::uint8_t, 8> released{};
+        const auto input_offset = release->offsets[0];
+        const auto param_offset = release->offsets[1];
+        if (input_offset >= released.size() ||
+            param_offset + sizeof(pending_melee_param) > released.size()) {
+            pending_melee_release = false;
+            pending_melee_input_id = 0;
+            pending_melee_param = 0;
+            pending_melee_controller = 0;
+            return;
+        }
+
+        released[input_offset] = pending_melee_input_id;
+        std::memcpy(
+            released.data() + param_offset,
+            &pending_melee_param,
+            sizeof(pending_melee_param));
+
+        static_cast<void>(InvokeNativeProcessEventLocked(
+            player_controller,
+            release->function,
+            released.data(),
+            released.size()));
+
+        pending_melee_release = false;
+        pending_melee_input_id = 0;
+        pending_melee_param = 0;
+        pending_melee_controller = 0;
+    }
+
     void RefreshCombatSkillBindingsLocked() noexcept {
         try {
             // Reflection discovery is demand driven. Publishing the service does
@@ -13287,130 +13349,245 @@ struct Ue5NteAdapter::State {
     static AnomalyStatusV1 ANOMALY_CALL ActivateMeleeInput(void* user) noexcept {
         auto& state = *static_cast<State*>(user);
         state.attack_input_demand.store(true, std::memory_order_release);
+
         const DWORD expected_thread = state.game_thread_id.load(std::memory_order_acquire);
         if (expected_thread == 0 || expected_thread != GetCurrentThreadId()) {
-            return Status(ANOMALY_STATUS_V1_CONFLICT, "attack input requires the Game thread");
+            return Status(
+                ANOMALY_STATUS_V1_CONFLICT,
+                "attack input requires the Game thread");
         }
+
         std::unique_lock lock(state.mutex);
-        if (!state.framework_hook_ready || !state.process_event_hook_ready ||
-            !state.process_event_invoker || state.player_controller == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "normal attack input binding is unavailable");
+        if (!state.framework_hook_ready ||
+            !state.process_event_hook_ready ||
+            !state.process_event_invoker ||
+            state.player_controller == 0 ||
+            !state.NtePlayerLayoutAvailable() ||
+            !state.resolution.FeatureAvailable("ue5.names") ||
+            !state.resolution.FeatureAvailable("ue5.objects") ||
+            !state.resolution.FeatureAvailable(kUe5ProcessEventFeature)) {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
+                "normal attack input binding is unavailable");
         }
+        if (state.pending_melee_release) {
+            return Status(
+                ANOMALY_STATUS_V1_CONFLICT,
+                "previous melee input is still pending release");
+        }
+
         const auto& activate = state.combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::ActivateAbilityFromId)];
         const auto& release = state.combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::ReleaseAbilityFromId)];
-        if (!activate || !release || activate->parms_size != 8U || release->parms_size != 8U) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+        if (!activate || !release ||
+            activate->parms_size != 8U ||
+            release->parms_size != 8U) {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
                 "ActivateAbilityFromID/ReleaseAbilityFromID binding is unavailable");
         }
 
-        // Dumper-7 confirmed: HTPlayerController::DT_AbilityInput +0x1978;
-        // FHTAbilityInputRow: InputID +0x08, InputAction +0x10, Param +0x2C.
-        constexpr std::uintptr_t kDtAbilityInputOffset = 0x1978U;
-        constexpr std::int32_t kInputIdRowOffset = 0x08;
-        constexpr std::int32_t kInputActionRowOffset = 0x10;
-        constexpr std::int32_t kParamRowOffset = 0x2C;
+        // The supplied HTGame dump confirms AHTPlayerController::AbilitiesInput at 0x1980
+        // and FHTAbilityInputRow as a TArray element. We resolve that reflected property at
+        // runtime instead of hard-coding the controller offset, then identify the real melee
+        // row by its IA_MeleeAttack object.
+        std::uintptr_t controller_class{};
+        if (!ReadPointerAt(
+                *state.memory,
+                state.player_controller,
+                Layout(state.profile, "object.class"),
+                controller_class)) {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
+                "player controller class is unavailable");
+        }
 
-        std::uintptr_t table{};
-        if (!ReadPointerAt(*state.memory, state.player_controller,
-                kDtAbilityInputOffset, table) || table == 0) {
-            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "DT_AbilityInput is unavailable");
+        ReflectedPropertyInfo abilities_input;
+        if (!state.FindReflectedPropertyLocked(
+                controller_class, "AbilitiesInput", abilities_input, true) ||
+            abilities_input.type != "ArrayProperty" ||
+            abilities_input.array_dim != 1 ||
+            abilities_input.element_size != static_cast<std::int32_t>(sizeof(NativeArrayHeader)) ||
+            abilities_input.offset < 0) {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTPlayerController::AbilitiesInput reflection validation failed");
         }
-        const auto row_struct_offset = Layout(state.profile, "dataTable.rowStruct", -1);
-        const auto row_map_offset = Layout(state.profile, "dataTable.rowMap", -1);
-        if (row_struct_offset < 0 || row_map_offset < 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "DT_AbilityInput layout is unavailable");
+
+        std::uintptr_t inner{};
+        if (!ReadPointerAt(
+                *state.memory,
+                abilities_input.property,
+                Layout(state.profile, "farrayProperty.inner"),
+                inner)) {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
+                "AbilitiesInput element property is unavailable");
         }
+
+        std::string inner_type;
+        if (!state.ReadReflectedFieldClassNameLocked(inner, inner_type) ||
+            inner_type != "StructProperty") {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
+                "AbilitiesInput element is not a struct property");
+        }
+
         std::uintptr_t row_struct{};
-        if (!ReadPointerAt(*state.memory, table, row_struct_offset, row_struct) || row_struct == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "DT_AbilityInput row struct is unavailable");
+        std::string row_struct_name;
+        std::int32_t row_stride{};
+        if (!ReadPointerAt(
+                *state.memory,
+                inner,
+                Layout(state.profile, "fstructProperty.struct"),
+                row_struct) ||
+            !state.ReadReflectedObjectNameLocked(row_struct, row_struct_name) ||
+            row_struct_name != "HTAbilityInputRow" ||
+            !ReadValue(
+                *state.memory,
+                inner + Layout(state.profile, "fproperty.elementSize"),
+                row_stride) ||
+            row_stride < static_cast<std::int32_t>(sizeof(std::uintptr_t)) ||
+            row_stride > 4096) {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTAbilityInputRow reflection validation failed");
         }
 
-        auto validate_row_field = [&](std::string_view name, std::string_view type,
-                                      std::int32_t size, std::int32_t offset) {
-            std::uintptr_t property{};
-            if (!ReadPointerAt(*state.memory, row_struct,
-                    Layout(state.profile, "ustruct.propertyLink"), property)) return false;
-            for (std::size_t count{}; property != 0 && count < 128U; ++count) {
-                ReflectedPropertyInfo info;
-                if (!state.ReadReflectedPropertyLocked(property, info)) return false;
-                if (info.name == name)
-                    return info.type == type && info.element_size == size && info.offset == offset;
-                property = info.next;
-            }
-            return false;
-        };
-        if (!validate_row_field("InputID", "ByteProperty", 1, kInputIdRowOffset) ||
-            !validate_row_field("InputAction", "ObjectProperty", 8, kInputActionRowOffset) ||
-            !validate_row_field("Param", "IntProperty", 4, kParamRowOffset)) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTAbilityInputRow layout validation failed");
+        ReflectedPropertyInfo input_id_property;
+        ReflectedPropertyInfo input_action_property;
+        ReflectedPropertyInfo param_property;
+        if (!state.FindReflectedPropertyLocked(
+                row_struct, "InputID", input_id_property, false) ||
+            !state.FindReflectedPropertyLocked(
+                row_struct, "InputAction", input_action_property, false) ||
+            !state.FindReflectedPropertyLocked(
+                row_struct, "Param", param_property, false) ||
+            input_id_property.array_dim != 1 ||
+            input_id_property.element_size < 1 ||
+            input_id_property.offset < 0 ||
+            (input_id_property.type != "ByteProperty" &&
+             input_id_property.type != "EnumProperty" &&
+             input_id_property.type != "UInt8Property") ||
+            input_action_property.array_dim != 1 ||
+            input_action_property.type != "ObjectProperty" ||
+            input_action_property.element_size != static_cast<std::int32_t>(sizeof(std::uintptr_t)) ||
+            input_action_property.offset < 0 ||
+            param_property.array_dim != 1 ||
+            param_property.type != "IntProperty" ||
+            param_property.element_size != static_cast<std::int32_t>(sizeof(std::int32_t)) ||
+            param_property.offset < 0 ||
+            static_cast<std::uint64_t>(input_action_property.offset) +
+                    sizeof(std::uintptr_t) > static_cast<std::uint64_t>(row_stride) ||
+            static_cast<std::uint64_t>(param_property.offset) +
+                    sizeof(std::int32_t) > static_cast<std::uint64_t>(row_stride) ||
+            static_cast<std::uint64_t>(input_id_property.offset) +
+                    sizeof(std::uint8_t) > static_cast<std::uint64_t>(row_stride)) {
+            return Status(
+                ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTAbilityInputRow field validation failed");
         }
 
-        SparseMapView map;
-        if (!ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), map) ||
-            map.num <= 0 || map.row_offset + sizeof(std::uintptr_t) > map.stride) {
-            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "DT_AbilityInput RowMap is unavailable");
+        NativeArrayHeader rows;
+        if (!ReadNativeArrayHeaderLocked(
+                state.player_controller +
+                    static_cast<std::uintptr_t>(abilities_input.offset),
+                rows,
+                4096)) {
+            return Status(
+                ANOMALY_STATUS_V1_NOT_FOUND,
+                "HTPlayerController::AbilitiesInput is empty or unavailable");
         }
-        const auto bytes = static_cast<std::size_t>(map.num) * static_cast<std::size_t>(map.stride);
-        if (bytes == 0 || bytes > 4U * 1024U * 1024U || map.num > 4096) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "DT_AbilityInput RowMap size is invalid");
+
+        if (rows.count > 4096 ||
+            static_cast<std::size_t>(rows.count) >
+                (static_cast<std::size_t>(4U * 1024U * 1024U) /
+                    static_cast<std::size_t>(row_stride))) {
+            return Status(
+                ANOMALY_STATUS_V1_FAILED,
+                "AbilitiesInput array size is invalid");
         }
-        std::vector<std::uint8_t> elements(bytes);
-        if (!state.memory->Read(map.data, elements.data(), elements.size())) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "DT_AbilityInput RowMap read failed");
+
+        const std::size_t byte_count =
+            static_cast<std::size_t>(rows.count) * static_cast<std::size_t>(row_stride);
+        std::vector<std::uint8_t> bytes(byte_count);
+        if (byte_count != 0 && !state.memory->Read(rows.data, bytes.data(), byte_count)) {
+            return Status(
+                ANOMALY_STATUS_V1_FAILED,
+                "AbilitiesInput array read failed");
         }
 
         std::uint8_t input_id{};
         std::int32_t input_param{};
-        bool found{};
-        for (std::int32_t slot{}; slot < map.num; ++slot) {
-            const auto uslot = static_cast<std::uint32_t>(slot);
-            if ((map.flags[static_cast<std::size_t>(uslot) / 32U] &
-                    (1U << (uslot & 31U))) == 0) continue;
-            const auto* element = elements.data() +
-                static_cast<std::size_t>(slot) * static_cast<std::size_t>(map.stride);
-            std::uint32_t comparison_index{}, number{};
-            std::uintptr_t row{};
-            std::memcpy(&comparison_index, element, sizeof(comparison_index));
-            std::memcpy(&number, element + sizeof(comparison_index), sizeof(number));
-            std::memcpy(&row, element + map.row_offset, sizeof(row));
-            if (row == 0) continue;
-            std::string row_name;
-            if (!state.ResolveFNameLocked(comparison_index, number, row_name) ||
-                row_name != "MeleeAtack") continue;
+        bool found = false;
+        for (std::int32_t index{}; index < rows.count; ++index) {
+            const auto* const row =
+                bytes.data() + static_cast<std::size_t>(index) *
+                    static_cast<std::size_t>(row_stride);
             std::uintptr_t action{};
-            if (!ReadValue(*state.memory, row + kInputActionRowOffset, action) || action == 0)
-                continue;
+            std::memcpy(
+                &action,
+                row + input_action_property.offset,
+                sizeof(action));
+            if (action == 0) continue;
+
             std::string action_name;
             if (!state.ReadReflectedObjectNameLocked(action, action_name) ||
-                action_name != "IA_MeleeAttack") continue;
-            if (!ReadValue(*state.memory, row + kInputIdRowOffset, input_id) ||
-                !ReadValue(*state.memory, row + kParamRowOffset, input_param)) {
-                return Status(ANOMALY_STATUS_V1_FAILED, "MeleeAtack row read failed");
+                action_name != "IA_MeleeAttack") {
+                continue;
             }
+
+            std::memcpy(
+                &input_id,
+                row + input_id_property.offset,
+                sizeof(input_id));
+            std::memcpy(
+                &input_param,
+                row + param_property.offset,
+                sizeof(input_param));
             found = true;
             break;
         }
-        if (!found) return Status(ANOMALY_STATUS_V1_NOT_FOUND, "MeleeAtack row was not found");
+        if (!found) {
+            return Status(
+                ANOMALY_STATUS_V1_NOT_FOUND,
+                "IA_MeleeAttack input row was not found");
+        }
 
-        std::array<std::uint8_t, 8> pressed{}, released{};
-        const auto ai = activate->offsets[0], ap = activate->offsets[1];
-        const auto ri = release->offsets[0], rp = release->offsets[1];
-        if (ai >= 8U || ap + sizeof(input_param) > 8U ||
-            ri >= 8U || rp + sizeof(input_param) > 8U) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "normal attack parameter layout is invalid");
+        std::array<std::uint8_t, 8> pressed{};
+        const auto input_offset = activate->offsets[0];
+        const auto param_offset = activate->offsets[1];
+        if (input_offset >= pressed.size() ||
+            param_offset + sizeof(input_param) > pressed.size()) {
+            return Status(
+                ANOMALY_STATUS_V1_FAILED,
+                "normal attack parameter layout is invalid");
         }
-        pressed[ai] = input_id;
-        std::memcpy(pressed.data() + ap, &input_param, sizeof(input_param));
-        released[ri] = input_id;
-        std::memcpy(released.data() + rp, &input_param, sizeof(input_param));
+
+        pressed[input_offset] = input_id;
+        std::memcpy(
+            pressed.data() + param_offset,
+            &input_param,
+            sizeof(input_param));
+
         if (!state.InvokeNativeProcessEventLocked(
-                state.player_controller, activate->function, pressed.data(), pressed.size()) ||
-            !state.InvokeNativeProcessEventLocked(
-                state.player_controller, release->function, released.data(), released.size())) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "normal attack input invocation failed");
+                state.player_controller,
+                activate->function,
+                pressed.data(),
+                pressed.size())) {
+            return Status(
+                ANOMALY_STATUS_V1_FAILED,
+                "normal attack input invocation failed");
         }
+
+        // The dump exposes Activate and Release as separate native controller functions.
+        // Keep the input pressed until the next Game tick so the game can consume the
+        // activation before the matching release is dispatched.
+        state.pending_melee_release = true;
+        state.pending_melee_input_id = input_id;
+        state.pending_melee_param = input_param;
+        state.pending_melee_controller = state.player_controller;
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -15612,6 +15789,7 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         }
         state->RefreshAhudBindingLocked();
         state->RefreshCombatSkillBindingsLocked();
+        state->ReleasePendingMeleeInputLocked();
         const bool combat_service_ready =
             state->NteCombatProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_COMBAT_SERVICE_V1_ID);
