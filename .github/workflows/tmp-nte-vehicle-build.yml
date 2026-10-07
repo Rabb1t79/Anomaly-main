@@ -1,0 +1,48 @@
+name: Build NteVehicle NoVS LLVM Temp
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install LLVM-MinGW 20260922 MSVCRT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'llvm-mingw.zip'
+          $root = Join-Path $env:RUNNER_TEMP 'llvm-mingw'
+          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $root -Force
+          $top = Get-ChildItem $root -Directory | Select-Object -First 1
+          if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
+          $env:LLVM_MINGW_ROOT = $top.FullName
+          "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Compile plugin directly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/include'
+          $src = Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/plugin.cpp'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'NteVehicle-plugin.dll'
+          & (Join-Path $env:LLVM_MINGW_ROOT 'bin/clang++.exe') -target x86_64-w64-windows-gnu -std=c++20 -O2 -DNOMINMAX -DWIN32_LEAN_AND_MEAN "-I$sdk" -shared $src -o $out
+          if ($LASTEXITCODE -ne 0) { throw "clang++ failed: $LASTEXITCODE" }
+          if (!(Test-Path $out)) { throw 'plugin.dll was not produced' }
+      - name: Stage package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkg = Join-Path $env:GITHUB_WORKSPACE 'NteVehicle-NoVS-LLVM'
+          New-Item -ItemType Directory -Path $pkg -Force | Out-Null
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'NteVehicle-plugin.dll') (Join-Path $pkg 'plugin.dll')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/manifest.json') (Join-Path $pkg 'manifest.json')
+          Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'NteVehicle-NoVS-LLVM.zip') -Force
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteVehicle-NoVS-LLVM
+          path: NteVehicle-NoVS-LLVM.zip
+          if-no-files-found: error
