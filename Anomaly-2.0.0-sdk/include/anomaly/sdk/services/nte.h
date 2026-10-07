@@ -32,6 +32,13 @@ typedef struct AnomalyNteAttackInputServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     // Host-side bridge validated against Dumper-7 HTPlayerController ABI.
     AnomalyStatusV1 (ANOMALY_CALL *activate_melee)(void* user);
+    // Marks the beginning of one automatic attack-capture window.
+    // The callback is optional for older hosts; when present, it resets the
+    // Host-side captured ActivateAbilityFromID argument snapshot.
+    AnomalyStatusV1 (ANOMALY_CALL *begin_capture)(void* user);
+    // Replays the exact InputID/Param pair observed before the captured DamageEvent.
+    // Returns NOT_FOUND when no matching real player input was observed.
+    AnomalyStatusV1 (ANOMALY_CALL *replay_captured_input)(void* user);
 } AnomalyNteAttackInputServiceV1;
 #define ANOMALY_NTE_METRICS_SERVICE_V1_ID "anomaly.nte.metrics"
 #define ANOMALY_NTE_METRICS_SERVICE_V1_VERSION 1u
