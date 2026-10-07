@@ -30,7 +30,6 @@
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
 #include "anomaly/sdk/services/interop.h"
-#include "anomaly/sdk/services/ue5.h"
 
 #include <algorithm>
 #include <atomic>
@@ -57,7 +56,7 @@ struct Context final {
     const AnomalySignatureServiceV1* signature{};
     const AnomalyUe5NamesServiceV1* names{};
     const AnomalyUe5FrameworkServiceV1* framework{};
-    const AnomalyUe5ProcessEventServiceV1* process_event{};
+    const AnomalyNteAttackInputServiceV1* attack_input{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
@@ -403,106 +402,14 @@ bool ReadNativeDataTable(uintptr_t table,
     return !rows.empty();
 }
 
-// ProcessEvent 必须经 Host 已验证的 ABI 调用器进入，禁止插件自行读取 UObject 虚表槽位。
-bool IsCanonicalUserPointer(uintptr_t value) noexcept {
-    // Windows x64 的用户态对象、UFunction 和虚表地址应落在低位 canonical 地址范围；异常地址 0xffffffff... 不进入原生调用。
-    return value >= 0x10000ull && value <= 0x00007FFFFFFFFFFFull;
-}
-
-// 从 PlayerController 的 UObject 虚表读取已配置的 ProcessEvent 槽位；在真正调用前拒绝非 canonical 的对象、UFunction、虚表和函数地址，避免错误的反射地址直接进入 HTGame。
-bool InvokeNativeProcessEvent(const Context& c, uintptr_t object, uintptr_t function,
-                             void* parameters, size_t parameter_size) noexcept {
-    if (c.process_event == nullptr || c.process_event->struct_size <
-        offsetof(AnomalyUe5ProcessEventServiceV1, invoke) + sizeof(c.process_event->invoke) ||
-        c.process_event->invoke == nullptr) return false;
-    if (!IsCanonicalUserPointer(object) || !IsCanonicalUserPointer(function)) return false;
-    return c.process_event->invoke(c.process_event->user, object, function,
-                                   parameters, parameter_size).code == ANOMALY_STATUS_V1_OK;
-}
-// 从当前 PlayerController 找到 ActivateAbilityFromID/ReleaseAbilityFromID，再读取 DT_AbilityInput 的 MeleeAtack 行，取得 InputID 和 Param 并按 UFunction 参数布局写入调用缓冲区，为普通攻击按下/释放调用准备原生参数。
-bool ResolveNormalAttackBinding(Context& c, NormalAttackBinding& out) {
-    uintptr_t world{}, controller{};
-    if (!GetNativeController(c, world, controller)) return false;
-    if (c.normal_attack.world == world &&
-        c.normal_attack.controller == controller &&
-        c.normal_attack.triggered != 0 &&
-        c.normal_attack.completed != 0) {
-        out = c.normal_attack;
-        return true;
-    }
-
-    c.normal_attack = {};
-    uintptr_t cls{};
-    if (!NativeRead(reinterpret_cast<const void*>(controller + kObjectClassOffset), cls))
-        return false;
-
-    NormalAttackBinding next{};
-    next.world = world;
-    next.controller = controller;
-    if (!FindNativeFunction(c, cls, "ActivateAbilityFromID", 2, 8, next.triggered) ||
-        !FindNativeFunction(c, cls, "ReleaseAbilityFromID", 2, 8, next.completed))
-        return false;
-
-    const uintptr_t table = NativeObjectProperty(c, controller, "DT_AbilityInput");
-    const uintptr_t row_struct = NativeObjectProperty(c, table, "RowStruct");
-    int32_t id_offset{}, param_offset{}, action_offset{};
-    std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>> rows;
-    if (!table || NativeObjectName(c, row_struct) != "HTAbilityInputRow" ||
-        !NativePropertyOffset(c, row_struct, "InputID", "ByteProperty", 1, id_offset) ||
-        !NativePropertyOffset(c, row_struct, "Param", "IntProperty", 4, param_offset) ||
-        !NativePropertyOffset(c, row_struct, "InputAction", "ObjectProperty", 8, action_offset) ||
-        !ReadNativeDataTable(table, rows))
-        return false;
-
-    bool found{};
-    for (const auto& [key, row] : rows) {
-        if (NativeFName(c, key[0], key[1]) != "MeleeAtack") continue;
-        uintptr_t action{};
-        if (!NativeRead(reinterpret_cast<const void*>(row + action_offset), action) || !action)
-            continue;
-        const auto action_name = NativeObjectName(c, action);
-        // The dump contains the exact MeleeAtack row. IA_MeleeAttack is an additional
-        // check when that action object is loaded into the current FName pool.
-        if (!action_name.empty() && action_name != "IA_MeleeAttack") continue;
-
-        uint8_t input_id{};
-        int32_t input_param{};
-        if (!NativeRead(reinterpret_cast<const void*>(row + id_offset), input_id) ||
-            !NativeRead(reinterpret_cast<const void*>(row + param_offset), input_param))
-            return false;
-
-        for (const bool pressed : {false, true}) {
-            const auto fn = pressed ? next.triggered : next.completed;
-            auto& value = pressed ? next.pressed : next.released;
-            int32_t fn_id_offset{}, fn_param_offset{};
-            if (!NativePropertyOffset(c, fn, "InputID", "ByteProperty", 1, fn_id_offset, 8) ||
-                !NativePropertyOffset(c, fn, "Param", "IntProperty", 4, fn_param_offset, 8))
-                return false;
-            value.fill(0);
-            value[fn_id_offset] = input_id;
-            std::memcpy(value.data() + fn_param_offset, &input_param, sizeof(input_param));
-        }
-        found = true;
-        break;
-    }
-    if (!found) return false;
-
-    c.normal_attack = next;
-    out = next;
-    return true;
-}
-
-// InvokeNativeNormalAttack 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
+// 普通攻击调用只经过 Host 已验证的 attack-input ABI；插件不直接调用 UObject::ProcessEvent。
 bool InvokeNativeNormalAttack(Context& c) {
-    NormalAttackBinding binding{};
-    if (!ResolveNormalAttackBinding(c, binding)) return false;
-    auto pressed = binding.pressed;
-    auto released = binding.released;
-    if (!InvokeNativeProcessEvent(c, binding.controller, binding.triggered, pressed.data(), pressed.size()))
+    if (c.attack_input == nullptr || c.attack_input->activate_melee == nullptr) {
         return false;
-    return InvokeNativeProcessEvent(c, binding.controller, binding.completed, released.data(), released.size());
+    }
+    return c.attack_input->activate_melee(c.attack_input->user).code ==
+        ANOMALY_STATUS_V1_OK;
 }
-
 
 std::string ReadAbilityPath(
     const AnomalyNteSkillsServiceV1* skills,
@@ -931,14 +838,17 @@ AnomalyStatusV1 ANOMALY_CALL Load(
         ANOMALY_UE5_NAMES_SERVICE_V1_ID, ANOMALY_UE5_NAMES_SERVICE_V1_VERSION).get();
     context->framework = sdk_host.Query<AnomalyUe5FrameworkServiceV1>(
         ANOMALY_UE5_FRAMEWORK_SERVICE_V1_ID, ANOMALY_UE5_FRAMEWORK_SERVICE_V1_VERSION).get();
+    context->attack_input = sdk_host.Query<AnomalyNteAttackInputServiceV1>(
+        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
+        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION).get();
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
     if (!CombatReady(context->combat) || !SkillsReady(context->skills) ||
         !InvocationReady(context->invocation) || !UiReady(context->ui) ||
-        context->signature == nullptr || context->names == nullptr || context->framework == nullptr ||
+        context->signature == nullptr || context->names == nullptr || context->framework == nullptr || context->attack_input == nullptr ||
         context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr ||
-        context->framework->tick_sequence == nullptr) {
+        context->framework->tick_sequence == nullptr || context->attack_input->activate_melee == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
