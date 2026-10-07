@@ -8853,7 +8853,8 @@ struct Ue5NteAdapter::State {
             // no consumer has requested a combat or skill sample.
             const bool combat_requested = combat_demand.load(std::memory_order_acquire);
             const bool skills_requested = skill_demand.load(std::memory_order_acquire);
-            if (!combat_requested && !skills_requested) return;
+            const bool attack_input_requested = attack_input_demand.load(std::memory_order_acquire);
+            if (!combat_requested && !skills_requested && !attack_input_requested) return;
             const bool combat_profile = NteCombatProfileAvailable();
             const bool skills_profile = NteSkillsProfileAvailable();
             if ((!combat_profile && !skills_profile) || object_registry.items == 0 ||
@@ -9041,6 +9042,10 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::AddMonsterBufferControl);
                     lookup_optional(NteFunctionKind::GetMonsterStaticData);
                     combat_skill_discovery.combat_event_bindings_attempted = true;
+                }
+                if (attack_input_requested) {
+                    lookup_optional(NteFunctionKind::ActivateAbilityFromId);
+                    lookup_optional(NteFunctionKind::ReleaseAbilityFromId);
                 }
                 if (skills_profile) {
                     if (!combat_skill_discovery.functions[NteIndex(
