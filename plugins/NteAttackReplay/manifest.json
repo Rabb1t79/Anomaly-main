@@ -49,7 +49,7 @@
       "minVersion": 1
     },
     {
-      "id": "anomaly.ue5.process-event",
+      "id": "anomaly.nte.attack-input",
       "minVersion": 1
     }
   ],
@@ -60,6 +60,7 @@
     "nte-skill-invocation",
     "interop-signature",
     "ue5-names",
-    "game-events"
+    "game-events",
+    "nte-attack-input"
   ]
 }
