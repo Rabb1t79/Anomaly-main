@@ -1,0 +1,65 @@
+name: NTE Vehicle LLVM-MinGW
+
+on:
+  push:
+    branches:
+      - work/nte-vehicle-plugin-20261006
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM-MinGW 20260922 MSVCRT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'llvm-mingw.zip'
+          $root = Join-Path $env:RUNNER_TEMP 'llvm-mingw'
+          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $root -Force
+          $top = Get-ChildItem $root -Directory | Select-Object -First 1
+          if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
+          "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Configure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = Join-Path $env:GITHUB_WORKSPACE '.build/nte-vehicle'
+          if (Test-Path $src) { Remove-Item $src -Recurse -Force }
+          New-Item -ItemType Directory -Path $src | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.22)
+          project(NteVehicle LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(nte_vehicle SHARED "${CMAKE_SOURCE_DIR}/../../plugins/NteVehicle/plugin.cpp")
+          target_include_directories(nte_vehicle PRIVATE "${CMAKE_SOURCE_DIR}/../../include")
+          target_compile_definitions(nte_vehicle PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(nte_vehicle PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          '@ | Set-Content -Path (Join-Path $src 'CMakeLists.txt') -Encoding utf8
+          cmake -S $src -B (Join-Path $src 'out') -G 'MinGW Makefiles' -DCMAKE_C_COMPILER="$env:LLVM_MINGW_ROOT/bin/clang.exe" -DCMAKE_CXX_COMPILER="$env:LLVM_MINGW_ROOT/bin/clang++.exe" -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-w64-windows-gnu
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE '.build/nte-vehicle/out'
+          cmake --build $out --parallel 2
+          $dll = Join-Path $out 'plugin.dll'
+          if (!(Test-Path $dll)) { throw 'plugin.dll was not produced' }
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist/NteVehicle-0.7.0-windows-x64'
+          if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
+          New-Item -ItemType Directory -Path $dist | Out-Null
+          Copy-Item $dll (Join-Path $dist 'plugin.dll')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/manifest.json') (Join-Path $dist 'manifest.json')
+          Compress-Archive -Path (Join-Path $dist '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/NteVehicle-0.7.0-windows-x64.zip') -Force
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteVehicle-0.7.0-windows-x64
+          path: dist/NteVehicle-0.7.0-windows-x64.zip
