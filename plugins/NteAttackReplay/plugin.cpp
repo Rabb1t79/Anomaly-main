@@ -21,6 +21,7 @@
  *
  * 本次改动行为说明：
  * - 新增/完善普通攻击原生输入绑定与重放路径。
+ * - 当 DamageSource 已可读但无法与当前技能目录匹配时，明确回退到普通攻击路径，避免 active skill 误分类。
  * - 增加对 AbilitiesInput 数组与行结构、属性类型、参数大小的运行时校验。
  * - 增加重放后的真实 DamageEvent 验证。
  * - 保留自动捕获、技能重放和 UI 请求/游戏线程分离行为。
@@ -447,14 +448,16 @@ bool CaptureNextAttack(Context& context) {
             ReadDamageSourceName(context.combat, event);
         if (!context.captured_damage_source_name.empty() &&
             SkillsReady(context.skills)) {
+            bool skill_scan_succeeded = false;
+            bool skill_match_found = false;
             AnomalyNteSkillFrameV1 frame{};
-    frame.struct_size = sizeof(frame);
+            frame.struct_size = sizeof(frame);
             std::array<AnomalyNteSkillSnapshotV1,
                        ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> source_skills{};
             AnomalyNteSkillPageRequestV1 request{};
-    request.struct_size = sizeof(request);
+            request.struct_size = sizeof(request);
             AnomalyNteSkillPageResultV1 result{};
-    result.struct_size = sizeof(result);
+            result.struct_size = sizeof(result);
             if (context.skills->frame(context.skills->user, &frame).code ==
                 ANOMALY_STATUS_V1_OK) {
                 request.generation = frame.generation;
@@ -463,6 +466,7 @@ bool CaptureNextAttack(Context& context) {
                 if (context.skills->page(
                         context.skills->user, &request,
                         source_skills.data(), &result).code == ANOMALY_STATUS_V1_OK) {
+                    skill_scan_succeeded = true;
                     for (uint32_t j = 0; j < result.returned; ++j) {
                         const auto& skill = source_skills[j];
                         if (!SameHandle(skill.character, combatant.character)) continue;
@@ -473,10 +477,21 @@ bool CaptureNextAttack(Context& context) {
                             context.captured_skill = skill.handle;
                             context.captured_ability = skill.ability_class;
                             context.captured_input_id = skill.input_id;
+                            skill_match_found = true;
                             break;
                         }
                     }
                 }
+            }
+
+            // Once the Host successfully enumerates the current skill catalog and the
+            // concrete DamageSource matches none of those abilities, do not fall back to
+            // an unrelated active skill. That path is what distinguishes ordinary melee
+            // input from an ability replay.
+            if (skill_scan_succeeded && !skill_match_found) {
+                context.captured_skill = {};
+                context.captured_ability = {};
+                context.captured_input_id = -1;
             }
         }
 
