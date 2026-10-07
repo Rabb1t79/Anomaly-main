@@ -686,6 +686,8 @@ struct Ue5NteAdapter::State {
         GetShieldHealth,
         GetActiveEffectTimeRemainingAndDuration,
         ActivateAbilityByClass,
+        ActivateAbilityFromId,
+        ReleaseAbilityFromId,
         ShowDamageFloaties,
         MulticastShowMonsterDamageInfo,
         ClientShowPlayerDamageInfo,
