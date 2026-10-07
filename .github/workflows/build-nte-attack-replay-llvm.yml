@@ -16,6 +16,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Archive current source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git archive --format=zip --output=current-source.zip HEAD
+          if (!(Test-Path current-source.zip)) { throw 'source archive was not produced' }
       - name: Install LLVM-MinGW 20260922 MSVCRT
         shell: pwsh
         run: |
@@ -108,6 +114,7 @@ jobs:
             toolchain-diagnose.txt
             compile.log
             install.log
+            current-source.zip
           if-no-files-found: warn
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
