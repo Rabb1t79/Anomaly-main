@@ -3,11 +3,15 @@ on:
   pull_request:
     branches:
       - main
+permissions:
+  contents: read
 jobs:
   package:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Package current main sources
         shell: pwsh
         run: |
