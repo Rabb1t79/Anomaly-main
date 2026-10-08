@@ -1,0 +1,61 @@
+name: Build Anomaly Core LLVM Linux 20261008
+
+on:
+  push:
+    branches:
+      - build/core-vehicle-attack-input-20261008
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install LLVM-MinGW cross compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -L --fail --retry 3 -o llvm-mingw.tar.xz 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-ubuntu-24.04-x86_64.tar.xz'
+          mkdir llvm-mingw
+          tar -xJf llvm-mingw.tar.xz -C llvm-mingw --strip-components=1
+          echo "LLVM_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B .build/core-llvm -G 'MinGW Makefiles' \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER="$LLVM_MINGW_ROOT/bin/clang" \
+            -DCMAKE_CXX_COMPILER="$LLVM_MINGW_ROOT/bin/clang++" \
+            -DCMAKE_C_COMPILER_TARGET=x86_64-w64-mingw32 \
+            -DCMAKE_CXX_COMPILER_TARGET=x86_64-w64-mingw32
+
+      - name: Build Core
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build .build/core-llvm --target anomaly_core --parallel 2
+
+      - name: Stage Core
+        shell: bash
+        run: |
+          set -euo pipefail
+          dll=$(find .build/core-llvm -type f -name 'Anomaly.Core.dll' -print -quit)
+          test -n "$dll"
+          mkdir -p dist/Core
+          cp "$dll" dist/Core/Anomaly.Core.dll
+          sha256sum dist/Core/Anomaly.Core.dll | tee dist/Core/SHA256SUMS.txt
+          cd dist
+          zip -j Anomaly.Core-vehicle-attack-input-20261008.zip Core/Anomaly.Core.dll Core/SHA256SUMS.txt
+
+      - name: Upload Core
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anomaly.Core-vehicle-attack-input-20261008-linux-build
+          path: dist/Anomaly.Core-vehicle-attack-input-20261008.zip
+          if-no-files-found: error
