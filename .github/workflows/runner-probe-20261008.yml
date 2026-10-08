@@ -1,0 +1,11 @@
+name: Runner probe 20261008
+on:
+  push:
+    branches:
+      - deliver/anomaly-framework-new-interfaces-20261008
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: uname -a
+      - run: echo runner-ok
