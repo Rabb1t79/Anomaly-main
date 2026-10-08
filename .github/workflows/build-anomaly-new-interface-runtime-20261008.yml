@@ -1,0 +1,35 @@
+name: Build Anomaly new-interface runtime 20261008
+on:
+  push:
+    branches:
+      - deliver/anomaly-framework-new-interfaces-20261008
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Runtime and package
+        shell: cmd
+        run: |
+          call build.cmd package
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Package runtime tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/game-package'
+          if (!(Test-Path $root)) { throw "Runtime package was not produced: $root" }
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-new-interface-runtime-20261008.zip'
+          Compress-Archive -Path (Join-Path $root '*') -DestinationPath $zip -Force
+          Get-Item $zip | Format-List FullName,Length
+
+      - name: Upload runtime package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anomaly-new-interface-runtime-20261008
+          path: Anomaly-new-interface-runtime-20261008.zip
+          if-no-files-found: error
