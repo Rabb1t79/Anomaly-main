@@ -1,0 +1,65 @@
+name: Build Anomaly Core LLVM 20261008
+
+on:
+  push:
+    branches:
+      - build/core-vehicle-attack-input-20261008
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install LLVM-MinGW 20260922 MSVCRT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'llvm-mingw.zip'
+          $root = Join-Path $env:RUNNER_TEMP 'llvm-mingw'
+          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-msvcrt-x86_64.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $root -Force
+          $top = Get-ChildItem $root -Directory | Select-Object -First 1
+          if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
+          "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S . -B .build/core-llvm -G 'MinGW Makefiles' `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DCMAKE_C_COMPILER="$env:LLVM_MINGW_ROOT/bin/clang.exe" `
+            -DCMAKE_CXX_COMPILER="$env:LLVM_MINGW_ROOT/bin/clang++.exe" `
+            -DCMAKE_C_COMPILER_TARGET=x86_64-w64-windows-gnu `
+            -DCMAKE_CXX_COMPILER_TARGET=x86_64-w64-windows-gnu `
+            -DANOMALY_BUILD_TEST_FIXTURES=OFF `
+            -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF `
+            -DANOMALY_BUILD_TEST_PLUGINS=OFF
+
+      - name: Build Core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build .build/core-llvm --target anomaly_core --parallel 2
+
+      - name: Stage Core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = Get-ChildItem -Path .build/core-llvm -Filter 'Anomaly.Core.dll' -Recurse -File | Select-Object -First 1
+          if ($null -eq $dll) { throw 'Anomaly.Core.dll was not produced' }
+          New-Item -ItemType Directory -Force -Path dist/Core | Out-Null
+          Copy-Item $dll.FullName dist/Core/Anomaly.Core.dll -Force
+          Get-FileHash dist/Core/Anomaly.Core.dll -Algorithm SHA256 | Format-List
+          Compress-Archive -Path dist/Core/Anomaly.Core.dll -DestinationPath dist/Anomaly.Core-vehicle-attack-input-20261008.zip -Force
+
+      - name: Upload Core
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anomaly.Core-vehicle-attack-input-20261008
+          path: dist/Anomaly.Core-vehicle-attack-input-20261008.zip
+          if-no-files-found: error
