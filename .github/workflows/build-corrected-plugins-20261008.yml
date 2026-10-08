@@ -1,0 +1,96 @@
+name: Build corrected NTE plugins 20261008
+
+on:
+  push:
+    branches:
+      - build/plugins-20261008
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Vehicle standalone build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = Join-Path $env:GITHUB_WORKSPACE '.build/vehicle-src'
+          $out = Join-Path $env:GITHUB_WORKSPACE '.build/vehicle-out'
+          New-Item -ItemType Directory -Force $src | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.22)
+          project(NteVehicleStandalone LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(nte_vehicle SHARED "${CMAKE_SOURCE_DIR}/../../plugins/NteVehicle/plugin.cpp")
+          target_include_directories(nte_vehicle PRIVATE "${CMAKE_SOURCE_DIR}/../../Anomaly-2.0.0-sdk/include")
+          target_compile_definitions(nte_vehicle PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(nte_vehicle PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          '@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding utf8
+          cmake -S $src -B $out -G 'Visual Studio 17 2022' -A x64
+
+      - name: Build Vehicle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE '.build/vehicle-out'
+          cmake --build $out --config Release --parallel
+          $dll = Join-Path $out 'Release/plugin.dll'
+          if (!(Test-Path $dll)) { throw 'Vehicle plugin.dll was not produced' }
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist/NteVehicle-0.7.0-windows-x64'
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          Copy-Item $dll (Join-Path $dist 'plugin.dll')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/manifest.json') (Join-Path $dist 'manifest.json')
+          Compress-Archive -Path (Join-Path $dist '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/NteVehicle-0.7.0-windows-x64.zip') -Force
+
+      - name: Configure Attack Replay standalone build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = Join-Path $env:GITHUB_WORKSPACE '.build/attack-src'
+          $out = Join-Path $env:GITHUB_WORKSPACE '.build/attack-out'
+          New-Item -ItemType Directory -Force $src | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.22)
+          project(NteAttackReplayStandalone LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(nte_attack_replay SHARED "${CMAKE_SOURCE_DIR}/../../plugins/NteAttackReplay/plugin.cpp")
+          target_include_directories(nte_attack_replay PRIVATE "${CMAKE_SOURCE_DIR}/../../Anomaly-2.0.0-sdk/include")
+          target_compile_definitions(nte_attack_replay PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(nte_attack_replay PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          '@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding utf8
+          cmake -S $src -B $out -G 'Visual Studio 17 2022' -A x64
+
+      - name: Build Attack Replay
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:GITHUB_WORKSPACE '.build/attack-out'
+          cmake --build $out --config Release --parallel
+          $dll = Join-Path $out 'Release/plugin.dll'
+          if (!(Test-Path $dll)) { throw 'Attack Replay plugin.dll was not produced' }
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist/NteAttackReplay-1.3.0-windows-x64'
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          Copy-Item $dll (Join-Path $dist 'plugin.dll')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/manifest.json') (Join-Path $dist 'manifest.json')
+          Compress-Archive -Path (Join-Path $dist '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/NteAttackReplay-1.3.0-windows-x64.zip') -Force
+
+      - name: Upload Vehicle package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteVehicle-0.7.0-windows-x64-fixed-20261008
+          path: dist/NteVehicle-0.7.0-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Upload Attack Replay package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-1.3.0-windows-x64-fixed-20261008
+          path: dist/NteAttackReplay-1.3.0-windows-x64.zip
+          if-no-files-found: error
