@@ -8228,8 +8228,42 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED, "HTPlayerController.CheatManager read failed");
         }
         if (cheat_manager == 0) {
-            // Standalone play may not have instantiated the CheatManager yet.
-            // Initialize it through the inherited native PlayerController entry.
+            // APlayerController::EnableCheats creates CheatManager from the instance's
+            // CheatClass property. In this build that property can be unset or still point
+            // at the generic Engine.CheatManager, which does not expose NTE vehicle commands.
+            // Bind only the validated HTGame subclass, then let the native engine routine
+            // construct and initialize the actual per-controller object.
+            std::uintptr_t cheat_class_property_owner{}, cheat_manager_class{}, cheat_manager_base{};
+            std::uintptr_t configured_cheat_class{};
+            ReflectedPropertyInfo cheat_class_property;
+            if (!FindReflectedPropertyLocked(controller_class, "CheatClass", cheat_class_property, true) ||
+                cheat_class_property.type != "ClassProperty" ||
+                cheat_class_property.element_size != sizeof(std::uintptr_t) ||
+                cheat_class_property.offset < 0 ||
+                !FindExactObjectLocked(L"/Script/HTGame.HTCheatManager", cheat_manager_class) ||
+                !FindExactObjectLocked(L"/Script/Engine.CheatManager", cheat_manager_base) ||
+                !IsClassDerivedFromLocked(cheat_manager_class, cheat_manager_base)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "HTPlayerController.CheatClass or HTGame.HTCheatManager failed 5.6.1 dump validation");
+            }
+            if (!ReadValue(*memory,
+                    player_controller + static_cast<std::uintptr_t>(cheat_class_property.offset),
+                    configured_cheat_class)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTPlayerController.CheatClass read failed");
+            }
+            // Preserve any configured custom Blueprint subclass of HTCheatManager.
+            // Replace only null/generic/incompatible classes with the dump-verified type.
+            if (configured_cheat_class == 0 ||
+                !IsClassDerivedFromLocked(configured_cheat_class, cheat_manager_class)) {
+                if (!memory->Write(
+                        player_controller + static_cast<std::uintptr_t>(cheat_class_property.offset),
+                        &cheat_manager_class, sizeof(cheat_manager_class))) {
+                    return Status(ANOMALY_STATUS_V1_FAILED,
+                        "could not bind validated HTCheatManager class to the local PlayerController");
+                }
+            }
+
             std::uintptr_t enable_cheats{};
             std::uint8_t num_parms{};
             std::uint16_t parms_size{}, return_offset{};
@@ -8243,11 +8277,19 @@ struct Ue5NteAdapter::State {
             }
             std::array<std::uint8_t, 8> no_parameters{};
             if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                    enable_cheats, no_parameters.data(), 0) ||
-                !ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset),
-                    cheat_manager) || cheat_manager == 0) {
+                    enable_cheats, no_parameters.data(), 0)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "PlayerController.EnableCheats ProcessEvent failed");
+            }
+            if (!ReadValue(*memory,
+                    player_controller + static_cast<std::uintptr_t>(manager_property.offset),
+                    cheat_manager)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTPlayerController.CheatManager read failed after EnableCheats");
+            }
+            if (cheat_manager == 0) {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    "EnableCheats did not initialize HTPlayerController.CheatManager");
+                    "EnableCheats ran with HTCheatManager configured but CheatManager remains null");
             }
         }
         if (!ObjectClassChainContainsLocked(cheat_manager, "HTCheatManager")) {
