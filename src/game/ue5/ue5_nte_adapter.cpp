@@ -776,7 +776,8 @@ struct Ue5NteAdapter::State {
     struct VehicleBindings {
         VehicleFunctionBinding current_vehicle{};
         VehicleFunctionBinding speed_kmh{};
-        VehicleFunctionBinding set_top_speed_ratio{};
+        VehicleFunctionBinding set_top_speed_ratio{}; // SetMaxEngineTorque
+        VehicleFunctionBinding set_vehicle_speed_ratio{}; // HTWheeledVehicleBase.SetTopSpeedRatio
         VehicleSummonBinding summon_vehicle{};
         VehicleFunctionBinding set_wheel_friction{};
         VehicleOwnerBinding set_owner{};
@@ -7603,7 +7604,7 @@ struct Ue5NteAdapter::State {
 
             ReflectedPropertyInfo info;
             if (!ReadReflectedPropertyLocked(property, info) ||
-                info.name != "InVehicleid" || info.array_dim != 1 || info.next != 0 ||
+                info.name != "VehicleID" || info.array_dim != 1 || info.next != 0 ||
                 info.offset < 0) return false;
 
             VehicleSummonParameterKind kind = VehicleSummonParameterKind::None;
@@ -7628,41 +7629,13 @@ struct Ue5NteAdapter::State {
         }
         if (vehicle_bindings.summon_vehicle.function != 0) return true;
 
-        static constexpr std::array<std::string_view, 2> outers{
-            "HTPlayerController", "HTPlayerCharacter"};
-        for (const auto outer : outers) {
-            std::wstring path = L"/Script/HTGame.";
-            path.reserve(path.size() + outer.size() + 18U);
-            for (char c : outer) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-            path.push_back(L'.');
-            for (const char* c = "CheatSpawnVehicle"; *c; ++c)
-                path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*c)));
-            std::uintptr_t function{};
-            if (FindExactObjectLocked(path.c_str(), function) &&
-                BuildVehicleSummonBindingLocked(function, "CheatSpawnVehicle", vehicle_bindings.summon_vehicle)) {
-                vehicle_bindings.summon_vehicle.receiver =
-                    outer == "HTPlayerController" ? player_controller : player_pawn;
-                if (vehicle_bindings.summon_vehicle.receiver != 0) return true;
-                vehicle_bindings.summon_vehicle = {};
-            }
-        }
-        for (const auto outer : outers) {
-            std::wstring path = L"/Script/HTGame.";
-            path.reserve(path.size() + outer.size() + 19U);
-            for (char c : outer) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-            path.push_back(L'.');
-            for (const char* c = "TestSummonVehicle"; *c; ++c)
-                path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*c)));
-            std::uintptr_t function{};
-            if (FindExactObjectLocked(path.c_str(), function) &&
-                BuildVehicleSummonBindingLocked(function, "TestSummonVehicle", vehicle_bindings.summon_vehicle)) {
-                vehicle_bindings.summon_vehicle.receiver =
-                    outer == "HTPlayerController" ? player_controller : player_pawn;
-                if (vehicle_bindings.summon_vehicle.receiver != 0) return true;
-                vehicle_bindings.summon_vehicle = {};
-            }
-        }
-        return false;
+        // The 5.6.1 dump declares CheatSpawnVehicle(FName VehicleID) on
+        // /Script/HTGame.HTCheatManager, not on the player controller or character.
+        const std::wstring path = L"/Script/HTGame.HTCheatManager.CheatSpawnVehicle";
+        std::uintptr_t function{};
+        if (!FindExactObjectLocked(path.c_str(), function)) return false;
+        return BuildVehicleSummonBindingLocked(
+            function, "CheatSpawnVehicle", vehicle_bindings.summon_vehicle);
     }
 
     [[nodiscard]] bool EnsureVehicleOwnerBindingLocked() noexcept {
@@ -7958,6 +7931,15 @@ struct Ue5NteAdapter::State {
             }
             // Tokky's speed mutation is a reflected SetMaxEngineTorque call on the
             // active ChaosWheeledVehicleMovementComponent.
+            // The dump exposes separate calls: HTWheeledVehicleBase.SetTopSpeedRatio
+            // controls speed, while ChaosWheeledVehicleMovementComponent.SetMaxEngineTorque
+            // controls engine torque. Do not route the speed slider into the torque setter.
+            if (vehicle_bindings.set_vehicle_speed_ratio.function == 0) {
+                static constexpr std::array<std::string_view, 1> speed_outers{"HTWheeledVehicleBase"};
+                static_cast<void>(FindVehicleFunctionLocked(
+                    "SetTopSpeedRatio", speed_outers, "FloatInput",
+                    vehicle_bindings.set_vehicle_speed_ratio));
+            }
             if (vehicle_bindings.set_top_speed_ratio.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked(
                     "SetMaxEngineTorque", vehicle_outers, "FloatInput",
@@ -8107,14 +8089,19 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
-        static constexpr std::array<std::string_view, 3> top_speed_path{
-            "Vehicle", "SetTopSpeedRatio", "Base"};
-        std::uintptr_t address{};
-        if (!ResolveVehicleFloatPathLocked(current_vehicle_object, top_speed_path, address))
+        if (vehicle_bindings.set_vehicle_speed_ratio.function == 0)
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "Vehicle.SetTopSpeedRatio.Base was not validated for the active vehicle");
-        if (!memory->Write(address, &ratio, sizeof(ratio)))
-            return Status(ANOMALY_STATUS_V1_FAILED, "Vehicle.SetTopSpeedRatio write failed");
+                "HTWheeledVehicleBase.SetTopSpeedRatio(float) ABI was not validated");
+        std::array<std::uint8_t, 4> parameters{};
+        std::memcpy(parameters.data() +
+                vehicle_bindings.set_vehicle_speed_ratio.parameter_offset,
+            &ratio, sizeof(ratio));
+        if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+                vehicle_bindings.set_vehicle_speed_ratio.function,
+                parameters.data(), vehicle_bindings.set_vehicle_speed_ratio.parms_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "HTWheeledVehicleBase.SetTopSpeedRatio ProcessEvent failed");
+        }
         vehicle_top_speed_ratio = ratio;
         return Status(ANOMALY_STATUS_V1_OK);
     }
