@@ -36,6 +36,8 @@ struct UiIntent {
     std::uint32_t select_index{};
     std::uint64_t select_sequence{};
     bool summon{};
+    bool speed_ratio_pending{};
+    float speed_ratio{1.0F};
 };
 
 struct Context {
@@ -185,6 +187,27 @@ void Update(void*, double) {
         if (g.driving_vehicle_valid) g.vehicle = next;
     }
 
+    // Slider changes are queued from Render and applied only on the Game domain.
+    if (intent.speed_ratio_pending) {
+        if (!g.driving_vehicle_valid || g.vehicle_service == nullptr ||
+            g.vehicle_service->set_top_speed_ratio == nullptr) {
+            g.status = "车速倍率未应用：当前没有有效的驾驶载具或 Host setter";
+        } else {
+            const float requested = (std::clamp)(intent.speed_ratio, 0.05F, 20.0F);
+            const auto result = g.vehicle_service->set_top_speed_ratio(
+                g.vehicle_service->user, requested);
+            if (result.code == ANOMALY_STATUS_V1_OK) {
+                g.vehicle.top_speed_ratio = requested;
+                g.status = "车速倍率已提交到 Host：" + std::to_string(requested) + "x";
+            } else if (result.message.data != nullptr && result.message.size != 0) {
+                g.status = "车速倍率设置失败：" +
+                    std::string(result.message.data, result.message.size);
+            } else {
+                g.status = "车速倍率设置失败，状态码 " + std::to_string(result.code);
+            }
+        }
+    }
+
     const std::uint32_t pages = g.catalog.entry_count == 0
         ? 1U : (g.catalog.entry_count + 5U) / 6U;
     if (intent.previous_page && g.page > 0) --g.page;
@@ -291,6 +314,19 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
     if (view->driving_vehicle_valid) {
         std::snprintf(info, sizeof(info), "当前驾驶速度：%.1f km/h", view->vehicle.speed_kmh);
         ui->text(ui->user, anomaly::sdk::StringView(info));
+        if (ui->slider_float != nullptr) {
+            float ratio = view->vehicle.top_speed_ratio;
+            if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F) ratio = 1.0F;
+            if (ui->slider_float(ui->user,
+                    anomaly::sdk::StringView("车速倍率（发动机扭矩）"),
+                    &ratio, 0.05F, 20.0F) != 0) {
+                std::scoped_lock lock(g.intent_mutex);
+                g.intents.speed_ratio_pending = true;
+                g.intents.speed_ratio = ratio;
+            }
+        } else {
+            ui->text(ui->user, anomaly::sdk::StringView("当前 Host UI 未提供 slider_float"));
+        }
     } else {
         ui->text(ui->user, anomaly::sdk::StringView("当前未检测到正在驾驶的载具"));
     }
@@ -310,7 +346,7 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
         ANOMALY_NTE_PLAYER_SERVICE_V1_ID, ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION);
     if (!vehicle || !player || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at ||
         !vehicle->set_summon_vehicle_id || !vehicle->summon_vehicle || !vehicle->snapshot ||
-        !player->snapshot) {
+        !vehicle->set_top_speed_ratio || !player->snapshot) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "required vehicle-v2/player service missing");
     }
 
