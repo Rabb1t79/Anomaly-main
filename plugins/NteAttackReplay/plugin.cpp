@@ -62,6 +62,8 @@ struct Context {
     bool button_pressed{};
     bool awaiting_hit{};
     bool auto_input_matched{};
+    // Persist the close button state for the current plugin generation.
+    int window_open{1};
 
     // Lifecycle flags are atomic; on_stop never invokes a Game-thread-only service.
     std::atomic_bool running{};
@@ -288,8 +290,9 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
         view = g.view;
     }
 
-    int open = 1;
+    int open = g.window_open;
     anomaly::sdk::UiWindow window(ui, "NTE Attack Replay", &open, 0);
+    g.window_open = open;
     if (!window) return; // RAII pairs EndWindow even when BeginWindow returns false.
 
     ui->text(ui->user, anomaly::sdk::StringView("录制始终自动运行；此复选框只控制重放循环。"));
@@ -332,6 +335,7 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
         static_cast<unsigned long long>(kDamageTimeoutFrames));
     ui->text(ui->user, anomaly::sdk::StringView(stats));
     ui->text(ui->user, anomaly::sdk::StringView(view.status));
+    g.window_open = open;
 }
 
 AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
@@ -356,6 +360,7 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
     g.button_pressed = g.awaiting_hit = g.auto_input_matched = false;
     g.input_request = {sizeof(g.input_request), 0, kInputNormal, 0};
     g.running.store(false, std::memory_order_release);
+    g.window_open = 1;
     g.reset_replay_on_start.store(false, std::memory_order_release);
     {
         std::scoped_lock lock(g.ui_mutex);
@@ -367,6 +372,7 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
     return anomaly::sdk::Ok();
 }
 AnomalyStatusV1 Start(void*) {
+    g.window_open = 1;
     g.reset_replay_on_start.store(true, std::memory_order_release);
     g.running.store(true, std::memory_order_release);
     return anomaly::sdk::Ok();
