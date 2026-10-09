@@ -1,0 +1,47 @@
+name: Build Anomaly Core MSVC 20261009
+
+on:
+  push:
+    branches:
+      - build/core-msvc-target-20261009
+
+jobs:
+  build-core:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure with original Visual Studio preset
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
+
+      - name: Build Core only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build --preset windows-relwithdebinfo --target anomaly_core --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Anomaly Core build failed: $LASTEXITCODE" }
+
+      - name: Stage Core DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = Get-ChildItem -Path .build/windows-vs2022 -Filter 'Anomaly.Core.dll' -Recurse -File | Select-Object -First 1
+          if ($null -eq $dll) { throw 'Anomaly.Core.dll was not produced' }
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist/Core'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $dist 'Anomaly.Core.dll') -Force
+          Get-FileHash (Join-Path $dist 'Anomaly.Core.dll') -Algorithm SHA256 | Format-List
+          Compress-Archive -Path (Join-Path $dist 'Anomaly.Core.dll') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'Anomaly.Core-MSVC-20261009.zip') -Force
+
+      - name: Upload Core DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anomaly.Core-MSVC-20261009
+          path: Anomaly.Core-MSVC-20261009.zip
+          if-no-files-found: error
