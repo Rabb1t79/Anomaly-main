@@ -750,7 +750,9 @@ struct Ue5NteAdapter::State {
     struct VehicleBindings {
         VehicleFunctionBinding current_vehicle{};
         VehicleFunctionBinding speed_kmh{};
+        VehicleFunctionBinding get_external_torque_ratio{};
         VehicleFunctionBinding set_top_speed_ratio{};
+        VehicleFunctionBinding set_external_torque_ratio{};
         VehicleFunctionBinding summon_vehicle{};
         VehicleFunctionBinding set_wheel_friction{};
         std::uint64_t object_generation{};
@@ -780,6 +782,7 @@ struct Ue5NteAdapter::State {
     } attack_input_bindings;
     std::uintptr_t current_vehicle_object{};
     float vehicle_top_speed_ratio{1.0F};
+    float vehicle_external_torque_ratio{1.0F};
     bool vehicle_wheel_friction_enabled{true};
     float vehicle_speed_kmh{};
     bool vehicle_speed_valid{};
@@ -5897,11 +5900,28 @@ struct Ue5NteAdapter::State {
             }
             QueueCombatParticipantNameLocked(event.victim, victim);
             event.source_id = ResolveDamageEventSourceLocked(source_index, source_serial);
-            if (event.source_id == 0) ++damage_source_resolution_failure_count;
-            if (event.source_id != 0) {
+            if (event.source_id == 0) {
+                ++damage_source_resolution_failure_count;
+            } else {
                 QueueDamageSourceAbilityNameLocked(
                     event.source_id, saved_skill_cdo, active_spec_handle,
                     attacker == player_pawn);
+                // FHTDamageEvent::DamageGEDef is a weak UObject, while the native K2
+                // call needs a TSubclassOf<UGameplayEffect>. Only publish the effect
+                // class when this captured UObject is the validated class default object.
+                const auto effect_object = damage_source_objects.find(event.source_id);
+                std::uintptr_t effect_class{}, effect_cdo{}, gameplay_effect_base{};
+                if (effect_object != damage_source_objects.end() &&
+                    ReadPointerAt(*memory, effect_object->second,
+                        Layout(profile, "object.class"), effect_class) &&
+                    ReadPointerAt(*memory, effect_class,
+                        Layout(profile, "uclass.classDefaultObject"), effect_cdo) &&
+                    effect_cdo == effect_object->second &&
+                    FindExactObjectLocked(L"/Script/GameplayAbilities.GameplayEffect",
+                        gameplay_effect_base) &&
+                    IsClassDerivedFromLocked(effect_class, gameplay_effect_base)) {
+                    static_cast<void>(ObjectHandleLocked(effect_class, event.gameplay_effect));
+                }
             }
             event.final_damage = static_cast<std::int64_t>(std::llround(damage));
             RecordDamageEventLocked(event);
@@ -7898,8 +7918,13 @@ struct Ue5NteAdapter::State {
             }
             static constexpr std::array<std::string_view, 2> controller_outers{
                 "HTPlayerController", "HTPlayerCharacter"};
-            static constexpr std::array<std::string_view, 3> vehicle_outers{
-                "HTWheeledVehicle", "HTWheeledVehicleDrivable", "HTVehicleMovementComponent"};
+            static constexpr std::array<std::string_view, 4> vehicle_outers{
+                "HTWheeledVehicle", "HTWheeledVehicleDrivable",
+                "HTWheeledVehicleBase", "HTVehicleMovementComponent"};
+            static constexpr std::array<std::string_view, 1> movement_outers{
+                "HTVehicleMovementComponent"};
+            static constexpr std::array<std::string_view, 1> vehicle_base_outers{
+                "HTWheeledVehicleBase"};
             if (vehicle_bindings.current_vehicle.function == 0 &&
                 !FindVehicleFunctionLocked("BP_GetCurrentDriveVehicle", controller_outers, "ObjectReturn",
                     vehicle_bindings.current_vehicle)) {
@@ -7912,7 +7937,16 @@ struct Ue5NteAdapter::State {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", vehicle_outers, "FloatReturn", vehicle_bindings.speed_kmh));
             }
             if (vehicle_bindings.set_wheel_friction.function == 0) {
-                static_cast<void>(FindVehicleFunctionLocked("SetEnableWheelFriction", vehicle_outers, "BoolInput", vehicle_bindings.set_wheel_friction));
+                static_cast<void>(FindVehicleFunctionLocked("SetEnableWheelFriction", movement_outers, "BoolInput", vehicle_bindings.set_wheel_friction));
+            }
+            if (vehicle_bindings.get_external_torque_ratio.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("GetExternalTorqueRatio", movement_outers, "FloatReturn", vehicle_bindings.get_external_torque_ratio));
+            }
+            if (vehicle_bindings.set_external_torque_ratio.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("SetExternalTorqueRatio", movement_outers, "FloatInput", vehicle_bindings.set_external_torque_ratio));
+            }
+            if (vehicle_bindings.set_top_speed_ratio.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("SetTopSpeedRatio", vehicle_base_outers, "FloatInput", vehicle_bindings.set_top_speed_ratio));
             }
             alignas(8) std::array<std::uint8_t, 8> out{};
             std::uintptr_t current_vehicle_target{};
@@ -7974,8 +8008,8 @@ struct Ue5NteAdapter::State {
         snapshot->struct_size = sizeof(*snapshot);
         snapshot->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
         if (vehicle_speed_valid) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
-        static constexpr std::array<std::string_view, 3> top_speed_path{
-            "Vehicle", "SetTopSpeedRatio", "Base"};
+        static constexpr std::array<std::string_view, 2> top_speed_path{
+            "HTVehicleMovementComponent", "TopSpeedRatio"};
         std::uintptr_t top_speed_address{};
         if (ResolveVehicleFloatPathLocked(current_vehicle_object, top_speed_path, top_speed_address)) {
             float ratio{};
@@ -7984,12 +8018,30 @@ struct Ue5NteAdapter::State {
                 snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO;
             }
         }
+        if (vehicle_bindings.get_external_torque_ratio.function != 0) {
+            std::uintptr_t torque_target{};
+            alignas(8) std::array<std::uint8_t, 8> torque_bytes{};
+            if (ResolveVehicleFunctionTargetLocked(current_vehicle_object,
+                    vehicle_bindings.get_external_torque_ratio.function, torque_target) &&
+                InvokeProcessEventGuarded(process_event_invoker, torque_target,
+                    vehicle_bindings.get_external_torque_ratio.function, torque_bytes.data(),
+                    vehicle_bindings.get_external_torque_ratio.parms_size)) {
+                float torque_ratio{};
+                std::memcpy(&torque_ratio, torque_bytes.data() +
+                    vehicle_bindings.get_external_torque_ratio.return_offset, sizeof(torque_ratio));
+                if (std::isfinite(torque_ratio)) {
+                    vehicle_external_torque_ratio = torque_ratio;
+                    snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_EXTERNAL_TORQUE_RATIO;
+                }
+            }
+        }
         if (vehicle_bindings.set_wheel_friction.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION;
         if (EnsureVehicleCatalogLocked()) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON;
         snapshot->vehicle = handle;
         snapshot->speed_kmh = vehicle_speed_kmh;
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
+        snapshot->external_torque_ratio = vehicle_external_torque_ratio;
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -7997,18 +8049,89 @@ struct Ue5NteAdapter::State {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
-            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle mutation requires Game thread");
         std::scoped_lock lock(mutex);
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
-        static constexpr std::array<std::string_view, 3> top_speed_path{
-            "Vehicle", "SetTopSpeedRatio", "Base"};
+        static constexpr std::array<std::string_view, 1> vehicle_base_outers{"HTWheeledVehicleBase"};
+        if (vehicle_bindings.set_top_speed_ratio.function == 0 &&
+            !FindVehicleFunctionLocked("SetTopSpeedRatio", vehicle_base_outers, "FloatInput",
+                vehicle_bindings.set_top_speed_ratio)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTWheeledVehicleBase.SetTopSpeedRatio(float) failed dump ABI validation");
+        }
+        std::uintptr_t target{};
+        if (!ResolveVehicleFunctionTargetLocked(current_vehicle_object,
+                vehicle_bindings.set_top_speed_ratio.function, target)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "SetTopSpeedRatio receiver is not a validated vehicle Actor");
+        }
+        alignas(8) std::array<std::uint8_t, 8> parameters{};
+        std::memcpy(parameters.data() + vehicle_bindings.set_top_speed_ratio.parameter_offset,
+            &ratio, sizeof(ratio));
+        if (!InvokeProcessEventGuarded(process_event_invoker, target,
+                vehicle_bindings.set_top_speed_ratio.function, parameters.data(),
+                vehicle_bindings.set_top_speed_ratio.parms_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "SetTopSpeedRatio ProcessEvent failed");
+        }
+        static constexpr std::array<std::string_view, 2> top_speed_path{
+            "HTVehicleMovementComponent", "TopSpeedRatio"};
         std::uintptr_t top_speed_address{};
-        if (!ResolveVehicleFloatPathLocked(current_vehicle_object, top_speed_path, top_speed_address))
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "Vehicle.SetTopSpeedRatio.Base was not validated");
-        if (!memory->Write(top_speed_address, &ratio, sizeof(ratio)))
-            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle speed ratio write failed");
-        vehicle_top_speed_ratio = ratio;
+        float actual{};
+        if (!ResolveVehicleFloatPathLocked(current_vehicle_object, top_speed_path, top_speed_address) ||
+            !ReadValue(*memory, top_speed_address, actual) || !std::isfinite(actual) ||
+            std::fabs(actual - ratio) > 0.001F) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetTopSpeedRatio dispatched but TopSpeedRatio read-back did not match");
+        }
+        vehicle_top_speed_ratio = actual;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleSetExternalTorqueRatio(float ratio) noexcept {
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "external torque ratio must be 0.05..20.0");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle mutation requires Game thread");
+        std::scoped_lock lock(mutex);
+        if (!RefreshVehicleLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
+        if (vehicle_bindings.set_external_torque_ratio.function == 0)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTVehicleMovementComponent.SetExternalTorqueRatio(float) failed dump ABI validation");
+        std::uintptr_t target{};
+        if (!ResolveVehicleFunctionTargetLocked(current_vehicle_object,
+                vehicle_bindings.set_external_torque_ratio.function, target))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "SetExternalTorqueRatio movement-component receiver is unavailable");
+        alignas(8) std::array<std::uint8_t, 8> parameters{};
+        std::memcpy(parameters.data() + vehicle_bindings.set_external_torque_ratio.parameter_offset,
+            &ratio, sizeof(ratio));
+        if (!InvokeProcessEventGuarded(process_event_invoker, target,
+                vehicle_bindings.set_external_torque_ratio.function, parameters.data(),
+                vehicle_bindings.set_external_torque_ratio.parms_size))
+            return Status(ANOMALY_STATUS_V1_FAILED, "SetExternalTorqueRatio ProcessEvent failed");
+        if (vehicle_bindings.get_external_torque_ratio.function != 0) {
+            std::uintptr_t get_target{};
+            alignas(8) std::array<std::uint8_t, 8> bytes{};
+            if (!ResolveVehicleFunctionTargetLocked(current_vehicle_object,
+                    vehicle_bindings.get_external_torque_ratio.function, get_target) ||
+                !InvokeProcessEventGuarded(process_event_invoker, get_target,
+                    vehicle_bindings.get_external_torque_ratio.function, bytes.data(),
+                    vehicle_bindings.get_external_torque_ratio.parms_size)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "SetExternalTorqueRatio ran but getter verification failed");
+            }
+            float actual{};
+            std::memcpy(&actual, bytes.data() +
+                vehicle_bindings.get_external_torque_ratio.return_offset, sizeof(actual));
+            if (!std::isfinite(actual) || std::fabs(actual - ratio) > 0.01F)
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "SetExternalTorqueRatio read-back did not match requested value");
+            vehicle_external_torque_ratio = actual;
+        } else {
+            vehicle_external_torque_ratio = ratio;
+        }
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -8101,9 +8224,35 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController.CheatManager property failed validation");
         }
         std::uintptr_t cheat_manager{};
-        if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset), cheat_manager) ||
-            cheat_manager == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "game CheatManager instance is not available");
+        if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset), cheat_manager)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "HTPlayerController.CheatManager read failed");
+        }
+        if (cheat_manager == 0) {
+            // Standalone play may not have instantiated the CheatManager yet.
+            // Initialize it through the inherited native PlayerController entry.
+            std::uintptr_t enable_cheats{};
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{}, return_offset{};
+            if (!FindExactObjectLocked(L"/Script/Engine.PlayerController.EnableCheats", enable_cheats) ||
+                !ReadValue(*memory, enable_cheats + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, enable_cheats + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, enable_cheats + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 0 || parms_size != 0 || return_offset != 0xFFFFu) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "PlayerController.EnableCheats() failed 5.6.1 ABI validation");
+            }
+            std::array<std::uint8_t, 8> no_parameters{};
+            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+                    enable_cheats, no_parameters.data(), 0) ||
+                !ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset),
+                    cheat_manager) || cheat_manager == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "EnableCheats did not initialize HTPlayerController.CheatManager");
+            }
+        }
+        if (!ObjectClassChainContainsLocked(cheat_manager, "HTCheatManager")) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "CheatManager is present but not a validated HTCheatManager instance");
         }
         VehicleFunctionBinding summon_binding{};
         static constexpr std::array<std::string_view, 1> cheat_manager_outer{"HTCheatManager"};
@@ -8192,9 +8341,9 @@ struct Ue5NteAdapter::State {
             request->struct_size < sizeof(*request) ||
             result->struct_size < sizeof(*result) ||
             !std::isfinite(request->damage) || request->damage <= 0.0F ||
-            request->damage > 1.0e9F) {
+            request->damage > 1.0e9F || request->gameplay_effect.id == 0) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
-                "direct damage request/result is invalid");
+                "native NTE replay needs positive captured damage and a validated GameplayEffect class handle");
         }
         result->struct_size = sizeof(*result);
         result->flags = 0;
@@ -8202,11 +8351,9 @@ struct Ue5NteAdapter::State {
         result->hp_before = 0.0F;
         result->hp_after = 0.0F;
         result->damage_applied = 0.0F;
-
-        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_CONFLICT,
-                "native damage application must run on the Game thread");
-        }
+                "native NTE GameplayEffect replay must run on the Game thread");
         std::scoped_lock lock(mutex);
         if (!NteCombatProfileAvailable() || !process_event_invoker ||
             player_pawn == 0 || player_controller == 0 || world_pointer == 0 ||
@@ -8216,20 +8363,21 @@ struct Ue5NteAdapter::State {
         }
         if (request->world.id != 1 || request->world.generation != world_generation ||
             request->attacker.generation != object_generation ||
-            request->victim.generation != object_generation) {
+            request->victim.generation != object_generation ||
+            request->gameplay_effect.generation != object_generation) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
-                "damage request contains stale world/object handles");
+                "native damage request has stale world/object/effect handles");
         }
 
-        std::uintptr_t attacker{}, victim{};
+        std::uintptr_t attacker{}, victim{}, gameplay_effect_class{};
         if (!ResolveObjectHandleLocked(request->attacker, attacker) ||
             !ResolveObjectHandleLocked(request->victim, victim) ||
+            !ResolveObjectHandleLocked(request->gameplay_effect, gameplay_effect_class) ||
             attacker != player_pawn || victim == 0 || victim == player_pawn) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
-                "damage source is not the current player or target handle is stale");
+                "damage source is not the current player or target/effect handle is stale");
         }
-
-        std::uintptr_t ability_character_class{}, victim_class{};
+        std::uintptr_t ability_character_class{}, victim_class{}, gameplay_effect_base{};
         if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter",
                 ability_character_class) ||
             !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
@@ -8238,15 +8386,21 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "target is not a validated HTAbilityCharacter");
         }
-
-        std::uintptr_t get_hp{}, apply_damage{}, damage_type_class{};
-        if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter.GetHP", get_hp) ||
-            !FindExactObjectLocked(L"/Script/Engine.GameplayStatics.ApplyDamage", apply_damage) ||
-            !FindExactObjectLocked(L"/Script/Engine.DamageType", damage_type_class)) {
+        if (!FindExactObjectLocked(L"/Script/GameplayAbilities.GameplayEffect",
+                gameplay_effect_base) ||
+            !IsClassDerivedFromLocked(gameplay_effect_class, gameplay_effect_base)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "native GetHP, GameplayStatics.ApplyDamage, or DamageType declaration is missing");
+                "captured DamageGEDef did not resolve to a GameplayEffect subclass");
         }
 
+        std::uintptr_t get_hp{}, activate_effect{};
+        if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter.GetHP", get_hp) ||
+            !FindExactObjectLocked(
+                L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor",
+                activate_effect)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTAbilityCharacter.GetHP or K2_ActivateGameEffectsWithClassByActor is missing");
+        }
         const auto validate_function = [this](
             const std::uintptr_t function, const std::string_view expected_name,
             const std::string_view expected_outer, const std::uint8_t expected_parms,
@@ -8269,94 +8423,127 @@ struct Ue5NteAdapter::State {
                 return_offset == expected_return;
         };
         if (!validate_function(get_hp, "GetHP", "HTAbilityCharacter", 1, 4, 0) ||
-            !validate_function(apply_damage, "ApplyDamage", "GameplayStatics", 6, 0x30, 0x28)) {
+            !validate_function(activate_effect, "K2_ActivateGameEffectsWithClassByActor",
+                "HTAbilityCharacter", 6, 0x80, 0x78)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "native damage function ABI does not match the 5.6.1-0+UE5-HT dump");
+                "native GetHP / NTE GameplayEffect ABI does not match the 5.6.1-0+UE5-HT dump");
         }
 
-        ReflectedPropertyInfo hp_return{}, damaged_actor{}, base_damage{}, instigator{},
-            damage_causer{}, damage_type{}, damage_return{};
+        ReflectedPropertyInfo hp_return{}, world_context{}, source_actor{}, effect_class_property{},
+            modify_data{}, trigger_ability_component{}, effect_return{};
         if (!FindReflectedPropertyLocked(get_hp, "ReturnValue", hp_return, false) ||
-            hp_return.type != "FloatProperty" || hp_return.element_size != 4 ||
-            hp_return.offset != 0 ||
-            !FindReflectedPropertyLocked(apply_damage, "DamagedActor", damaged_actor, false) ||
-            damaged_actor.type != "ObjectProperty" || damaged_actor.element_size != 8 ||
-            damaged_actor.offset != 0 ||
-            !FindReflectedPropertyLocked(apply_damage, "BaseDamage", base_damage, false) ||
-            base_damage.type != "FloatProperty" || base_damage.element_size != 4 ||
-            base_damage.offset != 8 ||
-            !FindReflectedPropertyLocked(apply_damage, "EventInstigator", instigator, false) ||
-            instigator.type != "ObjectProperty" || instigator.element_size != 8 ||
-            instigator.offset != 0x10 ||
-            !FindReflectedPropertyLocked(apply_damage, "DamageCauser", damage_causer, false) ||
-            damage_causer.type != "ObjectProperty" || damage_causer.element_size != 8 ||
-            damage_causer.offset != 0x18 ||
-            !FindReflectedPropertyLocked(apply_damage, "DamageTypeClass", damage_type, false) ||
-            damage_type.type != "ClassProperty" || damage_type.element_size != 8 ||
-            damage_type.offset != 0x20 ||
-            !FindReflectedPropertyLocked(apply_damage, "ReturnValue", damage_return, false) ||
-            damage_return.type != "FloatProperty" || damage_return.element_size != 4 ||
-            damage_return.offset != 0x28) {
+            hp_return.type != "FloatProperty" || hp_return.element_size != 4 || hp_return.offset != 0 ||
+            !FindReflectedPropertyLocked(activate_effect, "WorldContextObject", world_context, false) ||
+            world_context.type != "ObjectProperty" || world_context.element_size != 8 || world_context.offset != 0 ||
+            !FindReflectedPropertyLocked(activate_effect, "SourceObj", source_actor, false) ||
+            source_actor.type != "ObjectProperty" || source_actor.element_size != 8 || source_actor.offset != 8 ||
+            !FindReflectedPropertyLocked(activate_effect, "GameplayEffect", effect_class_property, false) ||
+            effect_class_property.type != "ClassProperty" || effect_class_property.element_size != 8 ||
+            effect_class_property.offset != 0x10 ||
+            !FindReflectedPropertyLocked(activate_effect, "ModifyData", modify_data, false) ||
+            modify_data.type != "StructProperty" || modify_data.element_size != 0x58 ||
+            modify_data.offset != 0x18 ||
+            !FindReflectedPropertyLocked(activate_effect, "pTriggerAbilityComp", trigger_ability_component, false) ||
+            trigger_ability_component.type != "ObjectProperty" ||
+            trigger_ability_component.element_size != 8 || trigger_ability_component.offset != 0x70 ||
+            !FindReflectedPropertyLocked(activate_effect, "ReturnValue", effect_return, false) ||
+            effect_return.type != "BoolProperty" || effect_return.element_size != 1 ||
+            effect_return.offset != 0x78) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "ApplyDamage parameter types/offsets failed reflection validation");
+                "native NTE GameplayEffect parameter types/offsets failed reflection validation");
         }
-
-        std::uintptr_t apply_outer{}, apply_default_object{};
-        if (!ReadPointerAt(*memory, apply_damage, Layout(profile, "object.outer"), apply_outer) ||
-            apply_outer == 0 ||
-            !ReadPointerAt(*memory, apply_outer,
-                Layout(profile, "uclass.classDefaultObject"), apply_default_object) ||
-            apply_default_object == 0 || !ReadableRange(*memory, apply_default_object, 0x20U)) {
+        std::string modify_data_name;
+        if (modify_data.structure == 0 ||
+            !ReadReflectedObjectNameLocked(modify_data.structure, modify_data_name) ||
+            modify_data_name != "BufferData") {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "GameplayStatics class default object is unavailable");
+                "K2_ActivateGameEffectsWithClassByActor ModifyData is not FBufferData");
+        }
+        std::uintptr_t trigger_ability_system{};
+        if (!CurrentAbilitySystemLocked(attacker, trigger_ability_system)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "player UHTAbilitySystemComponent could not be validated as the effect source");
         }
 
         std::array<std::uint8_t, 4> hp_parameters{};
         if (!InvokeProcessEventGuarded(process_event_invoker, victim, get_hp,
                 hp_parameters.data(), hp_parameters.size())) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "GetHP before ApplyDamage failed");
+            return Status(ANOMALY_STATUS_V1_FAILED, "GetHP before native GameplayEffect failed");
         }
         float hp_before{};
         std::memcpy(&hp_before, hp_parameters.data() + hp_return.offset, sizeof(hp_before));
-        if (!std::isfinite(hp_before) || hp_before <= 0.0F) {
+        if (!std::isfinite(hp_before) || hp_before <= 0.0F)
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "target is not alive");
-        }
 
-        std::array<std::uint8_t, 0x30> parameters{};
-        std::memcpy(parameters.data() + damaged_actor.offset, &victim, sizeof(victim));
-        std::memcpy(parameters.data() + base_damage.offset, &request->damage, sizeof(request->damage));
-        std::memcpy(parameters.data() + instigator.offset, &player_controller, sizeof(player_controller));
-        std::memcpy(parameters.data() + damage_causer.offset, &attacker, sizeof(attacker));
-        std::memcpy(parameters.data() + damage_type.offset, &damage_type_class, sizeof(damage_type_class));
-        if (!InvokeProcessEventGuarded(process_event_invoker, apply_default_object,
-                apply_damage, parameters.data(), parameters.size())) {
+        const auto captures_before = combat_capture_write.load(std::memory_order_acquire);
+        alignas(8) std::array<std::uint8_t, 0x80> parameters{};
+        std::memcpy(parameters.data() + world_context.offset, &world_pointer, sizeof(world_pointer));
+        std::memcpy(parameters.data() + source_actor.offset, &attacker, sizeof(attacker));
+        std::memcpy(parameters.data() + effect_class_property.offset,
+            &gameplay_effect_class, sizeof(gameplay_effect_class));
+        // Use the recorded GameEffect class and player's real AbilitySystemComponent.
+        // Native NTE computes the result; no synthetic DamageEvent or network key is forged.
+        const std::int32_t effect_level = 1;
+        const std::int32_t stack_count = 1;
+        const float strength_multiplier = 1.0F;
+        std::memcpy(parameters.data() + modify_data.offset + 0x28, &effect_level, sizeof(effect_level));
+        std::memcpy(parameters.data() + modify_data.offset + 0x38, &stack_count, sizeof(stack_count));
+        std::memcpy(parameters.data() + modify_data.offset + 0x3C,
+            &strength_multiplier, sizeof(strength_multiplier));
+        std::memcpy(parameters.data() + trigger_ability_component.offset,
+            &trigger_ability_system, sizeof(trigger_ability_system));
+        if (!InvokeProcessEventGuarded(process_event_invoker, victim, activate_effect,
+                parameters.data(), parameters.size())) {
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "GameplayStatics.ApplyDamage ProcessEvent failed");
+                "K2_ActivateGameEffectsWithClassByActor ProcessEvent failed");
+        }
+        if (parameters[effect_return.offset] == 0) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "NTE rejected the native GameplayEffect activation");
         }
 
-        float game_reported_damage{};
-        std::memcpy(&game_reported_damage,
-            parameters.data() + damage_return.offset, sizeof(game_reported_damage));
+        // Require a new CharacterOnDamaged capture for this exact player -> target pair.
+        // HP change alone does not prove that NTE recorded a player-caused combat event.
+        const auto captures_after = combat_capture_write.load(std::memory_order_acquire);
+        bool native_event_confirmed{};
+        const auto captures_added = static_cast<std::uint32_t>(captures_after - captures_before);
+        if (captures_added > 0 && captures_added <= kCombatCaptureQueueCapacity) {
+            for (std::uint32_t cursor = captures_before; cursor < captures_after; ++cursor) {
+                const auto& queued = combat_capture_queue[cursor % kCombatCaptureQueueCapacity];
+                if (queued.kind != CombatCaptureKind::CharacterDamage ||
+                    queued.payload_size < sizeof(NteCharacterDamageCapture)) continue;
+                NteCharacterDamageCapture captured{};
+                std::memcpy(&captured, queued.payload.data(), sizeof(captured));
+                if (captured.attacker == attacker && captured.victim == victim &&
+                    std::isfinite(captured.damage) && captured.damage > 0.0F) {
+                    native_event_confirmed = true;
+                    break;
+                }
+            }
+        }
+        if (!native_event_confirmed) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "native effect call returned but no matching player-attributed CharacterOnDamaged event was captured");
+        }
+
         hp_parameters.fill(0);
         if (!InvokeProcessEventGuarded(process_event_invoker, victim, get_hp,
                 hp_parameters.data(), hp_parameters.size())) {
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "ApplyDamage ran but resulting HP could not be read back");
+                "native damage event was captured but target HP read-back failed");
         }
         float hp_after{};
         std::memcpy(&hp_after, hp_parameters.data() + hp_return.offset, sizeof(hp_after));
-        if (!std::isfinite(hp_after) || hp_after < 0.0F || hp_after >= hp_before ||
-            !std::isfinite(game_reported_damage) || game_reported_damage <= 0.0F) {
+        if (!std::isfinite(hp_after) || hp_after < 0.0F)
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "ApplyDamage executed without a confirmed native HP decrease; result was not counted");
-        }
-
-        result->flags = ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID;
+                "native damage event was captured but target HP read-back was invalid");
+        result->flags = ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID |
+            ANOMALY_NTE_DAMAGE_REPLAY_V1_NATIVE_EVENT_CONFIRMED;
         if (hp_after > 0.0F) result->flags |= ANOMALY_NTE_DAMAGE_REPLAY_V1_TARGET_ALIVE;
         result->requested_damage = request->damage;
         result->hp_before = hp_before;
         result->hp_after = hp_after;
-        result->damage_applied = hp_before - hp_after;
+        result->damage_applied = (std::max)(0.0F, hp_before - hp_after);
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -8383,6 +8570,8 @@ struct Ue5NteAdapter::State {
     AnomalyStatusV1 VehicleReset() noexcept {
         const auto speed = VehicleSetTopSpeedRatio(1.0F);
         if (speed.code != ANOMALY_STATUS_V1_OK) return speed;
+        const auto torque = VehicleSetExternalTorqueRatio(1.0F);
+        if (torque.code != ANOMALY_STATUS_V1_OK) return torque;
         return VehicleSetWheelFriction(true);
     }
 
@@ -13549,7 +13738,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteVehicleServiceV1), ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleCatalogSnapshotThunk,
-            VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk};
+            VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk,
+            VehicleSetExternalTorqueRatioThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -13897,6 +14087,12 @@ private:
         void* user, std::uint32_t enabled) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSetWheelFriction(enabled != 0) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetExternalTorqueRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetExternalTorqueRatio(ratio) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleResetThunk(void* user) noexcept {
