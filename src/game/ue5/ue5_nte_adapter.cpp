@@ -14060,7 +14060,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1),
             ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
-            this, ActivateMeleeInputThunk};
+            this, ActivateMeleeInputThunk, ReplayDamageEventThunk};
         metrics_service = {
             sizeof(AnomalyNteMetricsServiceV1), ANOMALY_NTE_METRICS_SERVICE_V1_VERSION,
             this, MetricsSnapshotThunk};
@@ -14783,6 +14783,14 @@ private:
     static AnomalyStatusV1 ANOMALY_CALL ActivateMeleeInputThunk(void* user) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? State::ActivateMeleeInput(lease.User()) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL ReplayDamageEventThunk(
+        void* user, std::uint64_t replay_id) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? State::ReplayDamageEvent(lease.User(), replay_id)
+            : StoppedStatus();
     }
 
     std::weak_ptr<State> state_;
