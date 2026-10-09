@@ -1022,6 +1022,7 @@ struct Ue5NteAdapter::State {
         std::uint64_t replay_id{};
         std::uint64_t object_generation{};
         std::uint64_t tick_sequence{};
+        std::uintptr_t world_pointer{};
         std::uintptr_t victim{};
         std::uintptr_t attacker{};
         std::uintptr_t damage_causer{};
@@ -5520,6 +5521,7 @@ struct Ue5NteAdapter::State {
         ReplayableDamage candidate{};
         candidate.object_generation = object_generation;
         candidate.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
+        candidate.world_pointer = world_pointer;
         candidate.victim = victim;
         candidate.attacker = attacker;
         candidate.damage_causer = damage_causer;
@@ -13667,6 +13669,112 @@ struct Ue5NteAdapter::State {
         response.accepted =
             (parameters[returned.byte_offset] & returned.field_mask) != 0 ? 1U : 0U;
         *result = response;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    static AnomalyStatusV1 ReplayDamageEvent(void* user, const std::uint64_t replay_id) noexcept {
+        auto& state = *static_cast<State*>(user);
+        state.attack_input_demand.store(true, std::memory_order_release);
+        const DWORD expected_thread = state.game_thread_id.load(std::memory_order_acquire);
+        if (expected_thread == 0 || expected_thread != GetCurrentThreadId()) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "damage replay requires the Game thread");
+        }
+        if (replay_id == 0) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "damage replay token is zero");
+        }
+
+        std::unique_lock lock(state.mutex);
+        const auto& binding_table = state.combat_capture_bindings.load(std::memory_order_acquire);
+        if (!state.started.load(std::memory_order_acquire) ||
+            !state.process_event_invoker || state.world_pointer == 0 ||
+            state.player_pawn == 0 || binding_table == nullptr ||
+            !binding_table->damage_replay.valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "validated HTAbilityCharacter.OnDamaged replay ABI is unavailable");
+        }
+
+        const auto& record = state.replayable_damage[
+            static_cast<std::size_t>(replay_id % kReplayDamageCapacity)];
+        const auto current_tick = state.tick_sequence.load(std::memory_order_acquire);
+        if (!record.valid || record.replay_id != replay_id ||
+            record.object_generation != state.object_generation ||
+            record.world_pointer != state.world_pointer ||
+            record.attacker != state.player_pawn ||
+            record.victim == 0 || record.victim == state.player_pawn ||
+            current_tick < record.tick_sequence ||
+            current_tick - record.tick_sequence > 600U) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "captured damage context expired or no longer belongs to this player/world");
+        }
+
+        AnomalyGenerationHandleV1 victim_handle{}, attacker_handle{};
+        if (!state.ObjectHandleLocked(record.victim, victim_handle) ||
+            !state.ObjectHandleLocked(record.attacker, attacker_handle)) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "captured damage target or attacker is no longer valid");
+        }
+
+        std::uintptr_t damage_effect{};
+        if (record.damage_effect_index >= 0) {
+            std::uintptr_t registered{};
+            std::uint32_t serial{};
+            if (static_cast<std::uint64_t>(record.damage_effect_index) >=
+                    state.object_registry.count ||
+                !ReadObjectSlot(*state.memory, state.object_registry,
+                    static_cast<std::uint32_t>(record.damage_effect_index), registered, serial) ||
+                registered == 0 ||
+                serial != static_cast<std::uint32_t>(record.damage_effect_serial)) {
+                return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                    "captured UHTGamePlayEffect weak reference is stale");
+            }
+            damage_effect = registered;
+        }
+
+        const auto& binding = binding_table->damage_replay;
+        std::array<std::uint8_t, 512> parameters{};
+        if (binding.parms_size > parameters.size()) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "validated OnDamaged parameter block exceeds the safe buffer");
+        }
+        std::memcpy(parameters.data() + binding.damage_amount_offset,
+            &record.damage, sizeof(record.damage));
+        std::memcpy(parameters.data() + binding.hit_info_offset,
+            record.hit_info.data(), binding.hit_info_size);
+
+        struct ArrayHeader {
+            std::uintptr_t data{};
+            std::int32_t count{};
+            std::int32_t capacity{};
+        };
+        static_assert(sizeof(ArrayHeader) == 16);
+        auto gameplay_tags = record.gameplay_tags;
+        auto parent_tags = record.parent_tags;
+        const ArrayHeader gameplay_header{
+            reinterpret_cast<std::uintptr_t>(gameplay_tags.data()),
+            static_cast<std::int32_t>(record.gameplay_tag_count),
+            static_cast<std::int32_t>(record.gameplay_tag_count)};
+        const ArrayHeader parent_header{
+            reinterpret_cast<std::uintptr_t>(parent_tags.data()),
+            static_cast<std::int32_t>(record.parent_tag_count),
+            static_cast<std::int32_t>(record.parent_tag_count)};
+        auto* const tag_container = parameters.data() + binding.damage_tags_offset;
+        std::memcpy(tag_container + binding.tag_gameplay_array_offset,
+            &gameplay_header, sizeof(gameplay_header));
+        std::memcpy(tag_container + binding.tag_parent_array_offset,
+            &parent_header, sizeof(parent_header));
+        std::memcpy(parameters.data() + binding.damage_effect_offset,
+            &damage_effect, sizeof(damage_effect));
+        std::memcpy(parameters.data() + binding.instigator_offset,
+            &record.attacker, sizeof(record.attacker));
+        std::memcpy(parameters.data() + binding.causer_offset,
+            &record.damage_causer, sizeof(record.damage_causer));
+
+        if (!InvokeProcessEventGuarded(state.process_event_invoker, record.victim,
+                binding.function, parameters.data(), binding.parms_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "HTAbilityCharacter.OnDamaged ProcessEvent failed");
+        }
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
