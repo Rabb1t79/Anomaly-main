@@ -6006,6 +6006,7 @@ struct Ue5NteAdapter::State {
 
     void ProcessCharacterDamageLocked(
         const float damage,
+        const std::uint64_t replay_id,
         const std::int32_t source_index,
         const std::int32_t source_serial,
         const std::uintptr_t victim,
@@ -6065,6 +6066,7 @@ struct Ue5NteAdapter::State {
             combat_event.final_value = event.final_damage;
             combat_event.value = event.final_damage;
             combat_event.name_id = event.source_id;
+            combat_event.replay_id = replay_id;
             if (partial) combat_event.flags |= ANOMALY_NTE_COMBAT_EVENT_V1_PARTIAL;
             if (critical_valid) combat_event.flags |= ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL_VALID;
             if (is_critical) {
@@ -6096,7 +6098,7 @@ struct Ue5NteAdapter::State {
             DamageTagsContainCriticalLocked(damage.tags);
         const bool critical_valid = damage.critical.valid || critical;
         ProcessCharacterDamageLocked(
-            damage.damage, damage.source_index, damage.source_serial,
+            damage.damage, damage.replay_id, damage.source_index, damage.source_serial,
             damage.victim, damage.attacker, damage.saved_skill_cdo, damage.active_spec_handle,
             critical, critical_valid, damage.tags.partial || !critical_valid,
             capture_tick_sequence);
