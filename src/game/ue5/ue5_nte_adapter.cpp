@@ -8051,7 +8051,8 @@ struct Ue5NteAdapter::State {
         static_cast<void>(ApplySummonedVehicleLocked(
             tick_sequence.load(std::memory_order_acquire)));
         if (!RefreshVehicleLocked()) {
-            *snapshot = {sizeof(*snapshot), 0, {}, 0.0, vehicle_top_speed_ratio, vehicle_wheel_friction_enabled ? 1u : 0u};
+            *snapshot = {sizeof(*snapshot), 0, {}, 0.0, vehicle_top_speed_ratio,
+                vehicle_wheel_friction_enabled ? 1u : 0u, vehicle_engine_torque_ratio};
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "current driving vehicle is unavailable");
         }
         AnomalyGenerationHandleV1 handle{};
