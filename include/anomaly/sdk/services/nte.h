@@ -342,6 +342,9 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // current driving vehicle, for example BP_Vehicle_hight_C.
     AnomalyStatusV1 (ANOMALY_CALL *current_vehicle_class_name_utf8)(
         void* user, char* destination, size_t* inout_size);
+    // Optional append-only V1 diagnostic: current asynchronous summon verification state.
+    AnomalyStatusV1 (ANOMALY_CALL *summon_status_utf8)(
+        void* user, char* destination, size_t* inout_size);
 } AnomalyNteVehicleServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
