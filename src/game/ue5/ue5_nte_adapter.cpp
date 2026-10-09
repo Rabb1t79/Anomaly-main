@@ -8331,8 +8331,10 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "SetEnableWheelFriction is not validated");
         std::array<std::uint8_t, 4> parameters{};
         parameters[vehicle_bindings.set_wheel_friction.parameter_offset] = enabled ? 1 : 0;
-        if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
-                vehicle_bindings.set_wheel_friction.function, parameters.data(), parameters.size()))
+        if (vehicle_base_movement_component == 0 ||
+            !InvokeProcessEventGuarded(process_event_invoker, vehicle_base_movement_component,
+                vehicle_bindings.set_wheel_friction.function, parameters.data(),
+                vehicle_bindings.set_wheel_friction.parms_size))
             return Status(ANOMALY_STATUS_V1_FAILED, "SetEnableWheelFriction ProcessEvent failed");
         vehicle_wheel_friction_enabled = enabled;
         return Status(ANOMALY_STATUS_V1_OK);
