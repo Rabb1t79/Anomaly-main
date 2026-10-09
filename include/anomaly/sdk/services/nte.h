@@ -305,6 +305,7 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO (1u << 2u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION (1u << 3u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON (1u << 4u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_EXTERNAL_TORQUE_RATIO (1u << 5u)
 #define ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_CATALOG_V1_SUMMON_PENDING (1u << 1u)
 #define ANOMALY_NTE_VEHICLE_CATALOG_V1_SUMMON_VERIFIED (1u << 2u)
@@ -327,6 +328,7 @@ typedef struct AnomalyNteVehicleSnapshotV1 {
     double speed_kmh;
     float top_speed_ratio;
     uint32_t wheel_friction_enabled;
+    float external_torque_ratio;
 } AnomalyNteVehicleSnapshotV1;
 
 typedef struct AnomalyNteVehicleCatalogSnapshotV1 {
@@ -360,6 +362,7 @@ typedef struct AnomalyNteVehicleServiceV1 {
         void* user, AnomalyStringViewV1 vehicle_id);
     AnomalyStatusV1 (ANOMALY_CALL *summon_vehicle)(
         void* user, const AnomalyNteVehicleSummonRequestV1* request);
+    AnomalyStatusV1 (ANOMALY_CALL *set_external_torque_ratio)(void* user, float ratio);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
@@ -774,14 +777,17 @@ typedef struct AnomalyNteDamageEventV1 {
     double hit_location[3];
     uint32_t damage_type; uint32_t display_type;
     uint32_t reaction_type; uint32_t reaction_display_type;
+    /* Validated GameplayEffect class captured from FHTDamageEvent::DamageGEDef. */
+    AnomalyGenerationHandleV1 gameplay_effect;
 
 } AnomalyNteDamageEventV1;
 
-/* Direct damage application through the game's native ApplyDamage pipeline.
- * This service re-applies a captured damage amount; it never simulates player input. */
+/* Reapply the captured NTE GameplayEffect through the native HTAbilityCharacter
+ * game-effect entry point; success requires a new player-attributed CharacterOnDamaged event. */
 typedef uint32_t AnomalyNteDamageReplayFlagsV1;
 #define ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_DAMAGE_REPLAY_V1_TARGET_ALIVE (1u << 1u)
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_NATIVE_EVENT_CONFIRMED (1u << 2u)
 typedef struct AnomalyNteDamageReplayRequestV1 {
     uint32_t struct_size;
     uint32_t flags;
@@ -790,6 +796,7 @@ typedef struct AnomalyNteDamageReplayRequestV1 {
     AnomalyGenerationHandleV1 victim;
     float damage;
     uint32_t reserved;
+    AnomalyGenerationHandleV1 gameplay_effect;
 } AnomalyNteDamageReplayRequestV1;
 typedef struct AnomalyNteDamageReplayResultV1 {
     uint32_t struct_size;
