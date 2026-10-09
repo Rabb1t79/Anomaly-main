@@ -7960,6 +7960,7 @@ struct Ue5NteAdapter::State {
                 return false;
             }
             const bool vehicle_changed = current_vehicle_object != vehicle;
+            if (vehicle_changed) vehicle_top_speed_ratio = 1.0F;
             current_vehicle_object = vehicle;
             // Keep the original torque as a stable baseline. Refreshing it every frame
             // after a multiplier was applied would compound the ratio (2x -> 4x -> 8x).
@@ -8058,16 +8059,9 @@ struct Ue5NteAdapter::State {
         snapshot->struct_size = sizeof(*snapshot);
         snapshot->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
         if (vehicle_bindings.speed_kmh.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
-        static constexpr std::array<std::string_view, 3> top_speed_path{
-            "Vehicle", "SetTopSpeedRatio", "Base"};
-        std::uintptr_t top_speed_address{};
-        if (ResolveVehicleFloatPathLocked(current_vehicle_object, top_speed_path, top_speed_address)) {
-            float ratio{};
-            if (ReadValue(*memory, top_speed_address, ratio) && std::isfinite(ratio)) {
-                vehicle_top_speed_ratio = ratio;
-                snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO;
-            }
-        }
+        // The dump exposes SetTopSpeedRatio(float), not a guaranteed nested
+        // Vehicle.SetTopSpeedRatio.Base property. Report the last applied ratio.
+        snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO;
         if (vehicle_bindings.set_wheel_friction.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION;
         if (vehicle_bindings.summon_vehicle.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON;
         snapshot->vehicle = handle;
@@ -8141,7 +8135,7 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!EnsureVehicleSummonBindingLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "CheatSpawnVehicle/InVehicleid reflection ABI is not validated");
+                "HTCheatManager.CheatSpawnVehicle(VehicleID:FName) ABI is not validated");
 
         BuildVehicleCatalogLocked();
         if (selected_vehicle_id.empty()) {
