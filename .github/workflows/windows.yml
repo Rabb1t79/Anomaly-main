@@ -67,18 +67,18 @@ jobs:
             New-Item -ItemType Directory -Force $src, $build | Out-Null
             $sourceFile = (Join-Path $root "plugins\$plugin\plugin.cpp").Replace('\', '/')
             $includeDir = (Join-Path $root 'include').Replace('\', '/')
-            @          "
-          cmake_minimum_required(VERSION 3.22)
-          project($plugin LANGUAGES CXX)
-          set(CMAKE_CXX_STANDARD 20)
-          set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          set(CMAKE_CXX_EXTENSIONS OFF)
-          add_library(plugin SHARED "$sourceFile")
-          target_include_directories(plugin PRIVATE "$includeDir")
-          target_compile_definitions(plugin PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-          set_target_properties(plugin PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
-          
-"@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding utf8
+            $cmakeLines = @(
+              'cmake_minimum_required(VERSION 3.22)'
+              "project($plugin LANGUAGES CXX)"
+              'set(CMAKE_CXX_STANDARD 20)'
+              'set(CMAKE_CXX_STANDARD_REQUIRED ON)'
+              'set(CMAKE_CXX_EXTENSIONS OFF)'
+              ('add_library(plugin SHARED "' + $sourceFile + '")')
+              ('target_include_directories(plugin PRIVATE "' + $includeDir + '")')
+              'target_compile_definitions(plugin PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)'
+              'set_target_properties(plugin PROPERTIES OUTPUT_NAME "plugin" PREFIX "")'
+            )
+            $cmakeLines | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding ascii
             cmake -S $src -B $build -G 'Visual Studio 17 2022' -A x64
             cmake --build $build --config Release --parallel
             $dll = Join-Path $build 'Release\plugin.dll'
