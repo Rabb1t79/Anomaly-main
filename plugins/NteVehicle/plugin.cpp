@@ -238,7 +238,13 @@ void Draw() {
         !ui->button || !ui->slider_float) return;
 
     int open = 1;
-    if (!ui->begin_window(ui->user, anomaly::sdk::StringView("NTE Vehicle"), &open, 0)) return;
+    const int window_visible = ui->begin_window(
+        ui->user, anomaly::sdk::StringView("NTE Vehicle"), &open, 0);
+    if (!window_visible) {
+        // The host UI follows ImGui Begin/End pairing: End is required even when Begin returns false.
+        ui->end_window(ui->user);
+        return;
+    }
 
     Snapshot snap;
     std::string status;
