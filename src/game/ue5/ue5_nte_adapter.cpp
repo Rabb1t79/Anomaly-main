@@ -686,6 +686,8 @@ struct Ue5NteAdapter::State {
         GetShieldHealth,
         GetActiveEffectTimeRemainingAndDuration,
         ActivateAbilityByClass,
+        ActivateAbilityFromId,
+        ReleaseAbilityFromId,
         ShowDamageFloaties,
         MulticastShowMonsterDamageInfo,
         ClientShowPlayerDamageInfo,
@@ -1074,6 +1076,8 @@ struct Ue5NteAdapter::State {
     };
     std::vector<SkillRecord> skills;
     std::atomic_bool skill_demand{};
+    // Separate demand bit for the user-driven normal-attack input bridge.
+    std::atomic_bool attack_input_demand{};
     std::uint64_t skill_generation{};
     std::uint64_t skill_next_id{1};
     std::uint64_t skill_attempt_sequence{};
@@ -13481,7 +13485,7 @@ struct Ue5NteAdapter::State {
         }
 
         SparseMapView map;
-        if (!ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), map) ||
+        if (!state.ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), map) ||
             map.num <= 0 || map.row_offset + sizeof(std::uintptr_t) > map.stride) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "DT_AbilityInput RowMap is unavailable");
         }
@@ -14417,6 +14421,11 @@ private:
         return lease
             ? State::ActivateSkill(lease.User(), request, result)
             : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL ActivateMeleeInputThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? State::ActivateMeleeInput(lease.User()) : StoppedStatus();
     }
 
     std::weak_ptr<State> state_;
