@@ -10607,9 +10607,6 @@ struct Ue5NteAdapter::State {
         if (event == nullptr || event->struct_size < kLegacyEventSize) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
         }
-        // replay_id is a tail extension. Respect the caller's size so binaries
-        // compiled against the earlier V1 struct never receive an oversized write.
-        const std::size_t event_capacity = event->struct_size;
         auto& state = *static_cast<State*>(user);
         std::scoped_lock lock(state.mutex);
         if (!state.SemanticFeatureRunning("nte.session")) {
@@ -13131,6 +13128,7 @@ struct Ue5NteAdapter::State {
         if (event == nullptr || event->struct_size < sizeof(*event)) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
         }
+        const std::size_t event_capacity = event->struct_size;
         auto& state = *static_cast<State*>(user);
         state.combat_demand.store(true, std::memory_order_release);
         std::scoped_lock lock(state.mutex);
