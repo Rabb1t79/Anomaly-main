@@ -10602,9 +10602,14 @@ struct Ue5NteAdapter::State {
         void* user,
         const std::uint64_t after_sequence,
         AnomalyNteSessionEventV1* event) noexcept {
-        if (event == nullptr || event->struct_size < sizeof(*event)) {
+        constexpr std::size_t kLegacyEventSize =
+            offsetof(AnomalyNteCombatEventV1, replay_id);
+        if (event == nullptr || event->struct_size < kLegacyEventSize) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
         }
+        // replay_id is a tail extension. Respect the caller's size so binaries
+        // compiled against the earlier V1 struct never receive an oversized write.
+        const std::size_t event_capacity = event->struct_size;
         auto& state = *static_cast<State*>(user);
         std::scoped_lock lock(state.mutex);
         if (!state.SemanticFeatureRunning("nte.session")) {
@@ -13143,7 +13148,10 @@ struct Ue5NteAdapter::State {
             const auto& candidate = state.damage_events[
                 (state.damage_event_start + index) % kDamageEventCapacity].event;
             if (candidate.sequence <= after_sequence) continue;
-            *event = candidate;
+            const std::size_t bytes_to_copy =
+                (std::min)(event_capacity, sizeof(candidate));
+            std::memcpy(event, &candidate, bytes_to_copy);
+            event->struct_size = static_cast<std::uint32_t>(bytes_to_copy);
             return Status(ANOMALY_STATUS_V1_OK);
         }
         return Status(ANOMALY_STATUS_V1_NOT_FOUND, "no newer damage event");
