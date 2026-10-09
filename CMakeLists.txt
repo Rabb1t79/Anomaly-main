@@ -868,9 +868,11 @@ set(ANOMALY_MANUAL_MAP_TLS_FREE_TARGETS
     anomaly_repository_policy
     anomaly_service_graph
     nlohmann_json_schema_validator)
-foreach(target IN LISTS ANOMALY_MANUAL_MAP_TLS_FREE_TARGETS)
-    target_compile_options(${target} PRIVATE /Zc:threadSafeInit-)
-endforeach()
+if(MSVC)
+    foreach(target IN LISTS ANOMALY_MANUAL_MAP_TLS_FREE_TARGETS)
+        target_compile_options(${target} PRIVATE /Zc:threadSafeInit-)
+    endforeach()
+endif()
 target_link_libraries(
     anomaly_core PRIVATE
     ue5mem_core anomaly_runtime_kernel anomaly_imgui anomaly_minhook_backend anomaly_ui_service
