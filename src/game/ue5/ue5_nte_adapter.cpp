@@ -4998,8 +4998,11 @@ struct Ue5NteAdapter::State {
                 candidate_display == incoming_display &&
                 candidate.name_id == incoming.name_id) {
                 // CharacterOnDamaged and the UI multicast can both emit the
-                // same hit. Collapse exact duplicates before publishing the
-                // event so the demo never shows damage twice.
+                // same hit. Collapse exact duplicates before publishing, but keep
+                // the native replay token even if the display event arrived first.
+                if (candidate.replay_id == 0 && incoming.replay_id != 0) {
+                    candidate.replay_id = incoming.replay_id;
+                }
                 return true;
             }
             if (candidate_display == incoming_display) {
@@ -5014,12 +5017,18 @@ struct Ue5NteAdapter::State {
                     candidate.display_type == incoming.display_type &&
                     candidate.reaction_type == incoming.reaction_type &&
                     candidate.reaction_display_type == incoming.reaction_display_type) {
+                    if (candidate.replay_id == 0 && incoming.replay_id != 0) {
+                        candidate.replay_id = incoming.replay_id;
+                    }
                     return true;
                 }
                 continue;
             }
             if (candidate.source.id == 0) candidate.source = incoming.source;
             if (candidate.target.id == 0) candidate.target = incoming.target;
+            if (candidate.replay_id == 0 && incoming.replay_id != 0) {
+                candidate.replay_id = incoming.replay_id;
+            }
             candidate.flags |= incoming.flags;
             // The native event uses a generation-local GameplayEffect source
             // id. Damage text carries the stable InjurySourceName FName used by
@@ -13714,6 +13723,14 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND,
                 "captured damage target or attacker is no longer valid");
         }
+        // Projectiles/causers can be destroyed after the original hit. Do not replay
+        // a stale raw pointer; retain it only while UObject registry identity validates.
+        std::uintptr_t damage_causer = record.damage_causer;
+        AnomalyGenerationHandleV1 causer_handle{};
+        if (damage_causer != 0 &&
+            !state.ObjectHandleLocked(damage_causer, causer_handle)) {
+            damage_causer = 0;
+        }
 
         std::uintptr_t damage_effect{};
         if (record.damage_effect_index >= 0) {
@@ -13768,7 +13785,7 @@ struct Ue5NteAdapter::State {
         std::memcpy(parameters.data() + binding.instigator_offset,
             &record.attacker, sizeof(record.attacker));
         std::memcpy(parameters.data() + binding.causer_offset,
-            &record.damage_causer, sizeof(record.damage_causer));
+            &damage_causer, sizeof(damage_causer));
 
         if (!InvokeProcessEventGuarded(state.process_event_invoker, record.victim,
                 binding.function, parameters.data(), binding.parms_size)) {
