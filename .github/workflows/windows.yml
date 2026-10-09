@@ -91,6 +91,17 @@ jobs:
             Copy-Item -LiteralPath $dll -Destination (Join-Path $pluginPackage 'plugin.dll') -Force
             Copy-Item -LiteralPath (Join-Path $root "plugins\$plugin\manifest.json") -Destination (Join-Path $pluginPackage 'manifest.json') -Force
           }
+      - name: Remove separately published Vehicle from CI Runtime
+        if: github.ref_type != 'tag'
+        shell: pwsh
+        run: |
+          # GameRuntime's normal install component also contains the older CMake-built
+          # NteVehicle package. This workflow publishes the dump-backed Vehicle as a
+          # separate artifact, so remove the embedded copy to prevent duplicate manifest IDs.
+          $embeddedVehicle = Join-Path $env:GITHUB_WORKSPACE '.build\ci-artifacts\runtime\Anomaly\plugins\NteVehicle'
+          if (Test-Path -LiteralPath $embeddedVehicle) {
+            Remove-Item -LiteralPath $embeddedVehicle -Recurse -Force
+          }
       - name: Upload CI runtime
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
