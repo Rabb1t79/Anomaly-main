@@ -184,9 +184,10 @@ constexpr std::string_view kGWorldPattern =
 
 // NativeRead 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool NativeRead(const void* address, void* destination, size_t size) noexcept {
-    if (!address || !destination) return false;
-    __try { std::memcpy(destination, address, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    if (!address || !destination || size == 0) return false;
+    SIZE_T copied{};
+    return ReadProcessMemory(GetCurrentProcess(), address, destination, size, &copied) != 0 &&
+        copied == size;
 }
 template <typename T>
 // NativeRead 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
