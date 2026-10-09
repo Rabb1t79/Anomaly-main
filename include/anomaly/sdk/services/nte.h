@@ -360,12 +360,23 @@ typedef struct AnomalyNteAttackInputRequestV1 {
     uint32_t input_id;
     int32_t param;
 } AnomalyNteAttackInputRequestV1;
+typedef struct AnomalyNteAttackChainSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t rate; // Total applications per confirmed hit, including the original application.
+    uint64_t confirmed_player_hits;
+    uint64_t confirmed_additional_hits;
+} AnomalyNteAttackChainSnapshotV1;
 typedef struct AnomalyNteAttackInputServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     AnomalyStatusV1 (ANOMALY_CALL *press)(
         void* user, const AnomalyNteAttackInputRequestV1* request);
     AnomalyStatusV1 (ANOMALY_CALL *release)(
         void* user, const AnomalyNteAttackInputRequestV1* request);
+    // Global local-player chain configuration. Rate is total damage applications per
+    // observed player-to-enemy hit (1 disables chaining). Valid only from Game callbacks.
+    AnomalyStatusV1 (ANOMALY_CALL *set_chain_rate)(void* user, uint32_t rate);
+    AnomalyStatusV1 (ANOMALY_CALL *chain_snapshot)(
+        void* user, AnomalyNteAttackChainSnapshotV1* snapshot);
 } AnomalyNteAttackInputServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
