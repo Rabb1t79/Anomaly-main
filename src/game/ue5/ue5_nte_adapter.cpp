@@ -14282,6 +14282,13 @@ private:
             : StoppedStatus();
     }
 
+    static AnomalyStatusV1 ANOMALY_CALL ActivateMeleeInputThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? State::ActivateMeleeInput(lease.User())
+            : StoppedStatus();
+    }
+
     std::weak_ptr<State> state_;
     AdmissionGate gate_;
 
