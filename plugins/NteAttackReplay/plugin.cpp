@@ -39,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <mutex>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -50,6 +51,8 @@ namespace {
 struct NormalAttackBinding { uintptr_t world{}; uintptr_t controller{}; uintptr_t triggered{}; uintptr_t completed{}; std::array<uint8_t,8> pressed{}; std::array<uint8_t,8> released{}; };
 
 struct Context final {
+    // Draw belongs to Render while Update belongs to Game; serialize their shared state.
+    std::mutex state_mutex;
     const AnomalyNteCombatServiceV1* combat{};
     const AnomalyNteSkillsServiceV1* skills{};
     const AnomalyNteSkillInvocationServiceV1* invocation{};
@@ -855,6 +858,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
     context->replay_count = 10;
     context->replay_done = 0;
@@ -871,6 +875,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, uint32_t) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    std::scoped_lock state_lock(context->state_mutex);
     context->replaying = false;
     context->replay_requested.store(false, std::memory_order_release);
     context->stop_requested.store(true, std::memory_order_release);
@@ -886,6 +891,7 @@ void ANOMALY_CALL Unload(void* plugin_context) {
 void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
+    std::scoped_lock state_lock(context->state_mutex);
 
     // Recording is always active. The enable switch only gates replay actions.
     if (!context->captured && !context->replaying) {
@@ -1006,6 +1012,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr || !UiReady(ui)) return;
+    std::scoped_lock state_lock(context->state_mutex);
 
     int open = 1;
     if (ui->set_next_window_size != nullptr) {
