@@ -31,6 +31,9 @@ jobs:
         shell: pwsh
         run: |
           $root = $env:GITHUB_WORKSPACE
+          # CMake treats some Windows backslash sequences as escape codes; normalize
+          # only the source/include strings embedded in the generated CMakeLists.txt.
+          $cmakeRoot = $root.Replace('\', '/')
           $builds = @(
             @{ Name = 'NteVehicle'; Source = 'plugins/NteVehicle/plugin.cpp' },
             @{ Name = 'NteAttackReplay'; Source = 'plugins/NteAttackReplay/plugin.cpp' }
@@ -45,8 +48,8 @@ jobs:
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_CXX_EXTENSIONS OFF)
-          add_library(plugin SHARED "$root/$($item.Source)")
-          target_include_directories(plugin PRIVATE "$root/include" "$root/.build/windows-vs2022/generated/sdk-build/include")
+          add_library(plugin SHARED "$cmakeRoot/$($item.Source)")
+          target_include_directories(plugin PRIVATE "$cmakeRoot/include" "$cmakeRoot/.build/windows-vs2022/generated/sdk-build/include")
           target_compile_definitions(plugin PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
           set_target_properties(plugin PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
           "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
