@@ -310,6 +310,8 @@ typedef struct AnomalyNteVehicleSnapshotV1 {
     double speed_kmh;
     float top_speed_ratio;
     uint32_t wheel_friction_enabled;
+    // Optional V1 tail extension: normalized engine torque multiplier.
+    float engine_torque_ratio;
 } AnomalyNteVehicleSnapshotV1;
 
 #define ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES 128u
@@ -334,6 +336,10 @@ typedef struct AnomalyNteVehicleServiceV1 {
         void* user, uint32_t index, char* destination, size_t* inout_size);
     AnomalyStatusV1 (ANOMALY_CALL *set_summon_vehicle_id)(
         void* user, AnomalyStringViewV1 vehicle_id);
+    // Optional V1 tail extension: scales the original engine torque independently
+    // from Vehicle.SetTopSpeedRatio.
+    AnomalyStatusV1 (ANOMALY_CALL *set_engine_torque_ratio)(
+        void* user, float ratio);
 } AnomalyNteVehicleServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
