@@ -17,14 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure Anomaly
-        shell: pwsh
-        run: cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
-
-      - name: Build Anomaly runtime
-        shell: pwsh
-        run: cmake --build --preset windows-relwithdebinfo --parallel
-
       - name: Configure NTE Vehicle
         shell: pwsh
         run: |
