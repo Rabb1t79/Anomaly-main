@@ -218,10 +218,17 @@ void Update(void*, double delta_seconds) {
         g.last_damage_applied = 0.0F;
         g.replay_accumulator = 0.0;
         g.retry_cooldown_seconds = 0.0;
-        g.status = "已自动记录首个有效伤害事件；可独立启用/禁用直接重复伤害";
+        g.status = event.gameplay_effect.id != 0
+            ? "已记录玩家命中和可验证的原生 GameplayEffect；重复时由 NTE 自己处理伤害"
+            : "已记录玩家命中，但 DamageGEDef 未解析为 GameplayEffect 类；原生重放暂不可用";
     }
 
     if (!g.replay_enabled || !g.captured_valid) {
+        g.replay_accumulator = 0.0;
+        return;
+    }
+    if (g.captured.gameplay_effect.id == 0) {
+        g.status = "已记录事件，但 dump 验证未能确认可重放的 GameplayEffect 类；不会回退到通用 ApplyDamage";
         g.replay_accumulator = 0.0;
         return;
     }
@@ -246,6 +253,7 @@ void Update(void*, double delta_seconds) {
         request.attacker = g.captured.attacker;
         request.victim = g.captured.victim;
         request.damage = static_cast<float>(g.captured.final_damage);
+        request.gameplay_effect = g.captured.gameplay_effect;
 
         AnomalyNteDamageReplayResultV1 replay_result{sizeof(replay_result)};
         const auto result = g.damage_replay->apply_damage(
@@ -255,13 +263,14 @@ void Update(void*, double delta_seconds) {
 
         if (result.code == ANOMALY_STATUS_V1_OK &&
             (replay_result.flags & ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID) != 0 &&
+            (replay_result.flags & ANOMALY_NTE_DAMAGE_REPLAY_V1_NATIVE_EVENT_CONFIRMED) != 0 &&
             std::isfinite(replay_result.damage_applied) &&
-            replay_result.damage_applied > 0.0F) {
+            replay_result.damage_applied >= 0.0F) {
             ++g.successful_replays;
             g.last_damage_applied = replay_result.damage_applied;
             char message[192]{};
             std::snprintf(message, sizeof(message),
-                "直接伤害已确认：本次实际扣除 %.1f HP；成功重复 %llu 次",
+                "NTE 原生伤害事件已确认；目标 HP 净变化 %.1f；成功重复 %llu 次",
                 static_cast<double>(replay_result.damage_applied),
                 static_cast<unsigned long long>(g.successful_replays));
             g.status = message;
@@ -275,11 +284,15 @@ void Update(void*, double delta_seconds) {
             ClearCapture("目标或对象代际已失效；效果开关保持原值，自动等待下一次有效玩家伤害事件");
             break;
         } else {
-            char message[192]{};
-            std::snprintf(message, sizeof(message),
-                "Core 未确认本次伤害（状态码 %u）；效果仍保持启用，稍后重试",
-                result.code);
-            g.status = message;
+            if (result.message.data != nullptr && result.message.size != 0) {
+                const auto size = (std::min)(result.message.size, std::size_t{512});
+                g.status.assign(result.message.data, size);
+            } else {
+                char message[192]{};
+                std::snprintf(message, sizeof(message),
+                    "Core 未确认原生伤害事件（状态码 %u）；稍后重试", result.code);
+                g.status = message;
+            }
             g.replay_accumulator = 0.0;
             g.retry_cooldown_seconds = kFailureRetrySeconds;
             break;
