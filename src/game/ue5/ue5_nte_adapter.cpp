@@ -686,6 +686,8 @@ struct Ue5NteAdapter::State {
         GetShieldHealth,
         GetActiveEffectTimeRemainingAndDuration,
         ActivateAbilityByClass,
+        ActivateAbilityFromId,
+        ReleaseAbilityFromId,
         ShowDamageFloaties,
         MulticastShowMonsterDamageInfo,
         ClientShowPlayerDamageInfo,
@@ -1065,6 +1067,7 @@ struct Ue5NteAdapter::State {
     };
     std::vector<SkillRecord> skills;
     std::atomic_bool skill_demand{};
+    std::atomic_bool attack_input_demand{};
     std::uint64_t skill_generation{};
     std::uint64_t skill_next_id{1};
     std::uint64_t skill_attempt_sequence{};
@@ -2588,6 +2591,7 @@ struct Ue5NteAdapter::State {
         ahud_demand.store(false, std::memory_order_release);
         combat_demand.store(false, std::memory_order_release);
         skill_demand.store(false, std::memory_order_release);
+        attack_input_demand.store(false, std::memory_order_release);
         combat_capture_read.store(0, std::memory_order_release);
         combat_capture_write.store(0, std::memory_order_release);
         combat_capture_drop_count.store(0, std::memory_order_release);
@@ -13347,7 +13351,7 @@ struct Ue5NteAdapter::State {
         }
 
         SparseMapView map;
-        if (!ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), map) ||
+        if (!state.ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), map) ||
             map.num <= 0 || map.row_offset + sizeof(std::uintptr_t) > map.stride) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "DT_AbilityInput RowMap is unavailable");
         }
@@ -15221,8 +15225,8 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             &endpoint->attack_input_service,
             [self, observer_endpoint] {
-                const locked = self.lock();
-                const observed = observer_endpoint.lock();
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
                 if (!locked || !observed ||
                     locked->semantic_endpoint.load(std::memory_order_acquire) != observed) return;
                 locked->attack_input_demand.store(true, std::memory_order_release);
