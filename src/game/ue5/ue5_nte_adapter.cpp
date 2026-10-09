@@ -8032,35 +8032,59 @@ struct Ue5NteAdapter::State {
                 "HTPlayerController.CheatManager pointer could not be read");
         }
 
-        // PlayerController owns CheatManager and exposes EnableCheats() to initialize it.
-        // Do not stop at a null property: the dump-backed CheatSpawnVehicle call needs the
-        // manager instance, so attempt the documented engine entry point first.
+        // Prefer the dump-backed HTCheatManager.CheatSpawnVehicle(FName) path when
+        // the game has initialized CheatManager. Some runtime states leave that pointer
+        // null even after EnableCheats(); in that case, validate the controller/character
+        // method signatures and use the direct reflected path if the game exposes one.
         if (cheat_manager == 0) {
             std::uintptr_t enable_cheats_function{};
             VehicleFunctionBinding enable_cheats_binding{};
-            if (!FindExactObjectLocked(L"/Script/Engine.PlayerController.EnableCheats",
-                    enable_cheats_function) ||
-                !BuildVehicleBindingLocked(enable_cheats_function, "EnableCheats", "NoArgs",
+            if (FindExactObjectLocked(L"/Script/Engine.PlayerController.EnableCheats",
+                    enable_cheats_function) &&
+                BuildVehicleBindingLocked(enable_cheats_function, "EnableCheats", "NoArgs",
                     enable_cheats_binding)) {
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    "CheatManager is null and Engine.PlayerController.EnableCheats() ABI could not be validated");
-            }
-            std::array<std::uint8_t, 1> no_parameters{};
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                    enable_cheats_function, no_parameters.data(), enable_cheats_binding.parms_size)) {
-                return Status(ANOMALY_STATUS_V1_FAILED,
-                    "Engine.PlayerController.EnableCheats() ProcessEvent failed");
-            }
-            if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset),
-                    cheat_manager) || cheat_manager == 0) {
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    "EnableCheats returned but HTPlayerController.CheatManager remained null");
+                std::array<std::uint8_t, 1> no_parameters{};
+                if (InvokeProcessEventGuarded(process_event_invoker, player_controller,
+                        enable_cheats_function, no_parameters.data(), enable_cheats_binding.parms_size)) {
+                    static_cast<void>(ReadValue(*memory,
+                        player_controller + static_cast<std::uintptr_t>(manager_property.offset),
+                        cheat_manager));
+                }
             }
         }
+
         VehicleFunctionBinding summon_binding{};
-        static constexpr std::array<std::string_view, 1> cheat_manager_outer{"HTCheatManager"};
-        if (!FindVehicleFunctionLocked("CheatSpawnVehicle", cheat_manager_outer, "NameInput", summon_binding)) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTCheatManager.CheatSpawnVehicle(FName) ABI validation failed");
+        std::uintptr_t summon_receiver = cheat_manager;
+        bool summon_binding_ready = false;
+        if (cheat_manager != 0) {
+            static constexpr std::array<std::string_view, 1> cheat_manager_outer{"HTCheatManager"};
+            summon_binding_ready = FindVehicleFunctionLocked(
+                "CheatSpawnVehicle", cheat_manager_outer, "NameInput", summon_binding);
+        }
+
+        // Fallback is reflection-validated: never call a function just because its name
+        // matches. The receiver and FName parameter ABI must both validate first.
+        if (!summon_binding_ready) {
+            static constexpr std::array<std::string_view, 2> direct_outers{
+                "HTPlayerController", "HTPlayerCharacter"};
+            for (const auto outer : direct_outers) {
+                VehicleFunctionBinding candidate{};
+                if (!FindVehicleFunctionLocked(
+                        "CheatSpawnVehicle", std::array<std::string_view, 1>{outer},
+                        "NameInput", candidate)) {
+                    continue;
+                }
+                summon_binding = candidate;
+                summon_receiver = outer == "HTPlayerController" ? player_controller : player_pawn;
+                summon_binding_ready = summon_receiver != 0;
+                if (summon_binding_ready) break;
+            }
+        }
+        if (!summon_binding_ready) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                cheat_manager == 0
+                    ? "CheatManager stayed null and no validated direct CheatSpawnVehicle(FName) fallback exists"
+                    : "HTCheatManager and direct CheatSpawnVehicle(FName) ABI validation failed");
         }
 
         // Capture existing vehicle actors so the spawned actor must be new before relocation/ownership.
@@ -8081,7 +8105,7 @@ struct Ue5NteAdapter::State {
             &selected->name_comparison_index, sizeof(selected->name_comparison_index));
         std::memcpy(parameters.data() + summon_binding.parameter_offset + sizeof(std::uint32_t),
             &selected->name_number, sizeof(selected->name_number));
-        if (!InvokeProcessEventGuarded(process_event_invoker, cheat_manager,
+        if (!InvokeProcessEventGuarded(process_event_invoker, summon_receiver,
                 summon_binding.function, parameters.data(), summon_binding.parms_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED, "CheatSpawnVehicle(FName) ProcessEvent failed");
         }
