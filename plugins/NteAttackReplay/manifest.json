@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "id": "anomaly.builtin.nte-attack-replay",
   "name": "NTE Attack Replay",
-  "description": "Automatically captures a player-to-enemy damage event and repeats its damage amount through the Core direct-damage service at a configurable rate, without simulating player input.",
+  "description": "Captures the player-attributed NTE GameplayEffect and repeats it through the native NTE effect entry point; success requires a matching CharacterOnDamaged event.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
