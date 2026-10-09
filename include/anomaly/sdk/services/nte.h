@@ -20,6 +20,8 @@
 #define ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_COMBAT_SERVICE_V1_ID "anomaly.nte.combat"
 #define ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID "anomaly.nte.damage-replay"
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_SKILLS_SERVICE_V1_ID "anomaly.nte.skills"
 #define ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID "anomaly.nte.skill-invocation"
@@ -304,6 +306,17 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION (1u << 3u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON (1u << 4u)
 #define ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_SUMMON_PENDING (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_SUMMON_VERIFIED (1u << 2u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_SUMMON_FAILED (1u << 3u)
+/* The snapshot's reserved field carries these host-side authenticity checks. */
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_SOURCE (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_ASSET_CLASS (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_TABLE_CLASS (1u << 2u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_ROW_STRUCT (1u << 3u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_ROW_MAP (1u << 4u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_VEHICLE_IDS (1u << 5u)
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_ALL (ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_SOURCE | ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_ASSET_CLASS | ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_TABLE_CLASS | ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_ROW_STRUCT | ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_ROW_MAP | ANOMALY_NTE_VEHICLE_CATALOG_V1_AUTH_VEHICLE_IDS)
 #define ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
@@ -761,7 +774,37 @@ typedef struct AnomalyNteDamageEventV1 {
     double hit_location[3];
     uint32_t damage_type; uint32_t display_type;
     uint32_t reaction_type; uint32_t reaction_display_type;
+
 } AnomalyNteDamageEventV1;
+
+/* Direct damage application through the game's native ApplyDamage pipeline.
+ * This service re-applies a captured damage amount; it never simulates player input. */
+typedef uint32_t AnomalyNteDamageReplayFlagsV1;
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_TARGET_ALIVE (1u << 1u)
+typedef struct AnomalyNteDamageReplayRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    AnomalyGenerationHandleV1 world;
+    AnomalyGenerationHandleV1 attacker;
+    AnomalyGenerationHandleV1 victim;
+    float damage;
+    uint32_t reserved;
+} AnomalyNteDamageReplayRequestV1;
+typedef struct AnomalyNteDamageReplayResultV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    float requested_damage;
+    float hp_before;
+    float hp_after;
+    float damage_applied;
+} AnomalyNteDamageReplayResultV1;
+typedef struct AnomalyNteDamageReplayServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *apply_damage)(
+        void* user, const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result);
+} AnomalyNteDamageReplayServiceV1;
 
 // Unified low-latency combat stream. Damage entries are emitted from the
 // CharacterOnDamaged hook and enriched by FHTDamageTextInfo when available.
