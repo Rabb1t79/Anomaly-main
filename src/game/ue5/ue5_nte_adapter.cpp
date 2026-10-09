@@ -8178,16 +8178,14 @@ struct Ue5NteAdapter::State {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                     "HTPlayerController.CheatClass could not be read");
             }
-            if (cheat_class == 0) {
-                std::uintptr_t ht_cheat_manager_class{};
-                if (!FindExactObjectLocked(L"/Script/HTGame.HTCheatManager",
-                        ht_cheat_manager_class) || ht_cheat_manager_class == 0 ||
-                    !memory->Write(player_controller +
-                        static_cast<std::uintptr_t>(cheat_class_property.offset),
-                        &ht_cheat_manager_class, sizeof(ht_cheat_manager_class))) {
-                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                        "HTGame.HTCheatManager class could not be validated/written to CheatClass");
-                }
+            std::uintptr_t ht_cheat_manager_class{};
+            if (!FindExactObjectLocked(L"/Script/HTGame.HTCheatManager",
+                    ht_cheat_manager_class) || ht_cheat_manager_class == 0 ||
+                !memory->Write(player_controller +
+                    static_cast<std::uintptr_t>(cheat_class_property.offset),
+                    &ht_cheat_manager_class, sizeof(ht_cheat_manager_class))) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "HTGame.HTCheatManager class could not be validated/written to CheatClass");
             }
             std::uintptr_t enable_function{};
             VehicleFunctionBinding enable_binding{};
