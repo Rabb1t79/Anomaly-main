@@ -794,6 +794,7 @@ struct Ue5NteAdapter::State {
     float vehicle_top_speed_ratio{1.0F};
     bool vehicle_wheel_friction_enabled{true};
     float vehicle_speed_kmh{};
+    bool vehicle_speed_read_valid{};
     bool vehicle_valid{};
 
     std::vector<std::string> vehicle_ids;
@@ -809,6 +810,7 @@ struct Ue5NteAdapter::State {
         bool active{};
         std::uint64_t request_sequence{};
         std::array<double, 3> target{};
+        std::array<double, 3> spawn_origin{};
         std::unordered_set<std::uint64_t> existing_actor_ids;
     } pending_vehicle_summon;
     std::string vehicle_last_summon_status;
@@ -2308,6 +2310,9 @@ struct Ue5NteAdapter::State {
             return framework_hook_ready && NteActorsLayoutAvailable();
         }
         if (id == ANOMALY_NTE_COMBAT_SERVICE_V1_ID) {
+            return framework_hook_ready && NteCombatProfileAvailable();
+        }
+        if (id == ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID) {
             return framework_hook_ready && NteCombatProfileAvailable();
         }
         if (id == ANOMALY_NTE_SKILLS_SERVICE_V1_ID) {
@@ -7805,6 +7810,17 @@ struct Ue5NteAdapter::State {
                 vehicle_data_table == 0) return;
         }
 
+        std::uintptr_t table_class{};
+        std::string table_name, table_class_name;
+        if (!ReadPointerAt(*memory, vehicle_data_table, Layout(profile, "object.class"), table_class) ||
+            table_class == 0 ||
+            !ReadReflectedObjectNameLocked(table_class, table_class_name) ||
+            table_class_name != "DataTable" ||
+            !ReadReflectedObjectNameLocked(vehicle_data_table, table_name) ||
+            table_name != "DT_VehicleData") {
+            return;
+        }
+
         std::uintptr_t row_struct{};
         std::string row_struct_name;
         const auto row_struct_offset = Layout(profile, "dataTable.rowStruct", -1);
@@ -7970,9 +7986,11 @@ struct Ue5NteAdapter::State {
                 !ContainsVehicleName(class_it->second)) continue;
             if (entity.class_name_id == 0) continue;
 
-            const auto dx = entity.bounds_center[0] - pending_vehicle_summon.target[0];
-            const auto dy = entity.bounds_center[1] - pending_vehicle_summon.target[1];
-            const auto dz = entity.bounds_center[2] - pending_vehicle_summon.target[2];
+            // CheatSpawnVehicle(FName) has no location parameter. Identify its new
+            // actor near the spawn origin first; the far-away target is applied afterwards.
+            const auto dx = entity.bounds_center[0] - pending_vehicle_summon.spawn_origin[0];
+            const auto dy = entity.bounds_center[1] - pending_vehicle_summon.spawn_origin[1];
+            const auto dz = entity.bounds_center[2] - pending_vehicle_summon.spawn_origin[2];
             const double distance = std::sqrt(dx*dx + dy*dy + dz*dz);
             if (distance < best_distance) { best_distance = distance; best = &entity; }
         }
@@ -8083,6 +8101,8 @@ struct Ue5NteAdapter::State {
                 return false;
             }
             current_vehicle_object = vehicle;
+            vehicle_speed_read_valid = false;
+            vehicle_speed_kmh = 0.0F;
             // Tokky's target build reads the active movement component from the vehicle
             // instance and uses its validated base torque as the speed-mutation baseline.
             vehicle_base_movement_component = 0;
@@ -8108,7 +8128,52 @@ struct Ue5NteAdapter::State {
                         vehicle_bindings.speed_kmh.function, speed_bytes.data(), speed_bytes.size())) {
                     float speed{};
                     std::memcpy(&speed, speed_bytes.data() + vehicle_bindings.speed_kmh.return_offset, sizeof(speed));
-                    if (std::isfinite(speed)) vehicle_speed_kmh = speed;
+                    if (std::isfinite(speed)) {
+                        vehicle_speed_kmh = speed;
+                        vehicle_speed_read_valid = true;
+                    }
+                }
+            }
+            // Some versions report 0 through the movement helper even while the vehicle
+            // is moving. Fall back to Actor.GetVelocity(), validating its FVector ABI first.
+            if (!vehicle_speed_read_valid || std::abs(vehicle_speed_kmh) < 0.01F) {
+                std::uintptr_t velocity_function{};
+                if (FindExactObjectLocked(L"/Script/Engine.Actor.GetVelocity", velocity_function)) {
+                    std::uintptr_t fclass{}, outer{};
+                    std::string fname, fclass_name, outer_name;
+                    std::uint8_t nparms{};
+                    std::uint16_t psize{}, return_offset{};
+                    bool vector_valid = ReadReflectedObjectNameLocked(velocity_function, fname) && fname == "GetVelocity" &&
+                        ReadPointerAt(*memory, velocity_function, Layout(profile, "object.class"), fclass) &&
+                        ReadPointerAt(*memory, velocity_function, Layout(profile, "object.outer"), outer) &&
+                        ReadReflectedObjectNameLocked(fclass, fclass_name) && fclass_name == "Function" &&
+                        ReadReflectedObjectNameLocked(outer, outer_name) && outer_name == "Actor" &&
+                        ReadValue(*memory, velocity_function + Layout(profile, "ufunction.numParms"), nparms) &&
+                        ReadValue(*memory, velocity_function + Layout(profile, "ufunction.parmsSize"), psize) &&
+                        ReadValue(*memory, velocity_function + Layout(profile, "ufunction.returnValueOffset"), return_offset) &&
+                        nparms == 1 && psize == 0x18 && return_offset == 0;
+                    ReflectedPropertyInfo velocity_return{};
+                    if (vector_valid) {
+                        vector_valid = FindReflectedPropertyLocked(velocity_function, "ReturnValue", velocity_return, false) &&
+                            velocity_return.type == "StructProperty" && velocity_return.element_size == 0x18 &&
+                            velocity_return.offset == 0 && velocity_return.structure != 0;
+                        std::string vector_name;
+                        if (vector_valid) vector_valid = ReadReflectedObjectNameLocked(velocity_return.structure, vector_name) && vector_name == "Vector";
+                    }
+                    if (vector_valid) {
+                        std::array<std::uint8_t, 0x18> velocity_bytes{};
+                        if (InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+                                velocity_function, velocity_bytes.data(), velocity_bytes.size())) {
+                            double velocity[3]{};
+                            std::memcpy(velocity, velocity_bytes.data(), sizeof(velocity));
+                            const double magnitude = std::sqrt(velocity[0]*velocity[0] + velocity[1]*velocity[1] + velocity[2]*velocity[2]);
+                            const float fallback_speed = static_cast<float>(magnitude * 0.036);
+                            if (std::isfinite(fallback_speed) && fallback_speed >= 0.0F) {
+                                if (fallback_speed > 0.05F || !vehicle_speed_read_valid) vehicle_speed_kmh = fallback_speed;
+                                vehicle_speed_read_valid = true;
+                            }
+                        }
+                    }
                 }
             }
             return true;
@@ -8126,6 +8191,11 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!NteVehicleProfileAvailable()) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
         BuildVehicleCatalogLocked();
+        if (!vehicle_catalog_attempted || vehicle_data_table == 0 || vehicle_ids.empty()) {
+            *count = 0;
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "DT_VehicleData authenticity/row validation failed; no VehicleID entries were verified");
+        }
         *count = static_cast<std::uint32_t>(vehicle_ids.size());
         return Status(ANOMALY_STATUS_V1_OK);
     }
@@ -8137,6 +8207,8 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle catalog must run on Game thread");
         std::scoped_lock lock(mutex);
         BuildVehicleCatalogLocked();
+        if (!vehicle_catalog_attempted || vehicle_data_table == 0 || vehicle_ids.empty())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "DT_VehicleData has not passed authenticity validation");
         if (index >= vehicle_ids.size()) return Status(ANOMALY_STATUS_V1_NOT_FOUND);
         return CopyString(vehicle_ids[index], destination, inout_size);
     }
@@ -8148,9 +8220,10 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle selection must run on Game thread");
         std::scoped_lock lock(mutex);
         BuildVehicleCatalogLocked();
+        if (!vehicle_catalog_attempted || vehicle_data_table == 0 || vehicle_ids.empty())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "DT_VehicleData has not passed authenticity validation");
         const std::string requested(id.data, id.size);
-        if (!vehicle_ids.empty() &&
-            std::ranges::find(vehicle_ids, requested) == vehicle_ids.end()) {
+        if (std::ranges::find(vehicle_ids, requested) == vehicle_ids.end()) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle ID is not in the runtime catalog");
         }
         selected_vehicle_id = requested;
@@ -8173,7 +8246,7 @@ struct Ue5NteAdapter::State {
         static_cast<void>(ObjectHandleLocked(current_vehicle_object, handle));
         snapshot->struct_size = sizeof(*snapshot);
         snapshot->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
-        if (vehicle_bindings.speed_kmh.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
+        if (vehicle_speed_read_valid) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
         static constexpr std::array<std::string_view, 3> top_speed_path{
             "Vehicle", "SetTopSpeedRatio", "Base"};
         std::uintptr_t top_speed_address{};
@@ -8271,6 +8344,7 @@ struct Ue5NteAdapter::State {
             player_position[0] - 2000.0,
             player_position[1] + 2000.0,
             player_position[2] + 2000.0};
+        pending_vehicle_summon.spawn_origin = player_position;
         if (actor_frame_cache) {
             for (const auto& entity : actor_frame_cache->entities) {
                 if (entity.object_identity_available && entity.entity_id != 0)
@@ -8300,6 +8374,161 @@ struct Ue5NteAdapter::State {
 
         vehicle_last_summon_status = "召唤请求已发送，等待新载具实体完成 Player Owner/坐标绑定";
         static_cast<void>(ApplySummonedVehicleLocked(pending_vehicle_summon.request_sequence));
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 DamageReplayApply(
+        const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result) noexcept {
+        if (request == nullptr || result == nullptr ||
+            request->struct_size < sizeof(*request) ||
+            result->struct_size < sizeof(*result) ||
+            !std::isfinite(request->damage) || request->damage <= 0.0F ||
+            request->damage > 1.0e9F) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "direct damage request/result is invalid");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "direct damage must run on the Game thread");
+        }
+
+        std::scoped_lock lock(mutex);
+        if (!NteCombatProfileAvailable() || !process_event_invoker ||
+            player_pawn == 0 || world_pointer == 0 || object_registry.items == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "player, world, object registry, or validated ProcessEvent is unavailable");
+        }
+        if (request->world.id != 1 || request->world.generation != world_generation ||
+            request->attacker.generation != object_generation ||
+            request->victim.generation != object_generation) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "damage request contains stale world/object handles");
+        }
+
+        std::uintptr_t attacker{}, victim{};
+        if (!ResolveObjectHandleLocked(request->attacker, attacker) ||
+            !ResolveObjectHandleLocked(request->victim, victim) ||
+            attacker != player_pawn || victim == 0 || victim == player_pawn) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "damage source is not the current player or target handle is stale");
+        }
+
+        std::uintptr_t ability_character_class{}, victim_class{};
+        if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter",
+                ability_character_class) ||
+            !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
+            victim_class == 0 ||
+            !IsClassDerivedFromLocked(victim_class, ability_character_class)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "target is not a validated HTAbilityCharacter");
+        }
+
+        std::uintptr_t get_hp{}, set_hp{};
+        if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter.GetHP", get_hp) ||
+            !FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter.SetHP", set_hp)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTAbilityCharacter.GetHP/SetHP functions were not found");
+        }
+
+        const auto validate_function = [this](
+            const std::uintptr_t function, const std::string_view expected_name,
+            const std::uint8_t expected_parms, const std::uint16_t expected_size,
+            const std::uint16_t expected_return) noexcept -> bool {
+            std::uintptr_t function_class{}, outer{};
+            std::string function_name, function_class_name, outer_name;
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{}, return_offset{};
+            return ReadReflectedObjectNameLocked(function, function_name) &&
+                function_name == expected_name &&
+                ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) &&
+                ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) &&
+                ReadReflectedObjectNameLocked(function_class, function_class_name) &&
+                function_class_name == "Function" &&
+                ReadReflectedObjectNameLocked(outer, outer_name) &&
+                outer_name == "HTAbilityCharacter" &&
+                ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) &&
+                ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) &&
+                ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) &&
+                num_parms == expected_parms && parms_size == expected_size &&
+                return_offset == expected_return;
+        };
+        if (!validate_function(get_hp, "GetHP", 1, 4, 0) ||
+            !validate_function(set_hp, "SetHP", 4, 12, 0xFFFFu)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "GetHP/SetHP reflected ABI does not match the 5.6.1 dump");
+        }
+
+        ReflectedPropertyInfo hp_return{}, set_hp_value{}, damage_reason{},
+            real_dead_damage{}, real_damage{};
+        if (!FindReflectedPropertyLocked(get_hp, "ReturnValue", hp_return, false) ||
+            hp_return.type != "FloatProperty" || hp_return.element_size != 4 ||
+            hp_return.offset != 0 ||
+            !FindReflectedPropertyLocked(set_hp, "HP", set_hp_value, false) ||
+            set_hp_value.type != "FloatProperty" || set_hp_value.element_size != 4 ||
+            set_hp_value.offset != 0 ||
+            !FindReflectedPropertyLocked(set_hp, "DamageReason", damage_reason, false) ||
+            (damage_reason.type != "ByteProperty" && damage_reason.type != "EnumProperty") ||
+            damage_reason.element_size != 1 || damage_reason.offset != 4 ||
+            !FindReflectedPropertyLocked(set_hp, "bRealDeadDamage", real_dead_damage, false) ||
+            real_dead_damage.type != "BoolProperty" || real_dead_damage.element_size != 1 ||
+            real_dead_damage.offset != 5 ||
+            !FindReflectedPropertyLocked(set_hp, "fRealDamage", real_damage, false) ||
+            real_damage.type != "FloatProperty" || real_damage.element_size != 4 ||
+            real_damage.offset != 8) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "SetHP parameters failed reflected type/offset validation against the dump");
+        }
+
+        std::array<std::uint8_t, 4> get_parameters{};
+        if (!InvokeProcessEventGuarded(process_event_invoker, victim, get_hp,
+                get_parameters.data(), get_parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "GetHP ProcessEvent failed");
+        }
+        float hp_before{};
+        std::memcpy(&hp_before, get_parameters.data(), sizeof(hp_before));
+        if (!std::isfinite(hp_before) || hp_before <= 0.0F) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "target is not alive");
+        }
+
+        const float new_hp = (std::max)(0.0F, hp_before - request->damage);
+        const float allowed_damage = hp_before - new_hp;
+        if (allowed_damage <= 0.0F) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "requested damage cannot change target HP");
+        }
+        std::array<std::uint8_t, 12> set_parameters{};
+        std::memcpy(set_parameters.data(), &new_hp, sizeof(new_hp));
+        const std::uint8_t normal_damage_reason = 0;
+        const std::uint8_t allow_real_death = new_hp <= 0.0F ? 1U : 0U;
+        std::memcpy(set_parameters.data() + 4, &normal_damage_reason, sizeof(normal_damage_reason));
+        std::memcpy(set_parameters.data() + 5, &allow_real_death, sizeof(allow_real_death));
+        std::memcpy(set_parameters.data() + 8, &allowed_damage, sizeof(allowed_damage));
+        if (!InvokeProcessEventGuarded(process_event_invoker, victim, set_hp,
+                set_parameters.data(), set_parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "SetHP ProcessEvent failed");
+        }
+
+        get_parameters.fill(0);
+        if (!InvokeProcessEventGuarded(process_event_invoker, victim, get_hp,
+                get_parameters.data(), get_parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetHP was invoked but the resulting HP could not be read back");
+        }
+        float hp_after{};
+        std::memcpy(&hp_after, get_parameters.data(), sizeof(hp_after));
+        if (!std::isfinite(hp_after) || hp_after < 0.0F || hp_after >= hp_before) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetHP postcondition failed: target HP did not decrease");
+        }
+
+        result->struct_size = sizeof(*result);
+        result->flags = ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID;
+        if (hp_after > 0.0F) result->flags |= ANOMALY_NTE_DAMAGE_REPLAY_V1_TARGET_ALIVE;
+        result->requested_damage = request->damage;
+        result->hp_before = hp_before;
+        result->hp_after = hp_after;
+        result->damage_applied = hp_before - hp_after;
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -13651,6 +13880,10 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             NextDamageEventThunk, CombatStatisticsThunk, DamageSourceNameThunk,
             DamageParticipantPathThunk, LatestCombatEventSequenceThunk,
             NextCombatEventThunk, CombatEventNameThunk, ParticipantDisplayNameThunk};
+        damage_replay_service = {
+            sizeof(AnomalyNteDamageReplayServiceV1),
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+            this, DamageReplayApplyThunk};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
@@ -13705,6 +13938,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteEntitiesServiceV1 entities_service{};
     AnomalyNteActorsServiceV1 actors_service{};
     AnomalyNteCombatServiceV1 combat_service{};
+    AnomalyNteDamageReplayServiceV1 damage_replay_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
     AnomalyNteAttackInputServiceV1 attack_input_service{};
@@ -14263,6 +14497,15 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? State::NextDamageEvent(lease.User(), after_sequence, event)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageReplayApplyThunk(
+        void* user, const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->DamageReplayApply(request, result)
             : StoppedStatus();
     }
 
@@ -15299,6 +15542,22 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
                     locked->semantic_endpoint.load(std::memory_order_acquire) != observed) {
                     return;
                 }
+                locked->player_demand.store(true, std::memory_order_release);
+                locked->combat_demand.store(true, std::memory_order_release);
+            },
+            semantic_lifetime)) {
+        return false;
+    }
+    if (framework_hook_ready && NteCombatProfileAvailable() &&
+        !PublishIfMissing(
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+            &endpoint->damage_replay_service,
+            [self, observer_endpoint] {
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
+                if (!locked || !observed ||
+                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) return;
                 locked->player_demand.store(true, std::memory_order_release);
                 locked->combat_demand.store(true, std::memory_order_release);
             },
