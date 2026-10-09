@@ -8072,16 +8072,30 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleSnapshot(AnomalyNteVehicleSnapshotV1* snapshot) noexcept {
-        if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot))
+        constexpr auto kLegacySnapshotSize =
+            offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio);
+        if (snapshot == nullptr || snapshot->struct_size < kLegacySnapshotSize)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        // The struct_size on entry is the caller's writable capacity. Preserve it
+        // before publishing the newest struct size so old V1 callers never receive
+        // a write beyond their smaller snapshot allocation.
+        const std::uint32_t snapshot_capacity = snapshot->struct_size;
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle snapshot must run on Game thread");
         std::scoped_lock lock(mutex);
         static_cast<void>(ApplySummonedVehicleLocked(
             tick_sequence.load(std::memory_order_acquire)));
         if (!RefreshVehicleLocked()) {
-            *snapshot = {sizeof(*snapshot), 0, {}, 0.0, vehicle_top_speed_ratio,
-                vehicle_wheel_friction_enabled ? 1u : 0u, vehicle_engine_torque_ratio};
+            snapshot->struct_size = sizeof(*snapshot);
+            snapshot->flags = 0;
+            snapshot->vehicle = {};
+            snapshot->speed_kmh = 0.0;
+            snapshot->top_speed_ratio = vehicle_top_speed_ratio;
+            snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
+            if (snapshot_capacity >= offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio) +
+                    sizeof(snapshot->engine_torque_ratio)) {
+                snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
+            }
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "current driving vehicle is unavailable");
         }
         AnomalyGenerationHandleV1 handle{};
@@ -8098,7 +8112,7 @@ struct Ue5NteAdapter::State {
         snapshot->speed_kmh = vehicle_speed_kmh;
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
-        if (snapshot->struct_size >= offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio) +
+        if (snapshot_capacity >= offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio) +
                 sizeof(snapshot->engine_torque_ratio)) {
             snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
         }
