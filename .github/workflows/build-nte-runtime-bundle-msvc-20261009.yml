@@ -1,0 +1,93 @@
+name: nte-runtime-bundle-msvc-dump-verified
+
+on:
+  push:
+    branches:
+      - 'build/runtime-dump-verified-20261009'
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Core with original MSVC preset
+        shell: pwsh
+        run: |
+          cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
+      - name: Build Core and runtime
+        run: cmake --build --preset windows-relwithdebinfo --parallel
+      - name: Stage GameRuntime
+        shell: pwsh
+        run: |
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component GameRuntime
+          if (!(Test-Path '.build/ci-artifacts/runtime/Anomaly/Anomaly.Core.dll')) { throw 'Anomaly.Core.dll missing from staged runtime' }
+      - name: Build Vehicle and Attack Replay against current SDK headers
+        shell: pwsh
+        run: |
+          $root = $env:GITHUB_WORKSPACE
+          $builds = @(
+            @{ Name = 'NteVehicle'; Source = 'plugins/NteVehicle/plugin.cpp' },
+            @{ Name = 'NteAttackReplay'; Source = 'plugins/NteAttackReplay/plugin.cpp' }
+          )
+          foreach ($item in $builds) {
+            $src = Join-Path $root ('.build/' + $item.Name + '-standalone')
+            $out = Join-Path $root ('.build/' + $item.Name + '-standalone-out')
+            New-Item -ItemType Directory -Force $src | Out-Null
+            @"
+          cmake_minimum_required(VERSION 3.22)
+          project($($item.Name) LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          add_library(plugin SHARED "$root/$($item.Source)")
+          target_include_directories(plugin PRIVATE "$root/include" "$root/.build/windows-vs2022/generated/sdk-build/include")
+          target_compile_definitions(plugin PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(plugin PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
+            cmake -S $src -B $out -G 'Visual Studio 17 2022' -A x64
+            cmake --build $out --config Release --parallel
+            $dll = Join-Path $out 'Release/plugin.dll'
+            if (!(Test-Path $dll)) { throw "$($item.Name) plugin.dll missing" }
+            $dest = Join-Path $root ('.build/ci-artifacts/runtime/Anomaly/plugins/' + $item.Name)
+            New-Item -ItemType Directory -Force $dest | Out-Null
+            Copy-Item $dll (Join-Path $dest 'plugin.dll') -Force
+            Copy-Item (Join-Path $root ('plugins/' + $item.Name + '/manifest.json')) (Join-Path $dest 'manifest.json') -Force
+          }
+      - name: Include dump audit
+        shell: pwsh
+        run: |
+          Copy-Item 'NTE-DUMP-AUDIT.md' '.build/ci-artifacts/runtime/Anomaly/NTE-DUMP-AUDIT.md' -Force
+      - name: Validate manifests and package inputs
+        shell: pwsh
+        run: |
+          $root = '.build/ci-artifacts/runtime/Anomaly'
+          foreach ($file in @('plugins/NteVehicle/manifest.json', 'plugins/NteAttackReplay/manifest.json')) {
+            $null = Get-Content -Raw (Join-Path $root $file) | ConvertFrom-Json
+          }
+          foreach ($file in @('Anomaly.Core.dll', 'plugins/NteVehicle/plugin.dll', 'plugins/NteAttackReplay/plugin.dll')) {
+            $path = Join-Path $root $file
+            if (!(Test-Path $path)) { throw "Missing file: $path" }
+          }
+          $dlls = @('Anomaly.Core.dll', 'plugins/NteVehicle/plugin.dll', 'plugins/NteAttackReplay/plugin.dll')
+          foreach ($file in $dlls) {
+            $bytes = [System.IO.File]::ReadAllBytes((Join-Path $root $file))
+            if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Invalid PE header: $file" }
+          }
+      - name: Create complete runtime package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path '.build/ci-artifacts/runtime/*' -DestinationPath 'dist/Anomaly-runtime-NTE-dump-verified-MSVC-20261009.zip' -Force
+          $zip = Get-Item 'dist/Anomaly-runtime-NTE-dump-verified-MSVC-20261009.zip'
+          if ($zip.Length -lt 10000000) { throw "Runtime ZIP unexpectedly small: $($zip.Length)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Anomaly-runtime-NTE-dump-verified-MSVC-20261009
+          path: dist/Anomaly-runtime-NTE-dump-verified-MSVC-20261009.zip
+          if-no-files-found: error

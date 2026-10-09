@@ -758,6 +758,8 @@ struct Ue5NteAdapter::State {
         std::uint16_t parms_size{};
         std::uint16_t parameter_offset{};
         VehicleSummonParameterKind parameter_kind{VehicleSummonParameterKind::None};
+        // The dump declares summon functions on HTCheatManager, not HTPlayerController.
+        std::uintptr_t receiver{};
     };
     struct VehicleOwnerBinding {
         std::uintptr_t function{};
@@ -771,6 +773,7 @@ struct Ue5NteAdapter::State {
         std::uint16_t sweep_offset{};
         std::uint16_t hit_offset{};
         std::uint16_t teleport_offset{};
+        std::uint16_t return_offset{};
     };
     struct VehicleBindings {
         VehicleFunctionBinding current_vehicle{};
@@ -793,6 +796,7 @@ struct Ue5NteAdapter::State {
     bool vehicle_valid{};
 
     std::vector<std::string> vehicle_ids;
+    std::unordered_map<std::string, std::array<std::uint32_t, 2>> vehicle_name_keys;
     std::string selected_vehicle_id{"Vehicle007"};
     // The vehicle list must come from the real DT_VehicleData UObject, not from
     // arbitrary FNamePool strings containing "Vehicle".
@@ -7581,7 +7585,7 @@ struct Ue5NteAdapter::State {
                 !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
                 !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
                 !ReadReflectedObjectNameLocked(outer, outer_name) ||
-                function_class_name != "Function") return false;
+                function_class_name != "Function" || outer_name != "HTCheatManager") return false;
 
             std::uint8_t num_parms{};
             std::uint16_t parms_size{}, return_offset{};
@@ -7589,30 +7593,19 @@ struct Ue5NteAdapter::State {
             if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-                !ReadNullablePointerAt(*memory, function, Layout(profile, "ustruct.propertyLink"), property)) {
+                !ReadNullablePointerAt(*memory, function, Layout(profile, "ustruct.propertyLink"), property) ||
+                num_parms != 1 || parms_size != 8 || return_offset != 0xFFFFu || property == 0) {
                 return false;
             }
 
-            if (expected_name == "TestSummonVehicle" && num_parms == 0 &&
-                parms_size == 0 && return_offset == 0xFFFFu && property == 0) {
-                binding = {function, 0, 0, VehicleSummonParameterKind::NoArgs};
-                return true;
-            }
-            if (num_parms != 1 || return_offset != 0xFFFFu || property == 0) return false;
-
             ReflectedPropertyInfo info;
             if (!ReadReflectedPropertyLocked(property, info) ||
-                info.name != "InVehicleid" || info.array_dim != 1 || info.next != 0 ||
-                info.offset < 0) return false;
+                info.name != "VehicleID" || info.type != "NameProperty" ||
+                info.element_size != 8 || info.array_dim != 1 ||
+                info.offset != 0 || info.next != 0) return false;
 
-            VehicleSummonParameterKind kind = VehicleSummonParameterKind::None;
-            if (info.type == "StrProperty" && info.element_size == 16) kind = VehicleSummonParameterKind::FString;
-            else if (info.type == "NameProperty" && info.element_size == 8) kind = VehicleSummonParameterKind::FName;
-            else if (info.type == "IntProperty" && info.element_size == 4) kind = VehicleSummonParameterKind::Int32;
-            else return false;
-
-            if (static_cast<std::uint64_t>(info.offset) + info.element_size > parms_size) return false;
-            binding = {function, parms_size, static_cast<std::uint16_t>(info.offset), kind};
+            binding = {function, parms_size, static_cast<std::uint16_t>(info.offset),
+                VehicleSummonParameterKind::FName, 0};
             return true;
         } catch (...) {
             return false;
@@ -7620,40 +7613,53 @@ struct Ue5NteAdapter::State {
     }
 
     [[nodiscard]] bool EnsureVehicleSummonBindingLocked() noexcept {
-        if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker) return false;
+        if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker)
+            return false;
+
         if (vehicle_bindings.object_generation != object_generation) {
             vehicle_bindings = {};
             vehicle_bindings.object_generation = object_generation;
         }
+
+        // APlayerController::CheatManager is +0x430 in the supplied 5.6.1 dump.
+        // Validate the inherited reflected property and the live instance class too.
+        std::uintptr_t controller_class{};
+        ReflectedPropertyInfo manager_property;
+        if (!ReadPointerAt(*memory, player_controller,
+                Layout(profile, "object.class"), controller_class) ||
+            !FindReflectedPropertyLocked(controller_class, "CheatManager", manager_property, true) ||
+            manager_property.type != "ObjectProperty" || manager_property.element_size != 8 ||
+            manager_property.offset != 0x430) return false;
+
+        std::uintptr_t cheat_manager{};
+        if (!ReadValue(*memory, player_controller +
+                static_cast<std::uintptr_t>(manager_property.offset), cheat_manager) ||
+            cheat_manager == 0 || !ReadableRange(*memory, cheat_manager, 0x20U)) return false;
+
+        std::uintptr_t manager_class{};
+        std::string manager_class_name;
+        if (!ReadPointerAt(*memory, cheat_manager,
+                Layout(profile, "object.class"), manager_class) ||
+            !ReadReflectedObjectNameLocked(manager_class, manager_class_name) ||
+            manager_class_name != "HTCheatManager") return false;
+
+        vehicle_bindings.summon_vehicle.receiver = cheat_manager;
         if (vehicle_bindings.summon_vehicle.function != 0) return true;
 
-        static constexpr std::array<std::string_view, 2> outers{
-            "HTPlayerController", "HTPlayerCharacter"};
-        for (const auto outer : outers) {
-            std::wstring path = L"/Script/HTGame.";
-            path.reserve(path.size() + outer.size() + 18U);
-            for (char c : outer) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-            path.push_back(L'.');
-            for (const char* c = "CheatSpawnVehicle"; *c; ++c)
-                path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*c)));
-            std::uintptr_t function{};
-            if (FindExactObjectLocked(path.c_str(), function) &&
-                BuildVehicleSummonBindingLocked(function, "CheatSpawnVehicle", vehicle_bindings.summon_vehicle)) {
-                return true;
-            }
+        std::uintptr_t function{};
+        if (FindExactObjectLocked(
+                L"/Script/HTGame.HTCheatManager.CheatSpawnVehicle", function) &&
+            BuildVehicleSummonBindingLocked(
+                function, "CheatSpawnVehicle", vehicle_bindings.summon_vehicle)) {
+            vehicle_bindings.summon_vehicle.receiver = cheat_manager;
+            return true;
         }
-        for (const auto outer : outers) {
-            std::wstring path = L"/Script/HTGame.";
-            path.reserve(path.size() + outer.size() + 19U);
-            for (char c : outer) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-            path.push_back(L'.');
-            for (const char* c = "TestSummonVehicle"; *c; ++c)
-                path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*c)));
-            std::uintptr_t function{};
-            if (FindExactObjectLocked(path.c_str(), function) &&
-                BuildVehicleSummonBindingLocked(function, "TestSummonVehicle", vehicle_bindings.summon_vehicle)) {
-                return true;
-            }
+        if (FindExactObjectLocked(
+                L"/Script/HTGame.HTCheatManager.TestSummonVehicle", function) &&
+            BuildVehicleSummonBindingLocked(
+                function, "TestSummonVehicle", vehicle_bindings.summon_vehicle)) {
+            vehicle_bindings.summon_vehicle.receiver = cheat_manager;
+            return true;
         }
         return false;
     }
@@ -7695,15 +7701,16 @@ struct Ue5NteAdapter::State {
             !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
             !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
             !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-            num_parms != 4 || return_offset == 0xFFFFu || property == 0 || parms_size > 0x1000) return false;
+            num_parms != 5 || return_offset == 0xFFFFu ||
+            return_offset >= parms_size || property == 0 || parms_size > 0x1000) return false;
 
         VehicleLocationBinding candidate{};
         std::array<bool, 4> found{};
         std::size_t count{};
-        while (property != 0 && count < 4) {
+        while (property != 0 && count < 5) {
             ReflectedPropertyInfo info;
             if (!ReadReflectedPropertyLocked(property, info) ||
-                info.array_dim != 1 || info.offset < 0 || info.next == 0 && count != 3) return false;
+                info.array_dim != 1 || info.offset < 0 || info.next == 0 && count != 4) return false;
             if (info.name == "NewLocation" && info.type == "StructProperty" && info.element_size == 24) {
                 candidate.location_offset = static_cast<std::uint16_t>(info.offset); found[0] = true;
             } else if (info.name == "bSweep" && info.type == "BoolProperty" && info.element_size == 1) {
@@ -7712,13 +7719,17 @@ struct Ue5NteAdapter::State {
                 candidate.hit_offset = static_cast<std::uint16_t>(info.offset); found[2] = true;
             } else if (info.name == "bTeleport" && info.type == "BoolProperty" && info.element_size == 1) {
                 candidate.teleport_offset = static_cast<std::uint16_t>(info.offset); found[3] = true;
+            } else if (info.name == "ReturnValue" && info.type == "BoolProperty" &&
+                info.element_size == 1 && info.offset == return_offset) {
+                // The dump counts the bool return value as the fifth reflected parameter.
             } else return false;
             ++count;
             property = info.next;
         }
-        if (property != 0 || count != 4 || !std::ranges::all_of(found, [](bool v){ return v; })) return false;
+        if (property != 0 || count != 5 || !std::ranges::all_of(found, [](bool v){ return v; })) return false;
         candidate.function = function;
         candidate.parms_size = parms_size;
+        candidate.return_offset = return_offset;
         vehicle_bindings.set_location = candidate;
         return true;
     }
@@ -7741,8 +7752,8 @@ struct Ue5NteAdapter::State {
     }
 
     void BuildVehicleCatalogLocked() noexcept {
-        // DT_VehicleData is the game-native source. A FNamePool substring scan
-        // is not a valid substitute because it also sees classes and functions.
+        // The 5.6.1 dump declares UHTGameData::GetVehicleDataAsset(); its
+        // UHTVehicleDataAsset contains DT_VehicleData with VehicleData rows.
         const auto sequence = tick_sequence.load(std::memory_order_acquire);
         if (vehicle_catalog_generation != object_generation) {
             vehicle_catalog_generation = object_generation;
@@ -7750,97 +7761,118 @@ struct Ue5NteAdapter::State {
             vehicle_catalog_attempted = false;
             vehicle_data_table = 0;
             vehicle_ids.clear();
+            vehicle_name_keys.clear();
         }
         if (vehicle_catalog_attempted) return;
         if (vehicle_catalog_last_scan_sequence != 0 &&
-            sequence < vehicle_catalog_last_scan_sequence + 30U) {
-            return;
-        }
+            sequence < vehicle_catalog_last_scan_sequence + 30U) return;
         vehicle_catalog_last_scan_sequence = sequence;
-        if (object_registry.items == 0 || object_registry.count == 0) return;
+        if (object_registry.items == 0 || object_registry.count == 0 ||
+            GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) return;
 
-        // Locate the loaded UObject named DT_VehicleData from the authoritative
-        // UObject registry. The dump contains this exact native table name.
         if (vehicle_data_table == 0) {
-            for (std::uint32_t index = 0; index < object_registry.count; ++index) {
-                std::uintptr_t candidate{};
-                std::uint32_t serial{};
-                if (!ReadObjectSlot(*memory, object_registry, index, candidate, serial) ||
-                    candidate == 0) {
-                    continue;
-                }
-                std::string object_name;
-                if (!ReadReflectedObjectNameLocked(candidate, object_name) ||
-                    object_name != "DT_VehicleData") {
-                    continue;
-                }
-                std::uintptr_t class_object{};
-                std::string class_name;
-                if (!ReadPointerAt(*memory, candidate,
-                        Layout(profile, "object.class"), class_object) ||
-                    !ReadReflectedObjectNameLocked(class_object, class_name) ||
-                    class_name != "DataTable") {
-                    continue;
-                }
-                vehicle_data_table = candidate;
-                break;
-            }
-        }
-        if (vehicle_data_table == 0) return;
+            VehicleFunctionBinding asset_binding{};
+            static constexpr std::array<std::string_view, 1> data_outer{"HTGameData"};
+            if (!FindVehicleFunctionLocked("GetVehicleDataAsset", data_outer,
+                    "ObjectReturn", asset_binding)) return;
 
+            std::uintptr_t data_class{}, default_object{};
+            if (!ReadPointerAt(*memory, asset_binding.function,
+                    Layout(profile, "object.outer"), data_class) ||
+                !ReadPointerAt(*memory, data_class,
+                    Layout(profile, "uclass.classDefaultObject"), default_object) ||
+                default_object == 0) return;
+
+            std::array<std::uint8_t, 8> output{};
+            if (!InvokeProcessEventGuarded(process_event_invoker, default_object,
+                    asset_binding.function, output.data(), output.size())) return;
+            std::uintptr_t vehicle_asset{};
+            std::memcpy(&vehicle_asset, output.data() + asset_binding.return_offset,
+                sizeof(vehicle_asset));
+            if (vehicle_asset == 0) return;
+
+            std::uintptr_t asset_class{};
+            ReflectedPropertyInfo data_table_property;
+            if (!ReadPointerAt(*memory, vehicle_asset,
+                    Layout(profile, "object.class"), asset_class) ||
+                !FindReflectedPropertyLocked(asset_class, "DT_VehicleData",
+                    data_table_property, true) ||
+                data_table_property.type != "ObjectProperty" ||
+                data_table_property.element_size != 8 || data_table_property.offset < 0 ||
+                !ReadValue(*memory, vehicle_asset +
+                    static_cast<std::uintptr_t>(data_table_property.offset), vehicle_data_table) ||
+                vehicle_data_table == 0) return;
+        }
+
+        std::uintptr_t row_struct{};
+        std::string row_struct_name;
+        const auto row_struct_offset = Layout(profile, "dataTable.rowStruct", -1);
         const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
-        if (row_map_offset < 0) return;
-        SparseMapView map;
+        if (row_struct_offset < 0 || row_map_offset < 0 ||
+            !ReadPointerAt(*memory, vehicle_data_table, row_struct_offset, row_struct) ||
+            !ReadReflectedObjectNameLocked(row_struct, row_struct_name) ||
+            row_struct_name != "VehicleData") return;
+
+        ReflectedPropertyInfo vehicle_id_property;
+        if (!FindReflectedPropertyLocked(row_struct, "VehicleID",
+                vehicle_id_property, true) ||
+            vehicle_id_property.type != "NameProperty" ||
+            vehicle_id_property.element_size != 8 || vehicle_id_property.offset < 0 ||
+            vehicle_id_property.offset + 8 > 0x400) return;
+
+        SparseMapView view;
         if (!ReadSparseMapViewLocked(
-                vehicle_data_table + static_cast<std::uintptr_t>(row_map_offset), map) ||
-            map.num <= 0) {
-            return;
-        }
+                vehicle_data_table + static_cast<std::uintptr_t>(row_map_offset), view) ||
+            view.num <= 0 || view.num > 4096 || view.num_free > view.num ||
+            view.stride <= 0 || view.row_offset < 0 ||
+            view.row_offset + static_cast<std::int64_t>(sizeof(std::uintptr_t)) > view.stride) return;
 
-        const auto element_bytes =
-            static_cast<std::size_t>(map.num) * static_cast<std::size_t>(map.stride);
-        if (element_bytes == 0 || element_bytes > 4U * 1024U * 1024U ||
-            map.num > 4096) {
-            return;
-        }
+        const auto element_bytes = static_cast<std::size_t>(view.num) *
+            static_cast<std::size_t>(view.stride);
+        if (element_bytes == 0 || element_bytes > 4U * 1024U * 1024U) return;
         std::vector<std::uint8_t> elements(element_bytes);
-        if (!memory->Read(map.data, elements.data(), elements.size())) return;
+        if (!memory->Read(view.data, elements.data(), elements.size())) return;
 
+        const auto row_bytes_size = static_cast<std::size_t>(vehicle_id_property.offset) + 8U;
+        std::vector<std::uint8_t> row_bytes(row_bytes_size);
         std::vector<std::string> next_ids;
-        next_ids.reserve(static_cast<std::size_t>(map.num - map.num_free));
-        for (std::int32_t slot = 0; slot < map.num; ++slot) {
+        std::unordered_map<std::string, std::array<std::uint32_t, 2>> next_name_keys;
+        next_ids.reserve(static_cast<std::size_t>(view.num - view.num_free));
+
+        for (std::int32_t slot = 0; slot < view.num; ++slot) {
             const auto unsigned_slot = static_cast<std::uint32_t>(slot);
-            if ((map.flags[static_cast<std::size_t>(unsigned_slot) / 32U] &
-                    (1U << (unsigned_slot & 31U))) == 0) {
-                continue;
-            }
+            if ((view.flags[static_cast<std::size_t>(unsigned_slot) / 32U] &
+                    (1U << (unsigned_slot & 31U))) == 0) continue;
+
             const auto* element = elements.data() +
-                static_cast<std::size_t>(slot) * static_cast<std::size_t>(map.stride);
-            std::uint32_t comparison_index{};
-            std::uint32_t number{};
-            std::memcpy(&comparison_index, element, sizeof(comparison_index));
-            std::memcpy(&number, element + sizeof(comparison_index), sizeof(number));
-            const std::uint64_t key =
-                static_cast<std::uint64_t>(comparison_index) |
-                (static_cast<std::uint64_t>(number) << 32U);
-            if (key == 0) continue;
+                static_cast<std::size_t>(slot) * static_cast<std::size_t>(view.stride);
+            std::uintptr_t row{};
+            std::memcpy(&row, element + static_cast<std::size_t>(view.row_offset), sizeof(row));
+            if (row == 0 || !ReadableRange(*memory, row, row_bytes.size()) ||
+                !memory->Read(row, row_bytes.data(), row_bytes.size())) continue;
 
-            std::string row_name;
-            if (!ResolveFNameLocked(comparison_index, number, row_name) ||
-                row_name.empty() || !ContainsVehicleName(row_name) ||
-                row_name.size() > ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES) {
-                continue;
-            }
-            next_ids.push_back(std::move(row_name));
+            std::uint32_t comparison_index{}, number{};
+            std::memcpy(&comparison_index,
+                row_bytes.data() + static_cast<std::size_t>(vehicle_id_property.offset), 4);
+            std::memcpy(&number,
+                row_bytes.data() + static_cast<std::size_t>(vehicle_id_property.offset) + 4U, 4);
+            std::string vehicle_id;
+            if (!ResolveFNameLocked(comparison_index, number, vehicle_id) ||
+                vehicle_id.empty() || !ContainsVehicleName(vehicle_id) ||
+                vehicle_id.size() > ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES) continue;
+
+            next_name_keys.emplace(vehicle_id,
+                std::array<std::uint32_t, 2>{comparison_index, number});
+            next_ids.push_back(std::move(vehicle_id));
         }
 
-        if (next_ids.empty()) {
-            // The object can exist before streaming populates RowMap. Retry later.
-            return;
-        }
+        if (next_ids.empty()) return;
         std::ranges::sort(next_ids);
-        next_ids.erase(std::ranges::unique(next_ids).begin(), next_ids.end());
+        next_ids.erase(std::unique(next_ids.begin(), next_ids.end()), next_ids.end());
         vehicle_ids = std::move(next_ids);
+        vehicle_name_keys = std::move(next_name_keys);
+        if (std::ranges::find(vehicle_ids, selected_vehicle_id) == vehicle_ids.end())
+            selected_vehicle_id = vehicle_ids.front();
         vehicle_catalog_attempted = true;
     }
 
@@ -7873,10 +7905,10 @@ struct Ue5NteAdapter::State {
         if (!best || best_distance > max_distance) return false;
 
         bool owner_ok = false;
-        if (EnsureVehicleOwnerBindingLocked()) {
+        if (player_pawn != 0 && EnsureVehicleOwnerBindingLocked()) {
             std::array<std::uint8_t, 8> owner_parameters{};
             std::memcpy(owner_parameters.data() + vehicle_bindings.set_owner.parameter_offset,
-                &player_controller, sizeof(player_controller));
+                &player_pawn, sizeof(player_pawn));
             owner_ok = InvokeProcessEventGuarded(process_event_invoker, best->actor,
                 vehicle_bindings.set_owner.function, owner_parameters.data(),
                 vehicle_bindings.set_owner.parms_size);
@@ -7894,7 +7926,8 @@ struct Ue5NteAdapter::State {
             parameters[vehicle_bindings.set_location.sweep_offset] = 0;
             parameters[vehicle_bindings.set_location.teleport_offset] = 1;
             location_ok = InvokeProcessEventGuarded(process_event_invoker, best->actor,
-                vehicle_bindings.set_location.function, parameters.data(), parameters.size());
+                vehicle_bindings.set_location.function, parameters.data(), parameters.size()) &&
+                parameters[vehicle_bindings.set_location.return_offset] != 0;
         } else {
             // Validated UE5 root-component layout fallback. This keeps the mutation deterministic
             // even if K2_SetActorLocation is not published in a particular build.
@@ -7973,9 +8006,12 @@ struct Ue5NteAdapter::State {
             current_vehicle_object = vehicle;
             // Tokky's target build reads the active movement component from the vehicle
             // instance and uses its validated base torque as the speed-mutation baseline.
+            vehicle_base_movement_component = 0;
+            vehicle_base_engine_torque_valid = false;
             std::uintptr_t movement_component{};
             if (ReadPointerAt(*memory, current_vehicle_object,
-                    Layout(profile, "vehicle.movementComponent"), movement_component)) {
+                    Layout(profile, "vehicle.movementComponent"), movement_component) &&
+                movement_component != 0 && ReadableRange(*memory, movement_component, 0x20U)) {
                 vehicle_base_movement_component = movement_component;
                 float torque{};
                 if (ReadValue(*memory, movement_component +
@@ -7988,7 +8024,8 @@ struct Ue5NteAdapter::State {
             vehicle_valid = true;
             if (vehicle_bindings.speed_kmh.function != 0) {
                 alignas(8) std::array<std::uint8_t, 8> speed_bytes{};
-                if (InvokeProcessEventGuarded(process_event_invoker, vehicle,
+                if (vehicle_base_movement_component != 0 &&
+                    InvokeProcessEventGuarded(process_event_invoker, vehicle_base_movement_component,
                         vehicle_bindings.speed_kmh.function, speed_bytes.data(), speed_bytes.size())) {
                     float speed{};
                     std::memcpy(&speed, speed_bytes.data() + vehicle_bindings.speed_kmh.return_offset, sizeof(speed));
@@ -8077,6 +8114,27 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    AnomalyStatusV1 VehicleCurrentClassNameUtf8(
+        char* destination, std::size_t* inout_size) noexcept {
+        if (inout_size == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle class query must run on Game thread");
+        std::scoped_lock lock(mutex);
+        if (!RefreshVehicleLocked() || current_vehicle_object == 0)
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "current driving vehicle is unavailable");
+
+        std::uintptr_t vehicle_class{};
+        std::string class_name;
+        if (!ReadPointerAt(*memory, current_vehicle_object,
+                Layout(profile, "object.class"), vehicle_class) ||
+            vehicle_class == 0 ||
+            !ReadReflectedObjectNameLocked(vehicle_class, class_name) ||
+            class_name.empty()) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "current vehicle class name could not be resolved");
+        }
+        return CopyString(class_name, destination, inout_size);
+    }
+
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
@@ -8112,14 +8170,20 @@ struct Ue5NteAdapter::State {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle summon must run on Game thread");
         std::scoped_lock lock(mutex);
-        if (!EnsureVehicleSummonBindingLocked())
+        if (player_controller == 0 || player_pawn == 0 ||
+            !std::ranges::all_of(player_position, [](double value) { return std::isfinite(value); }) ||
+            !EnsureVehicleSummonBindingLocked()) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "CheatSpawnVehicle/InVehicleid reflection ABI is not validated");
+                "player, coordinates, or HTCheatManager.CheatSpawnVehicle(FName) is unavailable");
+        }
 
         BuildVehicleCatalogLocked();
-        if (selected_vehicle_id.empty()) {
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "no vehicle ID selected");
-        }
+        if (selected_vehicle_id.empty())
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "no VehicleID selected");
+        const auto name = vehicle_name_keys.find(selected_vehicle_id);
+        if (name == vehicle_name_keys.end())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "selected VehicleID is not present in DT_VehicleData");
 
         pending_vehicle_summon = {};
         pending_vehicle_summon.active = true;
@@ -8144,72 +8208,21 @@ struct Ue5NteAdapter::State {
         }
 
         const auto& binding = vehicle_bindings.summon_vehicle;
-        if (binding.parameter_kind == VehicleSummonParameterKind::NoArgs) {
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                    binding.function, nullptr, 0)) {
-                pending_vehicle_summon.active = false;
-                return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
-            }
-        } else {
-            std::array<std::uint8_t, 512> parameters{};
-            if (binding.parameter_kind == VehicleSummonParameterKind::FString) {
-                std::wstring vehicle_id;
-                vehicle_id.reserve(selected_vehicle_id.size() + 1U);
-                for (const char c : selected_vehicle_id)
-                    vehicle_id.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-                vehicle_id.push_back(L'\0');
-                struct FStringValue { wchar_t* data; std::int32_t count; std::int32_t capacity; };
-                static_assert(sizeof(FStringValue) == 16);
-                const FStringValue value{
-                    vehicle_id.data(),
-                    static_cast<std::int32_t>(vehicle_id.size()),
-                    static_cast<std::int32_t>(vehicle_id.size())};
-                if (binding.parameter_offset + sizeof(value) > parameters.size()) {
-                    pending_vehicle_summon.active = false;
-                    return Status(ANOMALY_STATUS_V1_FAILED, "summon FString parameter does not fit");
-                }
-                std::memcpy(parameters.data() + binding.parameter_offset, &value, sizeof(value));
-            } else if (binding.parameter_kind == VehicleSummonParameterKind::FName) {
-                std::uint32_t comparison_index{};
-                const auto name_status = FindNameIdLocked(selected_vehicle_id, comparison_index);
-                if (name_status.code != ANOMALY_STATUS_V1_OK || comparison_index == 0) {
-                    pending_vehicle_summon.active = false;
-                    return Status(ANOMALY_STATUS_V1_NOT_FOUND, "selected vehicle ID is not in FNamePool");
-                }
-                const std::uint32_t number = 0;
-                const std::array<std::uint32_t, 2> value{comparison_index, number};
-                if (binding.parameter_offset + sizeof(value) > parameters.size()) {
-                    pending_vehicle_summon.active = false;
-                    return Status(ANOMALY_STATUS_V1_FAILED, "summon FName parameter does not fit");
-                }
-                std::memcpy(parameters.data() + binding.parameter_offset, value.data(), sizeof(value));
-            } else if (binding.parameter_kind == VehicleSummonParameterKind::Int32) {
-                char* end{};
-                const long value = std::strtol(selected_vehicle_id.c_str(), &end, 10);
-                if (end == selected_vehicle_id.c_str() || *end != '\0' ||
-                    value < (std::numeric_limits<std::int32_t>::min)() ||
-                    value > (std::numeric_limits<std::int32_t>::max)()) {
-                    pending_vehicle_summon.active = false;
-                    return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "selected vehicle ID is not an integer");
-                }
-                const std::int32_t value32 = static_cast<std::int32_t>(value);
-                std::memcpy(parameters.data() + binding.parameter_offset, &value32, sizeof(value32));
-            } else {
-                pending_vehicle_summon.active = false;
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "unsupported summon parameter ABI");
-            }
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                    binding.function, parameters.data(), binding.parms_size)) {
-                pending_vehicle_summon.active = false;
-                return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
-            }
+        const auto& fname = name->second;
+        std::array<std::uint8_t, 8> parameters{};
+        std::memcpy(parameters.data() + binding.parameter_offset, fname.data(), sizeof(fname));
+        if (binding.receiver == 0 ||
+            !InvokeProcessEventGuarded(process_event_invoker, binding.receiver,
+                binding.function, parameters.data(), binding.parms_size)) {
+            pending_vehicle_summon.active = false;
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "HTCheatManager.CheatSpawnVehicle(FName) ProcessEvent failed");
         }
 
-        vehicle_last_summon_status = "召唤请求已发送，正在按 Player 坐标锁定新 BP_vehicle 实体";
+        vehicle_last_summon_status = "召唤请求已发送，等待新载具实体完成 Player Owner/坐标绑定";
         static_cast<void>(ApplySummonedVehicleLocked(pending_vehicle_summon.request_sequence));
         return Status(ANOMALY_STATUS_V1_OK);
     }
-
 
     AnomalyStatusV1 VehicleSetWheelFriction(bool enabled) noexcept {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
@@ -8219,7 +8232,8 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "SetEnableWheelFriction is not validated");
         std::array<std::uint8_t, 4> parameters{};
         parameters[vehicle_bindings.set_wheel_friction.parameter_offset] = enabled ? 1 : 0;
-        if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+        if (vehicle_base_movement_component == 0 ||
+            !InvokeProcessEventGuarded(process_event_invoker, vehicle_base_movement_component,
                 vehicle_bindings.set_wheel_friction.function, parameters.data(), parameters.size()))
             return Status(ANOMALY_STATUS_V1_FAILED, "SetEnableWheelFriction ProcessEvent failed");
         vehicle_wheel_friction_enabled = enabled;
@@ -13530,7 +13544,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteVehicleServiceV1), ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk,
-            VehicleIdCountThunk, VehicleIdAtThunk, SetSummonVehicleIdThunk};
+            VehicleIdCountThunk, VehicleIdAtThunk, SetSummonVehicleIdThunk,
+            VehicleCurrentClassNameThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -13902,6 +13917,13 @@ private:
         void* user, AnomalyStringViewV1 id) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->SetSummonVehicleId(id) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCurrentClassNameThunk(
+        void* user, char* destination, std::size_t* inout_size) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleCurrentClassNameUtf8(
+            destination, inout_size) : StoppedStatus();
     }
 
 
