@@ -771,7 +771,7 @@ enum class ReplayCallResult : uint32_t {
     Rejected,
 };
 
-// 先根据当前技能/普通攻击候选调用对应攻击路径，再等待新的玩家伤害事件验证命中；调用被接受本身不会直接计为 replay 成功。
+// 使用 Host 保留的真实 HTDamageEvent 上下文重放；每次提交后必须观察到新的玩家->目标 DamageEvent 才能计数。
 ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
     if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
     if (accepted != nullptr) *accepted = 0;
@@ -954,7 +954,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
             context->replaying = false;
             context->waiting_for_damage = false;
-            context->status = "重放失败：未观察到新的 DamageEvent";
+            context->status = "重放失败：原生伤害上下文已提交，但未观察到新的 DamageEvent";
             ArmForNextAttack(*context);
             return;
         }
@@ -997,11 +997,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         return;
     }
     context->waiting_for_damage = true;
-    context->status = context->captured_has_skill
-        ? (accepted != 0
-            ? "技能调用已接受，等待新的 DamageEvent"
-            : "技能调用已提交，等待新的 DamageEvent")
-        : "已发送普通攻击输入，等待新的 DamageEvent";
+    context->status = accepted != 0
+        ? "原生伤害上下文已提交，等待新的 DamageEvent"
+        : "原生伤害重放已提交，等待新的 DamageEvent";
 }
 
 // Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
