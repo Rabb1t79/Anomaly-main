@@ -8680,6 +8680,129 @@ struct Ue5NteAdapter::State {
     }
 
 
+    [[nodiscard]] bool BuildDamageReplayBindingLocked(
+        const std::uintptr_t damage_event_structure,
+        DamageReplayBinding& binding) const noexcept {
+        try {
+            binding = {};
+            std::uintptr_t function{};
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.HTAbilityCharacter.OnDamaged", function) ||
+                function == 0) return false;
+
+            std::string function_name;
+            std::uintptr_t function_class{}, function_outer{};
+            std::string function_class_name, function_outer_name;
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{}, return_offset{};
+            if (!ReadReflectedObjectNameLocked(function, function_name) ||
+                function_name != "OnDamaged" ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), function_outer) ||
+                !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+                !ReadReflectedObjectNameLocked(function_outer, function_outer_name) ||
+                function_class_name != "Function" ||
+                function_outer_name != "HTAbilityCharacter" ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 6 || return_offset != 0xFFFFU || parms_size == 0 ||
+                parms_size > 512U) return false;
+
+            const auto read_parameter = [&](const std::string_view name,
+                                            const std::string_view type,
+                                            const std::int32_t element_size,
+                                            const std::string_view nested,
+                                            std::uint16_t& offset) {
+                ReflectedPropertyInfo info;
+                if (!FindReflectedPropertyLocked(function, name, info, false) ||
+                    info.type != type || info.array_dim != 1 ||
+                    info.element_size != element_size || info.offset < 0 ||
+                    static_cast<std::uint64_t>(info.offset) +
+                        static_cast<std::uint64_t>(element_size) > parms_size) return false;
+                if (!nested.empty()) {
+                    std::string nested_name;
+                    if (info.structure == 0 ||
+                        !ReadReflectedObjectNameLocked(info.structure, nested_name) ||
+                        nested_name != nested) return false;
+                }
+                offset = static_cast<std::uint16_t>(info.offset);
+                return true;
+            };
+
+            std::uint16_t damage_offset{}, hit_offset{}, tags_offset{},
+                effect_offset{}, instigator_offset{}, causer_offset{};
+            if (!read_parameter("DamageAmount", "FloatProperty", 4, {}, damage_offset) ||
+                !read_parameter("HitInfo", "StructProperty",
+                    static_cast<std::int32_t>(kReplayHitInfoBytes), "HitResult", hit_offset) ||
+                !read_parameter("DamageTags", "StructProperty", 0x20,
+                    "GameplayTagContainer", tags_offset) ||
+                !read_parameter("DamageGameplayEffect", "ObjectProperty", 8, {}, effect_offset) ||
+                !read_parameter("InstigatorCharacter", "ObjectProperty", 8, {}, instigator_offset) ||
+                !read_parameter("DamageCauser", "ObjectProperty", 8, {}, causer_offset)) return false;
+
+            ReflectedPropertyInfo event_hit_info;
+            if (!FindReflectedPropertyLocked(damage_event_structure, "HitInfo", event_hit_info, true) ||
+                event_hit_info.type != "StructProperty" ||
+                event_hit_info.element_size != static_cast<std::int32_t>(kReplayHitInfoBytes) ||
+                event_hit_info.offset < 0 || event_hit_info.structure == 0) return false;
+            std::string hit_struct_name;
+            if (!ReadReflectedObjectNameLocked(event_hit_info.structure, hit_struct_name) ||
+                hit_struct_name != "HitResult") return false;
+
+            ReflectedPropertyInfo tag_property;
+            if (!FindReflectedPropertyLocked(function, "DamageTags", tag_property, false) ||
+                tag_property.structure == 0) return false;
+            ReflectedPropertyInfo gameplay_tags, parent_tags;
+            if (!FindReflectedPropertyLocked(
+                    tag_property.structure, "GameplayTags", gameplay_tags, false) ||
+                !FindReflectedPropertyLocked(
+                    tag_property.structure, "ParentTags", parent_tags, false) ||
+                gameplay_tags.type != "ArrayProperty" || gameplay_tags.element_size != 16 ||
+                parent_tags.type != "ArrayProperty" || parent_tags.element_size != 16 ||
+                gameplay_tags.offset < 0 || parent_tags.offset < 0) return false;
+
+            const auto validate_tag_array = [&](const ReflectedPropertyInfo& array) {
+                std::uintptr_t inner{}, tag_struct{};
+                std::string inner_type, tag_name;
+                std::int32_t inner_size{};
+                return ReadPointerAt(*memory, array.property,
+                           Layout(profile, "farrayProperty.inner"), inner) &&
+                    inner != 0 &&
+                    ReadReflectedFieldClassNameLocked(inner, inner_type) &&
+                    inner_type == "StructProperty" &&
+                    ReadValue(*memory, inner + Layout(profile, "fproperty.elementSize"), inner_size) &&
+                    inner_size == 8 &&
+                    ReadPointerAt(*memory, inner, Layout(profile, "fstructProperty.struct"), tag_struct) &&
+                    tag_struct != 0 &&
+                    ReadReflectedObjectNameLocked(tag_struct, tag_name) &&
+                    tag_name == "GameplayTag";
+            };
+            if (!validate_tag_array(gameplay_tags) || !validate_tag_array(parent_tags) ||
+                static_cast<std::uint64_t>(gameplay_tags.offset) + 16U > 0x20U ||
+                static_cast<std::uint64_t>(parent_tags.offset) + 16U > 0x20U) return false;
+
+            binding.function = function;
+            binding.parms_size = parms_size;
+            binding.damage_amount_offset = damage_offset;
+            binding.hit_info_offset = hit_offset;
+            binding.hit_info_size = static_cast<std::uint16_t>(kReplayHitInfoBytes);
+            binding.damage_tags_offset = tags_offset;
+            binding.damage_effect_offset = effect_offset;
+            binding.instigator_offset = instigator_offset;
+            binding.causer_offset = causer_offset;
+            binding.event_hit_info_offset = static_cast<std::uint16_t>(event_hit_info.offset);
+            binding.event_hit_info_size = static_cast<std::uint16_t>(event_hit_info.element_size);
+            binding.tag_gameplay_array_offset = static_cast<std::uint16_t>(gameplay_tags.offset);
+            binding.tag_parent_array_offset = static_cast<std::uint16_t>(parent_tags.offset);
+            binding.valid = true;
+            return true;
+        } catch (...) {
+            binding = {};
+            return false;
+        }
+    }
+
     [[nodiscard]] bool ValidateSkillLayoutLocked(
         const std::uintptr_t ability_system_class) const {
         try {
@@ -9202,6 +9325,8 @@ struct Ue5NteAdapter::State {
                             Layout(profile, "damageEvent.damageGEDef"));
                         next_capture_bindings.damage_tags_offset = static_cast<std::uint16_t>(
                             Layout(profile, "damageEvent.damageTags"));
+                        static_cast<void>(BuildDamageReplayBindingLocked(
+                            damage_event, next_capture_bindings.damage_replay));
                     }
                     if (combat_skill_discovery.ability_spawn_actor_class == 0 &&
                         !FindExactObjectLocked(L"/Script/HTGame.HTAbilitySpawnActor",
