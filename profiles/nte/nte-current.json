@@ -446,6 +446,13 @@
       "ue5.FNamePool",
       "ue5.GObjects",
       "ue5.ProcessEvent"
+    ],
+    "nte.attack-input": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent"
     ]
   },
   "optionalFeatures": [
@@ -467,7 +474,8 @@
     "nte.skills",
     "nte.skill-invocation",
     "ue5.streaming-source",
-    "nte.vehicle"
+    "nte.vehicle",
+    "nte.attack-input"
   ],
   "featureLayoutValidators": {
     "ue5.ftext": [
@@ -620,6 +628,12 @@
       "nte.player"
     ],
     "nte.vehicle": [
+      "nte.player",
+      "ue5.names",
+      "ue5.objects",
+      "ue5.process-event"
+    ],
+    "nte.attack-input": [
       "nte.player",
       "ue5.names",
       "ue5.objects",
