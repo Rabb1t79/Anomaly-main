@@ -83,10 +83,9 @@ jobs:
             cmake --build $build --config Release --parallel
             $dll = Join-Path $build 'Release\plugin.dll'
             if (!(Test-Path $dll)) { throw "$plugin plugin.dll was not produced" }
-            $dest = Join-Path $root ".build\ci-artifacts\runtime\Anomaly\plugins\$plugin"
-            New-Item -ItemType Directory -Force $dest | Out-Null
-            Copy-Item -LiteralPath $dll -Destination (Join-Path $dest 'plugin.dll') -Force
-            Copy-Item -LiteralPath (Join-Path $root "plugins\$plugin\manifest.json") -Destination (Join-Path $dest 'manifest.json') -Force
+            # These two packages are published as separate plugin artifacts below.
+            # Do not also embed them in the CI Runtime ZIP: users installing the
+            # standalone ZIP beside the Runtime would create duplicate manifest IDs.
             $pluginPackage = Join-Path $root ".build\ci-artifacts\$plugin"
             New-Item -ItemType Directory -Force $pluginPackage | Out-Null
             Copy-Item -LiteralPath $dll -Destination (Join-Path $pluginPackage 'plugin.dll') -Force
