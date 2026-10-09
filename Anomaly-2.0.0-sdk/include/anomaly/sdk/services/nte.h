@@ -33,12 +33,54 @@ typedef struct AnomalyNteAttackInputServiceV1 {
     // Host-side bridge validated against Dumper-7 HTPlayerController ABI.
     AnomalyStatusV1 (ANOMALY_CALL *activate_melee)(void* user);
 } AnomalyNteAttackInputServiceV1;
+
+typedef uint32_t AnomalyNteVehicleFlagsV1;
+#define ANOMALY_NTE_VEHICLE_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_SPEED (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO (1u << 2u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION (1u << 3u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON (1u << 4u)
+
+typedef struct AnomalyNteVehicleSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    AnomalyGenerationHandleV1 vehicle;
+    double speed_kmh;
+    float top_speed_ratio;
+    uint32_t wheel_friction_enabled;
+} AnomalyNteVehicleSnapshotV1;
+
+#define ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES 128u
+
+typedef struct AnomalyNteVehicleServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *snapshot)(
+        void* user, AnomalyNteVehicleSnapshotV1* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *set_top_speed_ratio)(
+        void* user, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *set_wheel_friction_enabled)(
+        void* user, uint32_t enabled);
+    AnomalyStatusV1 (ANOMALY_CALL *reset)(void* user);
+    // Appended in V1 without changing the existing field order. The host publishes
+    // this field only when the reflected summon ABI has been validated.
+    AnomalyStatusV1 (ANOMALY_CALL *summon_vehicle)(void* user);
+    // Optional V1 extensions. They are present only when struct_size covers the field.
+    // The catalog is read from the game's DT_VehicleData row names; callers must invoke
+    // these functions from the Game callback domain. No UE object or raw FName crosses ABI.
+    AnomalyStatusV1 (ANOMALY_CALL *vehicle_id_count)(void* user, uint32_t* count);
+    AnomalyStatusV1 (ANOMALY_CALL *vehicle_id_at)(
+        void* user, uint32_t index, char* destination, size_t* inout_size);
+    AnomalyStatusV1 (ANOMALY_CALL *set_summon_vehicle_id)(
+        void* user, AnomalyStringViewV1 vehicle_id);
+} AnomalyNteVehicleServiceV1;
 #define ANOMALY_NTE_METRICS_SERVICE_V1_ID "anomaly.nte.metrics"
 #define ANOMALY_NTE_METRICS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID "anomaly.nte.esc-menu-button"
 #define ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 1u
 // Service tables belong to one Host lifecycle generation. A cached table from a stopped or
 // replaced generation remains callable only to report UNAVAILABLE (or zero for scalar queries);
 // it never resumes against a later Start generation.
