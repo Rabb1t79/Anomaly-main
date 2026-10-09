@@ -31,6 +31,7 @@
 #include "anomaly/sdk/services/ui.h"
 #include "anomaly/sdk/services/interop.h"
 
+#include <Windows.h>
 #include <algorithm>
 #include <atomic>
 #include <array>
