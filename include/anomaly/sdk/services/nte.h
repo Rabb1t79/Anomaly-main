@@ -20,6 +20,8 @@
 #define ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_COMBAT_SERVICE_V1_ID "anomaly.nte.combat"
 #define ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID "anomaly.nte.damage-replay"
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_SKILLS_SERVICE_V1_ID "anomaly.nte.skills"
 #define ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID "anomaly.nte.skill-invocation"
@@ -816,6 +818,35 @@ typedef struct AnomalyNteCombatServiceV1 {
         void* user, AnomalyGenerationHandleV1 participant,
         char* destination, size_t* inout_size);
 } AnomalyNteCombatServiceV1;
+
+/* Host-validated direct damage application. This changes the victim's native
+ * HTAbilityCharacter HP through reflected GetHP/SetHP calls; it does not replay input. */
+typedef uint32_t AnomalyNteDamageReplayFlagsV1;
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_TARGET_ALIVE (1u << 1u)
+typedef struct AnomalyNteDamageReplayRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    AnomalyGenerationHandleV1 world;
+    AnomalyGenerationHandleV1 attacker;
+    AnomalyGenerationHandleV1 victim;
+    float damage;
+    uint32_t reserved;
+} AnomalyNteDamageReplayRequestV1;
+typedef struct AnomalyNteDamageReplayResultV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    float requested_damage;
+    float hp_before;
+    float hp_after;
+    float damage_applied;
+} AnomalyNteDamageReplayResultV1;
+typedef struct AnomalyNteDamageReplayServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *apply_damage)(
+        void* user, const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result);
+} AnomalyNteDamageReplayServiceV1;
 
 typedef struct AnomalyNteSkillFrameV1 {
     uint32_t struct_size; uint32_t flags;
