@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "Validates the native DT_VehicleData catalog, summons a selected VehicleID, and verifies position, owner, and live driving-speed reads.",
+  "description": "Reads the native vehicle table, summons selected VehicleIDs with position/owner verification, and exposes native top-speed and engine torque ratios.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
