@@ -8099,9 +8099,10 @@ struct Ue5NteAdapter::State {
             if (vehicle_bindings.speed_kmh.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", vehicle_outers, "FloatReturn", vehicle_bindings.speed_kmh));
             }
-            // Keep the two controls separate. The known-working NTE build resolves
-            // SetMaxEngineTorque through /Script/HTGame and these vehicle outers;
-            // do not replace this with the engine plugin's generic ChaosVehicles path.
+            // The supplied 5.6.1-0+UE5-HT dump declares two separate controls:
+            // HTGame.HTWheeledVehicleBase.SetTopSpeedRatio(float) for speed, and
+            // ChaosVehicles.ChaosWheeledVehicleMovementComponent.SetMaxEngineTorque(float)
+            // for engine torque. Resolve each under its exact reflected owner.
             if (vehicle_bindings.set_vehicle_speed_ratio.function == 0) {
                 static constexpr std::array<std::string_view, 1> speed_outers{"HTWheeledVehicleBase"};
                 static_cast<void>(FindVehicleFunctionLocked(
@@ -8109,9 +8110,11 @@ struct Ue5NteAdapter::State {
                     vehicle_bindings.set_vehicle_speed_ratio));
             }
             if (vehicle_bindings.set_engine_torque.function == 0) {
+                static constexpr std::array<std::string_view, 1> torque_outers{
+                    "ChaosWheeledVehicleMovementComponent"};
                 static_cast<void>(FindVehicleFunctionLocked(
-                    "SetMaxEngineTorque", vehicle_outers, "FloatInput",
-                    vehicle_bindings.set_engine_torque));
+                    "SetMaxEngineTorque", torque_outers, "FloatInput",
+                    vehicle_bindings.set_engine_torque, "ChaosVehicles"));
             }
             static_cast<void>(EnsureVehicleSummonBindingLocked());
             if (vehicle_bindings.set_wheel_friction.function == 0) {
@@ -8304,7 +8307,7 @@ struct Ue5NteAdapter::State {
         if (vehicle_base_movement_component == 0 ||
             vehicle_bindings.set_engine_torque.function == 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "HTGame vehicle SetMaxEngineTorque(float) ABI or movement component is unavailable");
+                "ChaosVehicles.ChaosWheeledVehicleMovementComponent.SetMaxEngineTorque(float) or movement component is unavailable");
         }
         if (!vehicle_base_engine_torque_valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
