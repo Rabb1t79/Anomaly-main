@@ -775,6 +775,10 @@ struct Ue5NteAdapter::State {
     };
     struct VehicleBindings {
         VehicleFunctionBinding current_vehicle{};
+        // Reflected UFunctions must be invoked on instances of their owning class.
+        // Keep each receiver alongside the ABI binding instead of assuming Controller,
+        // Character and vehicle movement component are interchangeable.
+        std::uintptr_t current_vehicle_receiver{};
         VehicleFunctionBinding speed_kmh{};
         VehicleFunctionBinding set_top_speed_ratio{}; // SetMaxEngineTorque
         VehicleFunctionBinding set_vehicle_speed_ratio{}; // HTWheeledVehicleBase.SetTopSpeedRatio
@@ -7918,13 +7922,34 @@ struct Ue5NteAdapter::State {
                 "HTPlayerController", "HTPlayerCharacter"};
             static constexpr std::array<std::string_view, 3> vehicle_outers{
                 "HTWheeledVehicle", "HTWheeledVehicleDrivable", "HTVehicleMovementComponent"};
+            const auto find_current_vehicle = [&](const std::string_view function_name) {
+                for (const auto outer : controller_outers) {
+                    std::wstring path = L"/Script/HTGame.";
+                    path.reserve(path.size() + outer.size() + 1U + function_name.size());
+                    for (char c : outer)
+                        path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+                    path.push_back(L'.');
+                    for (char c : function_name)
+                        path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+                    std::uintptr_t function{};
+                    VehicleFunctionBinding candidate{};
+                    if (!FindExactObjectLocked(path.c_str(), function) ||
+                        !BuildVehicleBindingLocked(function, function_name, "ObjectReturn", candidate)) {
+                        continue;
+                    }
+                    const std::uintptr_t receiver =
+                        outer == "HTPlayerController" ? player_controller : player_pawn;
+                    if (receiver == 0) continue;
+                    vehicle_bindings.current_vehicle = candidate;
+                    vehicle_bindings.current_vehicle_receiver = receiver;
+                    return true;
+                }
+                return false;
+            };
             if (vehicle_bindings.current_vehicle.function == 0 &&
-                !FindVehicleFunctionLocked("BP_GetCurrentDriveVehicle", controller_outers, "ObjectReturn",
-                    vehicle_bindings.current_vehicle)) {
-                static constexpr std::array<std::string_view, 2> fallback{
-                    "HTPlayerController", "HTPlayerCharacter"};
-                if (!FindVehicleFunctionLocked("BP_GetCurrentDirvingVehicle", fallback, "ObjectReturn",
-                        vehicle_bindings.current_vehicle)) return false;
+                !find_current_vehicle("BP_GetCurrentDriveVehicle") &&
+                !find_current_vehicle("BP_GetCurrentDirvingVehicle")) {
+                return false;
             }
             if (vehicle_bindings.speed_kmh.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", vehicle_outers, "FloatReturn", vehicle_bindings.speed_kmh));
@@ -7950,7 +7975,9 @@ struct Ue5NteAdapter::State {
                 static_cast<void>(FindVehicleFunctionLocked("SetEnableWheelFriction", vehicle_outers, "BoolInput", vehicle_bindings.set_wheel_friction));
             }
             alignas(8) std::array<std::uint8_t, 8> out{};
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+            if (vehicle_bindings.current_vehicle_receiver == 0 ||
+                !InvokeProcessEventGuarded(process_event_invoker,
+                    vehicle_bindings.current_vehicle_receiver,
                     vehicle_bindings.current_vehicle.function, out.data(), out.size())) return false;
             std::uintptr_t vehicle{};
             std::memcpy(&vehicle, out.data() + vehicle_bindings.current_vehicle.return_offset, sizeof(vehicle));
@@ -7989,8 +8016,10 @@ struct Ue5NteAdapter::State {
             vehicle_valid = true;
             if (vehicle_bindings.speed_kmh.function != 0) {
                 alignas(8) std::array<std::uint8_t, 8> speed_bytes{};
-                if (InvokeProcessEventGuarded(process_event_invoker, vehicle,
-                        vehicle_bindings.speed_kmh.function, speed_bytes.data(), speed_bytes.size())) {
+                if (vehicle_base_movement_component != 0 &&
+                    InvokeProcessEventGuarded(process_event_invoker, vehicle_base_movement_component,
+                        vehicle_bindings.speed_kmh.function, speed_bytes.data(),
+                        vehicle_bindings.speed_kmh.parms_size)) {
                     float speed{};
                     std::memcpy(&speed, speed_bytes.data() + vehicle_bindings.speed_kmh.return_offset, sizeof(speed));
                     if (std::isfinite(speed)) vehicle_speed_kmh = speed;
