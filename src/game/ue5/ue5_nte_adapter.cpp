@@ -8276,11 +8276,11 @@ struct Ue5NteAdapter::State {
                     "PlayerController.EnableCheats() failed 5.6.1 ABI validation");
             }
             std::array<std::uint8_t, 8> no_parameters{};
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                    enable_cheats, no_parameters.data(), 0)) {
-                return Status(ANOMALY_STATUS_V1_FAILED,
-                    "PlayerController.EnableCheats ProcessEvent failed");
-            }
+            // Even if the native EnableCheats dispatch is rejected by this local client
+            // controller, continue to the validated GameplayStatics.SpawnObject fallback
+            // below. The property is re-read before any fallback object is created.
+            static_cast<void>(InvokeProcessEventGuarded(process_event_invoker, player_controller,
+                enable_cheats, no_parameters.data(), 0));
             if (!ReadValue(*memory,
                     player_controller + static_cast<std::uintptr_t>(manager_property.offset),
                     cheat_manager)) {
