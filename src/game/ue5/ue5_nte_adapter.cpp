@@ -8233,7 +8233,7 @@ struct Ue5NteAdapter::State {
             // at the generic Engine.CheatManager, which does not expose NTE vehicle commands.
             // Bind only the validated HTGame subclass, then let the native engine routine
             // construct and initialize the actual per-controller object.
-            std::uintptr_t cheat_class_property_owner{}, cheat_manager_class{}, cheat_manager_base{};
+            std::uintptr_t cheat_manager_class{}, cheat_manager_base{};
             std::uintptr_t configured_cheat_class{};
             ReflectedPropertyInfo cheat_class_property;
             if (!FindReflectedPropertyLocked(controller_class, "CheatClass", cheat_class_property, true) ||
