@@ -1637,8 +1637,7 @@ struct Ue5NteAdapter::State {
                 "dataTable.rowMapNum", "dataTable.rowMapNumFree", "dataTable.rowMapMax",
                 "dataTable.rowMapElementStride", "dataTable.rowMapRowOffset",
                 "dataTable.rowMapFlagsData", "dataTable.rowMapFlagsNum",
-                "dataTable.rowMapFlagsMax", "dataTable.rowMapInlineFlags", "dataTable.maxRows"})
-            true;
+                "dataTable.rowMapFlagsMax", "dataTable.rowMapInlineFlags", "dataTable.maxRows"});
     }
 
     [[nodiscard]] bool NteAttackInputProfileAvailable() const noexcept {
