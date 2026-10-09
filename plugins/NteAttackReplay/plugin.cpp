@@ -72,6 +72,7 @@ struct Context final {
     AnomalyGenerationHandleV1 captured_target{};
     int32_t captured_input_id{-1};
     uint64_t captured_damage_sequence{};
+    uint64_t captured_replay_id{};
     uint64_t captured_tick_sequence{};
     int64_t captured_damage_value{};
     int64_t captured_basic_value{};
@@ -608,6 +609,7 @@ void ArmForNextAttack(Context& context) {
     context.captured_target = {};
     context.captured_input_id = -1;
     context.captured_damage_sequence = 0;
+    context.captured_replay_id = 0;
     context.captured_tick_sequence = 0;
     context.captured_damage_value = 0;
     context.captured_basic_value = 0;
@@ -675,8 +677,13 @@ bool CaptureNextAttack(Context& context) {
             continue;
         }
 
+        if (event.replay_id == 0) {
+            context.status = "检测到真实伤害，但 Host 未生成可重放 DamageEvent 上下文；已跳过";
+            continue;
+        }
         context.captured = true;
         context.captured_damage_sequence = event.sequence;
+        context.captured_replay_id = event.replay_id;
         context.captured_tick_sequence = event.tick_sequence;
         context.captured_damage_value = event.value;
         context.captured_basic_value = event.basic_value;
@@ -768,50 +775,28 @@ enum class ReplayCallResult : uint32_t {
 ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
     if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
     if (accepted != nullptr) *accepted = 0;
-    if (!context.captured) {
+    if (!context.captured || context.captured_replay_id == 0 ||
+        context.attack_input == nullptr) {
         return ReplayCallResult::InvalidState;
     }
-
-    AnomalyNteCombatantSnapshotV1 combatant{};
-    combatant.struct_size = sizeof(combatant);
-    if (context.combat->current_combatant(
-            context.combat->user, &combatant).code != ANOMALY_STATUS_V1_OK ||
-        combatant.character.id == 0 || combatant.world.id == 0) {
-        return ReplayCallResult::InvalidState;
-    }
-
-    context.world = combatant.world;
-    context.character = combatant.character;
-
-    // Normal attacks have no NTE skill handle. The old implementation returned
-    // NoSkill here, so a captured normal attack never sent any replay input.
-    if (!context.captured_has_skill) {
-        if (InvokeNativeNormalAttack(context)) return ReplayCallResult::Success;
-        if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_FAILED;
+    const bool replay_service_available =
+        HasField<AnomalyNteAttackInputServiceV1,
+            decltype(AnomalyNteAttackInputServiceV1::replay_damage_event)>(
+                context.attack_input,
+                offsetof(AnomalyNteAttackInputServiceV1, replay_damage_event)) &&
+        context.attack_input->replay_damage_event != nullptr;
+    if (!replay_service_available) {
+        if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
         return ReplayCallResult::ServiceError;
     }
 
-    if (!InvocationReady(context.invocation)) {
-        return ReplayCallResult::InvalidState;
-    }
-
-    AnomalyGenerationHandleV1 skill{};
-    if (!ResolveReplaySkill(context, &skill)) return ReplayCallResult::NoSkill;
-
-    AnomalyNteSkillInvocationRequestV1 request{};
-    request.struct_size = sizeof(request);
-    request.world = context.world;
-    request.character = context.character;
-    request.skill = skill;
-
-    AnomalyNteSkillInvocationResultV1 result{};
-    result.struct_size = sizeof(result);
-    const auto status = context.invocation->activate(
-        context.invocation->user, &request, &result);
+    // Reapply the captured native damage context instead of re-triggering the attack input
+    // or re-activating an ability. The Host validates target, world, hit data, tags and effect.
+    const auto status = context.attack_input->replay_damage_event(
+        context.attack_input->user, context.captured_replay_id);
     if (status_code != nullptr) *status_code = status.code;
-    if (accepted != nullptr) *accepted = result.accepted;
     if (status.code != ANOMALY_STATUS_V1_OK) return ReplayCallResult::ServiceError;
-    if (result.accepted == 0) return ReplayCallResult::Rejected;
+    if (accepted != nullptr) *accepted = 1;
     return ReplayCallResult::Success;
 }
 
@@ -850,7 +835,12 @@ AnomalyStatusV1 ANOMALY_CALL Load(
         !InvocationReady(context->invocation) || !UiReady(context->ui) ||
         context->signature == nullptr || context->names == nullptr || context->framework == nullptr || context->attack_input == nullptr ||
         context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr ||
-        context->framework->tick_sequence == nullptr || context->attack_input->activate_melee == nullptr) {
+        context->framework->tick_sequence == nullptr ||
+        !HasField<AnomalyNteAttackInputServiceV1,
+            decltype(AnomalyNteAttackInputServiceV1::replay_damage_event)>(
+                context->attack_input,
+                offsetof(AnomalyNteAttackInputServiceV1, replay_damage_event)) ||
+        context->attack_input->replay_damage_event == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -911,7 +901,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            context->replay_target_count = context->replay_count;
+            // x denotes x+1 additional hits after the original event; at most one is
+            // submitted per Game tick and the next is gated on a fresh DamageEvent.
+            context->replay_target_count = context->replay_count + 1U;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = "已提交重放，等待原始伤害后的下一游戏帧";
         } else {
@@ -1054,7 +1046,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("新增伤害次数 x"),
+            ui->user, anomaly::sdk::StringView("额外合法重击数 x（实际重击 x+1）"),
             &context->replay_count, 1, 10);
         context->replay_count = std::clamp(context->replay_count, 1u, 100000u);
     }
@@ -1073,10 +1065,11 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
                 "目标：" + context->captured_target_path));
         }
         const std::string progress =
-            "进度：" + std::to_string(context->replay_done) + "/" +
-            std::to_string(context->replay_count);
+            "额外重击进度：" + std::to_string(context->replay_done) + "/" +
+            std::to_string(context->replay_target_count != 0
+                ? context->replay_target_count : context->replay_count + 1U);
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("节拍：每个 Game tick 最多提交一次攻击，每个确认 DamageEvent 计 1 次伤害"));
+        ui->text(ui->user, anomaly::sdk::StringView("节拍：每个 Game tick 最多重放一次捕获的原生伤害上下文"));
     } else {
         ui->text(ui->user, anomaly::sdk::StringView(
             "无需手动录制：插件自动等待下一次玩家攻击"));
