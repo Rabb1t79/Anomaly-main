@@ -36,8 +36,8 @@ jobs:
           project(NteVehicleStandalone LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          add_library(nte_vehicle SHARED "$env:GITHUB_WORKSPACE/plugins/NteVehicle/plugin.cpp")
-          target_include_directories(nte_vehicle PRIVATE "$env:GITHUB_WORKSPACE/include")
+          add_library(nte_vehicle SHARED "$root/plugins/NteVehicle/plugin.cpp")
+          target_include_directories(nte_vehicle PRIVATE "$root/include")
           target_compile_definitions(nte_vehicle PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
           set_target_properties(nte_vehicle PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
           "@ | Set-Content -LiteralPath "$src\CMakeLists.txt" -Encoding UTF8
