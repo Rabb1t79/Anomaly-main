@@ -5501,6 +5501,86 @@ struct Ue5NteAdapter::State {
         combat_capture_write.store(write + 1U, std::memory_order_release);
     }
 
+    [[nodiscard]] std::uint64_t CaptureReplayableDamage(
+        const CombatCaptureBindings& bindings,
+        const std::uintptr_t damage_event,
+        const std::uintptr_t victim,
+        const std::uintptr_t attacker,
+        const std::uintptr_t damage_causer) noexcept {
+        const auto& replay_binding = bindings.damage_replay;
+        if (!replay_binding.valid || damage_event == 0 || victim == 0 ||
+            attacker == 0 || attacker != player_pawn || victim == player_pawn ||
+            GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return 0;
+        }
+        AnomalyGenerationHandleV1 victim_handle{}, attacker_handle{};
+        if (!ObjectHandleLocked(victim, victim_handle) ||
+            !ObjectHandleLocked(attacker, attacker_handle)) return 0;
+
+        ReplayableDamage candidate{};
+        candidate.object_generation = object_generation;
+        candidate.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
+        candidate.victim = victim;
+        candidate.attacker = attacker;
+        candidate.damage_causer = damage_causer;
+        if (!ReadValue(*memory, damage_event +
+                static_cast<std::uintptr_t>(bindings.damage_value_offset), candidate.damage) ||
+            !std::isfinite(candidate.damage) || candidate.damage < 0.0F ||
+            !memory->Read(damage_event + replay_binding.event_hit_info_offset,
+                candidate.hit_info.data(), replay_binding.event_hit_info_size)) return 0;
+
+        // DamageGEDef is a weak UObject reference (object index + serial). Resolve it
+        // at invocation time rather than retaining an unowned UObject address.
+        if (!ReadValue(*memory, damage_event +
+                static_cast<std::uintptr_t>(bindings.damage_source_offset),
+                candidate.damage_effect_index) ||
+            !ReadValue(*memory, damage_event +
+                static_cast<std::uintptr_t>(bindings.damage_source_offset) + sizeof(std::int32_t),
+                candidate.damage_effect_serial)) return 0;
+
+        struct ArrayHeader {
+            std::uintptr_t data{};
+            std::int32_t count{};
+            std::int32_t capacity{};
+        };
+        static_assert(sizeof(ArrayHeader) == 16);
+        const auto copy_tag_array = [&](const std::uint16_t array_offset,
+                                        auto& destination,
+                                        std::uint32_t& out_count) {
+            ArrayHeader header{};
+            const auto container = damage_event +
+                static_cast<std::uintptr_t>(bindings.damage_tags_offset);
+            const auto address = container + array_offset;
+            if (!ReadValue(*memory, address +
+                    static_cast<std::uintptr_t>(Layout(profile, "tarray.data")), header.data) ||
+                !ReadValue(*memory, address +
+                    static_cast<std::uintptr_t>(Layout(profile, "tarray.num")), header.count) ||
+                !ReadValue(*memory, address +
+                    static_cast<std::uintptr_t>(Layout(profile, "tarray.max")), header.capacity) ||
+                header.count < 0 || header.capacity < header.count ||
+                header.count > static_cast<std::int32_t>(destination.size()) ||
+                (header.count != 0 && header.data == 0)) return false;
+            if (header.count != 0 && !memory->Read(header.data, destination.data(),
+                    static_cast<std::size_t>(header.count) * sizeof(std::uint64_t))) return false;
+            out_count = static_cast<std::uint32_t>(header.count);
+            return true;
+        };
+        if (!copy_tag_array(replay_binding.tag_gameplay_array_offset,
+                candidate.gameplay_tags, candidate.gameplay_tag_count) ||
+            !copy_tag_array(replay_binding.tag_parent_array_offset,
+                candidate.parent_tags, candidate.parent_tag_count)) return 0;
+
+        const auto replay_id = next_replay_damage_id.fetch_add(1, std::memory_order_relaxed);
+        if (replay_id == 0) return 0;
+        auto& slot = replayable_damage[
+            static_cast<std::size_t>(replay_id % kReplayDamageCapacity)];
+        slot.valid = false;
+        candidate.replay_id = replay_id;
+        slot = candidate;
+        slot.valid = true;
+        return replay_id;
+    }
+
     void EnqueueCharacterDamage(
         const CombatCaptureBindings& bindings,
         const std::uintptr_t damage_event,
@@ -5589,6 +5669,8 @@ struct Ue5NteAdapter::State {
             [this](std::uintptr_t address, void* destination, std::size_t size) {
                 return memory->Read(address, destination, size);
             });
+        damage.replay_id = CaptureReplayableDamage(
+            bindings, damage_event, victim, attacker, damage_causer);
         std::memcpy(capture.payload.data(), &damage, sizeof(damage));
         combat_capture_write.store(write + 1U, std::memory_order_release);
     }
