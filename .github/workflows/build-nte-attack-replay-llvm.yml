@@ -26,7 +26,8 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $root -Force
           $top = Get-ChildItem $root -Directory | Select-Object -First 1
           if ($null -eq $top) { throw 'LLVM-MinGW archive root was not found' }
-          $env:LLVM_MINGW_ROOT = $top.FullName
+          # GITHUB_ENV persists this variable into the following build step.
+          "LLVM_MINGW_ROOT=$($top.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "$($top.FullName)\bin" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
       - name: Compile plugin directly
         shell: pwsh
