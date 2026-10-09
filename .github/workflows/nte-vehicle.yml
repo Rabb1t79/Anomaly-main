@@ -28,6 +28,7 @@ jobs:
       - name: Configure NTE Vehicle
         shell: pwsh
         run: |
+          $root = $env:GITHUB_WORKSPACE -replace '\\', '/'
           $b = "$env:GITHUB_WORKSPACE\.build\nte-vehicle"
           $src = "$env:GITHUB_WORKSPACE\.build\nte-vehicle-src"
           New-Item -ItemType Directory -Force $src | Out-Null
