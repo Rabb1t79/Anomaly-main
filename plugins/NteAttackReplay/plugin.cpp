@@ -26,6 +26,7 @@
  * - 保留自动捕获、技能重放和 UI 请求/游戏线程分离行为。
  */
 // Record the first player->target DAMAGE event; normal attacks do not require a skill.
+#include <windows.h> // Supplies EXCEPTION_EXECUTE_HANDLER for guarded native memory reads.
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
