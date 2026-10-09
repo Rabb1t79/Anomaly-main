@@ -63,8 +63,6 @@ NteDamageTags CaptureNteDamageTags(std::uintptr_t container, const Reader& read)
 
 struct NteCharacterDamageCapture {
     float damage{};
-    // Host-issued replay token linking this raw character hit to the public combat event.
-    std::uint64_t replay_id{};
     std::int32_t source_index{-1};
     std::int32_t source_serial{};
     std::uintptr_t victim{};

@@ -4,6 +4,8 @@
 
 # Anomaly 异象
 
+**稳定、灵活、开放的《异环》插件平台**
+
 
 <p align="center">
   <a href="docs/user-guide/README.md">用户文档</a> ·
@@ -24,7 +26,6 @@
 
 ---
 
-
 ## 🧾 开源许可
 
 本项目以 [**GNU Affero General Public License v3.0（AGPL-3.0-only）**](LICENSE) 分发，第三方组件及其各自的许可证见 [`NOTICE`](NOTICE) 与 `third_party/licenses/`。
@@ -35,7 +36,7 @@
 - 🪟 **游戏内管理界面**：按 `Insert` 呼出中文或英文界面，统一管理插件的启用、停用、重载和设置。
 - 🌐 **第三方插件下载**：在 **Plugins > 可用** 中浏览和安装社区插件，在 **更新** 中升级，也可以自行添加可信插件源。
 - 🔌 **实用内建插件**：随包提供坐标显示、实体 ESP、粉爪大劫案 ESP、自定义 UID、相机工具与反虚化、骨骼动作调整、资源点自动拾取、打怪资源点、自动副本与 WalletCollector，全部默认关闭，按需启用。
-- 🎥 **相机工具**：Camera Tools 将视距修改与自由相机整合到同一套相机 Hook 中，避免两个相机插件同时启用时发生 Hook 冲突。
+- 🎥 **相机工具**：Camera Tools 将视距与视角 FOV 修改、自由相机整合到同一套相机 Hook 中，避免两个相机插件同时启用时发生 Hook 冲突。
 - 🤖 **自动化任务**：Resource Auto Pickup、Combat Resource Points、Clone Enter 与 WalletCollector 支持按传送或寻路自动执行，并可在插件窗口中随时停止。
 - 🧭 **状态与排错**：插件不兼容、依赖缺失或 Profile 未就绪时会直接显示原因，详细状态可在 **Diagnostics** 和日志中查看。
 - 🧩 **开放插件框架**：提供纯 C ABI v1 SDK 和统一 V1 服务，插件工程无需依赖 Runtime 源码或 C++ ABI。
@@ -54,7 +55,7 @@
 | **Entity ESP** | 绘制实体边界框与标签 |
 | **Pink Paw Heist ESP** | 显示粉爪大劫案的战利品与撤离点，可按价值筛选 |
 | **Custom UID** | 自定义客户端界面上显示的 UID |
-| **Camera Tools** | 增加视距和自由相机视角，并可选按自由相机位置加载场景 |
+| **Camera Tools** | 增加视距、调整视角 FOV 和自由相机视角，并可选按自由相机位置加载场景 |
 | **CameraBlurFix** | 取消抬头时角色身上的虚化效果 |
 | **Better Pose** | 调整角色动作速率、暂停与位移缩放，编辑关节姿态，并可导入 MMD 动作与镜头 |
 | **Quick Ultimate** | 按住 Alt+1/2/3/4，自动切换角色并持续发送 Q，松开后停止 |
@@ -146,15 +147,3 @@ Anomaly 在运行时或分发包中使用了以下开源组件：
 - [nlohmann/json](https://github.com/nlohmann/json) 与 [JSON schema validator](https://github.com/pboettch/json-schema-validator) — JSON 与 Schema 校验
 - [Noto Sans CJK](https://github.com/notofonts/noto-cjk) — 中英文 UI 字体
 - [Dalamud](https://github.com/goatcorp/Dalamud) — 灵感来源
-#   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- #   A n o m a l y - m a i n  
- 

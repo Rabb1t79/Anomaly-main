@@ -21,6 +21,17 @@ Agent 请在会话开始时手动引用本文件。它是仓库唯一的自动�
 `.build/`、`data/`、`runtime/` 都是本机或生成状态，不能作为源码输入。不要修改生成的
 CMake 文件、构建产物或正在运行的游戏文件来掩盖源码问题。
 
+## NTE V1 基底与原生 Dump 证据规则（强制）
+
+- 当前主框架基底是用户提供的 `Anomaly-2.3.0-alpha.1.zip`：它是已修缮的 V1 源码，不能用旧 Git 分支整目录覆盖。后续工作必须在此基底上做最小合并，保留 ZIP 内已有的修复；此前新增的 SDK ABI、服务表、Profile、validator、宿主桥接、ABI snapshot 与文档，要逐项迁移并验证，不得假定它们已存在。
+- NTE / UE 原生类、UFunction 所属模块及类、函数名、参数顺序/大小/偏移、继承和对象布局的唯一证据源，是用户提供的 `5.6.1-0+UE5-HT.zip` 原生 Dump。优先核对其中 `CppSDK/SDK/HTGame_*`、相应插件模块的 `*_classes.hpp`、`*_parameters.hpp`、`*_functions.cpp` 及 `Dumpspace` 反射 JSON。不要用通用 Unreal 文档、其他游戏版本、无关仓库/旧插件或名称相似性替代 Dump。
+- 每个原生绑定必须核实完整路径/owner、参数 ABI、receiver、所属模块及必要布局。若 Dump 没有足够证据，标注为未验证、关闭该能力并给出可诊断状态；禁止以猜测实现写入、调用或宣称成功。
+- 公开 C ABI 变更必须同步更新 `include/anomaly/sdk/`、`apps/abi_snapshot/`、`abi/anomaly-sdk-v1-windows-x64.json`、服务能力/Manifest/Schema/Profile/validator 与文档；使用 `struct_size` 保护可选尾字段，并验证旧消费者前缀布局。
+- Attack Replay 必须以真实且相关联的 player→enemy DamageEvent 验证每次额外攻击；`ProcessEvent` 被调用或一个伤害回调返回并不等于实际扣血。Vehicle 必须按 Dump 的真函数 owner 分别调用车速、运动组件与召唤接口，并核验召唤实体、位置与 Owner。
+- 交付前必须对当前 V1 合并树执行受影响的 Windows x64 构建、ABI/Schema 验证和包内容检查。插件独立编译成功不能替代宿主构建；源码检查不能替代 DLL 构建；构建成功不能冒充真实游戏内验证。未完成上述必要检查时，不得标记为可交付。
+
+详见 `docs/developer-guide/nte-dump-contract.md`。
+
 ## 必经交付流程
 
 1. 开始前执行 `git status --short --branch`，保留与当前任务无关的已修改和未跟踪文件。

@@ -28,7 +28,9 @@
         "anomaly.nte.pickup",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation"
+        "anomaly.nte.skill-invocation",
+        "anomaly.nte.vehicle",
+        "anomaly.nte.attack-input"
       ]
     },
     "ue5.FNamePool": {
@@ -57,7 +59,9 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation"
+        "anomaly.nte.skill-invocation",
+        "anomaly.nte.vehicle",
+        "anomaly.nte.attack-input"
       ]
     },
     "ue5.FTextData.GetDisplayString": {
@@ -132,7 +136,9 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation"
+        "anomaly.nte.skill-invocation",
+        "anomaly.nte.vehicle",
+        "anomaly.nte.attack-input"
       ]
     },
     "ue5.StaticFindObject": {
@@ -182,7 +188,9 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation"
+        "anomaly.nte.skill-invocation",
+        "anomaly.nte.vehicle",
+        "anomaly.nte.attack-input"
       ]
     },
     "ue5.ProcessEvent": {
@@ -205,7 +213,9 @@
         "anomaly.nte.ui-buttons",
         "anomaly.nte.combat",
         "anomaly.nte.skills",
-        "anomaly.nte.skill-invocation"
+        "anomaly.nte.skill-invocation",
+        "anomaly.nte.vehicle",
+        "anomaly.nte.attack-input"
       ]
     },
     "nte.ClientIgnoreGameAndUiInput": {
@@ -376,6 +386,20 @@
       "ue5.ProcessEvent",
       "nte.ClientIgnoreGameAndUiInput"
     ],
+    "nte.vehicle": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent"
+    ],
+    "nte.attack-input": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent"
+    ],
     "nte.player-esp": [
       "ue5.GWorld",
       "ue5.GameTick"
@@ -439,20 +463,6 @@
       "ue5.GameTick",
       "ue5.FNamePool",
       "ue5.GObjects"
-    ],
-    "nte.vehicle": [
-      "ue5.GWorld",
-      "ue5.GameTick",
-      "ue5.FNamePool",
-      "ue5.GObjects",
-      "ue5.ProcessEvent"
-    ],
-    "nte.attack-input": [
-      "ue5.GWorld",
-      "ue5.GameTick",
-      "ue5.FNamePool",
-      "ue5.GObjects",
-      "ue5.ProcessEvent"
     ]
   },
   "optionalFeatures": [
@@ -541,6 +551,9 @@
     ],
     "nte.vehicle": [
       "nte-vehicle-layout-v1"
+    ],
+    "nte.attack-input": [
+      "nte-attack-input-layout-v1"
     ]
   },
   "featureDependencies": {
@@ -661,6 +674,8 @@
     "controller.cameraManager": 896,
     "controller.streamingSourceVtableOffset": 3168,
     "actor.rootComponent": 456,
+    "vehicle.movementComponent": 888,
+    "vehicle.maxEngineTorque": 2616,
     "object.internalIndex": 12,
     "object.class": 16,
     "object.nameOffset": 24,
@@ -896,8 +911,6 @@
     "htuiRadioBox.radioBox": 4960,
     "htuiRadioBox.radioText": 4968,
     "htuiRadioBox.blockButton": 4976,
-    "htuiListItem.clickButton": 1616,
-    "vehicle.movementComponent": 888,
-    "vehicle.maxEngineTorque": 2616
+    "htuiListItem.clickButton": 1616
   }
 }

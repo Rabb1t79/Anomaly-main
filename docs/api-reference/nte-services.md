@@ -19,6 +19,72 @@ typedef uint32_t AnomalyNteSnapshotFlagsV1;
 
 没有 `VALID` 或带 `STALE` 的快照不可作为当前状态使用；`PARTIAL` 表示其余字段仍有效但服务明确缺少一部分数据，具体缺失项由各服务合同说明。过期 generation 必须重新取得当前 frame / snapshot。
 
+## `anomaly.nte.vehicle`
+
+- **ID**：`"anomaly.nte.vehicle"` · **版本** 2 · **capability** `nte-vehicle`
+
+该服务把 Vehicle 数据表、当前驾驶载具快照、倍率修改和召唤统一放在 Host 的 Game 域。插件不持有 UE 指针，也不读取原始偏移。函数的所属类、参数类型和布局以本项目绑定的游戏原生 dump `5.6.1-0+UE5-HT` 为依据；对应调用在活动 Profile 和运行时反射 ABI 校验通过前不会执行。
+
+```c
+typedef struct AnomalyNteVehicleSnapshotV1 {
+    uint32_t struct_size; uint32_t flags;
+    AnomalyGenerationHandleV1 vehicle;
+    double speed_kmh; float top_speed_ratio; uint32_t wheel_friction_enabled;
+    // Optional tail, present when struct_size covers it:
+    float engine_torque_ratio;
+} AnomalyNteVehicleSnapshotV1;
+
+typedef struct AnomalyNteVehicleCatalogSnapshotV1 {
+    uint32_t struct_size; uint32_t flags; uint64_t sequence;
+    uint32_t entry_count; uint32_t reserved;
+} AnomalyNteVehicleCatalogSnapshotV1;
+
+typedef struct AnomalyNteVehicleSummonRequestV1 {
+    uint32_t struct_size; uint32_t flags; double world_position[3];
+} AnomalyNteVehicleSummonRequestV1;
+
+typedef struct AnomalyNteVehicleServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *snapshot)(void*, AnomalyNteVehicleSnapshotV1*);
+    AnomalyStatusV1 (ANOMALY_CALL *set_top_speed_ratio)(void*, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *set_wheel_friction_enabled)(void*, uint32_t enabled);
+    AnomalyStatusV1 (ANOMALY_CALL *reset)(void*);
+    AnomalyStatusV1 (ANOMALY_CALL *catalog_snapshot)(void*, AnomalyNteVehicleCatalogSnapshotV1*);
+    AnomalyStatusV1 (ANOMALY_CALL *vehicle_id_at)(void*, uint32_t, char*, size_t*);
+    AnomalyStatusV1 (ANOMALY_CALL *set_summon_vehicle_id)(void*, AnomalyStringViewV1);
+    AnomalyStatusV1 (ANOMALY_CALL *summon_vehicle)(void*, const AnomalyNteVehicleSummonRequestV1*);
+    // Optional V2 tail, guarded by service struct_size:
+    AnomalyStatusV1 (ANOMALY_CALL *set_engine_torque_ratio)(void*, float ratio);
+} AnomalyNteVehicleServiceV1;
+```
+
+`catalog_snapshot` 读取 `HTGameData.GetVehicleDataAsset()` 指向的 `UHTVehicleDataAsset.DT_VehicleData`，并仅返回经过完整读取、`VehicleID` 字段验证及关键字筛选后的条目。插件使用 `vehicle_id_at` 分页读取 ID，再通过 `set_summon_vehicle_id` 设置选择。`summon_vehicle` 只接受有限坐标和 `HAS_POSITION | SET_OWNER_TO_PLAYER` 标志；Host 调用 dump 中 `HTCheatManager.CheatSpawnVehicle(FName)`，随后验证新 Actor、位置和 `Actor.Owner`。返回 `OK` 前必须通过这些后置检查。
+
+`set_top_speed_ratio` 调用 dump 声明的 `HTWheeledVehicleBase.SetTopSpeedRatio(float)`；速度读取与车轮摩擦通过当前载具的 `HTVehicleMovementComponent` 执行。可选尾字段 `set_engine_torque_ratio` 优先调用 dump 中的 `HTVehicleMovementComponent.SetExternalTorqueRatio(float)`，`snapshot.engine_torque_ratio` 由其配套 getter 读取。所有修改都仅接受 Game callback domain 请求，倍率限制为 0.05--20.0。`struct_size` 不覆盖可选尾字段时，消费端不得访问它。
+
+---
+
+## `anomaly.nte.attack-input`
+
+- **ID**：`"anomaly.nte.attack-input"` · **版本** 1 · **capability** `nte-attack-input`
+
+该服务把输入转发到游戏原生玩家控制器输入桥，不接收任意 UFunction 或参数缓冲。它用于由游戏自己创建新的攻击动作，不能把调用已完成的伤害回调当作实际伤害重放成功。
+
+```c
+typedef struct AnomalyNteAttackInputRequestV1 {
+    uint32_t struct_size; uint32_t flags; uint32_t input_id; int32_t param;
+} AnomalyNteAttackInputRequestV1;
+typedef struct AnomalyNteAttackInputServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *press)(void*, const AnomalyNteAttackInputRequestV1*);
+    AnomalyStatusV1 (ANOMALY_CALL *release)(void*, const AnomalyNteAttackInputRequestV1*);
+} AnomalyNteAttackInputServiceV1;
+```
+
+Host 依据 dump 验证 `HTPlayerController.ActivateAbilityFromID(InputID, Param)` 和 `ReleaseAbilityFromID(InputID, Param)` 的参数布局，并只接受 `input_id` 在有效原生枚举范围内且 `flags == 0` 的请求。调用只能在 Game 域进行：`OK` 仅表示输入桥已成功调用，不等于已命中。需要确认攻击的插件必须继续监听新的玩家→敌人 `DamageEvent`。
+
+---
+
 ## `anomaly.nte.pickup`
 
 - **ID**：`"anomaly.nte.pickup"` · **版本** 1 · **capability** `nte-pickup`

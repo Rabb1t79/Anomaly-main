@@ -150,6 +150,90 @@ if(MSVC)
     target_compile_options(anomaly_miniz PRIVATE /w)
 endif()
 
+# miniaudio decodes the HiFiVehicleMusic library and drives WASAPI/DirectSound;
+# RtAudio supplies the ASIO host (built from source, its CMake project is skipped).
+FetchContent_Declare(
+    miniaudio
+    URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz
+    URL_HASH SHA256=b900edcffe979816e2560a0580b9b1216d674b4f17fbadeca8f777a7f8ab0274
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR anomaly-no-cmake
+)
+FetchContent_Declare(
+    rtaudio
+    URL https://github.com/thestk/rtaudio/archive/refs/tags/6.0.1.tar.gz
+    URL_HASH SHA256=7206c8b6cee43b474f43d64988fefaadfdcfc4264ed38d8de5f5d0e6ddb0a123
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR anomaly-no-cmake
+)
+FetchContent_MakeAvailable(miniaudio rtaudio)
+add_library(anomaly_miniaudio STATIC "${miniaudio_SOURCE_DIR}/miniaudio.c")
+target_include_directories(anomaly_miniaudio PUBLIC "${miniaudio_SOURCE_DIR}")
+add_library(anomaly_rtaudio_asio STATIC
+    "${rtaudio_SOURCE_DIR}/RtAudio.cpp"
+    "${rtaudio_SOURCE_DIR}/include/asio.cpp"
+    "${rtaudio_SOURCE_DIR}/include/asiodrivers.cpp"
+    "${rtaudio_SOURCE_DIR}/include/asiolist.cpp"
+    "${rtaudio_SOURCE_DIR}/include/iasiothiscallresolver.cpp")
+target_include_directories(anomaly_rtaudio_asio PUBLIC
+    "${rtaudio_SOURCE_DIR}" "${rtaudio_SOURCE_DIR}/include")
+target_compile_definitions(anomaly_rtaudio_asio PUBLIC __WINDOWS_ASIO__)
+target_link_libraries(anomaly_rtaudio_asio PUBLIC ole32 winmm user32 advapi32)
+if(MSVC)
+    target_compile_options(anomaly_miniaudio PRIVATE /w)
+    target_compile_options(anomaly_rtaudio_asio PRIVATE /w)
+endif()
+# Monkey's Audio SDK decodes .ape for HiFiVehicleMusic (official SDK archive,
+# built as a static library from its library sources; its CMake project is skipped).
+FetchContent_Declare(
+    monkeys_audio
+    URL https://monkeysaudio.com/files/MAC_1327_SDK.zip
+    URL_HASH SHA256=c47c6b36f6a7bd50d990f2eb36a70915c0074a7b9634be396c94464905e76686
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR anomaly-no-cmake
+)
+FetchContent_MakeAvailable(monkeys_audio)
+set(ANOMALY_MONKEYS_AUDIO_INCLUDE_DIRS
+    "${monkeys_audio_SOURCE_DIR}/Source/Shared" "${monkeys_audio_SOURCE_DIR}/Source/MACLib")
+set(anomaly_monkeys_audio_sources)
+foreach(anomaly_mac_source IN ITEMS
+        Shared/BufferIO Shared/CharacterHelper Shared/CircleBuffer Shared/CPUFeatures Shared/CRC
+        Shared/GlobalFunctions Shared/MemoryIO Shared/Semaphore Shared/Thread Shared/WholeFileIO
+        Shared/WinFileIO
+        MACLib/APECompress MACLib/APECompressCore MACLib/APECompressCreate MACLib/APEDecompress
+        MACLib/APEDecompressCore MACLib/APEHeader MACLib/APEInfo MACLib/APELink MACLib/APETag
+        MACLib/BitArray MACLib/FloatTransform MACLib/MACLib MACLib/MACProgressHelper MACLib/MD5
+        MACLib/NewPredictor MACLib/NNFilter MACLib/NNFilterGeneric MACLib/NNFilterSSE2
+        MACLib/NNFilterSSE4.1 MACLib/NNFilterAVX2 MACLib/NNFilterAVX512 MACLib/Prepare
+        MACLib/UnBitArray MACLib/UnBitArrayBase MACLib/WAVInputSource MACLib/Interim
+        MACLib/Old/NewPredictorOld MACLib/Old/AntiPredictorOld MACLib/Old/AntiPredictorExtraHighOld
+        MACLib/Old/AntiPredictorFastOld MACLib/Old/AntiPredictorHighOld MACLib/Old/AntiPredictorNormalOld
+        MACLib/Old/APEDecompressCoreOld MACLib/Old/APEDecompressOld MACLib/Old/UnBitArrayOld
+        MACLib/Old/UnMACOld)
+    list(APPEND anomaly_monkeys_audio_sources "${monkeys_audio_SOURCE_DIR}/Source/${anomaly_mac_source}.cpp")
+endforeach()
+# dsd2pcm converts DSD to PCM when neither native DSD nor DoP reaches the DAC.
+FetchContent_Declare(
+    dsd2pcm
+    URL https://github.com/GiangLH/dsd2pcm/archive/354fcb539d11920980ecd88249954f883a3d16f4.tar.gz
+    URL_HASH SHA256=bd01b056e8e82ddb6c6859cce4f359925cdee4459c8b2bc11d0ebe8a5599f2ba
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    SOURCE_SUBDIR anomaly-no-cmake
+)
+FetchContent_MakeAvailable(dsd2pcm)
+add_library(anomaly_dsd2pcm STATIC "${dsd2pcm_SOURCE_DIR}/dsd2pcm.c")
+target_include_directories(anomaly_dsd2pcm PUBLIC "${dsd2pcm_SOURCE_DIR}")
+if(MSVC)
+    target_compile_options(anomaly_dsd2pcm PRIVATE /w)
+endif()
+add_library(anomaly_monkeys_audio STATIC ${anomaly_monkeys_audio_sources})
+# Kept private: the SDK headers (All.h, Thread.h, Version.h, ...) would shadow others.
+target_include_directories(anomaly_monkeys_audio PRIVATE ${ANOMALY_MONKEYS_AUDIO_INCLUDE_DIRS})
+target_compile_definitions(anomaly_monkeys_audio PRIVATE PLATFORM_WINDOWS UNICODE _UNICODE)
+if(MSVC)
+    target_compile_options(anomaly_monkeys_audio PRIVATE /w)
+endif()
+
 add_library(anomaly_imgui STATIC
     src/ui/host_ui_service.cpp
     src/ui/platform_ui_theme.cpp
@@ -722,6 +806,15 @@ target_compile_definitions(
 target_compile_options(anomaly_plugin_native_dependency PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_plugin_native_dependency PUBLIC Psapi)
 
+# In-process PE mapper for plugin packages: the plugin image, its relocations,
+# imports and C++ exception data are mapped without the Windows loader, so the
+# image never enters the PEB module list.
+add_library(anomaly_plugin_image_mapper STATIC src/plugin/plugin_image_mapper.cpp)
+target_include_directories(anomaly_plugin_image_mapper PUBLIC include)
+target_compile_definitions(
+    anomaly_plugin_image_mapper PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(anomaly_plugin_image_mapper PRIVATE /W4 /permissive- /EHsc)
+
 add_library(anomaly_plugin_shadow STATIC
     src/plugin/plugin_shadow_store.cpp
     src/plugin/plugin_file_watcher.cpp
@@ -861,6 +954,7 @@ set(ANOMALY_MANUAL_MAP_TLS_FREE_TARGETS
     anomaly_adapter_services
     anomaly_imgui
     anomaly_nte_profile_runtime
+    anomaly_plugin_image_mapper
     anomaly_plugin_manifest
     anomaly_reliable_storage
     anomaly_repository_configuration
@@ -879,6 +973,7 @@ target_link_libraries(
     anomaly_platform_ui_layout
     anomaly_scoped_platform
     anomaly_plugin_shadow anomaly_plugin_dependency_resolver anomaly_plugin_enablement
+    anomaly_plugin_image_mapper
     anomaly_nte_profile_runtime
     anomaly_websocket_server
     anomaly_repository_coordinator
@@ -967,6 +1062,7 @@ target_compile_definitions(anomaly_test_host PRIVATE UNICODE _UNICODE WIN32_LEAN
 target_compile_options(anomaly_test_host PRIVATE /W4 /permissive- /EHsc)
 target_link_libraries(anomaly_test_host PRIVATE
     ue5mem_core anomaly_plugin_shadow anomaly_plugin_dependency_resolver anomaly_plugin_enablement
+    anomaly_plugin_image_mapper
     anomaly_adapter_services anomaly_plugin_runtime
     anomaly_structured_logger anomaly_scoped_platform anomaly_ui_resources
     anomaly_i18n nlohmann_json::nlohmann_json Psapi)
@@ -987,6 +1083,7 @@ if(ANOMALY_BUILD_TEST_FIXTURES)
         ue5mem_core anomaly_imgui anomaly_plugin_shadow anomaly_plugin_dependency_resolver
         anomaly_platform_ui_model anomaly_plugin_enablement anomaly_adapter_services
         anomaly_platform_settings anomaly_platform_ui_layout
+        anomaly_plugin_image_mapper
         anomaly_plugin_runtime
         anomaly_structured_logger anomaly_scoped_platform anomaly_ui_resources
         anomaly_i18n nlohmann_json::nlohmann_json ole32 shell32)
@@ -1067,6 +1164,7 @@ if(ANOMALY_BUILD_TEST_FIXTURES)
         anomaly_platform_ui_layout
         anomaly_scoped_platform
         anomaly_plugin_shadow anomaly_plugin_dependency_resolver anomaly_plugin_enablement
+        anomaly_plugin_image_mapper
         anomaly_nte_profile_runtime
         anomaly_websocket_server
         anomaly_repository_coordinator
@@ -1164,11 +1262,6 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteTeleport/manifest.json
         PACKAGE_NAME NteTeleport
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteTeleport")
-    anomaly_add_plugin(anomaly_builtin_nte_vehicle
-        SOURCES plugins/NteVehicle/plugin.cpp
-        MANIFEST plugins/NteVehicle/manifest.json
-        PACKAGE_NAME NteVehicle
-        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteVehicle")
     anomaly_add_plugin(anomaly_builtin_nte_movement_hold TEST_PLUGIN
         SOURCES plugins/NteMovementHold/plugin.cpp
         MANIFEST plugins/NteMovementHold/manifest.json
@@ -1202,6 +1295,13 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/FakeUID/manifest.json
         PACKAGE_NAME FakeUID
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/FakeUID")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_fake_uid_latency_fixture plugins/FakeUID/latency_tests.cpp)
+        target_include_directories(anomaly_fake_uid_latency_fixture PRIVATE include "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_compile_options(anomaly_fake_uid_latency_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        target_compile_definitions(anomaly_fake_uid_latency_fixture PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_link_libraries(anomaly_fake_uid_latency_fixture PRIVATE nlohmann_json::nlohmann_json)
+    endif()
     anomaly_add_plugin(anomaly_builtin_camera_tools
         SOURCES plugins/CameraTools/plugin.cpp
         MANIFEST plugins/CameraTools/manifest.json
@@ -1316,6 +1416,23 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteFreeFly/manifest.json
         PACKAGE_NAME NteFreeFly
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteFreeFly")
+    anomaly_add_plugin(anomaly_builtin_skin_changer
+        SOURCES plugins/SkinChanger/plugin.cpp plugins/SkinChanger/cosmetics.cpp
+            plugins/SkinChanger/awakening.cpp
+        MANIFEST plugins/SkinChanger/manifest.json
+        PACKAGE_NAME SkinChanger
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/SkinChanger")
+    if(ANOMALY_BUILD_TEST_FIXTURES)
+        add_executable(anomaly_skin_changer_fixture
+            plugins/SkinChanger/cosmetics_tests.cpp)
+        target_compile_features(anomaly_skin_changer_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_skin_changer_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+        add_executable(anomaly_skin_changer_awakening_fixture
+            plugins/SkinChanger/awakening_tests.cpp)
+        target_compile_features(anomaly_skin_changer_awakening_fixture PRIVATE cxx_std_20)
+        target_compile_options(anomaly_skin_changer_awakening_fixture PRIVATE /W4 /permissive- /EHsc /utf-8)
+    endif()
+
     add_library(anomaly_quick_ultimate_sequence STATIC
         plugins/QuickUltimate/sequence.cpp)
     target_include_directories(anomaly_quick_ultimate_sequence PUBLIC
@@ -1377,6 +1494,25 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     target_link_libraries(anomaly_builtin_camera_tools PRIVATE nlohmann_json::nlohmann_json)
     target_link_libraries(anomaly_builtin_better_pose PRIVATE nlohmann_json::nlohmann_json)
     target_link_libraries(anomaly_builtin_dll_loader PRIVATE nlohmann_json::nlohmann_json)
+    anomaly_add_plugin(anomaly_builtin_hifi_vehicle_music
+        SOURCES plugins/HiFiVehicleMusic/plugin.cpp plugins/HiFiVehicleMusic/audio_engine.cpp
+            plugins/HiFiVehicleMusic/ape_decoder.cpp plugins/HiFiVehicleMusic/dsd_reader.cpp
+            plugins/HiFiVehicleMusic/dsd_asio_output.cpp plugins/HiFiVehicleMusic/dsd_pcm_decoder.cpp
+        MANIFEST plugins/HiFiVehicleMusic/manifest.json
+        PACKAGE_NAME HiFiVehicleMusic
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/HiFiVehicleMusic")
+    anomaly_add_plugin(anomaly_builtin_model_scale
+        SOURCES plugins/ModelScale/plugin.cpp
+        MANIFEST plugins/ModelScale/manifest.json
+        PACKAGE_NAME ModelScale
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/ModelScale")
+    target_link_libraries(anomaly_builtin_hifi_vehicle_music PRIVATE
+        nlohmann_json::nlohmann_json anomaly_miniaudio anomaly_rtaudio_asio anomaly_monkeys_audio anomaly_dsd2pcm
+        ole32 shell32 uuid avrt winmm)
+    # Only the APE wrapper sees the Monkey's Audio headers and their defines.
+    set_source_files_properties(plugins/HiFiVehicleMusic/ape_decoder.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${ANOMALY_MONKEYS_AUDIO_INCLUDE_DIRS}"
+        COMPILE_DEFINITIONS "PLATFORM_WINDOWS;UNICODE;_UNICODE")
 
     # Test packages exist only when ANOMALY_BUILD_TEST_PLUGINS is on, so every list that
     # reaches their targets is built from the targets that actually exist.
@@ -1387,8 +1523,9 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_camera_blur_fix anomaly_builtin_better_pose
         anomaly_builtin_wallet_collector anomaly_builtin_box_auto anomaly_builtin_combat_box
         anomaly_builtin_clone_enter anomaly_builtin_nte_quick_ultimate
-        anomaly_builtin_nte_free_fly anomaly_builtin_ui_buttons
-        anomaly_builtin_dll_loader)
+        anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
+        anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
+        anomaly_builtin_model_scale)
     if(ANOMALY_BUILD_TEST_PLUGINS)
         list(APPEND ANOMALY_BUILTIN_PLUGIN_TARGETS
             anomaly_builtin_nte_movement_hold
@@ -1407,7 +1544,9 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_builtin_combat_box PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_clone_enter PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_nte_free_fly PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_skin_changer PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_hifi_vehicle_music PRIVATE /utf-8)
     endif()
     add_dependencies(anomaly_test_host ${ANOMALY_BUILTIN_PLUGIN_TARGETS})
     if(TARGET anomaly-platform-preview)
@@ -1459,9 +1598,11 @@ anomaly_stage_platform_preview_plugin(anomaly_builtin_clone_enter CloneEnter)
 anomaly_stage_platform_preview_plugin(
     anomaly_builtin_nte_quick_ultimate QuickUltimate)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_free_fly NteFreeFly)
+anomaly_stage_platform_preview_plugin(anomaly_builtin_skin_changer SkinChanger)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_ui_buttons UiButtons)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_dll_loader DllLoader)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_time_accel TimeAccel)
+anomaly_stage_platform_preview_plugin(anomaly_builtin_hifi_vehicle_music HiFiVehicleMusic)
 
 if(TARGET anomaly-platform-preview)
     add_custom_command(TARGET anomaly-platform-preview POST_BUILD
@@ -1678,6 +1819,11 @@ install(FILES schemas/plugin-manifest.schema.json schemas/build-profile.schema.j
     DESTINATION ${CMAKE_INSTALL_DATADIR}/anomaly/schemas COMPONENT SDK)
 install(FILES abi/anomaly-sdk-v1-windows-x64.json
     DESTINATION ${CMAKE_INSTALL_DATADIR}/anomaly/abi COMPONENT SDK)
+# The plugin build function compiles the exception bridge into every C++ plugin
+# package; the SDK distribution ships it so installed-package consumers build
+# against the same source.
+install(FILES sdk/cpp/plugin_cxx_throw_bridge.cpp
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/anomaly/cpp COMPONENT SDK)
 set(ANOMALY_SDK_EXAMPLES_DESTINATION "${CMAKE_INSTALL_DATADIR}/anomaly/examples")
 install(FILES examples/CMakeLists.txt examples/README.md
     DESTINATION ${ANOMALY_SDK_EXAMPLES_DESTINATION} COMPONENT SDK)
@@ -1711,7 +1857,11 @@ set(ANOMALY_THIRD_PARTY_LICENSE_FILES
     third_party/licenses/minhook-LICENSE.txt
     third_party/licenses/nlohmann-json-LICENSE.txt
     third_party/licenses/json-schema-validator-LICENSE.txt
-    third_party/licenses/noto-sans-cjk-LICENSE.txt)
+    third_party/licenses/noto-sans-cjk-LICENSE.txt
+    third_party/licenses/miniaudio-LICENSE.txt
+    third_party/licenses/rtaudio-LICENSE.txt
+    third_party/licenses/monkeys-audio-LICENSE.txt
+    third_party/licenses/dsd2pcm-LICENSE.txt)
 set(ANOMALY_RELEASE_COMPONENTS GameRuntime SDK Tools)
 if(ANOMALY_BUILD_SYMBOLS)
     list(APPEND ANOMALY_RELEASE_COMPONENTS Symbols)
