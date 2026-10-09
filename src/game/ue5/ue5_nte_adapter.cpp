@@ -8099,11 +8099,9 @@ struct Ue5NteAdapter::State {
             if (vehicle_bindings.speed_kmh.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", vehicle_outers, "FloatReturn", vehicle_bindings.speed_kmh));
             }
-            // Tokky's speed mutation is a reflected SetMaxEngineTorque call on the
-            // active ChaosWheeledVehicleMovementComponent.
-            // The dump exposes separate calls: HTWheeledVehicleBase.SetTopSpeedRatio
-            // controls speed, while ChaosWheeledVehicleMovementComponent.SetMaxEngineTorque
-            // controls engine torque. Do not route the speed slider into the torque setter.
+            // Keep the two controls separate. The known-working NTE build resolves
+            // SetMaxEngineTorque through /Script/HTGame and these vehicle outers;
+            // do not replace this with the engine plugin's generic ChaosVehicles path.
             if (vehicle_bindings.set_vehicle_speed_ratio.function == 0) {
                 static constexpr std::array<std::string_view, 1> speed_outers{"HTWheeledVehicleBase"};
                 static_cast<void>(FindVehicleFunctionLocked(
@@ -8111,11 +8109,9 @@ struct Ue5NteAdapter::State {
                     vehicle_bindings.set_vehicle_speed_ratio));
             }
             if (vehicle_bindings.set_engine_torque.function == 0) {
-                static constexpr std::array<std::string_view, 1> torque_outers{
-                    "ChaosWheeledVehicleMovementComponent"};
                 static_cast<void>(FindVehicleFunctionLocked(
-                    "SetMaxEngineTorque", torque_outers, "FloatInput",
-                    vehicle_bindings.set_engine_torque, "ChaosVehicles"));
+                    "SetMaxEngineTorque", vehicle_outers, "FloatInput",
+                    vehicle_bindings.set_engine_torque));
             }
             static_cast<void>(EnsureVehicleSummonBindingLocked());
             if (vehicle_bindings.set_wheel_friction.function == 0) {
@@ -8145,17 +8141,16 @@ struct Ue5NteAdapter::State {
                     movement_component != vehicle_base_movement_component;
                 if (vehicle_changed || component_changed || !vehicle_base_engine_torque_valid) {
                     vehicle_base_movement_component = movement_component;
-                    // SetMaxEngineTorque changes the live Chaos engine simulation, not the
-                    // EngineSetup config UPROPERTY. Read the untouched config value as the
-                    // multiplier baseline rather than trusting a raw hard-coded byte offset.
-                    static constexpr std::array<std::string_view, 2> torque_path{
-                        "EngineSetup", "MaxTorque"};
-                    std::uintptr_t torque_address{};
+                    // Restore the known-working NTE/Tokky data path: the active vehicle's
+                    // movement component is at profile offset 0x378, and its torque baseline
+                    // is at profile offset 0xA38 for the supplied 5.6.1 build. The profile
+                    // maps these validated dump offsets as 888 and 2616 respectively.
+                    // Cache the baseline per vehicle/component so applying 2x does not turn
+                    // the next frame's 2x baseline into 4x, 8x, and so on.
                     float torque{};
-                    if (ResolveVehicleFloatPathLocked(
-                            movement_component, torque_path, torque_address) &&
-                        ReadValue(*memory, torque_address, torque) &&
-                        std::isfinite(torque) && torque > 0.0F) {
+                    if (ReadValue(*memory, movement_component +
+                            Layout(profile, "vehicle.maxEngineTorque"), torque) &&
+                        std::isfinite(torque)) {
                         vehicle_base_engine_torque = torque;
                         vehicle_base_engine_torque_valid = true;
                         vehicle_engine_torque_ratio = 1.0F;
@@ -8309,11 +8304,11 @@ struct Ue5NteAdapter::State {
         if (vehicle_base_movement_component == 0 ||
             vehicle_bindings.set_engine_torque.function == 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "ChaosVehicles.ChaosWheeledVehicleMovementComponent.SetMaxEngineTorque(float) ABI is not validated");
+                "HTGame vehicle SetMaxEngineTorque(float) ABI or movement component is unavailable");
         }
         if (!vehicle_base_engine_torque_valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "original torque baseline EngineSetup.MaxTorque could not be read");
+                "original torque baseline at profile layout vehicle.maxEngineTorque could not be read");
         }
         const float torque = vehicle_base_engine_torque * ratio;
         std::array<std::uint8_t, 4> parameters{};
