@@ -8287,6 +8287,18 @@ struct Ue5NteAdapter::State {
         return CopyString(class_name, destination, inout_size);
     }
 
+    AnomalyStatusV1 VehicleSummonStatusUtf8(
+        char* destination, std::size_t* inout_size) noexcept {
+        if (inout_size == nullptr)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "summon status buffer size is null");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "summon status query requires Game thread");
+        std::scoped_lock lock(mutex);
+        if (vehicle_last_summon_status.empty())
+            return CopyString("尚无载具召唤请求", destination, inout_size);
+        return CopyString(vehicle_last_summon_status, destination, inout_size);
+    }
+
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
@@ -13853,7 +13865,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk,
             VehicleIdCountThunk, VehicleIdAtThunk, SetSummonVehicleIdThunk,
-            VehicleCurrentClassNameThunk};
+            VehicleCurrentClassNameThunk, VehicleSummonStatusThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -14236,6 +14248,13 @@ private:
         void* user, char* destination, std::size_t* inout_size) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleCurrentClassNameUtf8(
+            destination, inout_size) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSummonStatusThunk(
+        void* user, char* destination, std::size_t* inout_size) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSummonStatusUtf8(
             destination, inout_size) : StoppedStatus();
     }
 
