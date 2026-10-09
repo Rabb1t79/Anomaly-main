@@ -52,6 +52,8 @@ struct Context {
     bool catalog_ready{};
     bool player_position_valid{};
     bool driving_vehicle_valid{};
+    // Persist the close button state for the current plugin generation.
+    int window_open{1};
 
     // Cross-domain state only carries Render intents and immutable Render snapshots.
     std::mutex intent_mutex;
@@ -239,8 +241,9 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
     const auto view = g.render_snapshot.load(std::memory_order_acquire);
     if (!view) return;
 
-    int open = 1;
+    int open = g.window_open;
     anomaly::sdk::UiWindow window(ui, "NTE Vehicle Catalog", &open, 0);
+    g.window_open = open;
     if (!window) return; // UiWindow calls end_window even when begin_window returns false.
 
     ui->text(ui->user, anomaly::sdk::StringView(
@@ -294,6 +297,7 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
     if (view->player_position_valid) {
         ui->text(ui->user, anomaly::sdk::StringView("玩家坐标快照有效"));
     }
+    g.window_open = open;
 }
 
 AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
@@ -328,6 +332,7 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
     }
     g.render_snapshot.store(std::make_shared<const RenderSnapshot>(), std::memory_order_release);
     g.running.store(false, std::memory_order_release);
+    g.window_open = 1;
     g.reset_for_start.store(false, std::memory_order_release);
     *plugin_context = &g;
     return anomaly::sdk::Ok();
@@ -335,6 +340,7 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
 
 AnomalyStatusV1 Start(void* plugin_context) {
     if (plugin_context != &g) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    g.window_open = 1;
     g.reset_for_start.store(true, std::memory_order_release);
     g.running.store(true, std::memory_order_release);
     return anomaly::sdk::Ok();
