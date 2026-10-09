@@ -8148,6 +8148,67 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "no vehicle ID selected");
         }
 
+        // The 5.6.1 dump puts CheatSpawnVehicle(FName VehicleID) on
+        // HTCheatManager. EnableCheats only creates it when the controller has a
+        // valid CheatClass, so seed that class from the exact dump-backed HTCheatManager
+        // UClass when the game's controller left it unset.
+        std::uintptr_t controller_class{};
+        ReflectedPropertyInfo manager_property;
+        ReflectedPropertyInfo cheat_class_property;
+        if (!ReadPointerAt(*memory, player_controller, Layout(profile, "object.class"), controller_class) ||
+            !FindReflectedPropertyLocked(controller_class, "CheatManager", manager_property, true) ||
+            manager_property.type != "ObjectProperty" || manager_property.element_size != 8 ||
+            manager_property.offset < 0 ||
+            !FindReflectedPropertyLocked(controller_class, "CheatClass", cheat_class_property, true) ||
+            cheat_class_property.type != "ClassProperty" || cheat_class_property.element_size != 8 ||
+            cheat_class_property.offset < 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTPlayerController CheatManager/CheatClass reflection did not validate");
+        }
+        std::uintptr_t cheat_manager{};
+        if (!ReadValue(*memory, player_controller +
+                static_cast<std::uintptr_t>(manager_property.offset), cheat_manager)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTPlayerController.CheatManager could not be read");
+        }
+        if (cheat_manager == 0) {
+            std::uintptr_t cheat_class{};
+            if (!ReadValue(*memory, player_controller +
+                    static_cast<std::uintptr_t>(cheat_class_property.offset), cheat_class)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "HTPlayerController.CheatClass could not be read");
+            }
+            if (cheat_class == 0) {
+                std::uintptr_t ht_cheat_manager_class{};
+                if (!FindExactObjectLocked(L"/Script/HTGame.HTCheatManager",
+                        ht_cheat_manager_class) || ht_cheat_manager_class == 0 ||
+                    !memory->Write(player_controller +
+                        static_cast<std::uintptr_t>(cheat_class_property.offset),
+                        &ht_cheat_manager_class, sizeof(ht_cheat_manager_class))) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "HTGame.HTCheatManager class could not be validated/written to CheatClass");
+                }
+            }
+            std::uintptr_t enable_function{};
+            VehicleFunctionBinding enable_binding{};
+            if (!FindExactObjectLocked(L"/Script/Engine.PlayerController.EnableCheats",
+                    enable_function) ||
+                !BuildVehicleBindingLocked(enable_function, "EnableCheats", "NoArgs", enable_binding)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Engine.PlayerController.EnableCheats() ABI did not validate");
+            }
+            std::array<std::uint8_t, 1> no_parameters{};
+            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+                    enable_function, no_parameters.data(), enable_binding.parms_size) ||
+                !ReadValue(*memory, player_controller +
+                    static_cast<std::uintptr_t>(manager_property.offset), cheat_manager) ||
+                cheat_manager == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "EnableCheats did not initialize HTPlayerController.CheatManager");
+            }
+        }
+        vehicle_bindings.summon_vehicle.receiver = cheat_manager;
+
         pending_vehicle_summon = {};
         pending_vehicle_summon.active = true;
         pending_vehicle_summon.request_sequence = tick_sequence.load(std::memory_order_acquire);
