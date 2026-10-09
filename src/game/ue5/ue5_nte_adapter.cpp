@@ -756,6 +756,9 @@ struct Ue5NteAdapter::State {
         std::uint16_t parms_size{};
         std::uint16_t parameter_offset{};
         VehicleSummonParameterKind parameter_kind{VehicleSummonParameterKind::None};
+        // ProcessEvent receiver must match the reflected function owner. A function
+        // found on HTPlayerCharacter cannot safely be invoked on HTPlayerController.
+        std::uintptr_t receiver{};
     };
     struct VehicleOwnerBinding {
         std::uintptr_t function{};
@@ -7636,7 +7639,10 @@ struct Ue5NteAdapter::State {
             std::uintptr_t function{};
             if (FindExactObjectLocked(path.c_str(), function) &&
                 BuildVehicleSummonBindingLocked(function, "CheatSpawnVehicle", vehicle_bindings.summon_vehicle)) {
-                return true;
+                vehicle_bindings.summon_vehicle.receiver =
+                    outer == "HTPlayerController" ? player_controller : player_pawn;
+                if (vehicle_bindings.summon_vehicle.receiver != 0) return true;
+                vehicle_bindings.summon_vehicle = {};
             }
         }
         for (const auto outer : outers) {
@@ -7649,7 +7655,10 @@ struct Ue5NteAdapter::State {
             std::uintptr_t function{};
             if (FindExactObjectLocked(path.c_str(), function) &&
                 BuildVehicleSummonBindingLocked(function, "TestSummonVehicle", vehicle_bindings.summon_vehicle)) {
-                return true;
+                vehicle_bindings.summon_vehicle.receiver =
+                    outer == "HTPlayerController" ? player_controller : player_pawn;
+                if (vehicle_bindings.summon_vehicle.receiver != 0) return true;
+                vehicle_bindings.summon_vehicle = {};
             }
         }
         return false;
@@ -8142,7 +8151,8 @@ struct Ue5NteAdapter::State {
 
         const auto& binding = vehicle_bindings.summon_vehicle;
         if (binding.parameter_kind == VehicleSummonParameterKind::NoArgs) {
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+            if (binding.receiver == 0 ||
+                !InvokeProcessEventGuarded(process_event_invoker, binding.receiver,
                     binding.function, nullptr, 0)) {
                 pending_vehicle_summon.active = false;
                 return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
@@ -8195,7 +8205,8 @@ struct Ue5NteAdapter::State {
                 pending_vehicle_summon.active = false;
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "unsupported summon parameter ABI");
             }
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+            if (binding.receiver == 0 ||
+                !InvokeProcessEventGuarded(process_event_invoker, binding.receiver,
                     binding.function, parameters.data(), binding.parms_size)) {
                 pending_vehicle_summon.active = false;
                 return Status(ANOMALY_STATUS_V1_FAILED, "summon vehicle ProcessEvent failed");
