@@ -778,6 +778,7 @@ struct Ue5NteAdapter::State {
     struct VehicleBindings {
         VehicleFunctionBinding current_vehicle{};
         VehicleFunctionBinding speed_kmh{};
+        VehicleFunctionBinding spawned_actor_location{};
         VehicleFunctionBinding set_top_speed_ratio{};
         VehicleSummonBinding summon_vehicle{};
         VehicleFunctionBinding set_wheel_friction{};
@@ -7876,6 +7877,79 @@ struct Ue5NteAdapter::State {
         vehicle_catalog_attempted = true;
     }
 
+    [[nodiscard]] bool EnsureSpawnedActorLocationBindingLocked() noexcept {
+        if (vehicle_bindings.spawned_actor_location.function != 0) return true;
+        std::uintptr_t function{};
+        if (!FindExactObjectLocked(L"/Script/Engine.Actor.K2_GetActorLocation", function))
+            return false;
+
+        std::string function_name, outer_name, function_class_name;
+        std::uintptr_t outer{}, function_class{}, property{};
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadReflectedObjectNameLocked(function, function_name) ||
+            function_name != "K2_GetActorLocation" ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) || outer_name != "Actor" ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            function_class_name != "Function" ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+            !ReadNullablePointerAt(*memory, function, Layout(profile, "ustruct.propertyLink"), property) ||
+            num_parms != 1 || parms_size != 0x18 || return_offset != 0 ||
+            property == 0) return false;
+
+        ReflectedPropertyInfo info;
+        if (!ReadReflectedPropertyLocked(property, info) ||
+            info.name != "ReturnValue" || info.type != "StructProperty" ||
+            info.element_size != 0x18 || info.offset != 0 || info.next != 0) return false;
+
+        vehicle_bindings.spawned_actor_location = {
+            function, parms_size, 0, return_offset, true};
+        return true;
+    }
+
+    [[nodiscard]] bool VerifySpawnedActorOwnerLocked(
+        const std::uintptr_t actor, const std::uintptr_t expected_owner) const noexcept {
+        if (actor == 0 || expected_owner == 0) return false;
+        std::uintptr_t actor_class{};
+        if (!ReadPointerAt(*memory, actor, Layout(profile, "object.class"), actor_class) ||
+            actor_class == 0) return false;
+
+        ReflectedPropertyInfo owner_property;
+        if (!FindReflectedPropertyLocked(
+                actor_class, "Owner", owner_property, true) ||
+            owner_property.type != "ObjectProperty" ||
+            owner_property.element_size != sizeof(std::uintptr_t) ||
+            owner_property.offset != 0x160) return false;
+
+        std::uintptr_t observed_owner{};
+        return ReadValue(*memory, actor +
+                static_cast<std::uintptr_t>(owner_property.offset), observed_owner) &&
+            observed_owner == expected_owner;
+    }
+
+    [[nodiscard]] bool VerifySpawnedActorLocationLocked(
+        const std::uintptr_t actor, const std::array<double, 3>& target) noexcept {
+        if (actor == 0 || !EnsureSpawnedActorLocationBindingLocked()) return false;
+
+        std::array<std::uint8_t, 0x18> parameters{};
+        const auto& binding = vehicle_bindings.spawned_actor_location;
+        if (!InvokeProcessEventGuarded(process_event_invoker, actor,
+                binding.function, parameters.data(), parameters.size())) return false;
+
+        std::array<double, 3> actual{};
+        std::memcpy(actual.data(), parameters.data() + binding.return_offset,
+            sizeof(actual));
+        for (std::size_t axis = 0; axis < actual.size(); ++axis) {
+            if (!std::isfinite(actual[axis]) ||
+                std::abs(actual[axis] - target[axis]) > 5.0) return false;
+        }
+        return true;
+    }
+
     bool ApplySummonedVehicleLocked(const std::uint64_t sequence) noexcept {
         if (!pending_vehicle_summon.active) return false;
         if (!actor_frame_cache || actor_world_generation != world_generation ||
@@ -7904,11 +7978,12 @@ struct Ue5NteAdapter::State {
         }
         if (!best || best_distance > max_distance) return false;
 
+        // The dump's Actor.Owner property is read back and compared with this PlayerController.
         bool owner_ok = false;
-        if (player_pawn != 0 && EnsureVehicleOwnerBindingLocked()) {
+        if (player_controller != 0 && EnsureVehicleOwnerBindingLocked()) {
             std::array<std::uint8_t, 8> owner_parameters{};
             std::memcpy(owner_parameters.data() + vehicle_bindings.set_owner.parameter_offset,
-                &player_pawn, sizeof(player_pawn));
+                &player_controller, sizeof(player_controller));
             owner_ok = InvokeProcessEventGuarded(process_event_invoker, best->actor,
                 vehicle_bindings.set_owner.function, owner_parameters.data(),
                 vehicle_bindings.set_owner.parms_size);
@@ -7929,8 +8004,7 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.set_location.function, parameters.data(), parameters.size()) &&
                 parameters[vehicle_bindings.set_location.return_offset] != 0;
         } else {
-            // Validated UE5 root-component layout fallback. This keeps the mutation deterministic
-            // even if K2_SetActorLocation is not published in a particular build.
+            // The profile-validated root-component fallback is still subjected to read-back verification.
             std::uintptr_t root_pointer{}, location_address{};
             if (AddAddress(best->actor, Layout(profile, "actor.rootComponent"), root_pointer) &&
                 ReadValue(*memory, root_pointer, root_pointer) &&
@@ -7943,15 +8017,20 @@ struct Ue5NteAdapter::State {
             }
         }
 
+        owner_ok = owner_ok &&
+            VerifySpawnedActorOwnerLocked(best->actor, player_controller);
+        location_ok = location_ok &&
+            VerifySpawnedActorLocationLocked(best->actor, pending_vehicle_summon.target);
+
         pending_vehicle_summon.active = false;
         if (owner_ok && location_ok) {
-            vehicle_last_summon_status = "召唤成功：已锁定新 BP_vehicle 实体并设置 Player Owner/位置";
+            vehicle_last_summon_status = "召唤成功：已读回验证 PlayerController Owner 与目标坐标";
         } else if (location_ok) {
-            vehicle_last_summon_status = "召唤成功：已锁定新 BP_vehicle 实体并设置位置；Owner ABI 不可用";
+            vehicle_last_summon_status = "召唤成功：坐标读回验证通过，但 Owner 未能核实";
         } else if (owner_ok) {
-            vehicle_last_summon_status = "召唤成功：已设置 Player Owner，但位置 ABI 未验证";
+            vehicle_last_summon_status = "召唤成功：Owner 读回验证通过，但目标坐标未能核实";
         } else {
-            vehicle_last_summon_status = "已生成载具，但未能完成 Owner/位置绑定";
+            vehicle_last_summon_status = "已生成载具，但 Owner/坐标读回验证未全部通过";
         }
         return true;
     }
@@ -8170,7 +8249,7 @@ struct Ue5NteAdapter::State {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle summon must run on Game thread");
         std::scoped_lock lock(mutex);
-        if (player_controller == 0 || player_pawn == 0 ||
+        if (player_controller == 0 ||
             !std::ranges::all_of(player_position, [](double value) { return std::isfinite(value); }) ||
             !EnsureVehicleSummonBindingLocked()) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
