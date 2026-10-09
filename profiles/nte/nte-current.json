@@ -376,6 +376,20 @@
       "ue5.ProcessEvent",
       "nte.ClientIgnoreGameAndUiInput"
     ],
+    "nte.vehicle": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent"
+    ],
+    "nte.attack-input": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent"
+    ],
     "nte.player-esp": [
       "ue5.GWorld",
       "ue5.GameTick"
@@ -439,13 +453,6 @@
       "ue5.GameTick",
       "ue5.FNamePool",
       "ue5.GObjects"
-    ],
-    "nte.vehicle": [
-      "ue5.GWorld",
-      "ue5.GameTick",
-      "ue5.FNamePool",
-      "ue5.GObjects",
-      "ue5.ProcessEvent"
     ]
   },
   "optionalFeatures": [
@@ -467,7 +474,8 @@
     "nte.skills",
     "nte.skill-invocation",
     "ue5.streaming-source",
-    "nte.vehicle"
+    "nte.vehicle",
+    "nte.attack-input"
   ],
   "featureLayoutValidators": {
     "ue5.ftext": [
@@ -530,9 +538,6 @@
     ],
     "ue5.streaming-source": [
       "ue5-streaming-source-layout-v1"
-    ],
-    "nte.vehicle": [
-      "nte-vehicle-layout-v1"
     ]
   },
   "featureDependencies": {
@@ -620,6 +625,12 @@
       "nte.player"
     ],
     "nte.vehicle": [
+      "nte.player",
+      "ue5.names",
+      "ue5.objects",
+      "ue5.process-event"
+    ],
+    "nte.attack-input": [
       "nte.player",
       "ue5.names",
       "ue5.objects",
@@ -882,8 +893,6 @@
     "htuiRadioBox.radioBox": 4960,
     "htuiRadioBox.radioText": 4968,
     "htuiRadioBox.blockButton": 4976,
-    "htuiListItem.clickButton": 1616,
-    "vehicle.movementComponent": 888,
-    "vehicle.maxEngineTorque": 2616
+    "htuiListItem.clickButton": 1616
   }
 }

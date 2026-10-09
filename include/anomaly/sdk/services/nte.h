@@ -24,8 +24,6 @@
 #define ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID "anomaly.nte.skill-invocation"
 #define ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION 1u
-#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID "anomaly.nte.attack-input"
-#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_ENTITY_PAGE_V1_MAX_CAPACITY 256u
 #define ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY 128u
 #define ANOMALY_NTE_METRICS_SERVICE_V1_ID "anomaly.nte.metrics"
@@ -35,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 2u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -295,16 +293,20 @@ typedef struct AnomalyNteNavigationServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *stop_movement)(void* user);
 } AnomalyNteNavigationServiceV1;
 
-// Host-owned UE5 vehicle bridge. The Host resolves the current driving vehicle
-// and validates reflected function/property metadata before any mutation. No UE
-// object pointer crosses the plugin ABI. Mutations are Game-thread operations.
+// Host-owned UE5 vehicle bridge. Version 2 adds a catalog read directly from
+// HTVehicleDataAsset.DT_VehicleData, selection by a validated table ID, and a
+// position/owner-aware summon request. No UE object pointer crosses the plugin ABI.
+// All reflective reads and mutations are bounded, Game-thread operations.
 typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SPEED (1u << 1u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO (1u << 2u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION (1u << 3u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON (1u << 4u)
-
+#define ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES 128u
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
 typedef struct AnomalyNteVehicleSnapshotV1 {
     uint32_t struct_size;
     uint32_t flags;
@@ -314,7 +316,19 @@ typedef struct AnomalyNteVehicleSnapshotV1 {
     uint32_t wheel_friction_enabled;
 } AnomalyNteVehicleSnapshotV1;
 
-#define ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES 128u
+typedef struct AnomalyNteVehicleCatalogSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t sequence;
+    uint32_t entry_count;
+    uint32_t reserved;
+} AnomalyNteVehicleCatalogSnapshotV1;
+
+typedef struct AnomalyNteVehicleSummonRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    double world_position[3];
+} AnomalyNteVehicleSummonRequestV1;
 
 typedef struct AnomalyNteVehicleServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
@@ -325,22 +339,34 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_wheel_friction_enabled)(
         void* user, uint32_t enabled);
     AnomalyStatusV1 (ANOMALY_CALL *reset)(void* user);
-    // Appended in V1 without changing the existing field order. The host publishes
-    // this field only when the reflected summon ABI has been validated.
-    AnomalyStatusV1 (ANOMALY_CALL *summon_vehicle)(void* user);
-    // Optional V1 extensions. They are present only when struct_size covers the field.
-    // The catalog is read from the game's DT_VehicleData row names; callers must invoke
-    // these functions from the Game callback domain. No UE object or raw FName crosses ABI.
-    AnomalyStatusV1 (ANOMALY_CALL *vehicle_id_count)(void* user, uint32_t* count);
+    AnomalyStatusV1 (ANOMALY_CALL *catalog_snapshot)(
+        void* user, AnomalyNteVehicleCatalogSnapshotV1* snapshot);
     AnomalyStatusV1 (ANOMALY_CALL *vehicle_id_at)(
         void* user, uint32_t index, char* destination, size_t* inout_size);
     AnomalyStatusV1 (ANOMALY_CALL *set_summon_vehicle_id)(
         void* user, AnomalyStringViewV1 vehicle_id);
-    // Optional append-only V1 extension. Returns the reflected class name of the
-    // current driving vehicle, for example BP_Vehicle_hight_C.
-    AnomalyStatusV1 (ANOMALY_CALL *current_vehicle_class_name_utf8)(
-        void* user, char* destination, size_t* inout_size);
+    AnomalyStatusV1 (ANOMALY_CALL *summon_vehicle)(
+        void* user, const AnomalyNteVehicleSummonRequestV1* request);
 } AnomalyNteVehicleServiceV1;
+
+// Uses the game's own HTPlayerController input-to-ability bridge. It is kept
+// separate from skill-class activation because accepting a class activation did
+// not guarantee the actual attack action or a resulting damage event.
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID "anomaly.nte.attack-input"
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION 1u
+typedef struct AnomalyNteAttackInputRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t input_id;
+    int32_t param;
+} AnomalyNteAttackInputRequestV1;
+typedef struct AnomalyNteAttackInputServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *press)(
+        void* user, const AnomalyNteAttackInputRequestV1* request);
+    AnomalyStatusV1 (ANOMALY_CALL *release)(
+        void* user, const AnomalyNteAttackInputRequestV1* request);
+} AnomalyNteAttackInputServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
 // active Game callback domain; it never exposes UE object pointers, reflected functions, or
@@ -892,12 +918,6 @@ typedef struct AnomalyNteSkillInvocationServiceV1 {
         void* user, const AnomalyNteSkillInvocationRequestV1* request,
         AnomalyNteSkillInvocationResultV1* result);
 } AnomalyNteSkillInvocationServiceV1;
-
-// Host-side bridge for the validated HTPlayerController melee input path.
-typedef struct AnomalyNteAttackInputServiceV1 {
-    uint32_t struct_size; uint32_t service_version; void* user;
-    AnomalyStatusV1 (ANOMALY_CALL *activate_melee)(void* user);
-} AnomalyNteAttackInputServiceV1;
 
 // Sampling metrics describe Host work, not a per-plugin traversal. The active Profile's
 // feature matrix remains available through AnomalyNteBuildServiceV1::feature_state. A page

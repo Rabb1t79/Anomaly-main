@@ -55,6 +55,38 @@ jobs:
         shell: pwsh
         run: |
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component TestPlugins
+      - name: Build and stage dump-backed NTE plugins
+        if: github.ref_type != 'tag'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE
+          foreach ($plugin in @('NteVehicle', 'NteAttackReplay')) {
+            $src = Join-Path $root ".build\standalone-$plugin-src"
+            $build = Join-Path $root ".build\standalone-$plugin-build"
+            New-Item -ItemType Directory -Force $src, $build | Out-Null
+            $sourceFile = (Join-Path $root "plugins\$plugin\plugin.cpp").Replace('\', '/')
+            $includeDir = (Join-Path $root 'include').Replace('\', '/')
+            @"
+cmake_minimum_required(VERSION 3.22)
+project($plugin LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+add_library(plugin SHARED "$sourceFile")
+target_include_directories(plugin PRIVATE "$includeDir")
+target_compile_definitions(plugin PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+set_target_properties(plugin PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+"@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding utf8
+            cmake -S $src -B $build -G 'Visual Studio 17 2022' -A x64
+            cmake --build $build --config Release --parallel
+            $dll = Join-Path $build 'Release\plugin.dll'
+            if (!(Test-Path $dll)) { throw "$plugin plugin.dll was not produced" }
+            $dest = Join-Path $root ".build\ci-artifacts\runtime\Anomaly\plugins\$plugin"
+            New-Item -ItemType Directory -Force $dest | Out-Null
+            Copy-Item -LiteralPath $dll -Destination (Join-Path $dest 'plugin.dll') -Force
+            Copy-Item -LiteralPath (Join-Path $root "plugins\$plugin\manifest.json") -Destination (Join-Path $dest 'manifest.json') -Force
+          }
       - name: Upload CI runtime
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4

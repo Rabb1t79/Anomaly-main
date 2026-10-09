@@ -2,10 +2,9 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE DT_VehicleData catalog, real vehicle selection, current-vehicle detection, summon, player ownership and position control through the Host-validated semantic vehicle service.",
+  "description": "Reads the native DT_VehicleData catalog, lets the user select VehicleID, and validates spawned vehicle position and player ownership.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "audience": "developer",
   "version": "0.8.0",
   "entry": "plugin.dll",
   "api": {"major": 1, "minMinor": 0, "maxMinor": 0},
@@ -14,7 +13,8 @@
   "loadPhase": "game-ready",
   "services": [
     {"id": "anomaly.ui", "minVersion": 1},
-    {"id": "anomaly.nte.vehicle", "minVersion": 1}
+    {"id": "anomaly.nte.player", "minVersion": 1},
+    {"id": "anomaly.nte.vehicle", "minVersion": 2}
   ],
-  "capabilities": ["ui", "nte-vehicle"]
+  "capabilities": ["ui", "nte-player-snapshot", "nte-vehicle"]
 }
