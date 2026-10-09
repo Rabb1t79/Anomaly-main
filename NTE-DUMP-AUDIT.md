@@ -14,7 +14,8 @@ Direct CppSDK evidence used in this build:
 - UHTGameData.GetVehicleDataAsset -> UHTVehicleDataAsset.DT_VehicleData; table row struct VehicleData contains VehicleID (FName).
 - Engine.Actor.K2_SetActorLocation: block size 0x130; NewLocation at 0x00, bSweep at 0x18, SweepHitResult at 0x20, bTeleport at 0x128, ReturnValue at 0x129.
 - HTVehicleMovementComponent.GetForwardSpeedKmH and SetEnableWheelFriction execute on the movement component.
-- Summon offset is X-2000/Y+2000/Z+2000; Actor.Owner is set to the player pawn.
+- Summon offset is X-2000/Y+2000/Z+2000; Actor.Owner is set to the local PlayerController and read back for verification.
+- Engine.Actor.K2_GetActorLocation returns a 24-byte FVector; the runtime re-reads it after moving the spawned actor and checks each coordinate against the requested target (5-unit tolerance).
 
 Limitations:
 - CI compilation and package integrity do not replace in-game testing. Confirm runtime logs for catalog rows, selected VehicleID, spawn, final coordinates, Actor.Owner, attack-input dispatch, and the correlated new DamageEvent before treating gameplay behavior as proven.
