@@ -8027,9 +8027,35 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController.CheatManager property failed validation");
         }
         std::uintptr_t cheat_manager{};
-        if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset), cheat_manager) ||
-            cheat_manager == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "game CheatManager instance is not available");
+        if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset), cheat_manager)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTPlayerController.CheatManager pointer could not be read");
+        }
+
+        // PlayerController owns CheatManager and exposes EnableCheats() to initialize it.
+        // Do not stop at a null property: the dump-backed CheatSpawnVehicle call needs the
+        // manager instance, so attempt the documented engine entry point first.
+        if (cheat_manager == 0) {
+            std::uintptr_t enable_cheats_function{};
+            VehicleFunctionBinding enable_cheats_binding{};
+            if (!FindExactObjectLocked(L"/Script/Engine.PlayerController.EnableCheats",
+                    enable_cheats_function) ||
+                !BuildVehicleBindingLocked(enable_cheats_function, "EnableCheats", "NoArgs",
+                    enable_cheats_binding)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "CheatManager is null and Engine.PlayerController.EnableCheats() ABI could not be validated");
+            }
+            std::array<std::uint8_t, 1> no_parameters{};
+            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+                    enable_cheats_function, no_parameters.data(), enable_cheats_binding.parms_size)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "Engine.PlayerController.EnableCheats() ProcessEvent failed");
+            }
+            if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset),
+                    cheat_manager) || cheat_manager == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "EnableCheats returned but HTPlayerController.CheatManager remained null");
+            }
         }
         VehicleFunctionBinding summon_binding{};
         static constexpr std::array<std::string_view, 1> cheat_manager_outer{"HTCheatManager"};
