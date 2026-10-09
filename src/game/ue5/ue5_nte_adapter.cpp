@@ -7977,20 +7977,31 @@ struct Ue5NteAdapter::State {
                 current_vehicle_object = 0;
                 return false;
             }
+            const bool vehicle_changed = current_vehicle_object != vehicle;
             current_vehicle_object = vehicle;
-            // Tokky's target build reads the active movement component from the vehicle
-            // instance and uses its validated base torque as the speed-mutation baseline.
+            // Keep the original torque as a stable baseline. Refreshing it every frame
+            // after a multiplier was applied would compound the ratio (2x -> 4x -> 8x).
             std::uintptr_t movement_component{};
             if (ReadPointerAt(*memory, current_vehicle_object,
                     Layout(profile, "vehicle.movementComponent"), movement_component)) {
-                vehicle_base_movement_component = movement_component;
-                float torque{};
-                if (ReadValue(*memory, movement_component +
-                        Layout(profile, "vehicle.maxEngineTorque"), torque) &&
-                    std::isfinite(torque)) {
-                    vehicle_base_engine_torque = torque;
-                    vehicle_base_engine_torque_valid = true;
+                const bool component_changed =
+                    movement_component != vehicle_base_movement_component;
+                if (vehicle_changed || component_changed || !vehicle_base_engine_torque_valid) {
+                    vehicle_base_movement_component = movement_component;
+                    float torque{};
+                    if (ReadValue(*memory, movement_component +
+                            Layout(profile, "vehicle.maxEngineTorque"), torque) &&
+                        std::isfinite(torque)) {
+                        vehicle_base_engine_torque = torque;
+                        vehicle_base_engine_torque_valid = true;
+                        vehicle_engine_torque_ratio = 1.0F;
+                    } else {
+                        vehicle_base_engine_torque_valid = false;
+                    }
                 }
+            } else {
+                vehicle_base_movement_component = 0;
+                vehicle_base_engine_torque_valid = false;
             }
             vehicle_valid = true;
             if (vehicle_bindings.speed_kmh.function != 0) {
