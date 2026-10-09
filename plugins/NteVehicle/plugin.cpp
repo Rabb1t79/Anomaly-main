@@ -246,9 +246,13 @@ void Update(void*, double) {
             request.world_position[2] = g.player.position[2] + 2000.0;
             const auto result = g.vehicle_service->summon_vehicle(
                 g.vehicle_service->user, &request);
-            g.status = result.code == ANOMALY_STATUS_V1_OK
-                ? "Host 已确认召唤请求；坐标及 Actor.Owner 由 Host 后置核验"
-                : "召唤失败或后置核验未通过；不会显示为成功";
+            if (result.code == ANOMALY_STATUS_V1_OK) {
+                g.status = "Host 已确认召唤请求；坐标及 Actor.Owner 由 Host 后置核验";
+            } else if (result.message.data != nullptr && result.message.size != 0) {
+                g.status = "召唤失败：" + std::string(result.message.data, result.message.size);
+            } else {
+                g.status = "召唤失败，Host 状态码 " + std::to_string(result.code);
+            }
         }
     }
 
@@ -314,21 +318,24 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
     if (view->driving_vehicle_valid) {
         std::snprintf(info, sizeof(info), "当前驾驶速度：%.1f km/h", view->vehicle.speed_kmh);
         ui->text(ui->user, anomaly::sdk::StringView(info));
-        if (ui->slider_float != nullptr) {
-            float ratio = view->vehicle.top_speed_ratio;
-            if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F) ratio = 1.0F;
-            if (ui->slider_float(ui->user,
-                    anomaly::sdk::StringView("车速倍率（发动机扭矩）"),
-                    &ratio, 0.05F, 20.0F) != 0) {
-                std::scoped_lock lock(g.intent_mutex);
-                g.intents.speed_ratio_pending = true;
-                g.intents.speed_ratio = ratio;
-            }
-        } else {
-            ui->text(ui->user, anomaly::sdk::StringView("当前 Host UI 未提供 slider_float"));
+    } else {
+        ui->text(ui->user, anomaly::sdk::StringView("当前未检测到正在驾驶的载具；倍率可先调整，应用需在驾驶载具后执行"));
+    }
+    // Keep the slider visible independently of the driving snapshot. The previous UI
+    // hid the only control whenever the Host had not yet marked a vehicle as active,
+    // making the ratio appear impossible to drag even though the UI service supported it.
+    if (ui->slider_float != nullptr) {
+        float ratio = view->vehicle.top_speed_ratio;
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F) ratio = 1.0F;
+        if (ui->slider_float(ui->user,
+                anomaly::sdk::StringView("车速倍率"),
+                &ratio, 0.05F, 20.0F) != 0) {
+            std::scoped_lock lock(g.intent_mutex);
+            g.intents.speed_ratio_pending = true;
+            g.intents.speed_ratio = ratio;
         }
     } else {
-        ui->text(ui->user, anomaly::sdk::StringView("当前未检测到正在驾驶的载具"));
+        ui->text(ui->user, anomaly::sdk::StringView("当前 Host UI 未提供 slider_float"));
     }
     if (view->player_position_valid) {
         ui->text(ui->user, anomaly::sdk::StringView("玩家坐标快照有效"));
