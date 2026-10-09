@@ -289,8 +289,13 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
         g.intents.summon = true;
     }
     if (view->driving_vehicle_valid) {
-        std::snprintf(info, sizeof(info), "当前驾驶速度：%.1f km/h", view->vehicle.speed_kmh);
-        ui->text(ui->user, anomaly::sdk::StringView(info));
+        if ((view->vehicle.flags & ANOMALY_NTE_VEHICLE_V1_HAS_SPEED) != 0) {
+            std::snprintf(info, sizeof(info), "当前驾驶速度：%.1f km/h", view->vehicle.speed_kmh);
+            ui->text(ui->user, anomaly::sdk::StringView(info));
+        } else {
+            ui->text(ui->user, anomaly::sdk::StringView(
+                "已识别当前驾驶载具，但速度函数所属实例未通过验证；不显示伪造的 0.0。"));
+        }
     } else {
         ui->text(ui->user, anomaly::sdk::StringView("当前未检测到正在驾驶的载具"));
     }
@@ -374,6 +379,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.8.0"), Load, Start, Stop, Unload, Update, Draw};
+        anomaly::sdk::StringView("0.9.0"), Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }

@@ -782,6 +782,7 @@ struct Ue5NteAdapter::State {
     float vehicle_top_speed_ratio{1.0F};
     bool vehicle_wheel_friction_enabled{true};
     float vehicle_speed_kmh{};
+    bool vehicle_speed_valid{};
     bool vehicle_valid{};
 
     static constexpr std::size_t kDamageEventCapacity = 512;
@@ -7828,10 +7829,66 @@ struct Ue5NteAdapter::State {
             ? "game input activation dispatched" : "game input release dispatched");
     }
 
+    [[nodiscard]] bool ResolveVehicleFunctionTargetLocked(
+        const std::uintptr_t instance,
+        const std::uintptr_t function,
+        std::uintptr_t& target) const noexcept {
+        target = 0;
+        try {
+            std::uintptr_t expected_class{};
+            if (instance == 0 || function == 0 ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), expected_class) ||
+                expected_class == 0) {
+                return false;
+            }
+            const auto instance_matches = [this, expected_class](
+                const std::uintptr_t object) noexcept -> bool {
+                std::uintptr_t object_class{};
+                return object != 0 &&
+                    ReadPointerAt(*memory, object, Layout(profile, "object.class"), object_class) &&
+                    IsClassDerivedFromLocked(object_class, expected_class);
+            };
+            if (instance_matches(instance)) {
+                target = instance;
+                return true;
+            }
+
+            // Methods declared on a movement component must run on that component
+            // instance, not on the containing vehicle Actor.
+            std::uintptr_t instance_class{};
+            std::uintptr_t property{};
+            if (!ReadPointerAt(*memory, instance, Layout(profile, "object.class"), instance_class) ||
+                !ReadPointerAt(*memory, instance_class, Layout(profile, "ustruct.propertyLink"), property)) {
+                return false;
+            }
+            for (std::size_t depth = 0; property != 0 && depth < 512; ++depth) {
+                ReflectedPropertyInfo info;
+                if (!ReadReflectedPropertyLocked(property, info)) return false;
+                if (info.type == "ObjectProperty" && info.element_size == 8 &&
+                    info.array_dim == 1 && info.offset >= 0 && info.offset < 0x4000) {
+                    std::uintptr_t component{};
+                    if (ReadValue(*memory,
+                            instance + static_cast<std::uintptr_t>(info.offset), component) &&
+                        component != 0 && instance_matches(component)) {
+                        target = component;
+                        return true;
+                    }
+                }
+                if (info.next == property) return false;
+                property = info.next;
+            }
+            return false;
+        } catch (...) {
+            return false;
+        }
+    }
+
     [[nodiscard]] bool RefreshVehicleLocked() noexcept {
+        vehicle_speed_valid = false;
         try {
             if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker) {
                 vehicle_valid = false;
+                vehicle_speed_valid = false;
                 current_vehicle_object = 0;
                 return false;
             }
@@ -7858,7 +7915,16 @@ struct Ue5NteAdapter::State {
                 static_cast<void>(FindVehicleFunctionLocked("SetEnableWheelFriction", vehicle_outers, "BoolInput", vehicle_bindings.set_wheel_friction));
             }
             alignas(8) std::array<std::uint8_t, 8> out{};
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+            std::uintptr_t current_vehicle_target{};
+            if (!ResolveVehicleFunctionTargetLocked(player_controller,
+                    vehicle_bindings.current_vehicle.function, current_vehicle_target) &&
+                !ResolveVehicleFunctionTargetLocked(player_pawn,
+                    vehicle_bindings.current_vehicle.function, current_vehicle_target)) {
+                vehicle_valid = false;
+                current_vehicle_object = 0;
+                return false;
+            }
+            if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_target,
                     vehicle_bindings.current_vehicle.function, out.data(), out.size())) return false;
             std::uintptr_t vehicle{};
             std::memcpy(&vehicle, out.data() + vehicle_bindings.current_vehicle.return_offset, sizeof(vehicle));
@@ -7870,17 +7936,24 @@ struct Ue5NteAdapter::State {
             current_vehicle_object = vehicle;
             vehicle_valid = true;
             if (vehicle_bindings.speed_kmh.function != 0) {
+                std::uintptr_t speed_target{};
                 alignas(8) std::array<std::uint8_t, 8> speed_bytes{};
-                if (InvokeProcessEventGuarded(process_event_invoker, vehicle,
+                if (ResolveVehicleFunctionTargetLocked(vehicle,
+                        vehicle_bindings.speed_kmh.function, speed_target) &&
+                    InvokeProcessEventGuarded(process_event_invoker, speed_target,
                         vehicle_bindings.speed_kmh.function, speed_bytes.data(), speed_bytes.size())) {
                     float speed{};
                     std::memcpy(&speed, speed_bytes.data() + vehicle_bindings.speed_kmh.return_offset, sizeof(speed));
-                    if (std::isfinite(speed)) vehicle_speed_kmh = speed;
+                    if (std::isfinite(speed)) {
+                        vehicle_speed_kmh = speed;
+                        vehicle_speed_valid = true;
+                    }
                 }
             }
             return true;
         } catch (...) {
             vehicle_valid = false;
+            vehicle_speed_valid = false;
             current_vehicle_object = 0;
             return false;
         }
@@ -7900,7 +7973,7 @@ struct Ue5NteAdapter::State {
         static_cast<void>(ObjectHandleLocked(current_vehicle_object, handle));
         snapshot->struct_size = sizeof(*snapshot);
         snapshot->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
-        if (vehicle_bindings.speed_kmh.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
+        if (vehicle_speed_valid) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
         static constexpr std::array<std::string_view, 3> top_speed_path{
             "Vehicle", "SetTopSpeedRatio", "Base"};
         std::uintptr_t top_speed_address{};
@@ -8293,9 +8366,14 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!RefreshVehicleLocked() || vehicle_bindings.set_wheel_friction.function == 0)
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "SetEnableWheelFriction is not validated");
+        std::uintptr_t friction_target{};
+        if (!ResolveVehicleFunctionTargetLocked(current_vehicle_object,
+                vehicle_bindings.set_wheel_friction.function, friction_target))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "SetEnableWheelFriction owning component instance is unavailable");
         std::array<std::uint8_t, 4> parameters{};
         parameters[vehicle_bindings.set_wheel_friction.parameter_offset] = enabled ? 1 : 0;
-        if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+        if (!InvokeProcessEventGuarded(process_event_invoker, friction_target,
                 vehicle_bindings.set_wheel_friction.function, parameters.data(), parameters.size()))
             return Status(ANOMALY_STATUS_V1_FAILED, "SetEnableWheelFriction ProcessEvent failed");
         vehicle_wheel_friction_enabled = enabled;
