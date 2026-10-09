@@ -34,6 +34,8 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID "anomaly.nte.attack-input"
+#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -341,6 +343,13 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_engine_torque_ratio)(
         void* user, float ratio);
 } AnomalyNteVehicleServiceV1;
+
+// The host-side bridge uses the dump-validated HTPlayerController
+// ActivateAbilityFromID/ReleaseAbilityFromID functions to produce an actual melee input.
+typedef struct AnomalyNteAttackInputServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *activate_melee)(void* user);
+} AnomalyNteAttackInputServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
 // active Game callback domain; it never exposes UE object pointers, reflected functions, or
