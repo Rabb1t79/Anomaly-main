@@ -2,65 +2,19 @@
   "schemaVersion": 2,
   "id": "anomaly.builtin.nte-attack-replay",
   "name": "NTE Attack Replay",
-  "description": "Native Anomaly NTE attack capture and replay for normal and skill attacks.",
+  "description": "Automatically captures the first player-to-enemy damage event in a hit burst and repeats its numeric damage directly through the Host-validated HTAbilityCharacter HP service. Repetition count is unlimited; enable only gates the effect.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.3.1",
+  "version": "1.5.0",
   "entry": "plugin.dll",
-  "api": {
-    "major": 1,
-    "minMinor": 0,
-    "maxMinor": 0
-  },
-  "games": [
-    "nte"
-  ],
-  "builds": [
-    "nte-*"
-  ],
+  "api": {"major": 1, "minMinor": 0, "maxMinor": 0},
+  "games": ["nte"],
+  "builds": ["nte-*"],
   "loadPhase": "game-ready",
   "services": [
-    {
-      "id": "anomaly.ui",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.nte.combat",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.nte.skills",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.nte.skill-invocation",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.interop.signature",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.ue5.names",
-      "minVersion": 2
-    },
-    {
-      "id": "anomaly.ue5.framework",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.nte.attack-input",
-      "minVersion": 1
-    }
+    {"id": "anomaly.ui", "minVersion": 1},
+    {"id": "anomaly.nte.combat", "minVersion": 1},
+    {"id": "anomaly.nte.damage-replay", "minVersion": 1}
   ],
-  "capabilities": [
-    "ui",
-    "nte-combat-read",
-    "nte-skills-read",
-    "nte-skill-invocation",
-    "interop-signature",
-    "ue5-names",
-    "game-events",
-    "nte-attack-input"
-  ]
+  "capabilities": ["ui", "nte-combat-read", "nte-damage-replay"]
 }
