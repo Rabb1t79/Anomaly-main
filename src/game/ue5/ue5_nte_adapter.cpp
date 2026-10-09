@@ -7642,10 +7642,12 @@ struct Ue5NteAdapter::State {
             std::uint16_t parms_size{};
             std::uint16_t return_offset{};
             std::uintptr_t property{};
+            // A zero-parameter UFunction legitimately has a null propertyLink.
+            // Use the nullable reader so the NoArgs ABI check below can validate it.
             if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-                !ReadPointerAt(*memory, function, Layout(profile, "ustruct.propertyLink"), property)) return false;
+                !ReadNullablePointerAt(*memory, function, Layout(profile, "ustruct.propertyLink"), property)) return false;
             const bool object_return = mode == "ObjectReturn";
             const bool float_return = mode == "FloatReturn";
             const bool float_input = mode == "FloatInput";
