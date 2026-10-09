@@ -8112,6 +8112,181 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    AnomalyStatusV1 DamageReplayApply(
+        const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result) noexcept {
+        if (request == nullptr || result == nullptr ||
+            request->struct_size < sizeof(*request) ||
+            result->struct_size < sizeof(*result) ||
+            !std::isfinite(request->damage) || request->damage <= 0.0F ||
+            request->damage > 1.0e9F) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "direct damage request/result is invalid");
+        }
+        result->struct_size = sizeof(*result);
+        result->flags = 0;
+        result->requested_damage = request->damage;
+        result->hp_before = 0.0F;
+        result->hp_after = 0.0F;
+        result->damage_applied = 0.0F;
+
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "native damage application must run on the Game thread");
+        }
+        std::scoped_lock lock(mutex);
+        if (!NteCombatProfileAvailable() || !process_event_invoker ||
+            player_pawn == 0 || player_controller == 0 || world_pointer == 0 ||
+            object_registry.items == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "player, world, object registry, or validated ProcessEvent is unavailable");
+        }
+        if (request->world.id != 1 || request->world.generation != world_generation ||
+            request->attacker.generation != object_generation ||
+            request->victim.generation != object_generation) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "damage request contains stale world/object handles");
+        }
+
+        std::uintptr_t attacker{}, victim{};
+        if (!ResolveObjectHandleLocked(request->attacker, attacker) ||
+            !ResolveObjectHandleLocked(request->victim, victim) ||
+            attacker != player_pawn || victim == 0 || victim == player_pawn) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "damage source is not the current player or target handle is stale");
+        }
+
+        std::uintptr_t ability_character_class{}, victim_class{};
+        if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter",
+                ability_character_class) ||
+            !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
+            victim_class == 0 ||
+            !IsClassDerivedFromLocked(victim_class, ability_character_class)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "target is not a validated HTAbilityCharacter");
+        }
+
+        std::uintptr_t get_hp{}, apply_damage{}, damage_type_class{};
+        if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter.GetHP", get_hp) ||
+            !FindExactObjectLocked(L"/Script/Engine.GameplayStatics.ApplyDamage", apply_damage) ||
+            !FindExactObjectLocked(L"/Script/Engine.DamageType", damage_type_class)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "native GetHP, GameplayStatics.ApplyDamage, or DamageType declaration is missing");
+        }
+
+        const auto validate_function = [this](
+            const std::uintptr_t function, const std::string_view expected_name,
+            const std::string_view expected_outer, const std::uint8_t expected_parms,
+            const std::uint16_t expected_size, const std::uint16_t expected_return) noexcept -> bool {
+            std::uintptr_t function_class{}, outer{};
+            std::string function_name, function_class_name, outer_name;
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{}, return_offset{};
+            return ReadReflectedObjectNameLocked(function, function_name) &&
+                function_name == expected_name &&
+                ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) &&
+                ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) &&
+                ReadReflectedObjectNameLocked(function_class, function_class_name) &&
+                function_class_name == "Function" &&
+                ReadReflectedObjectNameLocked(outer, outer_name) && outer_name == expected_outer &&
+                ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) &&
+                ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) &&
+                ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) &&
+                num_parms == expected_parms && parms_size == expected_size &&
+                return_offset == expected_return;
+        };
+        if (!validate_function(get_hp, "GetHP", "HTAbilityCharacter", 1, 4, 0) ||
+            !validate_function(apply_damage, "ApplyDamage", "GameplayStatics", 6, 0x30, 0x28)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "native damage function ABI does not match the 5.6.1-0+UE5-HT dump");
+        }
+
+        ReflectedPropertyInfo hp_return{}, damaged_actor{}, base_damage{}, instigator{},
+            damage_causer{}, damage_type{}, damage_return{};
+        if (!FindReflectedPropertyLocked(get_hp, "ReturnValue", hp_return, false) ||
+            hp_return.type != "FloatProperty" || hp_return.element_size != 4 ||
+            hp_return.offset != 0 ||
+            !FindReflectedPropertyLocked(apply_damage, "DamagedActor", damaged_actor, false) ||
+            damaged_actor.type != "ObjectProperty" || damaged_actor.element_size != 8 ||
+            damaged_actor.offset != 0 ||
+            !FindReflectedPropertyLocked(apply_damage, "BaseDamage", base_damage, false) ||
+            base_damage.type != "FloatProperty" || base_damage.element_size != 4 ||
+            base_damage.offset != 8 ||
+            !FindReflectedPropertyLocked(apply_damage, "EventInstigator", instigator, false) ||
+            instigator.type != "ObjectProperty" || instigator.element_size != 8 ||
+            instigator.offset != 0x10 ||
+            !FindReflectedPropertyLocked(apply_damage, "DamageCauser", damage_causer, false) ||
+            damage_causer.type != "ObjectProperty" || damage_causer.element_size != 8 ||
+            damage_causer.offset != 0x18 ||
+            !FindReflectedPropertyLocked(apply_damage, "DamageTypeClass", damage_type, false) ||
+            damage_type.type != "ClassProperty" || damage_type.element_size != 8 ||
+            damage_type.offset != 0x20 ||
+            !FindReflectedPropertyLocked(apply_damage, "ReturnValue", damage_return, false) ||
+            damage_return.type != "FloatProperty" || damage_return.element_size != 4 ||
+            damage_return.offset != 0x28) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "ApplyDamage parameter types/offsets failed reflection validation");
+        }
+
+        std::uintptr_t apply_outer{}, apply_default_object{};
+        if (!ReadPointerAt(*memory, apply_damage, Layout(profile, "object.outer"), apply_outer) ||
+            apply_outer == 0 ||
+            !ReadPointerAt(*memory, apply_outer,
+                Layout(profile, "uclass.classDefaultObject"), apply_default_object) ||
+            apply_default_object == 0 || !ReadableRange(*memory, apply_default_object, 0x20U)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "GameplayStatics class default object is unavailable");
+        }
+
+        std::array<std::uint8_t, 4> hp_parameters{};
+        if (!InvokeProcessEventGuarded(process_event_invoker, victim, get_hp,
+                hp_parameters.data(), hp_parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "GetHP before ApplyDamage failed");
+        }
+        float hp_before{};
+        std::memcpy(&hp_before, hp_parameters.data() + hp_return.offset, sizeof(hp_before));
+        if (!std::isfinite(hp_before) || hp_before <= 0.0F) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "target is not alive");
+        }
+
+        std::array<std::uint8_t, 0x30> parameters{};
+        std::memcpy(parameters.data() + damaged_actor.offset, &victim, sizeof(victim));
+        std::memcpy(parameters.data() + base_damage.offset, &request->damage, sizeof(request->damage));
+        std::memcpy(parameters.data() + instigator.offset, &player_controller, sizeof(player_controller));
+        std::memcpy(parameters.data() + damage_causer.offset, &attacker, sizeof(attacker));
+        std::memcpy(parameters.data() + damage_type.offset, &damage_type_class, sizeof(damage_type_class));
+        if (!InvokeProcessEventGuarded(process_event_invoker, apply_default_object,
+                apply_damage, parameters.data(), parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "GameplayStatics.ApplyDamage ProcessEvent failed");
+        }
+
+        float game_reported_damage{};
+        std::memcpy(&game_reported_damage,
+            parameters.data() + damage_return.offset, sizeof(game_reported_damage));
+        hp_parameters.fill(0);
+        if (!InvokeProcessEventGuarded(process_event_invoker, victim, get_hp,
+                hp_parameters.data(), hp_parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "ApplyDamage ran but resulting HP could not be read back");
+        }
+        float hp_after{};
+        std::memcpy(&hp_after, hp_parameters.data() + hp_return.offset, sizeof(hp_after));
+        if (!std::isfinite(hp_after) || hp_after < 0.0F || hp_after >= hp_before ||
+            !std::isfinite(game_reported_damage) || game_reported_damage <= 0.0F) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "ApplyDamage executed without a confirmed native HP decrease; result was not counted");
+        }
+
+        result->flags = ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID;
+        if (hp_after > 0.0F) result->flags |= ANOMALY_NTE_DAMAGE_REPLAY_V1_TARGET_ALIVE;
+        result->requested_damage = request->damage;
+        result->hp_before = hp_before;
+        result->hp_after = hp_after;
+        result->damage_applied = hp_before - hp_after;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     AnomalyStatusV1 VehicleSetWheelFriction(bool enabled) noexcept {
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
