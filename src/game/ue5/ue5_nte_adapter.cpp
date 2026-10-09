@@ -782,7 +782,7 @@ struct Ue5NteAdapter::State {
         // Character and vehicle movement component are interchangeable.
         std::uintptr_t current_vehicle_receiver{};
         VehicleFunctionBinding speed_kmh{};
-        VehicleFunctionBinding set_top_speed_ratio{}; // SetMaxEngineTorque
+        VehicleFunctionBinding set_engine_torque{}; // /Script/ChaosVehicles.ChaosWheeledVehicleMovementComponent.SetMaxEngineTorque
         VehicleFunctionBinding set_vehicle_speed_ratio{}; // HTWheeledVehicleBase.SetTopSpeedRatio
         VehicleSummonBinding summon_vehicle{};
         VehicleFunctionBinding set_wheel_friction{};
@@ -7697,10 +7697,14 @@ struct Ue5NteAdapter::State {
         const std::string_view name,
         const std::span<const std::string_view> outers,
         const std::string_view mode,
-        VehicleFunctionBinding& binding) const {
+        VehicleFunctionBinding& binding,
+        const std::string_view script_module = "HTGame") const {
         for (const auto outer : outers) {
-            std::wstring path = L"/Script/HTGame.";
-            path.reserve(path.size() + outer.size() + 1U + name.size());
+            // UE engine-plugin functions live in their own script package, not /Script/HTGame.
+            std::wstring path = L"/Script/";
+            path.reserve(path.size() + script_module.size() + 1U + outer.size() + 1U + name.size());
+            for (char c : script_module) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+            path.push_back(L'.');
             for (char c : outer) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
             path.push_back(L'.');
             for (char c : name) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
@@ -8106,10 +8110,12 @@ struct Ue5NteAdapter::State {
                     "SetTopSpeedRatio", speed_outers, "FloatInput",
                     vehicle_bindings.set_vehicle_speed_ratio));
             }
-            if (vehicle_bindings.set_top_speed_ratio.function == 0) {
+            if (vehicle_bindings.set_engine_torque.function == 0) {
+                static constexpr std::array<std::string_view, 1> torque_outers{
+                    "ChaosWheeledVehicleMovementComponent"};
                 static_cast<void>(FindVehicleFunctionLocked(
-                    "SetMaxEngineTorque", vehicle_outers, "FloatInput",
-                    vehicle_bindings.set_top_speed_ratio));
+                    "SetMaxEngineTorque", torque_outers, "FloatInput",
+                    vehicle_bindings.set_engine_torque, "ChaosVehicles"));
             }
             static_cast<void>(EnsureVehicleSummonBindingLocked());
             if (vehicle_bindings.set_wheel_friction.function == 0) {
@@ -8139,10 +8145,17 @@ struct Ue5NteAdapter::State {
                     movement_component != vehicle_base_movement_component;
                 if (vehicle_changed || component_changed || !vehicle_base_engine_torque_valid) {
                     vehicle_base_movement_component = movement_component;
+                    // SetMaxEngineTorque changes the live Chaos engine simulation, not the
+                    // EngineSetup config UPROPERTY. Read the untouched config value as the
+                    // multiplier baseline rather than trusting a raw hard-coded byte offset.
+                    static constexpr std::array<std::string_view, 2> torque_path{
+                        "EngineSetup", "MaxTorque"};
+                    std::uintptr_t torque_address{};
                     float torque{};
-                    if (ReadValue(*memory, movement_component +
-                            Layout(profile, "vehicle.maxEngineTorque"), torque) &&
-                        std::isfinite(torque)) {
+                    if (ResolveVehicleFloatPathLocked(
+                            movement_component, torque_path, torque_address) &&
+                        ReadValue(*memory, torque_address, torque) &&
+                        std::isfinite(torque) && torque > 0.0F) {
                         vehicle_base_engine_torque = torque;
                         vehicle_base_engine_torque_valid = true;
                         vehicle_engine_torque_ratio = 1.0F;
@@ -8293,20 +8306,24 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
-        if (!vehicle_base_engine_torque_valid || vehicle_base_movement_component == 0 ||
-            vehicle_bindings.set_top_speed_ratio.function == 0) {
+        if (vehicle_base_movement_component == 0 ||
+            vehicle_bindings.set_engine_torque.function == 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "SetMaxEngineTorque ABI or original torque baseline is unavailable");
+                "ChaosVehicles.ChaosWheeledVehicleMovementComponent.SetMaxEngineTorque(float) ABI is not validated");
+        }
+        if (!vehicle_base_engine_torque_valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "original torque baseline EngineSetup.MaxTorque could not be read");
         }
         const float torque = vehicle_base_engine_torque * ratio;
         std::array<std::uint8_t, 4> parameters{};
         std::memcpy(parameters.data() +
-                vehicle_bindings.set_top_speed_ratio.parameter_offset,
+                vehicle_bindings.set_engine_torque.parameter_offset,
             &torque, sizeof(torque));
         if (!InvokeProcessEventGuarded(process_event_invoker,
                 vehicle_base_movement_component,
-                vehicle_bindings.set_top_speed_ratio.function,
-                parameters.data(), parameters.size())) {
+                vehicle_bindings.set_engine_torque.function,
+                parameters.data(), vehicle_bindings.set_engine_torque.parms_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "SetMaxEngineTorque ProcessEvent failed");
         }
