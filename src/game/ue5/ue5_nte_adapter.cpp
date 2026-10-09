@@ -789,6 +789,7 @@ struct Ue5NteAdapter::State {
     float vehicle_base_engine_torque{};
     bool vehicle_base_engine_torque_valid{};
     float vehicle_top_speed_ratio{1.0F};
+    float vehicle_engine_torque_ratio{1.0F};
     bool vehicle_wheel_friction_enabled{true};
     float vehicle_speed_kmh{};
     bool vehicle_valid{};
@@ -8080,6 +8081,10 @@ struct Ue5NteAdapter::State {
         snapshot->speed_kmh = vehicle_speed_kmh;
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
+        if (snapshot->struct_size >= offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio) +
+                sizeof(snapshot->engine_torque_ratio)) {
+            snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
+        }
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -8091,12 +8096,30 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
-        // Tokky multiplies the original movement-component torque and sends the
-        // resulting float through SetMaxEngineTorque; do not accumulate ratios.
+        static constexpr std::array<std::string_view, 3> top_speed_path{
+            "Vehicle", "SetTopSpeedRatio", "Base"};
+        std::uintptr_t address{};
+        if (!ResolveVehicleFloatPathLocked(current_vehicle_object, top_speed_path, address))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "Vehicle.SetTopSpeedRatio.Base was not validated for the active vehicle");
+        if (!memory->Write(address, &ratio, sizeof(ratio)))
+            return Status(ANOMALY_STATUS_V1_FAILED, "Vehicle.SetTopSpeedRatio write failed");
+        vehicle_top_speed_ratio = ratio;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleSetEngineTorqueRatio(float ratio) noexcept {
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "engine torque ratio must be 0.05..20.0");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
+        std::scoped_lock lock(mutex);
+        if (!RefreshVehicleLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
         if (!vehicle_base_engine_torque_valid || vehicle_base_movement_component == 0 ||
             vehicle_bindings.set_top_speed_ratio.function == 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "Tokky SetMaxEngineTorque ABI or torque baseline is unavailable");
+                "SetMaxEngineTorque ABI or original torque baseline is unavailable");
         }
         const float torque = vehicle_base_engine_torque * ratio;
         std::array<std::uint8_t, 4> parameters{};
@@ -8110,7 +8133,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "SetMaxEngineTorque ProcessEvent failed");
         }
-        vehicle_top_speed_ratio = ratio;
+        vehicle_engine_torque_ratio = ratio;
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -8237,6 +8260,8 @@ struct Ue5NteAdapter::State {
     AnomalyStatusV1 VehicleReset() noexcept {
         const auto speed = VehicleSetTopSpeedRatio(1.0F);
         if (speed.code != ANOMALY_STATUS_V1_OK) return speed;
+        const auto torque = VehicleSetEngineTorqueRatio(1.0F);
+        if (torque.code != ANOMALY_STATUS_V1_OK) return torque;
         return VehicleSetWheelFriction(true);
     }
 
@@ -13538,7 +13563,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteVehicleServiceV1), ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleSummonThunk,
-            VehicleIdCountThunk, VehicleIdAtThunk, SetSummonVehicleIdThunk};
+            VehicleIdCountThunk, VehicleIdAtThunk, SetSummonVehicleIdThunk,
+            VehicleSetEngineTorqueRatioThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -13876,6 +13902,12 @@ private:
         void* user, float ratio) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSetTopSpeedRatio(ratio) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetEngineTorqueRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetEngineTorqueRatio(ratio) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetWheelFrictionThunk(
