@@ -36,6 +36,11 @@ struct UiIntent {
     std::uint32_t select_index{};
     std::uint64_t select_sequence{};
     bool summon{};
+    bool top_speed_ratio_pending{};
+    float top_speed_ratio{1.0F};
+    bool external_torque_ratio_pending{};
+    float external_torque_ratio{1.0F};
+    bool reset_modifiers{};
 };
 
 struct Context {
@@ -65,6 +70,15 @@ struct Context {
 
 AnomalyStatusV1 Status(const std::uint32_t code, const char* message = nullptr) noexcept {
     return {code, 0, {message, message == nullptr ? 0U : std::strlen(message)}};
+}
+
+std::string ServiceMessage(const AnomalyStatusV1& status, const char* fallback) {
+    if (status.message.data != nullptr && status.message.size != 0) {
+        const auto size = (std::min)(status.message.size, std::size_t{512});
+        return std::string(status.message.data, size);
+    }
+    return fallback == nullptr ? std::string("Core did not provide diagnostic detail")
+                               : std::string(fallback);
 }
 
 void PublishSnapshot() {
@@ -185,6 +199,39 @@ void Update(void*, double) {
         if (g.driving_vehicle_valid) g.vehicle = next;
     }
 
+    if (intent.top_speed_ratio_pending) {
+        if (g.vehicle_service == nullptr || g.vehicle_service->set_top_speed_ratio == nullptr) {
+            g.status = "最高车速倍率不可用：Host 未提供原生 SetTopSpeedRatio";
+        } else {
+            const auto result = g.vehicle_service->set_top_speed_ratio(
+                g.vehicle_service->user, intent.top_speed_ratio);
+            g.status = result.code == ANOMALY_STATUS_V1_OK
+                ? "原生 SetTopSpeedRatio 已通过读回验证"
+                : "最高车速倍率设置失败：" + ServiceMessage(result, "SetTopSpeedRatio rejected");
+        }
+    }
+    if (intent.external_torque_ratio_pending) {
+        if (g.vehicle_service == nullptr || g.vehicle_service->set_external_torque_ratio == nullptr) {
+            g.status = "发动机扭矩倍率不可用：Host 未提供 SetExternalTorqueRatio";
+        } else {
+            const auto result = g.vehicle_service->set_external_torque_ratio(
+                g.vehicle_service->user, intent.external_torque_ratio);
+            g.status = result.code == ANOMALY_STATUS_V1_OK
+                ? "原生 SetExternalTorqueRatio 已通过读回验证"
+                : "发动机扭矩倍率设置失败：" + ServiceMessage(result, "SetExternalTorqueRatio rejected");
+        }
+    }
+    if (intent.reset_modifiers) {
+        if (g.vehicle_service == nullptr || g.vehicle_service->reset == nullptr) {
+            g.status = "恢复原厂参数失败：Host 未提供 reset 服务";
+        } else {
+            const auto result = g.vehicle_service->reset(g.vehicle_service->user);
+            g.status = result.code == ANOMALY_STATUS_V1_OK
+                ? "最高车速倍率、外部扭矩倍率和轮胎摩擦已恢复为默认值"
+                : "恢复原厂参数失败：" + ServiceMessage(result, "reset rejected");
+        }
+    }
+
     const std::uint32_t pages = g.catalog.entry_count == 0
         ? 1U : (g.catalog.entry_count + 5U) / 6U;
     if (intent.previous_page && g.page > 0) --g.page;
@@ -204,7 +251,7 @@ void Update(void*, double) {
                 g.selected_id = id;
                 g.status = "已选择有效 VehicleID：" + id;
             } else {
-                g.status = "Host 拒绝该 VehicleID；未更改召唤目标";
+                g.status = "Host 拒绝该 VehicleID：" + ServiceMessage(result, "invalid VehicleID");
             }
         }
     }
@@ -224,8 +271,8 @@ void Update(void*, double) {
             const auto result = g.vehicle_service->summon_vehicle(
                 g.vehicle_service->user, &request);
             g.status = result.code == ANOMALY_STATUS_V1_OK
-                ? "Host 已确认召唤请求；坐标及 Actor.Owner 由 Host 后置核验"
-                : "召唤失败或后置核验未通过；不会显示为成功";
+                ? "召唤成功：Host 已核验新 Actor 的目标坐标与 Actor.Owner"
+                : "召唤失败：" + ServiceMessage(result, "spawn or postcondition verification failed");
         }
     }
 
@@ -235,7 +282,7 @@ void Update(void*, double) {
 void Draw(void*, const AnomalyUiServiceV1* ui) {
     if (!g.running.load(std::memory_order_acquire) || ui == nullptr ||
         ui->begin_window == nullptr || ui->end_window == nullptr ||
-        ui->text == nullptr || ui->button == nullptr) return;
+        ui->text == nullptr || ui->button == nullptr || ui->slider_float == nullptr) return;
 
     // Immutable snapshot load is non-blocking; no Game service call or shared-state lock in Render.
     const auto view = g.render_snapshot.load(std::memory_order_acquire);
@@ -252,8 +299,32 @@ void Draw(void*, const AnomalyUiServiceV1* ui) {
     std::snprintf(info, sizeof(info), "符合 Vehicle 条件的目录条目：%u", view->count);
     ui->text(ui->user, anomaly::sdk::StringView(info));
     ui->text(ui->user, anomaly::sdk::StringView(view->status));
+
+    ui->text(ui->user, anomaly::sdk::StringView(
+        "原生载具参数（仅对当前正在驾驶的载具生效）"));
+    float top_speed_ratio = (view->vehicle.flags & ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO) != 0
+        ? view->vehicle.top_speed_ratio : 1.0F;
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("最高车速倍率"),
+            &top_speed_ratio, 0.1F, 5.0F)) {
+        std::scoped_lock lock(g.intent_mutex);
+        g.intents.top_speed_ratio_pending = true;
+        g.intents.top_speed_ratio = (std::clamp)(top_speed_ratio, 0.1F, 5.0F);
+    }
+    float external_torque_ratio =
+        (view->vehicle.flags & ANOMALY_NTE_VEHICLE_V1_HAS_EXTERNAL_TORQUE_RATIO) != 0
+        ? view->vehicle.external_torque_ratio : 1.0F;
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("发动机外部扭矩倍率"),
+            &external_torque_ratio, 0.1F, 5.0F)) {
+        std::scoped_lock lock(g.intent_mutex);
+        g.intents.external_torque_ratio_pending = true;
+        g.intents.external_torque_ratio = (std::clamp)(external_torque_ratio, 0.1F, 5.0F);
+    }
+    if (ui->button(ui->user, anomaly::sdk::StringView("恢复原厂参数"), 150.0F, 0.0F) != 0) {
+        std::scoped_lock lock(g.intent_mutex);
+        g.intents.reset_modifiers = true;
+    }
     if (!view->catalog_ready || view->count == 0) {
-        ui->text(ui->user, anomaly::sdk::StringView("目录验证并完整读取前，选择与召唤均不可用。"));
+        ui->text(ui->user, anomaly::sdk::StringView("目录验证并完整读取前，选择与召唤均不可用；速度控制不依赖该目录。"));
         return;
     }
 
@@ -315,7 +386,9 @@ AnomalyStatusV1 Load(const AnomalyHostApiV1* host, void** plugin_context) {
         ANOMALY_NTE_PLAYER_SERVICE_V1_ID, ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION);
     if (!vehicle || !player || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at ||
         !vehicle->set_summon_vehicle_id || !vehicle->summon_vehicle || !vehicle->snapshot ||
-        !player->snapshot) {
+        vehicle->struct_size < offsetof(AnomalyNteVehicleServiceV1, set_external_torque_ratio) +
+            sizeof(vehicle->set_external_torque_ratio) ||
+        !vehicle->set_external_torque_ratio || !vehicle->reset || !player->snapshot) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "required vehicle-v2/player service missing");
     }
 
@@ -379,6 +452,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.0"), Load, Start, Stop, Unload, Update, Draw};
+        anomaly::sdk::StringView("1.0.0"), Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
