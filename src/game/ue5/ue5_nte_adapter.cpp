@@ -999,6 +999,45 @@ struct Ue5NteAdapter::State {
     std::atomic<std::uint32_t> combat_capture_write{};
     std::atomic<std::uint32_t> combat_capture_read{};
     std::atomic<std::uint64_t> combat_capture_drop_count{};
+    struct DamageReplayBinding {
+        std::uintptr_t function{};
+        std::uint16_t parms_size{};
+        std::uint16_t damage_amount_offset{0xFFFFU};
+        std::uint16_t hit_info_offset{0xFFFFU};
+        std::uint16_t hit_info_size{};
+        std::uint16_t damage_tags_offset{0xFFFFU};
+        std::uint16_t damage_effect_offset{0xFFFFU};
+        std::uint16_t instigator_offset{0xFFFFU};
+        std::uint16_t causer_offset{0xFFFFU};
+        std::uint16_t event_hit_info_offset{0xFFFFU};
+        std::uint16_t event_hit_info_size{};
+        std::uint16_t tag_gameplay_array_offset{0xFFFFU};
+        std::uint16_t tag_parent_array_offset{0xFFFFU};
+        bool valid{};
+    };
+    static constexpr std::size_t kReplayDamageCapacity = 128;
+    static constexpr std::size_t kReplayDamageTagCapacity = 32;
+    static constexpr std::size_t kReplayHitInfoBytes = 0x108;
+    struct ReplayableDamage {
+        std::uint64_t replay_id{};
+        std::uint64_t object_generation{};
+        std::uint64_t tick_sequence{};
+        std::uintptr_t victim{};
+        std::uintptr_t attacker{};
+        std::uintptr_t damage_causer{};
+        std::int32_t damage_effect_index{-1};
+        std::int32_t damage_effect_serial{};
+        float damage{};
+        std::array<std::uint8_t, kReplayHitInfoBytes> hit_info{};
+        std::array<std::uint64_t, kReplayDamageTagCapacity> gameplay_tags{};
+        std::array<std::uint64_t, kReplayDamageTagCapacity> parent_tags{};
+        std::uint32_t gameplay_tag_count{};
+        std::uint32_t parent_tag_count{};
+        bool valid{};
+    };
+    std::array<ReplayableDamage, kReplayDamageCapacity> replayable_damage{};
+    std::atomic<std::uint64_t> next_replay_damage_id{1};
+
     struct CombatCaptureBindings {
         std::uintptr_t damage{};
         std::uintptr_t monster_damage{};
@@ -1006,6 +1045,7 @@ struct Ue5NteAdapter::State {
         std::uint16_t player_damage_queue_offset{};
         std::uintptr_t damage_widget{};
         std::uint16_t damage_widget_info_offset{};
+        DamageReplayBinding damage_replay{};
         struct Buff {
             std::uintptr_t function{};
             std::uint16_t parms_size{};
