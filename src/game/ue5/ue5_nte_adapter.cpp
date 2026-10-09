@@ -15371,8 +15371,8 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             &endpoint->attack_input_service,
             [self, observer_endpoint] {
-                const locked = self.lock();
-                const observed = observer_endpoint.lock();
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
                 if (!locked || !observed ||
                     locked->semantic_endpoint.load(std::memory_order_acquire) != observed) return;
                 locked->attack_input_demand.store(true, std::memory_order_release);
