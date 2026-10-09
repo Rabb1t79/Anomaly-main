@@ -8,6 +8,8 @@ on:
       - 'v*'
     paths-ignore:
       - '**/*.md'
+      - '.github/workflows/windows.yml'
+      - '.github/workflows/build-core-msvc-20261009.yml'
   pull_request:
     paths-ignore:
       - '**/*.md'
