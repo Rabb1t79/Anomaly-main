@@ -349,6 +349,9 @@ typedef struct AnomalyNteVehicleServiceV1 {
 typedef struct AnomalyNteAttackInputServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     AnomalyStatusV1 (ANOMALY_CALL *activate_melee)(void* user);
+    // Optional, dump-validated replay of a captured player->target HTDamageEvent.
+    // Called from the Game domain; replay_id is the Host-issued opaque hit token.
+    AnomalyStatusV1 (ANOMALY_CALL *replay_damage_event)(void* user, uint64_t replay_id);
 } AnomalyNteAttackInputServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
@@ -775,6 +778,9 @@ typedef struct AnomalyNteCombatEventV1 {
     float duration_seconds; int32_t stack_count;
     uint32_t damage_type; uint32_t display_type;
     uint32_t reaction_type; uint32_t reaction_display_type;
+    // Optional V1 tail: non-zero only when this event is backed by a replayable
+    // captured HTDamageEvent retained by the Host.
+    uint64_t replay_id;
 } AnomalyNteCombatEventV1;
 
 typedef enum AnomalyNteCombatDirectionV1 {
