@@ -28,10 +28,15 @@
     {
       "id": "anomaly.nte.vehicle",
       "minVersion": 2
+    },
+    {
+      "id": "anomaly.nte.player",
+      "minVersion": 1
     }
   ],
   "capabilities": [
     "ui",
-    "nte-vehicle"
+    "nte-vehicle",
+    "nte-player-snapshot"
   ]
 }
