@@ -861,8 +861,6 @@ ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* a
     if (accepted != nullptr) *accepted = 1;
     return ReplayCallResult::Success;
 }
-}
-
 
 AnomalyStatusV1 ANOMALY_CALL Load(
     const AnomalyHostApiV1* host, void** plugin_context) {
