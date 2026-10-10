@@ -72,9 +72,17 @@ jobs:
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_CXX_EXTENSIONS OFF)
-          add_library(nte_plugin SHARED "$rootUnix/$($plugin.Source)")
-          target_include_directories(nte_plugin PRIVATE "$rootUnix/include")
-          target_compile_definitions(nte_plugin PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          add_library(nte_plugin SHARED
+            "$rootUnix/$($plugin.Source)"
+            "$rootUnix/sdk/cpp/plugin_cxx_throw_bridge.cpp")
+          target_include_directories(nte_plugin PRIVATE
+            "$rootUnix/.build/windows-vs2022/generated/sdk-build/include"
+            "$rootUnix/include")
+          target_compile_definitions(nte_plugin PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX ANOMALY_USE_CONFIGURED_VERSION=1)
+          if(MSVC)
+            target_compile_options(nte_plugin PRIVATE /EHsc /Zc:threadSafeInit- /W4 /permissive-)
+          endif()
           set_target_properties(nte_plugin PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
           "@
             Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Value $cmakeText -Encoding UTF8
