@@ -3,6 +3,8 @@
 #include "anomaly/sdk/services/ui.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -23,7 +25,9 @@ struct Snapshot {
 
 struct Context {
     const AnomalyNteVehicleServiceV1* vehicle{};
-    const AnomalyUiServiceV1* ui{};
+    const AnomalyNtePlayerServiceV1* player{};
+    AnomalyNtePlayerSnapshotV1 player_snapshot{};
+    bool player_position_valid{};
     std::mutex mutex;
     Snapshot snapshot{};
     std::string status{"正在读取游戏进程中的 Vehicle 载具数据"};
@@ -68,41 +72,75 @@ void SetStatus(std::string text) {
     g_context.status = std::move(text);
 }
 
-void DrawText(std::string_view text) {
-    if (g_context.ui && g_context.ui->text) {
-        g_context.ui->text(g_context.ui->user, anomaly::sdk::StringView(text));
+void DrawText(const AnomalyUiServiceV1* ui, std::string_view text) {
+    if (ui != nullptr && ui->text != nullptr) {
+        ui->text(ui->user, anomaly::sdk::StringView(text));
     }
 }
 
+// 目录内容来自当前 Host 已核验的实时 FNamePool；读取前后序号相同才发布完整目录。
 void RefreshCatalogOnGameThread() {
     const auto* vehicle = g_context.vehicle;
-    if (!vehicle || !vehicle->vehicle_id_count || !vehicle->vehicle_id_at) return;
+    if (!vehicle || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at) return;
 
-    const auto tick = vehicle->vehicle_id_count ? 1u : 0u;
-    (void)tick;
-    std::uint32_t count{};
-    if (vehicle->vehicle_id_count(vehicle->user, &count).code != ANOMALY_STATUS_V1_OK) return;
-    if (count > 512) count = 512;
+    AnomalyNteVehicleCatalogSnapshotV1 before{};
+    before.struct_size = sizeof(before);
+    const auto before_status = vehicle->catalog_snapshot(vehicle->user, &before);
+    if (before_status.code != ANOMALY_STATUS_V1_OK ||
+        (before.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) == 0 ||
+        before.entry_count > 8192U) {
+        SetStatus("Host 尚未提供有效的载具目录；召唤保持禁用");
+        return;
+    }
 
     std::vector<std::string> ids;
-    ids.reserve(count);
-    for (std::uint32_t i = 0; i < count; ++i) {
-        std::size_t size = ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES + 1u;
-        std::string value(size, '\\0');
-        const auto status = vehicle->vehicle_id_at(
-            vehicle->user, i, value.data(), &size);
-        if (status.code != ANOMALY_STATUS_V1_OK || size == 0 || size > value.size()) continue;
-        value.resize(size - 1);
-        if (!value.empty()) ids.push_back(std::move(value));
+    ids.reserve(before.entry_count);
+    for (std::uint32_t i = 0; i < before.entry_count; ++i) {
+        std::array<char, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES + 1U> buffer{};
+        std::size_t size = buffer.size();
+        const auto status = vehicle->vehicle_id_at(vehicle->user, i, buffer.data(), &size);
+        if (status.code != ANOMALY_STATUS_V1_OK || size <= 1U || size > buffer.size()) {
+            SetStatus("载具目录未能完整读取；选择与召唤保持禁用");
+            return;
+        }
+        ids.emplace_back(buffer.data(), size - 1U);
+        if (ids.back().empty()) {
+            SetStatus("载具目录包含空 VehicleID；选择与召唤保持禁用");
+            return;
+        }
     }
 
-    std::scoped_lock lock(g_context.mutex);
-    g_context.vehicle_ids = std::move(ids);
-    if (std::ranges::find(g_context.vehicle_ids, g_context.selected_vehicle_id) ==
-        g_context.vehicle_ids.end() && !g_context.vehicle_ids.empty()) {
-        g_context.selected_vehicle_id = g_context.vehicle_ids.front();
+    AnomalyNteVehicleCatalogSnapshotV1 after{};
+    after.struct_size = sizeof(after);
+    const auto after_status = vehicle->catalog_snapshot(vehicle->user, &after);
+    if (after_status.code != ANOMALY_STATUS_V1_OK ||
+        (after.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) == 0 ||
+        after.sequence != before.sequence || after.entry_count != ids.size()) {
+        SetStatus("读取期间载具目录已变化；稍后重新读取");
+        return;
     }
-    g_context.catalog_tick = 1;
+
+    std::string select_after_refresh;
+    {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.vehicle_ids = std::move(ids);
+        g_context.catalog_tick = after.sequence;
+        if (std::ranges::find(g_context.vehicle_ids, g_context.selected_vehicle_id) ==
+            g_context.vehicle_ids.end()) {
+            g_context.selected_vehicle_id = g_context.vehicle_ids.empty()
+                ? std::string{} : g_context.vehicle_ids.front();
+            select_after_refresh = g_context.selected_vehicle_id;
+        }
+        g_context.status = g_context.vehicle_ids.empty()
+            ? "Host 目录有效，但没有符合 Vehicle 条件的条目"
+            : "已完整读取 Host 验证的载具目录";
+    }
+    if (!select_after_refresh.empty()) {
+        const auto selected = vehicle->set_summon_vehicle_id(
+            vehicle->user, anomaly::sdk::StringView(select_after_refresh));
+        if (selected.code != ANOMALY_STATUS_V1_OK)
+            SetStatus("目录已读取，但 Host 未接受默认 VehicleID；请手动选择");
+    }
 }
 
 void Update() {
@@ -126,15 +164,34 @@ void Update() {
         }
     }
 
-    // The catalog is generated by the Host from the live NTE FNamePool. Refresh only
-    // occasionally; the summon operation itself always uses the current selected ID.
-    if (g_context.vehicle->vehicle_id_count && g_context.vehicle->vehicle_id_at) {
-        bool need_catalog{};
+    if (g_context.vehicle->catalog_snapshot) {
+        AnomalyNteVehicleCatalogSnapshotV1 catalog{};
+        catalog.struct_size = sizeof(catalog);
+        const auto catalog_status = g_context.vehicle->catalog_snapshot(
+            g_context.vehicle->user, &catalog);
+        bool need_refresh = catalog_status.code == ANOMALY_STATUS_V1_OK &&
+            (catalog.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) != 0;
         {
             std::scoped_lock lock(g_context.mutex);
-            need_catalog = g_context.vehicle_ids.empty();
+            need_refresh = need_refresh &&
+                (g_context.vehicle_ids.empty() || catalog.sequence != g_context.catalog_tick);
         }
-        if (need_catalog) RefreshCatalogOnGameThread();
+        if (need_refresh) RefreshCatalogOnGameThread();
+    }
+
+    // Refresh the live player snapshot every Game update. Summon must not reuse stale coordinates.
+    if (g_context.player && g_context.player->snapshot) {
+        AnomalyNtePlayerSnapshotV1 player_snapshot{};
+        player_snapshot.struct_size = sizeof(player_snapshot);
+        const auto player_status = g_context.player->snapshot(
+            g_context.player->user, &player_snapshot);
+        const bool valid = player_status.code == ANOMALY_STATUS_V1_OK &&
+            (player_snapshot.flags & ANOMALY_NTE_SNAPSHOT_V1_VALID) != 0 &&
+            std::ranges::all_of(player_snapshot.position,
+                [](double value) { return std::isfinite(value); });
+        std::scoped_lock lock(g_context.mutex);
+        g_context.player_position_valid = valid;
+        if (valid) g_context.player_snapshot = player_snapshot;
     }
 
     if (g_context.reset.exchange(false, std::memory_order_acq_rel)) {
@@ -189,14 +246,41 @@ void Update() {
     }
 
     if (g_context.summon.exchange(false, std::memory_order_acq_rel)) {
-        const auto status = g_context.vehicle->summon_vehicle(g_context.vehicle->user);
-        if (status.code == ANOMALY_STATUS_V1_OK) {
+        AnomalyNteVehicleSummonRequestV1 request{};
+        request.struct_size = sizeof(request);
+        request.flags = ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
+            ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER;
+        std::string selected_id;
+        bool position_valid{};
+        {
             std::scoped_lock lock(g_context.mutex);
-            g_context.status = "召唤请求已发送：" + g_context.selected_vehicle_id;
-        } else if (status.message.data != nullptr && status.message.size != 0) {
-            SetStatus("召唤失败：" + std::string(status.message.data, status.message.size));
+            selected_id = g_context.selected_vehicle_id;
+            position_valid = g_context.player_position_valid;
+            if (position_valid) {
+                // The requested offset is signed by axis: X - 2000, Y + 2000, Z + 2000.
+                request.world_position[0] = g_context.player_snapshot.position[0] - 2000.0;
+                request.world_position[1] = g_context.player_snapshot.position[1] + 2000.0;
+                request.world_position[2] = g_context.player_snapshot.position[2] + 2000.0;
+            }
+        }
+        bool catalog_has_selection{};
+        {
+            std::scoped_lock lock(g_context.mutex);
+            catalog_has_selection = !selected_id.empty() &&
+                std::ranges::find(g_context.vehicle_ids, selected_id) != g_context.vehicle_ids.end();
+        }
+        if (!position_valid || !catalog_has_selection) {
+            SetStatus("召唤未执行：需要有效玩家坐标和当前目录中的 VehicleID");
         } else {
-            SetStatus("召唤失败，Host 状态码 " + std::to_string(status.code));
+            const auto status = g_context.vehicle->summon_vehicle(
+                g_context.vehicle->user, &request);
+            if (status.code == ANOMALY_STATUS_V1_OK) {
+                SetStatus("Host 已接受召唤请求；生成与 Actor.Owner 由 Host 后置核验");
+            } else if (status.message.data != nullptr && status.message.size != 0) {
+                SetStatus("召唤失败：" + std::string(status.message.data, status.message.size));
+            } else {
+                SetStatus("召唤失败，Host 状态码 " + std::to_string(status.code));
+            }
         }
     }
 
@@ -232,19 +316,13 @@ void Update() {
     }
 }
 
-void Draw() {
-    const auto* ui = g_context.ui;
+void Draw(const AnomalyUiServiceV1* ui) {
     if (!ui || !ui->begin_window || !ui->end_window || !ui->text ||
         !ui->button || !ui->slider_float) return;
 
     int open = 1;
-    const int window_visible = ui->begin_window(
-        ui->user, anomaly::sdk::StringView("NTE Vehicle"), &open, 0);
-    if (!window_visible) {
-        // The host UI follows ImGui Begin/End pairing: End is required even when Begin returns false.
-        ui->end_window(ui->user);
-        return;
-    }
+    anomaly::sdk::UiWindow window(ui, "NTE Vehicle", &open, 0);
+    if (!window) return;
 
     Snapshot snap;
     std::string status;
@@ -262,7 +340,7 @@ void Draw() {
         friction = g_context.friction_enabled;
     }
 
-    DrawText("NTE 载具控制");
+    DrawText(ui, "NTE 载具控制");
     DrawText(status);
 
     DrawText("召唤载具");
@@ -320,28 +398,25 @@ void Draw() {
     if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F))
         g_context.friction_toggle.store(true, std::memory_order_release);
 
-    ui->end_window(ui->user);
 }
 
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
     if (!host || !plugin_context) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     const auto* vehicle = QueryService<AnomalyNteVehicleServiceV1>(
         host, ANOMALY_NTE_VEHICLE_SERVICE_V1_ID, ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION);
-    const auto* ui = QueryService<AnomalyUiServiceV1>(
-        host, ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION);
-    if (!vehicle || !ui) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+    const auto* player = QueryService<AnomalyNtePlayerServiceV1>(
+        host, ANOMALY_NTE_PLAYER_SERVICE_V1_ID, ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION);
+    if (!vehicle || !player) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
 
     if (!vehicle->snapshot || !vehicle->set_top_speed_ratio ||
         !vehicle->summon_vehicle || !vehicle->set_wheel_friction_enabled ||
-        !vehicle->reset || !vehicle->vehicle_id_count || !vehicle->vehicle_id_at ||
-        !vehicle->set_summon_vehicle_id ||
-        !ui->begin_window || !ui->end_window || !ui->text ||
-        !ui->button || !ui->slider_float) {
+        !vehicle->reset || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at ||
+        !vehicle->set_summon_vehicle_id || !player->snapshot) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
 
     g_context.vehicle = vehicle;
-    g_context.ui = ui;
+    g_context.player = player;
     g_context.started.store(false, std::memory_order_release);
     g_context.apply_speed.store(false, std::memory_order_release);
     g_context.apply_torque.store(false, std::memory_order_release);
@@ -355,7 +430,10 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.selected_vehicle_id = "Vehicle007";
     g_context.pending_vehicle_id.clear();
     g_context.vehicle_ids.clear();
-    g_context.status = "正在读取运行时 Vehicle 目录";
+    g_context.status = "正在读取 Host 验证的运行时 Vehicle 目录";
+    g_context.player_position_valid = false;
+    g_context.player_snapshot = {};
+    g_context.catalog_tick = 0;
     *plugin_context = &g_context;
     return anomaly::sdk::Ok();
 }
@@ -376,15 +454,15 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     if (plugin_context != &g_context) return;
     g_context.started.store(false, std::memory_order_release);
     g_context.vehicle = nullptr;
-    g_context.ui = nullptr;
+    g_context.player = nullptr;
 }
 
 void ANOMALY_CALL UpdateCallback(void* plugin_context, double) {
     if (plugin_context == &g_context) Update();
 }
 
-void ANOMALY_CALL DrawCallback(void* plugin_context, const AnomalyUiServiceV1*) {
-    if (plugin_context == &g_context) Draw();
+void ANOMALY_CALL DrawCallback(void* plugin_context, const AnomalyUiServiceV1* ui) {
+    if (plugin_context == &g_context) Draw(ui);
 }
 
 } // namespace
