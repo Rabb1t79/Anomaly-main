@@ -34,9 +34,14 @@ jobs:
           project(NteAttackReplayStandalone LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          add_library(nte_attack_replay SHARED "$root/plugins/NteAttackReplay/plugin.cpp")
+          add_library(nte_attack_replay SHARED
+            "$root/plugins/NteAttackReplay/plugin.cpp"
+            "$root/sdk/cpp/plugin_cxx_throw_bridge.cpp")
           target_include_directories(nte_attack_replay PRIVATE "$root/include")
           target_compile_definitions(nte_attack_replay PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          if(MSVC)
+            target_compile_options(nte_attack_replay PRIVATE /EHsc /Zc:threadSafeInit-)
+          endif()
           set_target_properties(nte_attack_replay PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
           "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
           cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
@@ -48,6 +53,19 @@ jobs:
           cmake --build $b --config Release --parallel
           $dll = Join-Path $b 'Release/plugin.dll'
           if (!(Test-Path $dll)) { throw 'plugin.dll was not produced' }
+          $programFilesX86 = [Environment]::GetFolderPath('ProgramFilesX86')
+          $vswhere = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'vswhere.exe was not found; cannot verify the SDK exception bridge export.' }
+          $vsInstall = & $vswhere -latest -products '*' -property installationPath
+          $msvcRoot = Join-Path $vsInstall 'VC\Tools\MSVC'
+          $toolset = Get-ChildItem -LiteralPath $msvcRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if ($null -eq $toolset) { throw 'MSVC toolset was not found; cannot verify the SDK exception bridge export.' }
+          $dumpbin = Join-Path $toolset.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          if (!(Test-Path $dumpbin)) { throw "dumpbin.exe not found: $dumpbin" }
+          $exports = (& $dumpbin /nologo /exports $dll 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0 -or $exports -notmatch 'AnomalyPluginCxxThrowV1') {
+            throw "SDK exception bridge export AnomalyPluginCxxThrowV1 missing from $dll"
+          }
           $pkg = Join-Path $env:GITHUB_WORKSPACE 'dist/NteAttackReplay-windows-x64'
           New-Item -ItemType Directory -Path $pkg -Force | Out-Null
           Copy-Item $dll (Join-Path $pkg 'plugin.dll')
