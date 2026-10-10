@@ -416,8 +416,7 @@ bool ReadNativeDataTable(uintptr_t table,
 bool ResolveAttackInputRequest(Context& c, AnomalyNteAttackInputRequestV1& request) {
     uintptr_t world{}, controller{};
     if (!GetNativeController(c, world, controller)) return false;
-    const uintptr_t table = reinterpret_cast<uintptr_t>(
-        NativeObjectProperty(c, controller, "DT_AbilityInput"));
+    const uintptr_t table = NativeObjectProperty(c, controller, "DT_AbilityInput");
     std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>> rows;
     if (!table || !ReadNativeDataTable(table, rows)) return false;
 
