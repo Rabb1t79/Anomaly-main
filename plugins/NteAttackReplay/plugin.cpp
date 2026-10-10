@@ -94,7 +94,7 @@ struct Context final {
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
     std::atomic_bool stop_requested{false};
-    // Target total damage hits, counting the original captured hit as one.
+    // Rate parameter x schedules x+1 additional inputs after the captured hit.
     uint32_t replay_rate{1};
     uint32_t replay_done{};
     uint64_t replay_last_tick{};
@@ -959,7 +959,6 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             // Only one input is issued per Game tick; each extra hit must be confirmed by a
             // new player->same-target DamageEvent before the next input is sent.
             context.replay_target_count = context.replay_rate + 1U;
-                ? context->replay_rate - 1U : 0U;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = "已提交重放，等待原始伤害后的下一游戏帧";
         } else {
