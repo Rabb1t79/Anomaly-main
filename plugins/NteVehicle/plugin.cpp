@@ -340,7 +340,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         friction = g_context.friction_enabled;
     }
 
-    DrawText(ui, ui, "NTE 载具控制");
+    DrawText(ui, "NTE 载具控制");
     DrawText(ui, status);
 
     DrawText(ui, "召唤载具");
