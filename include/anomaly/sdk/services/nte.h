@@ -304,6 +304,7 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION (1u << 3u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON (1u << 4u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_ENGINE_TORQUE_RATIO (1u << 5u)
+#define ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_LIMIT (1u << 6u)
 #define ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
@@ -315,8 +316,11 @@ typedef struct AnomalyNteVehicleSnapshotV1 {
     double speed_kmh;
     float top_speed_ratio;
     uint32_t wheel_friction_enabled;
-    // Optional V2 tail field. Guard reads by snapshot.struct_size.
+    // Optional V2 tail fields. Guard reads by snapshot.struct_size.
     float engine_torque_ratio;
+    // Game-reported HTVehicleMovementComponent.GetVehicleTopSpeed result,
+    // not the multiplier requested by the UI.
+    float top_speed_limit_kmh;
 } AnomalyNteVehicleSnapshotV1;
 
 typedef struct AnomalyNteVehicleCatalogSnapshotV1 {

@@ -752,6 +752,7 @@ struct Ue5NteAdapter::State {
         VehicleFunctionBinding current_vehicle{};
         VehicleFunctionBinding speed_kmh{};
         VehicleFunctionBinding set_top_speed_ratio{};
+        VehicleFunctionBinding get_vehicle_top_speed{};
         VehicleFunctionBinding get_external_torque_ratio{};
         VehicleFunctionBinding set_external_torque_ratio{};
         VehicleFunctionBinding set_max_engine_torque{};
@@ -786,6 +787,10 @@ struct Ue5NteAdapter::State {
     std::uintptr_t current_vehicle_object{};
     std::uintptr_t vehicle_movement_component{};
     float vehicle_top_speed_ratio{1.0F};
+    bool vehicle_top_speed_ratio_live_valid{};
+    float vehicle_speed_ratio_target{1.0F};
+    bool vehicle_speed_ratio_override_active{};
+    float vehicle_speed_limit_kmh{};
     float vehicle_engine_torque_ratio{1.0F};
     float vehicle_base_engine_torque{};
     std::uintptr_t vehicle_base_torque_component{};
@@ -2553,11 +2558,21 @@ struct Ue5NteAdapter::State {
         map_landmark_binding = {};
         map_landmark_catalog.reset();
         vehicle_bindings = {};
+        vehicle_top_speed_ratio = 1.0F;
+        vehicle_top_speed_ratio_live_valid = false;
+        vehicle_speed_ratio_target = 1.0F;
+        vehicle_speed_ratio_override_active = false;
+        vehicle_speed_limit_kmh = 0.0F;
         vehicle_catalog.clear();
         vehicle_catalog_generation = 0;
         vehicle_catalog_table = 0;
         vehicle_catalog_valid = false;
         selected_summon_vehicle_id.clear();
+        vehicle_top_speed_ratio = 1.0F;
+        vehicle_top_speed_ratio_live_valid = false;
+        vehicle_speed_ratio_target = 1.0F;
+        vehicle_speed_ratio_override_active = false;
+        vehicle_speed_limit_kmh = 0.0F;
         attack_input_bindings = {};
         map_landmark_next_refresh_sequence = 0;
         navigation = {};
@@ -7868,6 +7883,11 @@ struct Ue5NteAdapter::State {
                 vehicle_movement_component = 0;
                 vehicle_base_torque_component = 0;
                 vehicle_base_engine_torque_valid = false;
+                vehicle_top_speed_ratio = 1.0F;
+                vehicle_top_speed_ratio_live_valid = false;
+                vehicle_speed_ratio_target = 1.0F;
+                vehicle_speed_ratio_override_active = false;
+                vehicle_speed_limit_kmh = 0.0F;
             }
 
             static constexpr std::array<std::string_view, 1> controller_outer{"HTPlayerController"};
@@ -7895,6 +7915,10 @@ struct Ue5NteAdapter::State {
             if (vehicle_bindings.speed_kmh.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", movement_outer,
                     "FloatReturn", vehicle_bindings.speed_kmh));
+            }
+            if (vehicle_bindings.get_vehicle_top_speed.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("GetVehicleTopSpeed", movement_outer,
+                    "FloatReturn", vehicle_bindings.get_vehicle_top_speed));
             }
             if (vehicle_bindings.set_wheel_friction.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("SetEnableWheelFriction", movement_outer,
@@ -7956,6 +7980,54 @@ struct Ue5NteAdapter::State {
                 vehicle_engine_torque_ratio = 1.0F;
             }
 
+            // The 5.6.1-0+UE5-HT dump declares TopSpeedRatio as a FloatProperty
+            // on HTVehicleMovementComponent (offset 0x1220). Resolve by reflected
+            // name/type at runtime; don't trust the slider's cached value.
+            static constexpr std::array<std::string_view, 1> top_speed_ratio_path{"TopSpeedRatio"};
+            std::uintptr_t top_speed_ratio_address{};
+            vehicle_top_speed_ratio_live_valid = false;
+            if (ResolveVehicleFloatPathLocked(vehicle_movement_component,
+                    top_speed_ratio_path, top_speed_ratio_address)) {
+                float observed_ratio{};
+                if (ReadValue(*memory, top_speed_ratio_address, observed_ratio) &&
+                    std::isfinite(observed_ratio)) {
+                    if (vehicle_speed_ratio_override_active &&
+                        std::fabs(observed_ratio - vehicle_speed_ratio_target) > 0.001F &&
+                        memory->Write(top_speed_ratio_address, &vehicle_speed_ratio_target,
+                            sizeof(vehicle_speed_ratio_target))) {
+                        float verified_ratio{};
+                        if (ReadValue(*memory, top_speed_ratio_address, verified_ratio) &&
+                            std::isfinite(verified_ratio) &&
+                            std::fabs(verified_ratio - vehicle_speed_ratio_target) <= 0.001F) {
+                            observed_ratio = verified_ratio;
+                        }
+                    }
+                    vehicle_top_speed_ratio = observed_ratio;
+                    vehicle_top_speed_ratio_live_valid =
+                        std::isfinite(observed_ratio) && observed_ratio >= 0.0F &&
+                        observed_ratio <= 10000.0F;
+                }
+            }
+
+            // This readback is from HTVehicleMovementComponent.GetVehicleTopSpeed;
+            // it is distinct from the UI request and can show whether the game-side
+            // computed speed limit changed after the multiplier was applied.
+            vehicle_speed_limit_kmh = 0.0F;
+            if (vehicle_bindings.get_vehicle_top_speed.function != 0) {
+                alignas(8) std::array<std::uint8_t, 8> top_speed_bytes{};
+                if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
+                        vehicle_bindings.get_vehicle_top_speed.function, top_speed_bytes.data(),
+                        vehicle_bindings.get_vehicle_top_speed.parms_size)) {
+                    float top_speed{};
+                    std::memcpy(&top_speed, top_speed_bytes.data() +
+                        vehicle_bindings.get_vehicle_top_speed.return_offset, sizeof(top_speed));
+                    if (std::isfinite(top_speed) && top_speed >= 0.0F &&
+                        top_speed <= 100000.0F) {
+                        vehicle_speed_limit_kmh = top_speed;
+                    }
+                }
+            }
+
             if (vehicle_bindings.speed_kmh.function != 0) {
                 alignas(8) std::array<std::uint8_t, 8> speed_bytes{};
                 if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
@@ -8014,7 +8086,12 @@ struct Ue5NteAdapter::State {
         if (snapshot == nullptr || snapshot->struct_size < minimum_size)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
         const std::uint32_t caller_size = snapshot->struct_size;
-        const bool has_torque_tail = caller_size >= sizeof(*snapshot);
+        const bool has_torque_tail = caller_size >=
+            offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio) +
+                sizeof(snapshot->engine_torque_ratio);
+        const bool has_top_speed_limit_tail = caller_size >=
+            offsetof(AnomalyNteVehicleSnapshotV1, top_speed_limit_kmh) +
+                sizeof(snapshot->top_speed_limit_kmh);
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle snapshot must run on Game thread");
         std::scoped_lock lock(mutex);
@@ -8026,6 +8103,7 @@ struct Ue5NteAdapter::State {
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
         if (has_torque_tail) snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
+        if (has_top_speed_limit_tail) snapshot->top_speed_limit_kmh = 0.0F;
         if (!RefreshVehicleLocked()) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "current driving vehicle is unavailable");
         }
@@ -8033,8 +8111,12 @@ struct Ue5NteAdapter::State {
         static_cast<void>(ObjectHandleLocked(current_vehicle_object, handle));
         snapshot->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
         if (vehicle_bindings.speed_kmh.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
-        if (vehicle_bindings.set_top_speed_ratio.function != 0)
+        if (vehicle_bindings.set_top_speed_ratio.function != 0 &&
+            vehicle_top_speed_ratio_live_valid)
             snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO;
+        if (vehicle_bindings.get_vehicle_top_speed.function != 0 &&
+            vehicle_speed_limit_kmh > 0.0F)
+            snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_LIMIT;
         if (vehicle_bindings.set_wheel_friction.function != 0)
             snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION;
         if (vehicle_bindings.set_external_torque_ratio.function != 0 ||
@@ -8046,6 +8128,7 @@ struct Ue5NteAdapter::State {
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
         if (has_torque_tail) snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
+        if (has_top_speed_limit_tail) snapshot->top_speed_limit_kmh = vehicle_speed_limit_kmh;
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -8067,7 +8150,49 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.set_top_speed_ratio.function, parameters.data(),
                 vehicle_bindings.set_top_speed_ratio.parms_size))
             return Status(ANOMALY_STATUS_V1_FAILED, "SetTopSpeedRatio ProcessEvent failed");
-        vehicle_top_speed_ratio = ratio;
+
+        // Keep the dump-validated native setter, then require a live property
+        // readback before reporting success. A successful ProcessEvent only proves
+        // dispatch; it doesn't prove the game's movement component changed.
+        static constexpr std::array<std::string_view, 1> top_speed_ratio_path{"TopSpeedRatio"};
+        std::uintptr_t top_speed_ratio_address{};
+        if (vehicle_movement_component == 0 ||
+            !ResolveVehicleFloatPathLocked(vehicle_movement_component,
+                top_speed_ratio_path, top_speed_ratio_address)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTVehicleMovementComponent.TopSpeedRatio failed runtime reflection validation");
+        }
+        if (!memory->Write(top_speed_ratio_address, &ratio, sizeof(ratio))) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "TopSpeedRatio was dispatched but the live movement-component write failed");
+        }
+        float observed_ratio{};
+        if (!ReadValue(*memory, top_speed_ratio_address, observed_ratio) ||
+            !std::isfinite(observed_ratio) ||
+            std::fabs(observed_ratio - ratio) > 0.001F) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "TopSpeedRatio live-field readback did not match the requested ratio");
+        }
+        vehicle_speed_ratio_target = ratio;
+        vehicle_speed_ratio_override_active = true;
+        vehicle_top_speed_ratio = observed_ratio;
+        vehicle_top_speed_ratio_live_valid = true;
+
+        vehicle_speed_limit_kmh = 0.0F;
+        if (vehicle_bindings.get_vehicle_top_speed.function != 0) {
+            alignas(8) std::array<std::uint8_t, 8> top_speed_bytes{};
+            if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
+                    vehicle_bindings.get_vehicle_top_speed.function, top_speed_bytes.data(),
+                    vehicle_bindings.get_vehicle_top_speed.parms_size)) {
+                float top_speed{};
+                std::memcpy(&top_speed, top_speed_bytes.data() +
+                    vehicle_bindings.get_vehicle_top_speed.return_offset, sizeof(top_speed));
+                if (std::isfinite(top_speed) && top_speed >= 0.0F &&
+                    top_speed <= 100000.0F) {
+                    vehicle_speed_limit_kmh = top_speed;
+                }
+            }
+        }
         return Status(ANOMALY_STATUS_V1_OK);
     }
 

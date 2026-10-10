@@ -20,6 +20,7 @@ struct Snapshot {
     double speed_kmh{};
     float top_speed_ratio{1.0F};
     float engine_torque_ratio{1.0F};
+    float top_speed_limit_kmh{};
     bool friction{true};
 };
 
@@ -146,13 +147,14 @@ void RefreshCatalogOnGameThread() {
 void Update() {
     if (!g_context.vehicle || !g_context.started.load(std::memory_order_acquire)) return;
 
-    if (g_context.pending_vehicle_id.size() != 0) {
-        std::string id;
-        {
-            std::scoped_lock lock(g_context.mutex);
-            id = g_context.pending_vehicle_id;
-            g_context.pending_vehicle_id.clear();
-        }
+    std::string pending_vehicle_id;
+    {
+        std::scoped_lock lock(g_context.mutex);
+        pending_vehicle_id = std::move(g_context.pending_vehicle_id);
+        g_context.pending_vehicle_id.clear();
+    }
+    if (!pending_vehicle_id.empty()) {
+        const std::string& id = pending_vehicle_id;
         const auto status = g_context.vehicle->set_summon_vehicle_id(
             g_context.vehicle->user, anomaly::sdk::StringView(id));
         if (status.code == ANOMALY_STATUS_V1_OK) {
@@ -208,7 +210,8 @@ void Update() {
         const auto status = g_context.vehicle->set_top_speed_ratio(
             g_context.vehicle->user, ratio);
         if (status.code == ANOMALY_STATUS_V1_OK) {
-            SetStatus("车速倍率已应用：" + std::to_string(ratio) + "x");
+            SetStatus("车速倍率已写入并核验游戏内 TopSpeedRatio：" +
+                std::to_string(ratio) + "x");
         } else if (status.message.data != nullptr && status.message.size != 0) {
             SetStatus("车速倍率应用失败：" + std::string(status.message.data, status.message.size));
         } else {
@@ -309,6 +312,7 @@ void Update() {
         g_context.snapshot.speed_kmh = snapshot.speed_kmh;
         g_context.snapshot.top_speed_ratio = snapshot.top_speed_ratio;
         g_context.snapshot.engine_torque_ratio = snapshot.engine_torque_ratio;
+        g_context.snapshot.top_speed_limit_kmh = snapshot.top_speed_limit_kmh;
         g_context.snapshot.friction = snapshot.wheel_friction_enabled != 0;
         g_context.status = g_context.status;
     } else {
@@ -320,6 +324,14 @@ void Draw(const AnomalyUiServiceV1* ui) {
     if (!ui || !ui->begin_window || !ui->end_window || !ui->text ||
         !ui->button || !ui->slider_float) return;
 
+    if (ui->set_next_window_size != nullptr &&
+        HasField<AnomalyUiServiceV1,
+            decltype(AnomalyUiServiceV1::set_next_window_size)>(
+                ui, offsetof(AnomalyUiServiceV1, set_next_window_size))) {
+        // 首次打开时给主窗口合理的固定初始尺寸；载具列表使用独立滚动区域。
+        ui->set_next_window_size(ui->user, 470.0F, 700.0F, 4U);
+    }
+
     int open = 1;
     anomaly::sdk::UiWindow window(ui, "NTE Vehicle", &open, 0);
     if (!window) return;
@@ -328,7 +340,8 @@ void Draw(const AnomalyUiServiceV1* ui) {
     std::string status;
     std::string selected;
     std::vector<std::string> ids;
-    float ratio;
+    float speed_ratio;
+    float torque_ratio;
     bool friction;
     {
         std::scoped_lock lock(g_context.mutex);
@@ -336,68 +349,114 @@ void Draw(const AnomalyUiServiceV1* ui) {
         status = g_context.status;
         selected = g_context.selected_vehicle_id;
         ids = g_context.vehicle_ids;
-        ratio = g_context.speed_ratio;
+        speed_ratio = g_context.speed_ratio;
+        torque_ratio = g_context.engine_torque_ratio;
         friction = g_context.friction_enabled;
     }
 
-    DrawText(ui, "NTE 载具控制");
+    DrawText(ui, "NTE VEHICLE  |  载具控制");
     DrawText(ui, status);
+    if (ui->separator != nullptr) ui->separator(ui->user);
 
-    DrawText(ui, "召唤载具");
-    DrawText(ui, "当前选择：" + selected);
-    if (ids.empty()) {
-        DrawText(ui, "正在读取运行时 Vehicle 名称...");
-    } else {
-        const std::size_t limit = (std::min)(ids.size(), std::size_t{96});
-        for (std::size_t i = 0; i < limit; ++i) {
-            const bool current = ids[i] == selected;
-            const std::string label = std::string(current ? "[当前] " : "") + ids[i];
-            if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
-                std::scoped_lock lock(g_context.mutex);
-                g_context.pending_vehicle_id = ids[i];
+    DrawText(ui, "载具目录");
+    DrawText(ui, "已载入 " + std::to_string(ids.size()) + " 项    当前选择：" +
+        (selected.empty() ? std::string("无") : selected));
+
+    const bool supports_child =
+        HasField<AnomalyUiServiceV1,
+            decltype(AnomalyUiServiceV1::begin_child)>(
+                ui, offsetof(AnomalyUiServiceV1, begin_child)) &&
+        HasField<AnomalyUiServiceV1,
+            decltype(AnomalyUiServiceV1::end_child)>(
+                ui, offsetof(AnomalyUiServiceV1, end_child)) &&
+        ui->begin_child != nullptr && ui->end_child != nullptr;
+    if (supports_child) {
+        // EndChild is required even when BeginChild returns false.
+        const int list_visible = ui->begin_child(
+            ui->user, anomaly::sdk::StringView("vehicle-catalog-scroll"),
+            0.0F, 210.0F, 1U);
+        if (list_visible != 0) {
+            if (ids.empty()) {
+                DrawText(ui, "正在读取游戏中的 Vehicle 数据表...");
+            } else {
+                for (const auto& id : ids) {
+                    const bool current = id == selected;
+                    const std::string label = std::string(current ? "[已选] " : "      ") +
+                        id + "###vehicle-row-" + id;
+                    if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
+                        std::scoped_lock lock(g_context.mutex);
+                        g_context.pending_vehicle_id = id;
+                    }
+                }
             }
         }
-        if (ids.size() > limit) {
-            DrawText(ui, "列表显示前 96 项；Host 目录仍保留全部运行时匹配项。");
+        ui->end_child(ui->user);
+    } else {
+        DrawText(ui, "当前 Host UI 不支持滚动子窗口，请更新 Anomaly Runtime。");
+        const std::size_t limit = (std::min)(ids.size(), std::size_t{8});
+        for (std::size_t i = 0; i < limit; ++i) {
+            const auto& id = ids[i];
+            const bool current = id == selected;
+            const std::string label = std::string(current ? "[已选] " : "      ") + id;
+            if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
+                std::scoped_lock lock(g_context.mutex);
+                g_context.pending_vehicle_id = id;
+            }
         }
     }
-    if (ui->button(ui->user, anomaly::sdk::StringView("召唤当前载具"), 0.0F, 0.0F)) {
+
+    if (ui->button(ui->user, anomaly::sdk::StringView("召唤当前选择"), 0.0F, 0.0F)) {
         g_context.summon.store(true, std::memory_order_release);
     }
 
+    if (ui->separator != nullptr) ui->separator(ui->user);
+    DrawText(ui, "驾驶状态");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
-        DrawText(ui, "当前没有检测到正在驾驶的载具；可先调整倍率，应用时需要有效驾驶载具。");
+        DrawText(ui, "当前未检测到正在驾驶的载具。召唤与目录选择仍可使用。");
     } else {
         DrawText(ui, "当前速度：" + std::to_string(snap.speed_kmh) + " km/h");
-        DrawText(ui, "当前倍率：" + std::to_string(snap.top_speed_ratio) + "x");
+        if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO) != 0) {
+            DrawText(ui, "实时 TopSpeedRatio：" + std::to_string(snap.top_speed_ratio) + "x");
+        } else {
+            DrawText(ui, "实时 TopSpeedRatio：当前无法读取，尚不报告已验证倍率");
+        }
+        if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_LIMIT) != 0) {
+            DrawText(ui, "游戏读取的最高车速值：" +
+                std::to_string(snap.top_speed_limit_kmh));
+        } else {
+            DrawText(ui, "游戏最高车速值：当前不可读取");
+        }
     }
-    // Keep the control visible even when the current vehicle snapshot is temporarily
-    // invalid; hiding it made the slider impossible to drag before a valid driving sample.
+
+    DrawText(ui, "最高车速倍率");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("速度倍率"),
-                         &ratio, 0.05F, 20.0F)) {
+                         &speed_ratio, 0.05F, 20.0F)) {
         std::scoped_lock lock(g_context.mutex);
-        g_context.speed_ratio = ratio;
+        g_context.speed_ratio = speed_ratio;
     }
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F))
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F)) {
         g_context.apply_speed.store(true, std::memory_order_release);
-    float torque_ratio;
-    {
-        std::scoped_lock lock(g_context.mutex);
-        torque_ratio = g_context.engine_torque_ratio;
     }
+
+    if (ui->separator != nullptr) ui->separator(ui->user);
+    DrawText(ui, "发动机扭矩");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("发动机扭矩倍率"),
                          &torque_ratio, 0.05F, 20.0F)) {
         std::scoped_lock lock(g_context.mutex);
         g_context.engine_torque_ratio = torque_ratio;
     }
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用扭矩倍率"), 0.0F, 0.0F))
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用扭矩倍率"), 0.0F, 0.0F)) {
         g_context.apply_torque.store(true, std::memory_order_release);
-    if (ui->button(ui->user, anomaly::sdk::StringView("恢复 1.0x"), 0.0F, 0.0F))
+    }
+    if (ui->button(ui->user, anomaly::sdk::StringView("恢复全部倍率至 1.0x"), 0.0F, 0.0F)) {
         g_context.reset.store(true, std::memory_order_release);
-    DrawText(ui, std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
-    if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F))
-        g_context.friction_toggle.store(true, std::memory_order_release);
+    }
 
+    if (ui->separator != nullptr) ui->separator(ui->user);
+    DrawText(ui, std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
+    if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F)) {
+        g_context.friction_toggle.store(true, std::memory_order_release);
+    }
 }
 
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
@@ -475,6 +534,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.8.1"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.8.2"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
