@@ -762,6 +762,17 @@ struct Ue5NteAdapter::State {
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
+    struct DamageReplaySetHpBinding {
+        std::uintptr_t function{};
+        std::uintptr_t outer_class{};
+        std::uint16_t parms_size{};
+        std::uint16_t hp_offset{};
+        std::uint16_t reason_offset{};
+        std::uint16_t lethal_offset{};
+        std::uint16_t real_damage_offset{};
+        std::uint64_t object_generation{};
+        bool attempted{};
+    } damage_replay_set_hp_binding;
     struct VehicleCatalogEntry {
         std::string id;
         std::uint32_t name_comparison_index{};
@@ -2307,7 +2318,8 @@ struct Ue5NteAdapter::State {
         if (id == ANOMALY_NTE_ACTORS_SERVICE_V1_ID) {
             return framework_hook_ready && NteActorsLayoutAvailable();
         }
-        if (id == ANOMALY_NTE_COMBAT_SERVICE_V1_ID) {
+        if (id == ANOMALY_NTE_COMBAT_SERVICE_V1_ID ||
+            id == ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID) {
             return framework_hook_ready && NteCombatProfileAvailable();
         }
         if (id == ANOMALY_NTE_SKILLS_SERVICE_V1_ID) {
@@ -8132,6 +8144,70 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    [[nodiscard]] bool EnsureDamageReplaySetHpBindingLocked() noexcept {
+        auto& binding = damage_replay_set_hp_binding;
+        if (binding.object_generation != object_generation) {
+            binding = {};
+            binding.object_generation = object_generation;
+        }
+        if (binding.function != 0) return true;
+        if (binding.attempted) return false;
+        binding.attempted = true;
+
+        std::uintptr_t function{};
+        if (!FindExactObjectLocked(
+                L"/Script/HTGame.HTAbilityCharacter.SetHP", function)) {
+            return false;
+        }
+        std::uintptr_t function_class{};
+        std::uintptr_t outer{};
+        std::string function_class_name;
+        std::string outer_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{};
+        std::uint16_t return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            function_class_name != "Function" || outer_name != "HTAbilityCharacter" ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+            num_parms != 4U || parms_size != 0x0CU || return_offset != 0xFFFFU) {
+            return false;
+        }
+
+        const auto property_matches = [this, function](
+            const std::string_view name,
+            const std::string_view expected_type,
+            const std::int32_t expected_size,
+            const std::int32_t expected_offset) {
+            ReflectedPropertyInfo property;
+            return FindReflectedPropertyLocked(function, name, property, false) &&
+                property.array_dim == 1 && property.type == expected_type &&
+                property.element_size == expected_size && property.offset == expected_offset;
+        };
+        ReflectedPropertyInfo reason_property;
+        if (!FindReflectedPropertyLocked(function, "DamageReason", reason_property, false) ||
+            reason_property.array_dim != 1 || reason_property.element_size != 1 ||
+            reason_property.offset != 4 ||
+            (reason_property.type != "ByteProperty" && reason_property.type != "EnumProperty") ||
+            !property_matches("HP", "FloatProperty", 4, 0) ||
+            !property_matches("bRealDeadDamage", "BoolProperty", 1, 5) ||
+            !property_matches("fRealDamage", "FloatProperty", 4, 8)) {
+            return false;
+        }
+        binding.function = function;
+        binding.outer_class = outer;
+        binding.parms_size = parms_size;
+        binding.hp_offset = 0;
+        binding.reason_offset = 4;
+        binding.lethal_offset = 5;
+        binding.real_damage_offset = 8;
+        return true;
+    }
+
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
@@ -12947,6 +13023,137 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_NOT_FOUND, "no newer damage event");
     }
 
+    static AnomalyStatusV1 ANOMALY_CALL ReplayRecordedDamage(
+        void* user,
+        const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result) noexcept {
+        if (request == nullptr || request->struct_size < sizeof(*request) ||
+            request->damage_sequence == 0 || result == nullptr ||
+            result->struct_size < sizeof(*result)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "direct damage replay request/result ABI is invalid");
+        }
+        auto& state = *static_cast<State*>(user);
+        if (GetCurrentThreadId() != state.game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "direct damage replay requires the Game callback domain");
+        }
+
+        std::scoped_lock lock(state.mutex);
+        if (!state.SemanticFeatureRunning("nte.combat") || !state.player_available ||
+            state.player_pawn == 0 || state.world_pointer == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "NTE combat/player runtime is unavailable");
+        }
+
+        AnomalyNteDamageEventV1 recorded{};
+        bool found{};
+        for (std::size_t index{}; index < state.damage_event_count; ++index) {
+            const auto& candidate = state.damage_events[
+                (state.damage_event_start + index) % kDamageEventCapacity].event;
+            if (candidate.sequence == request->damage_sequence) {
+                recorded = candidate;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "recorded native damage event has expired from the Host ring");
+        }
+        if ((recorded.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
+            recorded.world.id != 1 || recorded.world.generation != state.world_generation ||
+            recorded.attacker.id == 0 || recorded.victim.id == 0 ||
+            recorded.attacker.generation != state.object_generation ||
+            recorded.victim.generation != state.object_generation ||
+            recorded.final_damage <= 0) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "recorded event is not a valid current-world character damage");
+        }
+
+        AnomalyGenerationHandleV1 local_player{};
+        std::uintptr_t target{};
+        if (!state.ObjectHandleLocked(state.player_pawn, local_player) ||
+            recorded.attacker.id != local_player.id ||
+            recorded.attacker.generation != local_player.generation) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "recorded damage was not caused by the current local player");
+        }
+        if (!state.ResolveObjectHandleLocked(recorded.victim, target) ||
+            target == 0 || target == state.player_pawn) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "recorded damage target no longer resolves to a live actor");
+        }
+
+        const auto& get_hp = state.combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::GetHp)];
+        std::uintptr_t target_class{};
+        if (!get_hp ||
+            !ReadPointerAt(*state.memory, target, Layout(state.profile, "object.class"), target_class) ||
+            !state.IsClassDerivedFromLocked(target_class, get_hp->outer_class)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "damage target is not a reflected HTAbilityCharacter");
+        }
+        if (!state.EnsureDamageReplaySetHpBindingLocked()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTAbilityCharacter.SetHP failed dump ABI validation");
+        }
+
+        float hp_before{};
+        if (!state.InvokeNteReturnLocked(NteFunctionKind::GetHp, target, hp_before) ||
+            !std::isfinite(hp_before) || hp_before <= 0.0F) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "target HP is unavailable or the target is already defeated");
+        }
+        const float recorded_damage = static_cast<float>(recorded.final_damage);
+        if (!std::isfinite(recorded_damage) || recorded_damage <= 0.0F) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "recorded final damage is outside the supported numeric range");
+        }
+
+        const float applied_damage = (std::min)(recorded_damage, hp_before);
+        const float expected_hp_after = (std::max)(0.0F, hp_before - applied_damage);
+        alignas(8) std::array<std::uint8_t, 12> parameters{};
+        const auto& binding = state.damage_replay_set_hp_binding;
+        std::memcpy(parameters.data() + binding.hp_offset, &expected_hp_after, sizeof(expected_hp_after));
+        parameters[binding.reason_offset] = 0U; // EDamageReason::Normal from the supplied dump.
+        parameters[binding.lethal_offset] = expected_hp_after <= 0.001F ? 1U : 0U;
+        std::memcpy(parameters.data() + binding.real_damage_offset, &applied_damage, sizeof(applied_damage));
+        if (!state.InvokeNativeProcessEventLocked(
+                target, binding.function, parameters.data(), binding.parms_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "HTAbilityCharacter.SetHP ProcessEvent failed");
+        }
+
+        float hp_after{};
+        if (!state.InvokeNteReturnLocked(NteFunctionKind::GetHp, target, hp_after) ||
+            !std::isfinite(hp_after)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetHP was dispatched but post-damage HP could not be read back");
+        }
+        const float observed_damage = hp_before - hp_after;
+        const float allowed_error = (std::max)(1.0F, applied_damage * 0.02F);
+        if (observed_damage <= 0.01F || hp_after < -0.01F ||
+            std::fabs(hp_after - expected_hp_after) > allowed_error) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetHP was dispatched but its live HP postcondition did not match the recorded damage");
+        }
+
+        AnomalyNteDamageReplayResultV1 response{};
+        response.struct_size = sizeof(response);
+        response.flags = ANOMALY_NTE_DAMAGE_REPLAY_V1_APPLIED;
+        if (hp_after <= 0.001F) response.flags |= ANOMALY_NTE_DAMAGE_REPLAY_V1_LETHAL;
+        response.damage_sequence = recorded.sequence;
+        response.target = recorded.victim;
+        response.recorded_damage = recorded_damage;
+        response.applied_damage = observed_damage;
+        response.hp_before = hp_before;
+        response.hp_after = hp_after;
+        *result = response;
+        return Status(ANOMALY_STATUS_V1_OK,
+            "recorded damage directly applied and verified by target HP readback");
+    }
+
     [[nodiscard]] static bool SameHandle(
         const AnomalyGenerationHandleV1 left,
         const AnomalyGenerationHandleV1 right) noexcept {
@@ -13623,6 +13830,10 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             NextDamageEventThunk, CombatStatisticsThunk, DamageSourceNameThunk,
             DamageParticipantPathThunk, LatestCombatEventSequenceThunk,
             NextCombatEventThunk, CombatEventNameThunk, ParticipantDisplayNameThunk};
+        damage_replay_service = {
+            sizeof(AnomalyNteDamageReplayServiceV1),
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+            this, ReplayDamageEventThunk};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
@@ -13674,6 +13885,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteEntitiesServiceV1 entities_service{};
     AnomalyNteActorsServiceV1 actors_service{};
     AnomalyNteCombatServiceV1 combat_service{};
+    AnomalyNteDamageReplayServiceV1 damage_replay_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
     AnomalyNteMetricsServiceV1 metrics_service{};
@@ -14242,6 +14454,15 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? State::NextDamageEvent(lease.User(), after_sequence, event)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL ReplayDamageEventThunk(
+        void* user, const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? State::ReplayRecordedDamage(lease.User(), request, result)
             : StoppedStatus();
     }
 
@@ -15293,6 +15514,27 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             semantic_lifetime)) {
         return false;
     }
+    const bool publish_damage_replay_service = framework_hook_ready &&
+        NteCombatProfileAvailable() &&
+        !IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
+    if (publish_damage_replay_service &&
+        !Publish(
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+            &endpoint->damage_replay_service,
+            [self, observer_endpoint] {
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
+                if (!locked || !observed ||
+                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) {
+                    return;
+                }
+                locked->player_demand.store(true, std::memory_order_release);
+                locked->combat_demand.store(true, std::memory_order_release);
+            },
+            semantic_lifetime)) {
+        return false;
+    }
     const bool publish_skills_service = framework_hook_ready &&
         NteSkillsProfileAvailable() &&
         !IsPublished(ANOMALY_NTE_SKILLS_SERVICE_V1_ID);
@@ -15700,13 +15942,17 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         const bool combat_service_ready =
             state->NteCombatProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_COMBAT_SERVICE_V1_ID);
+        const bool damage_replay_service_ready =
+            state->NteCombatProfileAvailable() &&
+            !state->IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
         const bool skills_service_ready =
             state->NteSkillsProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_SKILLS_SERVICE_V1_ID);
         const bool invocation_service_ready =
             state->SemanticFeatureAvailable("nte.skill-invocation") &&
             !state->IsPublished(ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID);
-        if (combat_service_ready || skills_service_ready || invocation_service_ready) {
+        if (combat_service_ready || damage_replay_service_ready ||
+            skills_service_ready || invocation_service_ready) {
             static_cast<void>(state->PublishAvailableServices(state));
         }
         state->RefreshPickupConfirmationLocked();
