@@ -761,6 +761,13 @@ bool CaptureNextAttack(Context& context) {
         // merely happened to be active immediately before the hit.
         context.captured_damage_source_name =
             ReadDamageSourceName(context.combat, event);
+        // A generic active-skill candidate is not proof that it caused this hit.
+        // When the real DamageSource is available, keep only an exact name match.
+        if (!context.captured_damage_source_name.empty()) {
+            context.captured_skill = {};
+            context.captured_ability = {};
+            context.captured_input_id = -1;
+        }
         if (!context.captured_damage_source_name.empty() &&
             SkillsReady(context.skills)) {
             AnomalyNteSkillFrameV1 frame{};
@@ -962,11 +969,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            // replay_count is the desired total hit count, including the original hit.
-            // The original is already captured, so submit exactly total-1 legal re-hits.
-            // At most one is submitted per Game tick and each must yield a fresh DamageEvent.
-            context->replay_target_count = context->replay_count > 0U
-                ? context->replay_count - 1U : 0U;
+            // The user-set chain rate X requests X+1 additional legal hits after
+            // the captured original event. Only one input is sent per Game tick.
+            context->replay_target_count = context->replay_count + 1U;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = "已提交重放，等待原始伤害后的下一游戏帧";
         } else {
@@ -1075,8 +1080,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     }
     context->waiting_for_damage = true;
     context->status = accepted != 0
-        ? "原生伤害上下文已提交，等待新的 DamageEvent"
-        : "原生伤害重放已提交，等待新的 DamageEvent";
+        ? "已发送真实攻击输入，等待新的 DamageEvent"
+        : "攻击输入已提交，等待新的 DamageEvent";
 }
 
 // Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -1122,9 +1127,9 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("目标总伤害次数（包含原始命中）"),
+            ui->user, anomaly::sdk::StringView("连锁速率（追加重击参数）"),
             &context->replay_count, 1, 10);
-        context->replay_count = std::clamp(context->replay_count, 1u, 100000u);
+        context->replay_count = std::clamp(context->replay_count, 0u, 9999u);
     }
 
     if (context->captured) {
@@ -1140,14 +1145,13 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             ui->text(ui->user, anomaly::sdk::StringView(
                 "目标：" + context->captured_target_path));
         }
-        const uint32_t desired_rehits = context->replay_count > 0U
-            ? context->replay_count - 1U : 0U;
+        const uint32_t desired_rehits = context->replay_count + 1U;
         const std::string progress =
             "已确认的额外伤害事件：" + std::to_string(context->replay_done) + "/" +
             std::to_string(context->replay_target_count != 0
                 ? context->replay_target_count : desired_rehits);
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("倍率语义：每次原始命中总计造成设定次数伤害；追加伤害逐帧提交并逐条验证"));
+        ui->text(ui->user, anomaly::sdk::StringView("每个游戏帧最多提交一次真实攻击输入；只有出现新的玩家→同一目标 DamageEvent 才计数。速率 X 对当前命中追加 X+1 次重击。"));
     } else {
         ui->text(ui->user, anomaly::sdk::StringView(
             "无需手动录制：插件自动等待下一次玩家攻击"));
