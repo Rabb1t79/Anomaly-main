@@ -20,6 +20,8 @@
 #define ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_COMBAT_SERVICE_V1_ID "anomaly.nte.combat"
 #define ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID "anomaly.nte.damage-replay"
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_SKILLS_SERVICE_V1_ID "anomaly.nte.skills"
 #define ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID "anomaly.nte.skill-invocation"
@@ -852,6 +854,33 @@ typedef struct AnomalyNteCombatServiceV1 {
         void* user, AnomalyGenerationHandleV1 participant,
         char* destination, size_t* inout_size);
 } AnomalyNteCombatServiceV1;
+
+// Requests identify a native HTDamageEvent that already happened. The Host revalidates
+// its source and target before replaying its recorded final damage.
+typedef uint32_t AnomalyNteDamageReplayFlagsV1;
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_APPLIED (1u << 0u)
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_LETHAL (1u << 1u)
+typedef struct AnomalyNteDamageReplayRequestV1 {
+    uint32_t struct_size; uint32_t flags;
+    uint64_t damage_sequence;
+} AnomalyNteDamageReplayRequestV1;
+
+typedef struct AnomalyNteDamageReplayResultV1 {
+    uint32_t struct_size; uint32_t flags;
+    uint64_t damage_sequence;
+    AnomalyGenerationHandleV1 target;
+    float recorded_damage; float applied_damage;
+    float hp_before; float hp_after;
+} AnomalyNteDamageReplayResultV1;
+
+typedef struct AnomalyNteDamageReplayServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    // Apply the recorded value through HTAbilityCharacter.SetHP directly. This is
+    // not attack-input, skill, animation or GameplayEffect-chain replay. Game-thread-only.
+    AnomalyStatusV1 (ANOMALY_CALL *replay_event)(
+        void* user, const AnomalyNteDamageReplayRequestV1* request,
+        AnomalyNteDamageReplayResultV1* result);
+} AnomalyNteDamageReplayServiceV1;
 
 typedef struct AnomalyNteSkillFrameV1 {
     uint32_t struct_size; uint32_t flags;
