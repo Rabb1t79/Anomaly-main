@@ -845,7 +845,7 @@ enum class ReplayCallResult : uint32_t {
     Rejected,
 };
 
-// 使用 Host 保留的真实 HTDamageEvent 上下文重放；每次提交后必须观察到新的玩家->目标 DamageEvent 才能计数。
+// 重放通过 Host 暴露的原生攻击输入服务执行；每次按下后必须观察到新的玩家->目标 DamageEvent 才能计数。
 ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
     if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
     if (accepted != nullptr) *accepted = 0;
@@ -1035,7 +1035,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
             context->replaying = false;
             context->waiting_for_damage = false;
-            context->status = "重放失败：原生伤害上下文已提交，但未观察到新的 DamageEvent";
+            context->status = "重放失败：真实攻击输入已发送，但未观察到新的 DamageEvent";
             ArmForNextAttack(*context);
             return;
         }
@@ -1069,9 +1069,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (replay_result == ReplayCallResult::NoSkill) {
             context->status = context->captured_has_skill
                 ? "重放失败：当前捕获技能句柄已失效或无法重新解析"
-                : "已记录普通攻击，但原生 ActivateAbilityFromID/ReleaseAbilityFromID 输入绑定不可用";
+                : "已记录攻击，但 DT_AbilityInput 未能解析出有效的 InputID/Param";
         } else if (replay_result == ReplayCallResult::Rejected) {
-            context->status = "重放被游戏拒绝：skill activate accepted=0";
+            context->status = "游戏未接受攻击输入请求";
         } else {
             context->status = "重放调用失败：ABI status=" + std::to_string(replay_status);
         }
@@ -1160,7 +1160,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (context->enabled && !context->replaying && context->captured) {
         if (ui->button(
                 ui->user, anomaly::sdk::StringView("开始重放"), 0.0F, 0.0F) != 0) {
-            // Draw only posts the request; Update() executes the skill activation in Game domain.
+            // Draw only posts the request; Update() sends the real input from the Game domain.
             context->replay_requested.store(true, std::memory_order_release);
             context->status = "已提交重放请求";
         }
