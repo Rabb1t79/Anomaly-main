@@ -25,7 +25,6 @@ struct Snapshot {
 struct Context {
     const AnomalyNteVehicleServiceV1* vehicle{};
     const AnomalyNtePlayerServiceV1* player{};
-    const AnomalyUiServiceV1* ui{};
     std::mutex mutex;
     Snapshot snapshot{};
     std::string status{"正在读取游戏进程中的 Vehicle 载具数据"};
@@ -70,9 +69,9 @@ void SetStatus(std::string text) {
     g_context.status = std::move(text);
 }
 
-void DrawText(std::string_view text) {
-    if (g_context.ui && g_context.ui->text) {
-        g_context.ui->text(g_context.ui->user, anomaly::sdk::StringView(text));
+void DrawText(const AnomalyUiServiceV1* ui, std::string_view text) {
+    if (ui != nullptr && ui->text != nullptr) {
+        ui->text(ui->user, anomaly::sdk::StringView(text));
     }
 }
 
@@ -273,8 +272,7 @@ void Update() {
     }
 }
 
-void Draw() {
-    const auto* ui = g_context.ui;
+void Draw(const AnomalyUiServiceV1* ui) {
     if (!ui || !ui->begin_window || !ui->end_window || !ui->text ||
         !ui->button || !ui->slider_float) return;
 
@@ -303,13 +301,13 @@ void Draw() {
         friction = g_context.friction_enabled;
     }
 
-    DrawText("NTE 载具控制");
-    DrawText(status);
+    DrawText(ui, "NTE 载具控制");
+    DrawText(ui, status);
 
-    DrawText("召唤载具");
-    DrawText("当前选择：" + selected);
+    DrawText(ui, "召唤载具");
+    DrawText(ui, "当前选择：" + selected);
     if (ids.empty()) {
-        DrawText("正在读取运行时 Vehicle 名称...");
+        DrawText(ui, "正在读取运行时 Vehicle 名称...");
     } else {
         const std::size_t limit = (std::min)(ids.size(), std::size_t{96});
         for (std::size_t i = 0; i < limit; ++i) {
@@ -321,7 +319,7 @@ void Draw() {
             }
         }
         if (ids.size() > limit) {
-            DrawText("列表显示前 96 项；Host 目录仍保留全部运行时匹配项。");
+            DrawText(ui, "列表显示前 96 项；Host 目录仍保留全部运行时匹配项。");
         }
     }
     if (ui->button(ui->user, anomaly::sdk::StringView("召唤当前载具"), 0.0F, 0.0F)) {
@@ -329,11 +327,11 @@ void Draw() {
     }
 
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
-        DrawText("当前没有检测到正在驾驶的载具；可先调整倍率，应用时需要有效驾驶载具。");
+        DrawText(ui, "当前没有检测到正在驾驶的载具；可先调整倍率，应用时需要有效驾驶载具。");
     } else {
-        DrawText("当前速度：" + std::to_string(snap.speed_kmh) + " km/h");
-        DrawText("当前倍率：" + std::to_string(snap.top_speed_ratio) + "x");
-        DrawText("发动机扭矩倍率：" + std::to_string(snap.engine_torque_ratio) + "x");
+        DrawText(ui, "当前速度：" + std::to_string(snap.speed_kmh) + " km/h");
+        DrawText(ui, "当前倍率：" + std::to_string(snap.top_speed_ratio) + "x");
+        DrawText(ui, "发动机扭矩倍率：" + std::to_string(snap.engine_torque_ratio) + "x");
     }
     // Keep the control visible even when the current vehicle snapshot is temporarily
     // invalid; hiding it made the slider impossible to drag before a valid driving sample.
@@ -358,7 +356,7 @@ void Draw() {
         g_context.apply_torque.store(true, std::memory_order_release);
     if (ui->button(ui->user, anomaly::sdk::StringView("恢复 1.0x"), 0.0F, 0.0F))
         g_context.reset.store(true, std::memory_order_release);
-    DrawText(std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
+    DrawText(ui, std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
     if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F))
         g_context.friction_toggle.store(true, std::memory_order_release);
 
@@ -371,22 +369,17 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
         host, ANOMALY_NTE_VEHICLE_SERVICE_V1_ID, ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION);
     const auto* player = QueryService<AnomalyNtePlayerServiceV1>(
         host, ANOMALY_NTE_PLAYER_SERVICE_V1_ID, ANOMALY_NTE_PLAYER_SERVICE_V1_VERSION);
-    const auto* ui = QueryService<AnomalyUiServiceV1>(
-        host, ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION);
-    if (!vehicle || !player || !ui) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+    if (!vehicle || !player) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
 
     if (!vehicle->snapshot || !vehicle->set_top_speed_ratio ||
         !vehicle->summon_vehicle || !vehicle->set_wheel_friction_enabled ||
         !vehicle->reset || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at ||
-        !vehicle->set_summon_vehicle_id || !player->snapshot ||
-        !ui->begin_window || !ui->end_window || !ui->text ||
-        !ui->button || !ui->slider_float) {
+        !vehicle->set_summon_vehicle_id || !player->snapshot) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
 
     g_context.vehicle = vehicle;
     g_context.player = player;
-    g_context.ui = ui;
     g_context.started.store(false, std::memory_order_release);
     g_context.apply_speed.store(false, std::memory_order_release);
     g_context.apply_torque.store(false, std::memory_order_release);
@@ -421,15 +414,14 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     if (plugin_context != &g_context) return;
     g_context.started.store(false, std::memory_order_release);
     g_context.vehicle = nullptr;
-    g_context.ui = nullptr;
 }
 
 void ANOMALY_CALL UpdateCallback(void* plugin_context, double) {
     if (plugin_context == &g_context) Update();
 }
 
-void ANOMALY_CALL DrawCallback(void* plugin_context, const AnomalyUiServiceV1*) {
-    if (plugin_context == &g_context) Draw();
+void ANOMALY_CALL DrawCallback(void* plugin_context, const AnomalyUiServiceV1* ui) {
+    if (plugin_context == &g_context) Draw(ui);
 }
 
 } // namespace
@@ -442,6 +434,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.7.0"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.8.1"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
