@@ -50,6 +50,37 @@ jobs:
         run: |
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component GameRuntime
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/tools --component Tools
+      - name: Build and stage NTE Vehicle and Attack Replay
+        if: github.ref_type != 'tag'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          foreach ($plugin in @('NteVehicle', 'NteAttackReplay')) {
+            $src = Join-Path $env:GITHUB_WORKSPACE ".build/plugin-src/$plugin"
+            $b = Join-Path $env:GITHUB_WORKSPACE ".build/plugin-build/$plugin"
+            New-Item -ItemType Directory -Path $src -Force | Out-Null
+            @"
+          cmake_minimum_required(VERSION 3.22)
+          project($($plugin)Standalone LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library($($plugin.ToLower()) SHARED "$root/plugins/$plugin/plugin.cpp")
+          target_include_directories($($plugin.ToLower()) PRIVATE "$root/include")
+          target_compile_definitions($($plugin.ToLower()) PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties($($plugin.ToLower()) PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
+            cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
+            cmake --build $b --config Release --parallel
+            $dll = Join-Path $b 'Release/plugin.dll'
+            if (!(Test-Path $dll)) { throw "$plugin plugin.dll was not produced" }
+            $pkg = Join-Path $env:GITHUB_WORKSPACE ".build/ci-artifacts/runtime/Anomaly/plugins/$plugin"
+            New-Item -ItemType Directory -Path $pkg -Force | Out-Null
+            Copy-Item $dll (Join-Path $pkg 'plugin.dll') -Force
+            Copy-Item (Join-Path $env:GITHUB_WORKSPACE "plugins/$plugin/manifest.json") (Join-Path $pkg 'manifest.json') -Force
+            $locales = Join-Path $env:GITHUB_WORKSPACE "plugins/$plugin/locales"
+            if (Test-Path $locales) { Copy-Item $locales $pkg -Recurse -Force }
+          }
       - name: Stage CI test plugins
         if: github.ref_type != 'tag' && inputs.fixtures == true
         shell: pwsh
