@@ -50,6 +50,49 @@ jobs:
         run: |
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component GameRuntime
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/tools --component Tools
+      - name: Build and stage NTE plugins
+        if: github.ref_type != 'tag'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE
+          $rootUnix = $root -replace '\\', '/'
+          $stage = Join-Path $root '.build/ci-artifacts/runtime/Anomaly/plugins'
+          $plugins = @(
+            @{ Name = 'NteVehicle'; Source = 'plugins/NteVehicle/plugin.cpp'; Manifest = 'plugins/NteVehicle/manifest.json' },
+            @{ Name = 'NteAttackReplay'; Source = 'plugins/NteAttackReplay/plugin.cpp'; Manifest = 'plugins/NteAttackReplay/manifest.json' }
+          )
+          foreach ($plugin in $plugins) {
+            $src = Join-Path $root ('.build/' + $plugin.Name + '-runtime-src')
+            $build = Join-Path $root ('.build/' + $plugin.Name + '-runtime-build')
+            New-Item -ItemType Directory -Path $src -Force | Out-Null
+            $cmakeText = @"
+          cmake_minimum_required(VERSION 3.22)
+          project(AnomalyIntegratedNtePlugin LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          add_library(nte_plugin SHARED "$rootUnix/$($plugin.Source)")
+          target_include_directories(nte_plugin PRIVATE "$rootUnix/include")
+          target_compile_definitions(nte_plugin PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(nte_plugin PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          "@
+            Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Value $cmakeText -Encoding UTF8
+            cmake -S $src -B $build -G 'Visual Studio 17 2022' -A x64
+            if ($LASTEXITCODE -ne 0) { throw "CMake configure failed for $($plugin.Name)" }
+            cmake --build $build --config Release --parallel
+            if ($LASTEXITCODE -ne 0) { throw "Build failed for $($plugin.Name)" }
+            $dll = Join-Path $build 'Release/plugin.dll'
+            if (!(Test-Path -LiteralPath $dll)) { throw "plugin.dll missing for $($plugin.Name)" }
+            $destination = Join-Path $stage $plugin.Name
+            New-Item -ItemType Directory -Path $destination -Force | Out-Null
+            Copy-Item -LiteralPath $dll -Destination (Join-Path $destination 'plugin.dll') -Force
+            Copy-Item -LiteralPath (Join-Path $root $plugin.Manifest) -Destination (Join-Path $destination 'manifest.json') -Force
+            $locales = Join-Path $root ('plugins/' + $plugin.Name + '/locales')
+            if (Test-Path -LiteralPath $locales) {
+              Copy-Item -Path $locales -Destination $destination -Recurse -Force
+            }
+          }
       - name: Stage CI test plugins
         if: github.ref_type != 'tag' && inputs.fixtures == true
         shell: pwsh
