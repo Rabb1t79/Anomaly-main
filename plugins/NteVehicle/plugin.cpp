@@ -340,13 +340,13 @@ void Draw(const AnomalyUiServiceV1* ui) {
         friction = g_context.friction_enabled;
     }
 
-    DrawText(ui, "NTE 载具控制");
-    DrawText(status);
+    DrawText(ui, ui, "NTE 载具控制");
+    DrawText(ui, status);
 
-    DrawText("召唤载具");
-    DrawText("当前选择：" + selected);
+    DrawText(ui, "召唤载具");
+    DrawText(ui, "当前选择：" + selected);
     if (ids.empty()) {
-        DrawText("正在读取运行时 Vehicle 名称...");
+        DrawText(ui, "正在读取运行时 Vehicle 名称...");
     } else {
         const std::size_t limit = (std::min)(ids.size(), std::size_t{96});
         for (std::size_t i = 0; i < limit; ++i) {
@@ -358,7 +358,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
             }
         }
         if (ids.size() > limit) {
-            DrawText("列表显示前 96 项；Host 目录仍保留全部运行时匹配项。");
+            DrawText(ui, "列表显示前 96 项；Host 目录仍保留全部运行时匹配项。");
         }
     }
     if (ui->button(ui->user, anomaly::sdk::StringView("召唤当前载具"), 0.0F, 0.0F)) {
@@ -366,10 +366,10 @@ void Draw(const AnomalyUiServiceV1* ui) {
     }
 
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
-        DrawText("当前没有检测到正在驾驶的载具；可先调整倍率，应用时需要有效驾驶载具。");
+        DrawText(ui, "当前没有检测到正在驾驶的载具；可先调整倍率，应用时需要有效驾驶载具。");
     } else {
-        DrawText("当前速度：" + std::to_string(snap.speed_kmh) + " km/h");
-        DrawText("当前倍率：" + std::to_string(snap.top_speed_ratio) + "x");
+        DrawText(ui, "当前速度：" + std::to_string(snap.speed_kmh) + " km/h");
+        DrawText(ui, "当前倍率：" + std::to_string(snap.top_speed_ratio) + "x");
     }
     // Keep the control visible even when the current vehicle snapshot is temporarily
     // invalid; hiding it made the slider impossible to drag before a valid driving sample.
@@ -394,7 +394,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         g_context.apply_torque.store(true, std::memory_order_release);
     if (ui->button(ui->user, anomaly::sdk::StringView("恢复 1.0x"), 0.0F, 0.0F))
         g_context.reset.store(true, std::memory_order_release);
-    DrawText(std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
+    DrawText(ui, std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
     if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F))
         g_context.friction_toggle.store(true, std::memory_order_release);
 
