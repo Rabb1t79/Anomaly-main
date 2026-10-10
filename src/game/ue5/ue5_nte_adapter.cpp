@@ -787,6 +787,7 @@ struct Ue5NteAdapter::State {
     std::uintptr_t current_vehicle_object{};
     std::uintptr_t vehicle_movement_component{};
     float vehicle_top_speed_ratio{1.0F};
+    bool vehicle_top_speed_ratio_live_valid{};
     float vehicle_speed_ratio_target{1.0F};
     bool vehicle_speed_ratio_override_active{};
     float vehicle_speed_limit_kmh{};
@@ -2558,6 +2559,7 @@ struct Ue5NteAdapter::State {
         map_landmark_catalog.reset();
         vehicle_bindings = {};
         vehicle_top_speed_ratio = 1.0F;
+        vehicle_top_speed_ratio_live_valid = false;
         vehicle_speed_ratio_target = 1.0F;
         vehicle_speed_ratio_override_active = false;
         vehicle_speed_limit_kmh = 0.0F;
@@ -2567,6 +2569,7 @@ struct Ue5NteAdapter::State {
         vehicle_catalog_valid = false;
         selected_summon_vehicle_id.clear();
         vehicle_top_speed_ratio = 1.0F;
+        vehicle_top_speed_ratio_live_valid = false;
         vehicle_speed_ratio_target = 1.0F;
         vehicle_speed_ratio_override_active = false;
         vehicle_speed_limit_kmh = 0.0F;
@@ -7881,6 +7884,7 @@ struct Ue5NteAdapter::State {
                 vehicle_base_torque_component = 0;
                 vehicle_base_engine_torque_valid = false;
                 vehicle_top_speed_ratio = 1.0F;
+                vehicle_top_speed_ratio_live_valid = false;
                 vehicle_speed_ratio_target = 1.0F;
                 vehicle_speed_ratio_override_active = false;
                 vehicle_speed_limit_kmh = 0.0F;
@@ -7981,12 +7985,12 @@ struct Ue5NteAdapter::State {
             // name/type at runtime; don't trust the slider's cached value.
             static constexpr std::array<std::string_view, 1> top_speed_ratio_path{"TopSpeedRatio"};
             std::uintptr_t top_speed_ratio_address{};
+            vehicle_top_speed_ratio_live_valid = false;
             if (ResolveVehicleFloatPathLocked(vehicle_movement_component,
                     top_speed_ratio_path, top_speed_ratio_address)) {
                 float observed_ratio{};
                 if (ReadValue(*memory, top_speed_ratio_address, observed_ratio) &&
-                    std::isfinite(observed_ratio) &&
-                    observed_ratio >= 0.05F && observed_ratio <= 20.0F) {
+                    std::isfinite(observed_ratio)) {
                     if (vehicle_speed_ratio_override_active &&
                         std::fabs(observed_ratio - vehicle_speed_ratio_target) > 0.001F &&
                         memory->Write(top_speed_ratio_address, &vehicle_speed_ratio_target,
@@ -7999,6 +8003,9 @@ struct Ue5NteAdapter::State {
                         }
                     }
                     vehicle_top_speed_ratio = observed_ratio;
+                    vehicle_top_speed_ratio_live_valid =
+                        std::isfinite(observed_ratio) && observed_ratio >= 0.0F &&
+                        observed_ratio <= 10000.0F;
                 }
             }
 
@@ -8104,7 +8111,8 @@ struct Ue5NteAdapter::State {
         static_cast<void>(ObjectHandleLocked(current_vehicle_object, handle));
         snapshot->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
         if (vehicle_bindings.speed_kmh.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
-        if (vehicle_bindings.set_top_speed_ratio.function != 0)
+        if (vehicle_bindings.set_top_speed_ratio.function != 0 &&
+            vehicle_top_speed_ratio_live_valid)
             snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO;
         if (vehicle_bindings.get_vehicle_top_speed.function != 0 &&
             vehicle_speed_limit_kmh > 0.0F)
@@ -8168,6 +8176,7 @@ struct Ue5NteAdapter::State {
         vehicle_speed_ratio_target = ratio;
         vehicle_speed_ratio_override_active = true;
         vehicle_top_speed_ratio = observed_ratio;
+        vehicle_top_speed_ratio_live_valid = true;
 
         vehicle_speed_limit_kmh = 0.0F;
         if (vehicle_bindings.get_vehicle_top_speed.function != 0) {
