@@ -56,7 +56,6 @@ struct Context final {
     const AnomalyNteCombatServiceV1* combat{};
     const AnomalyNteSkillsServiceV1* skills{};
     const AnomalyNteSkillInvocationServiceV1* invocation{};
-    const AnomalyUiServiceV1* ui{};
     const AnomalySignatureServiceV1* signature{};
     const AnomalyUe5NamesServiceV1* names{};
     const AnomalyUe5FrameworkServiceV1* framework{};
@@ -874,11 +873,9 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     context->attack_input = sdk_host.Query<AnomalyNteAttackInputServiceV1>(
         ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
         ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION).get();
-    context->ui = sdk_host.Query<AnomalyUiServiceV1>(
-        ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
     if (!CombatReady(context->combat) || !SkillsReady(context->skills) ||
-        !InvocationReady(context->invocation) || !UiReady(context->ui) ||
+        !InvocationReady(context->invocation) ||
         context->signature == nullptr || context->names == nullptr || context->framework == nullptr || context->attack_input == nullptr ||
         context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr ||
         context->framework->tick_sequence == nullptr ||
