@@ -415,7 +415,11 @@ void Draw(const AnomalyUiServiceV1* ui) {
         DrawText(ui, "当前未检测到正在驾驶的载具。召唤与目录选择仍可使用。");
     } else {
         DrawText(ui, "当前速度：" + std::to_string(snap.speed_kmh) + " km/h");
-        DrawText(ui, "实时 TopSpeedRatio：" + std::to_string(snap.top_speed_ratio) + "x");
+        if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO) != 0) {
+            DrawText(ui, "实时 TopSpeedRatio：" + std::to_string(snap.top_speed_ratio) + "x");
+        } else {
+            DrawText(ui, "实时 TopSpeedRatio：当前无法读取，尚不报告已验证倍率");
+        }
         if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_LIMIT) != 0) {
             DrawText(ui, "游戏读取的最高车速值：" +
                 std::to_string(snap.top_speed_limit_kmh));
