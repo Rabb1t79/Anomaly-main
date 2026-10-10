@@ -94,7 +94,7 @@ void RefreshCatalogOnGameThread() {
     std::vector<std::string> ids;
     ids.reserve(count);
     for (std::uint32_t i = 0; i < count; ++i) {
-        std::size_t size = ANOMALY_NTE_VEHICLE_V1_ID_MAX_BYTES + 1u;
+        std::size_t size = ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES + 1u;
         std::string value(size, '\0');
         const auto status = vehicle->vehicle_id_at(vehicle->user, i, value.data(), &size);
         if (status.code != ANOMALY_STATUS_V1_OK || size == 0 || size > value.size()) continue;
