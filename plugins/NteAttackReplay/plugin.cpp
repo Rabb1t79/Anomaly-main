@@ -75,7 +75,6 @@ struct Context final {
     AnomalyGenerationHandleV1 captured_target{};
     int32_t captured_input_id{-1};
     uint64_t captured_damage_sequence{};
-    uint64_t captured_replay_id{};
     uint64_t captured_tick_sequence{};
     int64_t captured_damage_value{};
     int64_t captured_basic_value{};
@@ -410,12 +409,57 @@ bool ReadNativeDataTable(uintptr_t table,
 }
 
 // 普通攻击调用只经过 Host 已验证的 attack-input ABI；插件不直接调用 UObject::ProcessEvent。
-bool InvokeNativeNormalAttack(Context& c) {
-    if (c.attack_input == nullptr || c.attack_input->activate_melee == nullptr) {
-        return false;
+// 从当前 HTPlayerController.DT_AbilityInput 解析游戏真实的 InputID/Param。
+// HTAbilityInputRow 字段偏移来自 5.6.1-0+UE5-HT dump：
+// InputID=0x08、AbilityName=0x20、Param=0x2C。优先用捕获的 InputID，
+// 没有关联技能输入时才查找普通攻击的 MeleeAtack 行。
+bool ResolveAttackInputRequest(Context& c, AnomalyNteAttackInputRequestV1& request) {
+    uintptr_t world{}, controller{};
+    if (!GetNativeController(c, world, controller)) return false;
+    const uintptr_t table = reinterpret_cast<uintptr_t>(
+        NativeObjectProperty(c, controller, "DT_AbilityInput"));
+    std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>> rows;
+    if (!table || !ReadNativeDataTable(table, rows)) return false;
+
+    const int32_t wanted_input = c.captured_input_id;
+    bool found_input = false;
+    AnomalyNteAttackInputRequestV1 fallback{};
+    for (const auto& item : rows) {
+        const uintptr_t row = item.second;
+        uint8_t input_id{};
+        int32_t param{};
+        std::array<uint32_t, 2> ability_name{};
+        if (!NativeRead(reinterpret_cast<const void*>(row + 0x08), input_id) ||
+            !NativeRead(reinterpret_cast<const void*>(row + 0x2C), param) ||
+            !NativeRead(reinterpret_cast<const void*>(row + 0x20), ability_name))
+            continue;
+
+        const std::string row_name = NativeFName(c, item.first[0], item.first[1]);
+        const std::string ability = NativeFName(c, ability_name[0], ability_name[1]);
+        const bool normal_attack = row_name == "MeleeAtack" || ability == "MeleeAtack";
+        if (wanted_input >= 0) {
+            if (input_id != static_cast<uint8_t>(wanted_input)) continue;
+            request = {sizeof(request), 0U, input_id, param};
+            if ((!c.captured_damage_source_name.empty() &&
+                 (row_name == c.captured_damage_source_name ||
+                  ability == c.captured_damage_source_name)) ||
+                normal_attack) {
+                return true;
+            }
+            if (!found_input) {
+                fallback = request;
+                found_input = true;
+            }
+        } else if (normal_attack) {
+            request = {sizeof(request), 0U, input_id, param};
+            return true;
+        }
     }
-    return c.attack_input->activate_melee(c.attack_input->user).code ==
-        ANOMALY_STATUS_V1_OK;
+    if (found_input) {
+        request = fallback;
+        return true;
+    }
+    return false;
 }
 
 std::string ReadAbilityPath(
@@ -613,7 +657,6 @@ void ArmForNextAttack(Context& context) {
     context.captured_target = {};
     context.captured_input_id = -1;
     context.captured_damage_sequence = 0;
-    context.captured_replay_id = 0;
     context.captured_tick_sequence = 0;
     context.captured_damage_value = 0;
     context.captured_basic_value = 0;
@@ -681,13 +724,8 @@ bool CaptureNextAttack(Context& context) {
             continue;
         }
 
-        if (event.replay_id == 0) {
-            context.status = "检测到真实伤害，但 Host 未生成可重放 DamageEvent 上下文；已跳过";
-            continue;
-        }
         context.captured = true;
         context.captured_damage_sequence = event.sequence;
-        context.captured_replay_id = event.replay_id;
         context.captured_tick_sequence = event.tick_sequence;
         context.captured_damage_value = event.value;
         context.captured_basic_value = event.basic_value;
@@ -779,27 +817,32 @@ enum class ReplayCallResult : uint32_t {
 ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
     if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
     if (accepted != nullptr) *accepted = 0;
-    if (!context.captured || context.captured_replay_id == 0 ||
-        context.attack_input == nullptr) {
+    if (!context.captured || context.attack_input == nullptr ||
+        context.attack_input->press == nullptr || context.attack_input->release == nullptr) {
         return ReplayCallResult::InvalidState;
     }
-    const bool replay_service_available =
-        HasField<AnomalyNteAttackInputServiceV1,
-            decltype(AnomalyNteAttackInputServiceV1::replay_damage_event)>(
-                context.attack_input,
-                offsetof(AnomalyNteAttackInputServiceV1, replay_damage_event)) &&
-        context.attack_input->replay_damage_event != nullptr;
-    if (!replay_service_available) {
+
+    // Replay a real HTPlayerController input action, not an invented "replay damage"
+    // ABI. The Host validates the native ActivateAbilityFromID/ReleaseAbilityFromID
+    // bindings; this request supplies the dump-derived DataTable InputID and Param.
+    AnomalyNteAttackInputRequestV1 request{};
+    if (!ResolveAttackInputRequest(context, request)) {
         if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
-        return ReplayCallResult::ServiceError;
+        return ReplayCallResult::NoSkill;
     }
 
-    // Reapply the captured native damage context instead of re-triggering the attack input
-    // or re-activating an ability. The Host validates target, world, hit data, tags and effect.
-    const auto status = context.attack_input->replay_damage_event(
-        context.attack_input->user, context.captured_replay_id);
-    if (status_code != nullptr) *status_code = status.code;
-    if (status.code != ANOMALY_STATUS_V1_OK) return ReplayCallResult::ServiceError;
+    const auto pressed = context.attack_input->press(context.attack_input->user, &request);
+    if (pressed.code != ANOMALY_STATUS_V1_OK) {
+        if (status_code != nullptr) *status_code = pressed.code;
+        return ReplayCallResult::ServiceError;
+    }
+    // Release immediately in the same Game-domain update. The next activation is still
+    // frame-gated and waits for a new player->same-target DamageEvent before it is issued.
+    const auto released = context.attack_input->release(context.attack_input->user, &request);
+    if (released.code != ANOMALY_STATUS_V1_OK) {
+        if (status_code != nullptr) *status_code = released.code;
+        return ReplayCallResult::ServiceError;
+    }
     if (accepted != nullptr) *accepted = 1;
     return ReplayCallResult::Success;
 }
@@ -841,10 +884,15 @@ AnomalyStatusV1 ANOMALY_CALL Load(
         context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr ||
         context->framework->tick_sequence == nullptr ||
         !HasField<AnomalyNteAttackInputServiceV1,
-            decltype(AnomalyNteAttackInputServiceV1::replay_damage_event)>(
+            decltype(AnomalyNteAttackInputServiceV1::press)>(
                 context->attack_input,
-                offsetof(AnomalyNteAttackInputServiceV1, replay_damage_event)) ||
-        context->attack_input->replay_damage_event == nullptr) {
+                offsetof(AnomalyNteAttackInputServiceV1, press)) ||
+        !HasField<AnomalyNteAttackInputServiceV1,
+            decltype(AnomalyNteAttackInputServiceV1::release)>(
+                context->attack_input,
+                offsetof(AnomalyNteAttackInputServiceV1, release)) ||
+        context->attack_input->press == nullptr ||
+        context->attack_input->release == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -994,8 +1042,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         context->replaying = false;
         if (replay_result == ReplayCallResult::NoSkill) {
             context->status = context->captured_has_skill
-                ? "重放失败：当前捕获技能句柄已失效或无法重新解析"
-                : "已记录普通攻击，但原生 ActivateAbilityFromID/ReleaseAbilityFromID 输入绑定不可用";
+                ? "重放失败：无法从 DT_AbilityInput 解析捕获技能的 InputID/Param"
+                : "重放失败：无法从 DT_AbilityInput 解析 MeleeAtack 的 InputID/Param";
         } else if (replay_result == ReplayCallResult::Rejected) {
             context->status = "重放被游戏拒绝：skill activate accepted=0";
         } else {
