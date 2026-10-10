@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "id": "anomaly.builtin.nte-attack-replay",
   "name": "NTE Attack Replay",
-  "description": "Native Anomaly NTE attack capture and replay for normal and skill attacks.",
+  "description": "Auto-capture and directly replay the recorded NTE damage value against the original target without replaying attack input, skill activation, animation or the original GameplayEffect chain.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -29,38 +29,13 @@
       "minVersion": 1
     },
     {
-      "id": "anomaly.nte.skills",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.nte.skill-invocation",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.interop.signature",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.ue5.names",
-      "minVersion": 2
-    },
-    {
-      "id": "anomaly.ue5.framework",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.nte.attack-input",
+      "id": "anomaly.nte.damage-replay",
       "minVersion": 1
     }
   ],
   "capabilities": [
     "ui",
     "nte-combat-read",
-    "nte-skills-read",
-    "nte-skill-invocation",
-    "interop-signature",
-    "ue5-names",
-    "game-events",
-    "nte-attack-input"
+    "nte-damage-replay"
   ]
 }
