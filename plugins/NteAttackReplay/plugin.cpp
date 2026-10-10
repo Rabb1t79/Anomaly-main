@@ -958,7 +958,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             // Parameter x schedules x+1 additional legal attack inputs after the captured hit.
             // Only one input is issued per Game tick; each extra hit must be confirmed by a
             // new player->same-target DamageEvent before the next input is sent.
-            context.replay_target_count = context.replay_rate + 1U;
+            context->replay_target_count = context->replay_rate + 1U;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = "已提交重放，等待原始伤害后的下一游戏帧";
         } else {
