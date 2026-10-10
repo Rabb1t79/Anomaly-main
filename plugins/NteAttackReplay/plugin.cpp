@@ -1165,7 +1165,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.3.0"),
+        anomaly::sdk::StringView("1.5.1"),
         Load,
         Start,
         Stop,
