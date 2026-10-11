@@ -8356,6 +8356,210 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    // Tokky's summon path uses GameplayStatics deferred spawning and finishes the actor
+    // directly; CheatManager is retained only as a fallback when the row's soft class is not
+    // already resolved by the game. All reflected signatures below are checked against the dump.
+    [[nodiscard]] bool ResolveVehicleTemplateClassLocked(
+        const std::uintptr_t row, std::uintptr_t& actor_class) noexcept {
+        actor_class = 0;
+        try {
+            std::uintptr_t row_struct{};
+            ReflectedPropertyInfo template_property;
+            if (row == 0 || vehicle_catalog_table == 0 ||
+                !ReadPointerAt(*memory, vehicle_catalog_table,
+                    Layout(profile, "dataTable.rowStruct"), row_struct) ||
+                !FindReflectedPropertyLocked(row_struct, "InVehicleTemple",
+                    template_property, true) ||
+                template_property.type != "SoftClassProperty" ||
+                template_property.element_size != 0x28 || template_property.offset < 0 ||
+                template_property.offset > 0x400) {
+                return false;
+            }
+            if (!ReadWeakObjectPointerLocked(
+                    row + static_cast<std::uintptr_t>(template_property.offset), actor_class)) {
+                return false;
+            }
+            std::uintptr_t actor_base{};
+            std::string class_name;
+            return actor_class != 0 &&
+                FindExactObjectLocked(L"/Script/Engine.Actor", actor_base) &&
+                IsClassDerivedFromLocked(actor_class, actor_base) &&
+                ReadReflectedObjectNameLocked(actor_class, class_name) &&
+                ContainsVehicleToken(class_name);
+        } catch (...) {
+            actor_class = 0;
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool SpawnVehicleDirectLocked(
+        const std::uintptr_t actor_class,
+        const std::array<double, 3>& destination,
+        std::uintptr_t& spawned) noexcept {
+        spawned = 0;
+        try {
+            if (actor_class == 0 || player_controller == 0 || player_pawn == 0 ||
+                !std::ranges::all_of(destination,
+                    [](double value) { return std::isfinite(value); })) {
+                return false;
+            }
+
+            // Reuse the local player's valid transform so rotation/scale retain native layout.
+            std::uintptr_t get_transform{};
+            std::uint8_t transform_num_parms{};
+            std::uint16_t transform_parms_size{};
+            std::uint16_t transform_return_offset{};
+            ReflectedPropertyInfo transform_return;
+            if (!FindExactObjectLocked(L"/Script/Engine.Actor.K2_GetActorTransform", get_transform) ||
+                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.numParms"),
+                    transform_num_parms) ||
+                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.parmsSize"),
+                    transform_parms_size) ||
+                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.returnValueOffset"),
+                    transform_return_offset) ||
+                transform_num_parms != 1 || transform_parms_size != 0x60 ||
+                transform_return_offset != 0 ||
+                !FindReflectedPropertyLocked(get_transform, "ReturnValue", transform_return, false) ||
+                transform_return.type != "StructProperty" || transform_return.element_size != 0x60 ||
+                transform_return.offset != 0) {
+                return false;
+            }
+            alignas(16) std::array<std::uint8_t, 0x60> transform{};
+            if (!InvokeProcessEventGuarded(process_event_invoker, player_pawn,
+                    get_transform, transform.data(), transform.size())) {
+                return false;
+            }
+            // FTransform uses a 0x20-byte rotation followed by the FVector translation.
+            std::memcpy(transform.data() + 0x20, destination.data(), sizeof(double) * 3U);
+
+            std::uintptr_t begin_function{};
+            std::uintptr_t statics_class{};
+            std::uintptr_t statics_cdo{};
+            std::uint8_t begin_num_parms{};
+            std::uint16_t begin_parms_size{};
+            std::uint16_t begin_return_offset{};
+            if (!FindExactObjectLocked(
+                    L"/Script/Engine.GameplayStatics.BeginDeferredActorSpawnFromClass",
+                    begin_function) ||
+                !ReadPointerAt(*memory, begin_function, Layout(profile, "object.outer"), statics_class) ||
+                !ReadPointerAt(*memory, statics_class,
+                    Layout(profile, "uclass.classDefaultObject"), statics_cdo) ||
+                statics_cdo == 0 ||
+                !ReadValue(*memory, begin_function + Layout(profile, "ufunction.numParms"),
+                    begin_num_parms) ||
+                !ReadValue(*memory, begin_function + Layout(profile, "ufunction.parmsSize"),
+                    begin_parms_size) ||
+                !ReadValue(*memory, begin_function + Layout(profile, "ufunction.returnValueOffset"),
+                    begin_return_offset) ||
+                begin_num_parms != 7 || begin_parms_size != 0x90 ||
+                begin_return_offset != 0x88) {
+                return false;
+            }
+            ReflectedPropertyInfo world_context, class_input, spawn_transform, collision_mode,
+                owner_input, scale_mode, begin_return;
+            if (!FindReflectedPropertyLocked(begin_function, "WorldContextObject", world_context, false) ||
+                world_context.type != "ObjectProperty" || world_context.element_size != 8 ||
+                world_context.offset != 0 ||
+                !FindReflectedPropertyLocked(begin_function, "ActorClass", class_input, false) ||
+                class_input.type != "ClassProperty" || class_input.element_size != 8 ||
+                class_input.offset != 8 ||
+                !FindReflectedPropertyLocked(begin_function, "SpawnTransform", spawn_transform, false) ||
+                spawn_transform.type != "StructProperty" || spawn_transform.element_size != 0x60 ||
+                spawn_transform.offset != 0x10 ||
+                !FindReflectedPropertyLocked(begin_function, "CollisionHandlingOverride", collision_mode, false) ||
+                (collision_mode.type != "ByteProperty" && collision_mode.type != "EnumProperty") ||
+                collision_mode.element_size != 1 || collision_mode.offset != 0x70 ||
+                !FindReflectedPropertyLocked(begin_function, "Owner", owner_input, false) ||
+                owner_input.type != "ObjectProperty" || owner_input.element_size != 8 ||
+                owner_input.offset != 0x78 ||
+                !FindReflectedPropertyLocked(begin_function, "TransformScaleMethod", scale_mode, false) ||
+                (scale_mode.type != "ByteProperty" && scale_mode.type != "EnumProperty") ||
+                scale_mode.element_size != 1 || scale_mode.offset != 0x80 ||
+                !FindReflectedPropertyLocked(begin_function, "ReturnValue", begin_return, false) ||
+                begin_return.type != "ObjectProperty" || begin_return.element_size != 8 ||
+                begin_return.offset != 0x88) {
+                return false;
+            }
+
+            alignas(16) std::array<std::uint8_t, 0x90> begin_parameters{};
+            std::memcpy(begin_parameters.data(), &player_controller, sizeof(player_controller));
+            std::memcpy(begin_parameters.data() + 8, &actor_class, sizeof(actor_class));
+            std::memcpy(begin_parameters.data() + 0x10, transform.data(), transform.size());
+            begin_parameters[0x70] = 1; // ESpawnActorCollisionHandlingMethod::AlwaysSpawn
+            std::memcpy(begin_parameters.data() + 0x78, &player_pawn, sizeof(player_pawn));
+            begin_parameters[0x80] = 0; // ESpawnActorScaleMethod::OverrideRootScale
+            if (!InvokeProcessEventGuarded(process_event_invoker, statics_cdo,
+                    begin_function, begin_parameters.data(), begin_parameters.size())) {
+                return false;
+            }
+            std::memcpy(&spawned, begin_parameters.data() + 0x88, sizeof(spawned));
+            if (spawned == 0) return false;
+
+            std::uintptr_t finish_function{};
+            std::uint8_t finish_num_parms{};
+            std::uint16_t finish_parms_size{};
+            std::uint16_t finish_return_offset{};
+            if (!FindExactObjectLocked(
+                    L"/Script/Engine.GameplayStatics.FinishSpawningActor", finish_function) ||
+                !ReadValue(*memory, finish_function + Layout(profile, "ufunction.numParms"),
+                    finish_num_parms) ||
+                !ReadValue(*memory, finish_function + Layout(profile, "ufunction.parmsSize"),
+                    finish_parms_size) ||
+                !ReadValue(*memory, finish_function + Layout(profile, "ufunction.returnValueOffset"),
+                    finish_return_offset) ||
+                finish_num_parms != 4 || finish_parms_size != 0x80 ||
+                finish_return_offset != 0x78) {
+                return false;
+            }
+            ReflectedPropertyInfo finish_actor, finish_transform, finish_scale, finish_return;
+            if (!FindReflectedPropertyLocked(finish_function, "Actor", finish_actor, false) ||
+                finish_actor.type != "ObjectProperty" || finish_actor.element_size != 8 ||
+                finish_actor.offset != 0 ||
+                !FindReflectedPropertyLocked(finish_function, "SpawnTransform", finish_transform, false) ||
+                finish_transform.type != "StructProperty" || finish_transform.element_size != 0x60 ||
+                finish_transform.offset != 0x10 ||
+                !FindReflectedPropertyLocked(finish_function, "TransformScaleMethod", finish_scale, false) ||
+                (finish_scale.type != "ByteProperty" && finish_scale.type != "EnumProperty") ||
+                finish_scale.element_size != 1 || finish_scale.offset != 0x70 ||
+                !FindReflectedPropertyLocked(finish_function, "ReturnValue", finish_return, false) ||
+                finish_return.type != "ObjectProperty" || finish_return.element_size != 8 ||
+                finish_return.offset != 0x78) {
+                return false;
+            }
+            alignas(16) std::array<std::uint8_t, 0x80> finish_parameters{};
+            std::memcpy(finish_parameters.data(), &spawned, sizeof(spawned));
+            std::memcpy(finish_parameters.data() + 0x10, transform.data(), transform.size());
+            finish_parameters[0x70] = 0;
+            if (!InvokeProcessEventGuarded(process_event_invoker, statics_cdo,
+                    finish_function, finish_parameters.data(), finish_parameters.size())) {
+                return false;
+            }
+            std::uintptr_t finished_actor{};
+            std::memcpy(&finished_actor, finish_parameters.data() + 0x78, sizeof(finished_actor));
+            if (finished_actor != 0) spawned = finished_actor;
+
+            if (!IsVehicleActorLocked(spawned) ||
+                !RelocateSpawnedVehicleLocked(spawned, destination) ||
+                !InvokeVehicleSetOwnerLocked(spawned, player_pawn)) {
+                return false;
+            }
+            std::uintptr_t spawned_class{};
+            ReflectedPropertyInfo owner_property;
+            std::uintptr_t actual_owner{};
+            if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class) ||
+                !FindReflectedPropertyLocked(spawned_class, "Owner", owner_property, true) ||
+                owner_property.type != "ObjectProperty" || owner_property.element_size != 8 ||
+                owner_property.offset < 0 ||
+                !ReadValue(*memory, spawned + static_cast<std::uintptr_t>(owner_property.offset), actual_owner) ||
+                actual_owner != player_pawn) {
+                return false;
+            }
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
     AnomalyStatusV1 VehicleSummon(
         const AnomalyNteVehicleSummonRequestV1* request) noexcept {
         if (request == nullptr || request->struct_size < sizeof(*request) ||
@@ -8385,7 +8589,24 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "selected VehicleID is no longer in the current data table");
         }
 
-        // The dump declares CheatSpawnVehicle(FName) on HTCheatManager, not on the player controller.
+        // Prefer the Tokky-style direct route: resolve the VehicleData row's InVehicleTemple
+        // soft class and use GameplayStatics deferred spawn. This path does not require a CheatManager.
+        const std::array<double, 3> direct_destination{
+            request->world_position[0], request->world_position[1], request->world_position[2]};
+        std::uintptr_t direct_vehicle_class{};
+        if (ResolveVehicleTemplateClassLocked(selected->row, direct_vehicle_class)) {
+            std::uintptr_t direct_spawned{};
+            if (SpawnVehicleDirectLocked(direct_vehicle_class, direct_destination, direct_spawned)) {
+                return Status(ANOMALY_STATUS_V1_OK);
+            }
+            // Once BeginDeferredActorSpawnFromClass returned an actor, do not try a second
+            // spawn path: that could create a duplicate vehicle after a partial failure.
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "Tokky-style GameplayStatics vehicle spawn failed postcondition validation");
+        }
+
+        // The direct class may not yet be resident because InVehicleTemple is a soft reference.
+        // Only in that case retain the dump-validated CheatManager route as a compatibility fallback.
         std::uintptr_t controller_class{};
         ReflectedPropertyInfo manager_property;
         if (!ReadPointerAt(*memory, player_controller, Layout(profile, "object.class"), controller_class) ||
