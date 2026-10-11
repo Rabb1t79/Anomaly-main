@@ -8626,16 +8626,29 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle catalog read requires Game thread");
         std::scoped_lock lock(mutex);
         if (!EnsureVehicleCatalogLocked()) {
-            *snapshot = {sizeof(*snapshot), 0, 0, 0, 0};
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "HTGameData.GetVehicleDataAsset / DT_VehicleData catalog validation failed");
+            *snapshot = {sizeof(*snapshot), 0, vehicle_catalog_sequence, 0, 0};
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
         }
         snapshot->struct_size = sizeof(*snapshot);
         snapshot->flags = ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID;
-        snapshot->sequence = vehicle_catalog_generation;
+        snapshot->sequence = vehicle_catalog_sequence;
         snapshot->entry_count = static_cast<std::uint32_t>(vehicle_catalog.size());
         snapshot->reserved = 0;
         return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleCatalogRefresh() noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "载具目录刷新必须在 Game 线程执行");
+        std::scoped_lock lock(mutex);
+        vehicle_catalog.clear();
+        vehicle_catalog_valid = false;
+        vehicle_catalog_table = 0;
+        vehicle_catalog_generation = 0;
+        vehicle_catalog_failure_reason = "用户请求重新读取 DT_VehicleData";
+        if (!EnsureVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        return Status(ANOMALY_STATUS_V1_OK, "DT_VehicleData 目录已重新读取");
     }
 
     AnomalyStatusV1 VehicleIdAt(
@@ -8646,10 +8659,24 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle catalog read requires Game thread");
         std::scoped_lock lock(mutex);
         if (!EnsureVehicleCatalogLocked())
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle catalog is unavailable");
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
         if (index >= vehicle_catalog.size())
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "vehicle catalog index is out of range");
         return CopyString(vehicle_catalog[index].id, destination, inout_size);
+    }
+
+    AnomalyStatusV1 VehicleCatalogLabelAt(
+        const std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        if (inout_size == nullptr)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "目录标签缓冲区大小指针为空");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "载具目录标签读取必须在 Game 线程执行");
+        std::scoped_lock lock(mutex);
+        if (!EnsureVehicleCatalogLocked())
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        if (index >= vehicle_catalog.size())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "载具目录标签索引越界");
+        return CopyString(vehicle_catalog[index].display_label, destination, inout_size);
     }
 
     AnomalyStatusV1 VehicleSetSummonVehicleId(const AnomalyStringViewV1 id) noexcept {
@@ -8659,12 +8686,25 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle selection requires Game thread");
         std::scoped_lock lock(mutex);
         if (!EnsureVehicleCatalogLocked())
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "vehicle catalog is unavailable");
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
         const std::string_view requested{id.data, id.size};
-        const auto found = std::ranges::find(vehicle_catalog, requested, &VehicleCatalogEntry::id);
-        if (found == vehicle_catalog.end())
-            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "VehicleID is not in DT_VehicleData");
-        selected_summon_vehicle_id = found->id;
+        const auto exact = std::ranges::find(vehicle_catalog, requested, &VehicleCatalogEntry::id);
+        if (exact != vehicle_catalog.end()) {
+            selected_summon_vehicle_id = exact->id;
+            return Status(ANOMALY_STATUS_V1_OK);
+        }
+        const VehicleCatalogEntry* alias_match{};
+        for (const auto& entry : vehicle_catalog) {
+            if (entry.vehicle_id != requested) continue;
+            if (alias_match != nullptr && alias_match->row != entry.row) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "VehicleID alias maps to multiple rows; select the displayed RowName instead");
+            }
+            alias_match = &entry;
+        }
+        if (alias_match == nullptr)
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "RowName / VehicleID is not in DT_VehicleData");
+        selected_summon_vehicle_id = alias_match->id;
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -14379,7 +14419,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleCatalogSnapshotThunk,
             VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk,
-            VehicleSetEngineTorqueRatioThunk};
+            VehicleSetEngineTorqueRatioThunk, VehicleCatalogRefreshThunk,
+            VehicleCatalogLabelAtThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -14750,6 +14791,17 @@ private:
         void* user, std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleIdAt(index, destination, inout_size) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogRefreshThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleCatalogRefresh() : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCatalogLabelAtThunk(
+        void* user, std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleCatalogLabelAt(index, destination, inout_size) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetSummonVehicleIdThunk(
