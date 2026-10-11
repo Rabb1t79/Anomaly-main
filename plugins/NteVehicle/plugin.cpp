@@ -711,7 +711,7 @@ void DrawLegacyLayout(
     const AnomalyUiServiceV1* ui, const Snapshot& snap, const std::string& status,
     const std::string& selected, const std::vector<std::string>& ids,
     const std::vector<std::string>& labels, const std::string& last_summon,
-    float ratio, float torque_ratio, bool friction, bool player_position_valid) {
+    bool summon_enabled, float ratio, float torque_ratio, bool friction, bool player_position_valid) {
     DrawSectionTitle(ui, "NTE  /  VEHICLE CONTROL", "载具控制");
     DrawText(ui, "状态  /  " + status);
     DrawDivider(ui);
@@ -788,8 +788,8 @@ void Draw(const AnomalyUiServiceV1* ui) {
         }
         ui->end_tab_bar(ui->user);
     } else {
-        DrawLegacyLayout(ui, snap, status, selected, ids, labels, last_summon, ratio, torque_ratio,
-            friction, player_position_valid);
+        DrawLegacyLayout(ui, snap, status, selected, ids, labels, last_summon, summon_enabled,
+            ratio, torque_ratio, friction, player_position_valid);
     }
 }
 
