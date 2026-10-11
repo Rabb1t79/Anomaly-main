@@ -61,7 +61,6 @@ struct Context final {
     const AnomalySignatureServiceV1* signature{};
     const AnomalyUe5NamesServiceV1* names{};
     const AnomalyUe5FrameworkServiceV1* framework{};
-    const AnomalyNteAttackInputServiceV1* attack_input{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
@@ -102,7 +101,7 @@ struct Context final {
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
     std::atomic_bool stop_requested{false};
-    // Target total damage hits, counting the original captured hit as one.
+    // X represents the selected chain parameter; X+1 extra effect applications are issued one per tick.
     uint32_t replay_count{10};
     uint32_t replay_done{};
     uint64_t replay_last_tick{};
@@ -896,9 +895,6 @@ AnomalyStatusV1 ANOMALY_CALL Load(
         ANOMALY_UE5_NAMES_SERVICE_V1_ID, ANOMALY_UE5_NAMES_SERVICE_V1_VERSION).get();
     context->framework = sdk_host.Query<AnomalyUe5FrameworkServiceV1>(
         ANOMALY_UE5_FRAMEWORK_SERVICE_V1_ID, ANOMALY_UE5_FRAMEWORK_SERVICE_V1_VERSION).get();
-    context->attack_input = sdk_host.Query<AnomalyNteAttackInputServiceV1>(
-        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
-        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION).get();
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
@@ -1079,7 +1075,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     // begin_window/end_window are always paired. The host UI follows ImGui's
     // Begin/End rule: End is required even when Begin returns false.
     const int window_visible = ui->begin_window(
-        ui->user, anomaly::sdk::StringView("自动攻击录制/重放"), &open, 0);
+        ui->user, anomaly::sdk::StringView("自动伤害录制/重放"), &open, 0);
     if (window_visible != 0) {
         int enabled = context->enabled ? 1 : 0;
         if (ui->checkbox(ui->user, anomaly::sdk::StringView("[启用]"), &enabled) != 0) {
@@ -1109,9 +1105,9 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("连锁速率（追加重击参数）"),
+            ui->user, anomaly::sdk::StringView("连锁参数 X（每帧一次；本次追加 X+1 次伤害）"),
             &context->replay_count, 1, 10);
-        context->replay_count = std::clamp(context->replay_count, 0u, 9999u);
+        context->replay_count = std::clamp(context->replay_count, 1u, 10u);
     }
 
     if (context->captured) {
@@ -1133,7 +1129,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             std::to_string(context->replay_target_count != 0
                 ? context->replay_target_count : desired_rehits);
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("每个游戏帧最多提交一次真实攻击输入；只有出现新的玩家→同一目标 DamageEvent 才计数。速率 X 对当前命中追加 X+1 次重击。"));
+        ui->text(ui->user, anomaly::sdk::StringView("每个 Game/动画帧最多重用一次原始 GameplayEffect 调用；只有 Core 捕获到同一玩家、同一目标、同一 DamageSource 的新 DamageEvent 才计数。X 对当前命中追加 X+1 次伤害，不会重放按键、动画或技能激活。"));
     } else {
         ui->text(ui->user, anomaly::sdk::StringView(
             "无需手动录制：插件自动等待下一次玩家攻击"));
@@ -1142,7 +1138,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (context->enabled && !context->replaying && context->captured) {
         if (ui->button(
                 ui->user, anomaly::sdk::StringView("开始重放"), 0.0F, 0.0F) != 0) {
-            // Draw only posts the request; Update() sends the real input from the Game domain.
+            // Draw 只提交请求；Update 在 Game 线程调用 Host 的捕获伤害重放服务。
             context->replay_requested.store(true, std::memory_order_release);
             context->status = "已提交重放请求";
         }
@@ -1175,7 +1171,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.7.0"),
+        anomaly::sdk::StringView("1.8.0"),
         Load,
         Start,
         Stop,
