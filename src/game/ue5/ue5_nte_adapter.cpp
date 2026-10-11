@@ -7656,6 +7656,23 @@ struct Ue5NteAdapter::State {
                 std::memcpy(&row, element + view.row_offset, sizeof(row));
                 if (row == 0 || !ReadableRange(*memory, row, row_bytes.size()) ||
                     !memory->Read(row, row_bytes.data(), row_bytes.size())) continue;
+                // FDataTableRowMap 的每个 TMap 元素以 FName RowName 开头，后接行指针
+                // （5.6.1 dump 中 row 指针偏移为 0x08）。不能只读行内 VehicleID：
+                // Tokky 目录中的 918、911、turbo 等可能来自 RowName，和字段值并不总相同。
+                std::uint32_t row_name_comparison_index{};
+                std::uint32_t row_name_number{};
+                if (view.row_offset >= 8) {
+                    std::memcpy(&row_name_comparison_index, element, sizeof(row_name_comparison_index));
+                    std::memcpy(&row_name_number, element + sizeof(row_name_comparison_index),
+                        sizeof(row_name_number));
+                    std::string row_name;
+                    if (ResolveFNameLocked(row_name_comparison_index, row_name_number, row_name) &&
+                        !row_name.empty() && row_name.size() < ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                        next.push_back({std::move(row_name), row_name_comparison_index,
+                            row_name_number, row});
+                    }
+                }
+
                 std::uint32_t comparison_index{};
                 std::uint32_t number{};
                 std::memcpy(&comparison_index,
@@ -7665,11 +7682,11 @@ struct Ue5NteAdapter::State {
                 std::string id;
                 // DT_VehicleData 已限定这是载具目录；VehicleID 可能是 918、911、turbo 等
                 // 非 vehicle 前缀/子串的合法 FName，不能用类名筛选规则过滤数据表 ID。
-                if (!ResolveFNameLocked(comparison_index, number, id) ||
-                    id.empty() || id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
-                    continue;
+                if (ResolveFNameLocked(comparison_index, number, id) &&
+                    !id.empty() && id.size() < ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                    // 同时保留行内 VehicleID，兼容游戏按字段值而非 RowName 查找的调用路径。
+                    next.push_back({std::move(id), comparison_index, number, row});
                 }
-                next.push_back({std::move(id), comparison_index, number, row});
             }
             std::ranges::sort(next, {}, &VehicleCatalogEntry::id);
             next.erase(std::unique(next.begin(), next.end(), [](const auto& lhs, const auto& rhs) {
