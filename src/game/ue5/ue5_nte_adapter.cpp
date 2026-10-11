@@ -8162,6 +8162,10 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t row, std::uintptr_t& actor_class) noexcept {
         actor_class = 0;
         try {
+            // HTGame.VehicleData declares InVehicleTemple as TSoftClassPtr<UClass>
+            // at row-relative offset 0xE0, size 0x28 in dump 5.6.1-0+UE5-HT.
+            // Do not interpret the first bytes as a TWeakObjectPtr: FSoftObjectPath
+            // precedes its weak cache in TSoftClassPtr. Ask Unreal to load/resolve it.
             std::uintptr_t row_struct{};
             ReflectedPropertyInfo template_property;
             if (row == 0 || vehicle_catalog_table == 0 ||
@@ -8174,17 +8178,58 @@ struct Ue5NteAdapter::State {
                 template_property.offset > 0x400) {
                 return false;
             }
-            if (!ReadWeakObjectPointerLocked(
-                    row + static_cast<std::uintptr_t>(template_property.offset), actor_class)) {
+
+            std::uintptr_t load_function{};
+            std::uintptr_t library_class{};
+            std::uintptr_t library_cdo{};
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{};
+            std::uint16_t return_offset{};
+            if (!FindExactObjectLocked(
+                    L"/Script/Engine.KismetSystemLibrary.LoadClassAsset_Blocking",
+                    load_function) ||
+                !ReadPointerAt(*memory, load_function, Layout(profile, "object.outer"), library_class) ||
+                !ReadPointerAt(*memory, library_class,
+                    Layout(profile, "uclass.classDefaultObject"), library_cdo) ||
+                library_cdo == 0 ||
+                !ReadValue(*memory, load_function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, load_function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, load_function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 2 || parms_size != 0x30 || return_offset != 0x28) {
                 return false;
             }
+
+            ReflectedPropertyInfo class_input, class_return;
+            if (!FindReflectedPropertyLocked(load_function, "AssetClass", class_input, false) ||
+                class_input.type != "SoftClassProperty" || class_input.element_size != 0x28 ||
+                class_input.offset != 0 ||
+                !FindReflectedPropertyLocked(load_function, "ReturnValue", class_return, false) ||
+                class_return.type != "ClassProperty" || class_return.element_size != 8 ||
+                class_return.offset != 0x28) {
+                return false;
+            }
+
+            const auto soft_class_address =
+                row + static_cast<std::uintptr_t>(template_property.offset);
+            alignas(8) std::array<std::uint8_t, 0x30> parameters{};
+            if (!ReadableRange(*memory, soft_class_address, 0x28) ||
+                !memory->Read(soft_class_address, parameters.data(), 0x28) ||
+                !InvokeProcessEventGuarded(process_event_invoker, library_cdo,
+                    load_function, parameters.data(), parameters.size())) {
+                return false;
+            }
+            std::memcpy(&actor_class, parameters.data() + 0x28, sizeof(actor_class));
             std::uintptr_t actor_base{};
             std::string class_name;
-            return actor_class != 0 &&
-                FindExactObjectLocked(L"/Script/Engine.Actor", actor_base) &&
-                IsClassDerivedFromLocked(actor_class, actor_base) &&
-                ReadReflectedObjectNameLocked(actor_class, class_name) &&
-                ContainsVehicleToken(class_name);
+            if (actor_class == 0 ||
+                !FindExactObjectLocked(L"/Script/Engine.Actor", actor_base) ||
+                !IsClassDerivedFromLocked(actor_class, actor_base) ||
+                !ReadReflectedObjectNameLocked(actor_class, class_name) ||
+                !ContainsVehicleToken(class_name)) {
+                actor_class = 0;
+                return false;
+            }
+            return true;
         } catch (...) {
             actor_class = 0;
             return false;
