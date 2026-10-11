@@ -849,6 +849,23 @@ typedef struct AnomalyNteCombatServiceV1 {
         char* destination, size_t* inout_size);
 } AnomalyNteCombatServiceV1;
 
+// Replays the exact HTAbilitySystemComponent GameplayEffect application captured with
+// a real CharacterOnDamaged event. This is deliberately not an attack-input or skill
+// activation API. OK means the original GameplayEffect call was dispatched; plugins
+// must still observe a newer damage event before reporting a successful extra hit.
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID "anomaly.nte.damage-replay"
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION 1u
+typedef struct AnomalyNteDamageReplayRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t damage_sequence;
+} AnomalyNteDamageReplayRequestV1;
+typedef struct AnomalyNteDamageReplayServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *replay_damage)(
+        void* user, const AnomalyNteDamageReplayRequestV1* request);
+} AnomalyNteDamageReplayServiceV1;
+
 typedef struct AnomalyNteSkillFrameV1 {
     uint32_t struct_size; uint32_t flags;
     uint64_t generation; uint64_t sequence;
