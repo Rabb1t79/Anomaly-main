@@ -771,9 +771,12 @@ struct Ue5NteAdapter::State {
         // One record per DT row, not duplicate entries for the row key and VehicleID alias.
         std::string id;             // Canonical RowName where readable
         std::string vehicle_id;     // Row's independent VehicleID FName
-        std::string display_label;  // Tokky-style "RowName (VehicleID)"
-        std::uint32_t name_comparison_index{};
+        std::string display_label;  // Tokky-style "Name (VehicleID)"
+        std::uint32_t name_comparison_index{}; // DataTable RowName used as canonical selection key
         std::uint32_t name_number{};
+        std::uint32_t vehicle_id_comparison_index{}; // Independent FVehicleData.VehicleID field
+        std::uint32_t vehicle_id_number{};
+        bool vehicle_id_valid{};
         std::uintptr_t row{};
     };
     std::vector<VehicleCatalogEntry> vehicle_catalog;
@@ -8224,6 +8227,9 @@ struct Ue5NteAdapter::State {
                 entry.name_comparison_index = row_name_valid
                     ? row_name_comparison_index : comparison_index;
                 entry.name_number = row_name_valid ? row_name_number : number;
+                entry.vehicle_id_comparison_index = comparison_index;
+                entry.vehicle_id_number = number;
+                entry.vehicle_id_valid = vehicle_id_valid;
                 entry.row = row;
                 next.push_back(std::move(entry));
             }
@@ -9435,11 +9441,19 @@ struct Ue5NteAdapter::State {
                 existing.insert(object);
         }
 
+        // CheatSpawnVehicle consumes a native FName VehicleID, not the DataTable RowName.
+        // The direct soft-class route above uses the row pointer; this fallback must use
+        // the independently validated VehicleData.VehicleID field and must never substitute
+        // the displayed Name or the canonical RowName.
+        if (!selected->vehicle_id_valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "直接载具模板类不可解析，且 DT_VehicleData.VehicleID 无有效 FName；拒绝用 RowName 冒充 VehicleID 调用 CheatSpawnVehicle");
+        }
         std::array<std::uint8_t, 8> parameters{};
         std::memcpy(parameters.data() + summon_binding.parameter_offset,
-            &selected->name_comparison_index, sizeof(selected->name_comparison_index));
+            &selected->vehicle_id_comparison_index, sizeof(selected->vehicle_id_comparison_index));
         std::memcpy(parameters.data() + summon_binding.parameter_offset + sizeof(std::uint32_t),
-            &selected->name_number, sizeof(selected->name_number));
+            &selected->vehicle_id_number, sizeof(selected->vehicle_id_number));
         if (!InvokeProcessEventGuarded(process_event_invoker, cheat_manager,
                 summon_binding.function, parameters.data(), summon_binding.parms_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED, "CheatSpawnVehicle(FName) ProcessEvent failed");
