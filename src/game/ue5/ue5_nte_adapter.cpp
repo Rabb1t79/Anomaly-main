@@ -8312,6 +8312,51 @@ struct Ue5NteAdapter::State {
             ? "game input activation dispatched" : "game input release dispatched");
     }
 
+    // Tokky's readable .text locates and calls this dump-defined native function
+    // through ProcessEvent. Validate its exact HTGame signature before using it to
+    // preserve the requested linear velocity after Chaos updates the vehicle body.
+    [[nodiscard]] bool ValidateDelayedVelocityRestoreLocked(
+        const std::uintptr_t function) const noexcept {
+        try {
+            if (function == 0) return false;
+            std::uintptr_t outer{}, function_class{};
+            std::string outer_name, function_class_name, function_name;
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{}, return_offset{};
+            if (!ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+                !ReadReflectedObjectNameLocked(outer, outer_name) ||
+                !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+                !ReadReflectedObjectNameLocked(function, function_name) ||
+                outer_name != "HTVehicleMovementComponent" || function_class_name != "Function" ||
+                function_name != "SetDelayedVelocityRestore" ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 3 || parms_size != 0x38 || return_offset != 0xFFFFU) {
+                return false;
+            }
+            const auto vector_field = [&](std::string_view name, std::uint16_t offset) {
+                ReflectedPropertyInfo property;
+                std::string struct_name;
+                return FindReflectedPropertyLocked(function, name, property, false) &&
+                    property.type == "StructProperty" && property.element_size == 0x18 &&
+                    property.offset == offset && property.array_dim == 1 &&
+                    property.structure != 0 &&
+                    ReadReflectedObjectNameLocked(property.structure, struct_name) &&
+                    struct_name == "Vector";
+            };
+            ReflectedPropertyInfo forward_speed;
+            return vector_field("InLinearVelocity", 0x00) &&
+                vector_field("InAngularVelocity", 0x18) &&
+                FindReflectedPropertyLocked(function, "InForwardSpeed", forward_speed, false) &&
+                forward_speed.type == "FloatProperty" && forward_speed.element_size == 4 &&
+                forward_speed.offset == 0x30 && forward_speed.array_dim == 1;
+        } catch (...) {
+            return false;
+        }
+    }
+
     [[nodiscard]] bool RefreshVehicleLocked() noexcept {
         try {
             if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker) {
@@ -8413,9 +8458,19 @@ struct Ue5NteAdapter::State {
                 vehicle_base_torque_component = 0;
                 vehicle_base_engine_torque_valid = false;
                 vehicle_engine_torque_ratio = 1.0F;
-                // Ratio tracking is per current driving vehicle, so changing vehicles starts
-                // from 1x and does not reuse the previous vehicle's velocity scale.
                 vehicle_top_speed_ratio = 1.0F;
+                vehicle_speed_kmh = 0.0F;
+                // Refresh the Tokky-referenced delayed velocity binding for this component.
+                vehicle_bindings.set_delayed_velocity_restore = 0;
+            }
+            if (vehicle_bindings.set_delayed_velocity_restore == 0) {
+                std::uintptr_t delayed_restore{};
+                if (FindExactObjectLocked(
+                        L"/Script/HTGame.HTVehicleMovementComponent.SetDelayedVelocityRestore",
+                        delayed_restore) &&
+                    ValidateDelayedVelocityRestoreLocked(delayed_restore)) {
+                    vehicle_bindings.set_delayed_velocity_restore = delayed_restore;
+                }
             }
 
             if (vehicle_bindings.speed_kmh.function != 0) {
@@ -8522,19 +8577,50 @@ struct Ue5NteAdapter::State {
         if (vehicle_bindings.set_top_speed_ratio.function == 0)
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "HTGame.HTWheeledVehicleBase.SetTopSpeedRatio(float) failed dump ABI validation");
+        const float previous_ratio = vehicle_top_speed_ratio;
+        if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "tracked top-speed multiplier is invalid; refusing a partial update");
+        }
 
-        // 仅使用 HTVehicleMovementComponent 继承的 Velocity FVector 属性，不添加游戏函数。
-        // 先核验运行时反射类型/尺寸；未核验成功时不改动限速，也不伪报成功。
+        // Always apply the known-native limit first. Failure to read movement velocity
+        // must not disable the separate SetTopSpeedRatio cap that can work on its own.
+        std::array<std::uint8_t, 8> top_speed_parameters{};
+        std::memcpy(top_speed_parameters.data() +
+                vehicle_bindings.set_top_speed_ratio.parameter_offset,
+            &ratio, sizeof(ratio));
+        if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+                vehicle_bindings.set_top_speed_ratio.function, top_speed_parameters.data(),
+                vehicle_bindings.set_top_speed_ratio.parms_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "SetTopSpeedRatio ProcessEvent failed");
+        }
+        vehicle_top_speed_ratio = ratio;
+
+        if (vehicle_bindings.set_delayed_velocity_restore == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "最高车速上限已应用；当前车速恢复失败：dump 定义的 SetDelayedVelocityRestore ABI 未通过校验");
+        }
+
+        // Read the current native Velocity FVector. The write is submitted through
+        // SetDelayedVelocityRestore (the Tokky path), not a raw property write that Chaos
+        // can immediately overwrite. Velocity is 3 doubles (0x18) in the supplied dump.
         std::uintptr_t movement_class{};
         ReflectedPropertyInfo velocity_property;
         if (!ReadPointerAt(*memory, vehicle_movement_component,
                 Layout(profile, "object.class"), movement_class) ||
             !FindHeldPropertyLocked(movement_class, "Velocity", velocity_property) ||
             velocity_property.type != "StructProperty" ||
-            velocity_property.element_size != static_cast<std::int32_t>(sizeof(double) * 3U) ||
-            velocity_property.offset < 0) {
+            velocity_property.element_size != 0x18 ||
+            velocity_property.offset < 0 ||
+            velocity_property.structure == 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "HTVehicleMovementComponent inherited Velocity FVector failed dump ABI validation");
+                "最高车速上限已应用；当前车速恢复失败：Velocity FVector 反射校验未通过");
+        }
+        std::string velocity_struct_name;
+        if (!ReadReflectedObjectNameLocked(velocity_property.structure, velocity_struct_name) ||
+            velocity_struct_name != "Vector") {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "最高车速上限已应用；当前车速恢复失败：Velocity 不是 dump 定义的 FVector");
         }
         std::array<double, 3> velocity{};
         if (!ReadValue(*memory,
@@ -8542,46 +8628,71 @@ struct Ue5NteAdapter::State {
                 velocity) ||
             !std::ranges::all_of(velocity, [](double value) { return std::isfinite(value); })) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "current vehicle Velocity FVector is unreadable or non-finite");
+                "最高车速上限已应用；当前车速恢复失败：Velocity FVector 当前不可读");
         }
-        const float previous_ratio = vehicle_top_speed_ratio;
-        if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "tracked top-speed multiplier is invalid; refusing a partial update");
-        }
+
         const double velocity_scale = static_cast<double>(ratio) /
             static_cast<double>(previous_ratio);
         for (double& component : velocity) component *= velocity_scale;
         if (!std::ranges::all_of(velocity, [](double value) { return std::isfinite(value); })) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
-                "scaled current vehicle velocity is outside the valid numeric range");
+                "最高车速上限已应用；当前车速恢复失败：缩放后的 Velocity 数值无效");
         }
 
-        // Apply the reflected native top-speed limit, then scale the current velocity by
-        // new_ratio / previous_ratio so repeated slider applies remain absolute, not cumulative.
-        std::array<std::uint8_t, 8> parameters{};
-        std::memcpy(parameters.data() + vehicle_bindings.set_top_speed_ratio.parameter_offset,
-            &ratio, sizeof(ratio));
-        if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
-                vehicle_bindings.set_top_speed_ratio.function, parameters.data(),
-                vehicle_bindings.set_top_speed_ratio.parms_size))
-            return Status(ANOMALY_STATUS_V1_FAILED, "SetTopSpeedRatio ProcessEvent failed");
-
-        if (!memory->Write(
-                vehicle_movement_component + static_cast<std::uintptr_t>(velocity_property.offset),
-                velocity.data(), sizeof(velocity))) {
-            std::array<std::uint8_t, 8> rollback{};
-            std::memcpy(rollback.data() + vehicle_bindings.set_top_speed_ratio.parameter_offset,
-                &previous_ratio, sizeof(previous_ratio));
-            const bool restored = InvokeProcessEventGuarded(process_event_invoker,
-                current_vehicle_object, vehicle_bindings.set_top_speed_ratio.function,
-                rollback.data(), vehicle_bindings.set_top_speed_ratio.parms_size);
-            return Status(ANOMALY_STATUS_V1_FAILED, restored
-                ? "current velocity write failed; top-speed limit rolled back"
-                : "current velocity write failed and top-speed rollback failed");
+        // The Dump's GetForwardSpeedKmH is km/h; SetDelayedVelocityRestore's
+        // InForwardSpeed is the native linear-speed unit used by Tokky (km/h * 100 / 3.6).
+        // Preserve reverse sign if the game getter exposes it. A failed optional getter
+        // falls back to the signed speed magnitude inferred from the current Velocity.
+        double forward_speed_cm_s{};
+        bool forward_speed_valid = false;
+        if (vehicle_bindings.speed_kmh.function != 0) {
+            std::array<std::uint8_t, 8> speed_parameters{};
+            if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
+                    vehicle_bindings.speed_kmh.function, speed_parameters.data(),
+                    vehicle_bindings.speed_kmh.parms_size)) {
+                float current_speed_kmh{};
+                std::memcpy(&current_speed_kmh,
+                    speed_parameters.data() + vehicle_bindings.speed_kmh.return_offset,
+                    sizeof(current_speed_kmh));
+                if (std::isfinite(current_speed_kmh)) {
+                    forward_speed_cm_s = static_cast<double>(current_speed_kmh) *
+                        (100.0 / 3.6) * velocity_scale;
+                    forward_speed_valid = std::isfinite(forward_speed_cm_s);
+                }
+            }
         }
-        vehicle_top_speed_ratio = ratio;
-        return Status(ANOMALY_STATUS_V1_OK);
+        if (!forward_speed_valid) {
+            const double magnitude = std::sqrt(
+                velocity[0] * velocity[0] + velocity[1] * velocity[1] +
+                velocity[2] * velocity[2]);
+            if (!std::isfinite(magnitude)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "最高车速上限已应用；当前车速恢复失败：无法得到有效前向速度");
+            }
+            forward_speed_cm_s = magnitude;
+        }
+
+        // Tokky passes zero angular velocity and the desired forward speed in cm/s.
+        // This function is dump-defined as three parameters, size 0x38, offsets 0/0x18/0x30.
+        alignas(16) std::array<std::uint8_t, 0x38> delayed_parameters{};
+        std::memcpy(delayed_parameters.data(), velocity.data(), sizeof(velocity));
+        constexpr std::array<double, 3> zero_angular_velocity{};
+        std::memcpy(delayed_parameters.data() + 0x18,
+            zero_angular_velocity.data(), sizeof(zero_angular_velocity));
+        const float forward_speed = static_cast<float>(forward_speed_cm_s);
+        if (!std::isfinite(forward_speed)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "最高车速上限已应用；当前车速恢复失败：InForwardSpeed 超出有效数值范围");
+        }
+        std::memcpy(delayed_parameters.data() + 0x30, &forward_speed, sizeof(forward_speed));
+        if (!InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
+                vehicle_bindings.set_delayed_velocity_restore, delayed_parameters.data(),
+                delayed_parameters.size())) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "最高车速上限已应用；当前车速恢复失败：SetDelayedVelocityRestore ProcessEvent 调用失败");
+        }
+        return Status(ANOMALY_STATUS_V1_OK,
+            "最高车速上限与当前速度均已应用倍率；当前速度通过 SetDelayedVelocityRestore 提交给车辆物理组件");
     }
 
     AnomalyStatusV1 VehicleSetEngineTorqueRatio(float ratio) noexcept {
