@@ -8004,7 +8004,18 @@ struct Ue5NteAdapter::State {
             NativeUtf16StringHeader text_header{};
             std::memcpy(&text_header, parameters.data() + 0x10, sizeof(text_header));
             if (!DecodeUtf16StringLocked(text_header, display_name)) return false;
-            display_name = TrimAscii(display_name);
+            const auto is_space = [](unsigned char value) noexcept {
+                return value == ' ' || value == '\\t' || value == '\\r' || value == '\\n';
+            };
+            auto first = std::find_if_not(display_name.begin(), display_name.end(),
+                [&](char value) { return is_space(static_cast<unsigned char>(value)); });
+            auto last = std::find_if_not(display_name.rbegin(), display_name.rend(),
+                [&](char value) { return is_space(static_cast<unsigned char>(value)); }).base();
+            if (first >= last) {
+                display_name.clear();
+                return false;
+            }
+            display_name = std::string(first, last);
             return !display_name.empty();
         } catch (...) {
             display_name.clear();
@@ -8022,27 +8033,26 @@ struct Ue5NteAdapter::State {
                 vehicle_display_name_binding.class_default_object != 0) {
                 return true;
             }
-            std::uintptr_t function{}, library_class{}, class_default_object{};
-            std::string outer_name, function_name, class_name;
+            std::uintptr_t function{}, library_class{}, function_class{}, class_default_object{};
+            std::string outer_name, function_name, function_class_name;
             std::uint8_t num_parms{};
             std::uint16_t parms_size{}, return_offset{};
             if (!FindExactObjectLocked(
                     L"/Script/Engine.KismetTextLibrary.Conv_TextToString", function) ||
                 !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), library_class) ||
-                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), class_default_object) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
                 !ReadReflectedObjectNameLocked(library_class, outer_name) ||
                 !ReadReflectedObjectNameLocked(function, function_name) ||
+                !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
                 outer_name != "KismetTextLibrary" || function_name != "Conv_TextToString" ||
+                function_class_name != "Function" ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
                 num_parms != 2 || parms_size != 0x20 || return_offset != 0x10 ||
                 !ReadPointerAt(*memory, library_class,
                     Layout(profile, "uclass.classDefaultObject"), class_default_object) ||
-                class_default_object == 0 ||
-                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), class_default_object) ||
-                !ReadReflectedObjectNameLocked(class_default_object, class_name) ||
-                class_name != "Function") {
+                class_default_object == 0) {
                 return false;
             }
             ReflectedPropertyInfo input_text, output_string;
