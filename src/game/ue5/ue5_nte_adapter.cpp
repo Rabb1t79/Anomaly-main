@@ -8282,10 +8282,13 @@ struct Ue5NteAdapter::State {
         const std::array<std::uint8_t, 0x60>& transform,
         const std::array<double, 3>& destination) noexcept {
         try {
+            if (actor == 0 || actor_class == 0) return false;
             std::uintptr_t wheeled_class{};
-            if (actor == 0 || actor_class == 0 ||
-                !FindExactObjectLocked(L"/Script/HTGame.HTWheeledVehicleDrivable", wheeled_class)) {
-                return false;
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.HTWheeledVehicleDrivable", wheeled_class)) {
+                // A non-wheeled vehicle class need not load the wheeled base class.
+                // Keep the spawn usable through the validated generic Actor location route.
+                return RelocateSpawnedVehicleLocked(actor, destination);
             }
             if (!IsClassDerivedFromLocked(actor_class, wheeled_class)) {
                 // Non-wheeled vehicle actors keep the generic reflected location route.
@@ -8337,8 +8340,10 @@ struct Ue5NteAdapter::State {
     [[nodiscard]] bool SpawnVehicleDirectLocked(
         const std::uintptr_t actor_class,
         const std::array<double, 3>& destination,
-        std::uintptr_t& spawned) noexcept {
+        std::uintptr_t& spawned,
+        const char*& failure_reason) noexcept {
         spawned = 0;
+        failure_reason = "direct spawn arguments or live player objects are invalid";
         try {
             if (actor_class == 0 || player_controller == 0 || player_pawn == 0 ||
                 !std::ranges::all_of(destination,
@@ -8352,6 +8357,7 @@ struct Ue5NteAdapter::State {
             std::uint16_t transform_parms_size{};
             std::uint16_t transform_return_offset{};
             ReflectedPropertyInfo transform_return;
+            failure_reason = "K2_GetActorTransform reflection ABI validation failed";
             if (!FindExactObjectLocked(L"/Script/Engine.Actor.K2_GetActorTransform", get_transform) ||
                 !ReadValue(*memory, get_transform + Layout(profile, "ufunction.numParms"),
                     transform_num_parms) ||
@@ -8367,6 +8373,7 @@ struct Ue5NteAdapter::State {
                 return false;
             }
             alignas(16) std::array<std::uint8_t, 0x60> transform{};
+            failure_reason = "K2_GetActorTransform ProcessEvent failed";
             if (!InvokeProcessEventGuarded(process_event_invoker, player_pawn,
                     get_transform, transform.data(), transform.size())) {
                 return false;
@@ -8380,6 +8387,7 @@ struct Ue5NteAdapter::State {
             std::uint8_t begin_num_parms{};
             std::uint16_t begin_parms_size{};
             std::uint16_t begin_return_offset{};
+            failure_reason = "GameplayStatics.BeginDeferredActorSpawnFromClass reflection ABI validation failed";
             if (!FindExactObjectLocked(
                     L"/Script/Engine.GameplayStatics.BeginDeferredActorSpawnFromClass",
                     begin_function) ||
@@ -8423,6 +8431,7 @@ struct Ue5NteAdapter::State {
                 return false;
             }
 
+            failure_reason = "BeginDeferredActorSpawnFromClass parameter layout failed validation";
             alignas(16) std::array<std::uint8_t, 0x90> begin_parameters{};
             std::memcpy(begin_parameters.data(), &player_controller, sizeof(player_controller));
             std::memcpy(begin_parameters.data() + 8, &actor_class, sizeof(actor_class));
@@ -8430,17 +8439,20 @@ struct Ue5NteAdapter::State {
             begin_parameters[0x70] = 1; // ESpawnActorCollisionHandlingMethod::AlwaysSpawn
             std::memcpy(begin_parameters.data() + 0x78, &player_pawn, sizeof(player_pawn));
             begin_parameters[0x80] = 0; // ESpawnActorScaleMethod::OverrideRootScale
+            failure_reason = "GameplayStatics.BeginDeferredActorSpawnFromClass ProcessEvent failed";
             if (!InvokeProcessEventGuarded(process_event_invoker, statics_cdo,
                     begin_function, begin_parameters.data(), begin_parameters.size())) {
                 return false;
             }
             std::memcpy(&spawned, begin_parameters.data() + 0x88, sizeof(spawned));
+            failure_reason = "BeginDeferredActorSpawnFromClass returned a null actor";
             if (spawned == 0) return false;
 
             std::uintptr_t finish_function{};
             std::uint8_t finish_num_parms{};
             std::uint16_t finish_parms_size{};
             std::uint16_t finish_return_offset{};
+            failure_reason = "GameplayStatics.FinishSpawningActor reflection ABI validation failed";
             if (!FindExactObjectLocked(
                     L"/Script/Engine.GameplayStatics.FinishSpawningActor", finish_function) ||
                 !ReadValue(*memory, finish_function + Layout(profile, "ufunction.numParms"),
@@ -8468,10 +8480,12 @@ struct Ue5NteAdapter::State {
                 finish_return.offset != 0x78) {
                 return false;
             }
+            failure_reason = "FinishSpawningActor parameter layout failed validation";
             alignas(16) std::array<std::uint8_t, 0x80> finish_parameters{};
             std::memcpy(finish_parameters.data(), &spawned, sizeof(spawned));
             std::memcpy(finish_parameters.data() + 0x10, transform.data(), transform.size());
             finish_parameters[0x70] = 0;
+            failure_reason = "GameplayStatics.FinishSpawningActor ProcessEvent failed";
             if (!InvokeProcessEventGuarded(process_event_invoker, statics_cdo,
                     finish_function, finish_parameters.data(), finish_parameters.size())) {
                 return false;
@@ -8481,14 +8495,22 @@ struct Ue5NteAdapter::State {
             if (finished_actor != 0) spawned = finished_actor;
 
             std::uintptr_t spawned_class{};
+            failure_reason = "spawned actor did not validate as a Vehicle-derived Actor";
             if (!IsVehicleActorLocked(spawned) ||
-                !ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class) ||
-                !ApplyVehicleSpawnTransformLocked(spawned, spawned_class, transform, destination) ||
-                !InvokeVehicleSetOwnerLocked(spawned, player_pawn)) {
+                !ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class)) {
+                return false;
+            }
+            failure_reason = "vehicle transform/location postcondition failed";
+            if (!ApplyVehicleSpawnTransformLocked(spawned, spawned_class, transform, destination)) {
+                return false;
+            }
+            failure_reason = "Actor.SetOwner ProcessEvent or reflected ABI validation failed";
+            if (!InvokeVehicleSetOwnerLocked(spawned, player_pawn)) {
                 return false;
             }
             ReflectedPropertyInfo owner_property;
             std::uintptr_t actual_owner{};
+            failure_reason = "spawned Actor.Owner did not resolve to the player pawn";
             if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class) ||
                 !FindReflectedPropertyLocked(spawned_class, "Owner", owner_property, true) ||
                 owner_property.type != "ObjectProperty" || owner_property.element_size != 8 ||
@@ -8497,8 +8519,10 @@ struct Ue5NteAdapter::State {
                 actual_owner != player_pawn) {
                 return false;
             }
+            failure_reason = nullptr;
             return true;
         } catch (...) {
+            failure_reason = "C++ exception while running the direct spawn path";
             return false;
         }
     }
@@ -8539,13 +8563,18 @@ struct Ue5NteAdapter::State {
         std::uintptr_t direct_vehicle_class{};
         if (ResolveVehicleTemplateClassLocked(selected->row, direct_vehicle_class)) {
             std::uintptr_t direct_spawned{};
-            if (SpawnVehicleDirectLocked(direct_vehicle_class, direct_destination, direct_spawned)) {
+            const char* direct_spawn_failure{};
+            if (SpawnVehicleDirectLocked(
+                    direct_vehicle_class, direct_destination, direct_spawned, direct_spawn_failure)) {
                 return Status(ANOMALY_STATUS_V1_OK);
             }
-            // Once BeginDeferredActorSpawnFromClass returned an actor, do not try a second
-            // spawn path: that could create a duplicate vehicle after a partial failure.
+            // The detailed failure stage tells us whether no actor was created or a
+            // post-spawn invariant failed. Do not dispatch a second spawn when an actor
+            // may already have been created.
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "Tokky-style GameplayStatics vehicle spawn failed postcondition validation");
+                direct_spawn_failure != nullptr
+                    ? direct_spawn_failure
+                    : "GameplayStatics spawned actor passed all direct-spawn checks");
         }
 
         // The direct class may not yet be resident because InVehicleTemple is a soft reference.
