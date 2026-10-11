@@ -8285,6 +8285,9 @@ struct Ue5NteAdapter::State {
                 vehicle_base_torque_component = 0;
                 vehicle_base_engine_torque_valid = false;
                 vehicle_engine_torque_ratio = 1.0F;
+                // Ratio tracking is per current driving vehicle, so changing vehicles starts
+                // from 1x and does not reuse the previous vehicle's velocity scale.
+                vehicle_top_speed_ratio = 1.0F;
             }
 
             if (vehicle_bindings.speed_kmh.function != 0) {
@@ -8391,6 +8394,43 @@ struct Ue5NteAdapter::State {
         if (vehicle_bindings.set_top_speed_ratio.function == 0)
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "HTGame.HTWheeledVehicleBase.SetTopSpeedRatio(float) failed dump ABI validation");
+
+        // 仅使用 HTVehicleMovementComponent 继承的 Velocity FVector 属性，不添加游戏函数。
+        // 先核验运行时反射类型/尺寸；未核验成功时不改动限速，也不伪报成功。
+        std::uintptr_t movement_class{};
+        ReflectedPropertyInfo velocity_property;
+        if (!ReadPointerAt(*memory, vehicle_movement_component,
+                Layout(profile, "object.class"), movement_class) ||
+            !FindHeldPropertyLocked(movement_class, "Velocity", velocity_property) ||
+            velocity_property.type != "StructProperty" ||
+            velocity_property.element_size != static_cast<std::int32_t>(sizeof(double) * 3U) ||
+            velocity_property.offset < 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTVehicleMovementComponent inherited Velocity FVector failed dump ABI validation");
+        }
+        std::array<double, 3> velocity{};
+        if (!ReadValue(*memory,
+                vehicle_movement_component + static_cast<std::uintptr_t>(velocity_property.offset),
+                velocity) ||
+            !std::ranges::all_of(velocity, [](double value) { return std::isfinite(value); })) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "current vehicle Velocity FVector is unreadable or non-finite");
+        }
+        const float previous_ratio = vehicle_top_speed_ratio;
+        if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "tracked top-speed multiplier is invalid; refusing a partial update");
+        }
+        const double velocity_scale = static_cast<double>(ratio) /
+            static_cast<double>(previous_ratio);
+        for (double& component : velocity) component *= velocity_scale;
+        if (!std::ranges::all_of(velocity, [](double value) { return std::isfinite(value); })) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "scaled current vehicle velocity is outside the valid numeric range");
+        }
+
+        // Apply the reflected native top-speed limit, then scale the current velocity by
+        // new_ratio / previous_ratio so repeated slider applies remain absolute, not cumulative.
         std::array<std::uint8_t, 8> parameters{};
         std::memcpy(parameters.data() + vehicle_bindings.set_top_speed_ratio.parameter_offset,
             &ratio, sizeof(ratio));
@@ -8398,6 +8438,20 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.set_top_speed_ratio.function, parameters.data(),
                 vehicle_bindings.set_top_speed_ratio.parms_size))
             return Status(ANOMALY_STATUS_V1_FAILED, "SetTopSpeedRatio ProcessEvent failed");
+
+        if (!memory->Write(
+                vehicle_movement_component + static_cast<std::uintptr_t>(velocity_property.offset),
+                velocity.data(), sizeof(velocity))) {
+            std::array<std::uint8_t, 8> rollback{};
+            std::memcpy(rollback.data() + vehicle_bindings.set_top_speed_ratio.parameter_offset,
+                &previous_ratio, sizeof(previous_ratio));
+            const bool restored = InvokeProcessEventGuarded(process_event_invoker,
+                current_vehicle_object, vehicle_bindings.set_top_speed_ratio.function,
+                rollback.data(), vehicle_bindings.set_top_speed_ratio.parms_size);
+            return Status(ANOMALY_STATUS_V1_FAILED, restored
+                ? "current velocity write failed; top-speed limit rolled back"
+                : "current velocity write failed and top-speed rollback failed");
+        }
         vehicle_top_speed_ratio = ratio;
         return Status(ANOMALY_STATUS_V1_OK);
     }
@@ -8682,35 +8736,16 @@ struct Ue5NteAdapter::State {
                 return false;
             }
 
-            // Reuse the local player's valid transform so rotation/scale retain native layout.
-            std::uintptr_t get_transform{};
-            std::uint8_t transform_num_parms{};
-            std::uint16_t transform_parms_size{};
-            std::uint16_t transform_return_offset{};
-            ReflectedPropertyInfo transform_return;
-            failure_reason = "K2_GetActorTransform reflection ABI validation failed";
-            if (!FindExactObjectLocked(L"/Script/Engine.Actor.K2_GetActorTransform", get_transform) ||
-                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.numParms"),
-                    transform_num_parms) ||
-                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.parmsSize"),
-                    transform_parms_size) ||
-                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.returnValueOffset"),
-                    transform_return_offset) ||
-                transform_num_parms != 1 || transform_parms_size != 0x60 ||
-                transform_return_offset != 0 ||
-                !FindReflectedPropertyLocked(get_transform, "ReturnValue", transform_return, false) ||
-                transform_return.type != "StructProperty" || transform_return.element_size != 0x60 ||
-                transform_return.offset != 0) {
-                return false;
-            }
+            // DT/HTGame dump ABI: BeginDeferredActorSpawnFromClass accepts a 0x60-byte
+            // FTransform. Build the known UE5.6 layout directly rather than depending on
+            // K2_GetActorTransform, which is not required for the summon path.
             alignas(16) std::array<std::uint8_t, 0x60> transform{};
-            failure_reason = "K2_GetActorTransform ProcessEvent failed";
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_pawn,
-                    get_transform, transform.data(), transform.size())) {
-                return false;
-            }
-            // FTransform uses a 0x20-byte rotation followed by the FVector translation.
+            const double identity = 1.0;
+            const std::array<double, 3> unit_scale{1.0, 1.0, 1.0};
+            // UE5.6 FTransform: Rotation.W @ 0x18, Translation @ 0x20, Scale3D @ 0x40.
+            std::memcpy(transform.data() + 0x18, &identity, sizeof(identity));
             std::memcpy(transform.data() + 0x20, destination.data(), sizeof(double) * 3U);
+            std::memcpy(transform.data() + 0x40, unit_scale.data(), sizeof(unit_scale));
 
             std::uintptr_t begin_function{};
             std::uintptr_t statics_class{};
