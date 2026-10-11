@@ -7663,8 +7663,10 @@ struct Ue5NteAdapter::State {
                 std::memcpy(&number,
                     row_bytes.data() + static_cast<std::size_t>(vehicle_id_property.offset) + 4U, 4);
                 std::string id;
+                // DT_VehicleData 已限定这是载具目录；VehicleID 可能是 918、911、turbo 等
+                // 非 vehicle 前缀/子串的合法 FName，不能用类名筛选规则过滤数据表 ID。
                 if (!ResolveFNameLocked(comparison_index, number, id) ||
-                    id.empty() || !ContainsVehicleToken(id) || id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                    id.empty() || id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
                     continue;
                 }
                 next.push_back({std::move(id), comparison_index, number, row});
