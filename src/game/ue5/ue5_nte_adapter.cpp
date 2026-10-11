@@ -8607,6 +8607,38 @@ struct Ue5NteAdapter::State {
                 "BeginDeferredActorSpawnFromClass did not return a new vehicle Actor");
         }
 
+        // Assign the exact selected DT_VehicleData VehicleID before FinishSpawningActor
+        // executes the Blueprint construction lifecycle. The class is loaded from the same
+        // row's InVehicleTemple, but its inherited VehicleID field must still match the row.
+        std::uintptr_t pending_vehicle_class{};
+        ReflectedPropertyInfo pending_vehicle_id_property;
+        if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"),
+                pending_vehicle_class) ||
+            !FindReflectedPropertyLocked(pending_vehicle_class, "VehicleID",
+                pending_vehicle_id_property, true) ||
+            pending_vehicle_id_property.type != "NameProperty" ||
+            pending_vehicle_id_property.element_size != 8 ||
+            pending_vehicle_id_property.offset < 0) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "spawned class does not expose a validated VehicleID FName field");
+        }
+        const std::array<std::uint32_t, 2> requested_vehicle_name{
+            selected->name_comparison_index, selected->name_number};
+        const auto pending_vehicle_id_address = spawned +
+            static_cast<std::uintptr_t>(pending_vehicle_id_property.offset);
+        if (!memory->Write(pending_vehicle_id_address, requested_vehicle_name.data(),
+                sizeof(requested_vehicle_name))) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "could not initialize spawned actor VehicleID before construction");
+        }
+        std::array<std::uint32_t, 2> pending_vehicle_name_readback{};
+        if (!memory->Read(pending_vehicle_id_address, pending_vehicle_name_readback.data(),
+                sizeof(pending_vehicle_name_readback)) ||
+            pending_vehicle_name_readback != requested_vehicle_name) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "spawned actor VehicleID does not match the selected DT_VehicleData row");
+        }
+
         alignas(16) std::array<std::uint8_t, 0x80> finish_parameters{};
         std::memcpy(finish_parameters.data(), &spawned, sizeof(spawned));
         std::memcpy(finish_parameters.data() + 0x10, spawn_transform.data(), spawn_transform.size());
@@ -8646,6 +8678,122 @@ struct Ue5NteAdapter::State {
         if (!registered_spawned_actor) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "vehicle Actor returned by GameplayStatics is missing from live GObjects");
+        }
+
+        // Wheeled drivable vehicles carry a second attribution field, OwnerPlayerID,
+        // separate from UObject.Actor.Owner. Populate it from the local HTPlayerState role ID
+        // whenever that field exists on the selected vehicle class; water vehicle classes that
+        // do not define OwnerPlayerID continue to use the verified Actor.Owner path below.
+        std::uintptr_t spawned_class_for_owner{};
+        ReflectedPropertyInfo owner_player_id_property;
+        if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"),
+                spawned_class_for_owner)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "could not resolve spawned vehicle class for player attribution");
+        }
+        if (FindReflectedPropertyLocked(spawned_class_for_owner, "OwnerPlayerID",
+                owner_player_id_property, true)) {
+            if (owner_player_id_property.element_size != 8 ||
+                owner_player_id_property.offset < 0 ||
+                (owner_player_id_property.type != "Int64Property" &&
+                 owner_player_id_property.type != "UInt64Property" &&
+                 owner_player_id_property.type != "QWordProperty")) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "vehicle OwnerPlayerID field does not match the dump's 64-bit role ID");
+            }
+
+            std::uintptr_t controller_runtime_class{};
+            ReflectedPropertyInfo player_state_property;
+            std::uintptr_t local_player_state{};
+            std::uintptr_t player_state_class{};
+            ReflectedPropertyInfo role_id_property{};
+            std::uint64_t local_role_id{};
+            if (!ReadPointerAt(*memory, player_controller,
+                    Layout(profile, "object.class"), controller_runtime_class) ||
+                !FindReflectedPropertyLocked(controller_runtime_class, "PlayerState",
+                    player_state_property, true) ||
+                player_state_property.type != "ObjectProperty" ||
+                player_state_property.element_size != 8 || player_state_property.offset < 0 ||
+                !ReadValue(*memory, player_controller +
+                    static_cast<std::uintptr_t>(player_state_property.offset), local_player_state) ||
+                local_player_state == 0 ||
+                !ReadPointerAt(*memory, local_player_state,
+                    Layout(profile, "object.class"), player_state_class) ||
+                !FindReflectedPropertyLocked(player_state_class, "m_nRoleId", role_id_property, true) ||
+                role_id_property.element_size != 8 || role_id_property.offset < 0 ||
+                (role_id_property.type != "Int64Property" &&
+                 role_id_property.type != "UInt64Property" &&
+                 role_id_property.type != "QWordProperty") ||
+                !ReadValue(*memory, local_player_state +
+                    static_cast<std::uintptr_t>(role_id_property.offset), local_role_id) ||
+                local_role_id == 0) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "could not resolve local HTPlayerState.m_nRoleId for vehicle ownership");
+            }
+
+            bool owner_id_set = false;
+            std::uintptr_t set_owner_player_id_function{};
+            if (FindExactObjectLocked(
+                    L"/Script/HTGame.HTWheeledVehicleDrivable.SetOwnerPlayerID",
+                    set_owner_player_id_function) && set_owner_player_id_function != 0) {
+                std::uintptr_t function_meta_class{};
+                std::uintptr_t function_outer{};
+                std::string function_meta_name;
+                std::string function_outer_name;
+                std::string function_name;
+                std::uint8_t function_num_parms{};
+                std::uint16_t function_parms_size{};
+                std::uint16_t function_return_offset{};
+                std::uintptr_t function_property{};
+                ReflectedPropertyInfo input;
+                if (ReadReflectedObjectNameLocked(set_owner_player_id_function, function_name) &&
+                    function_name == "SetOwnerPlayerID" &&
+                    ReadPointerAt(*memory, set_owner_player_id_function,
+                        Layout(profile, "object.class"), function_meta_class) &&
+                    ReadReflectedObjectNameLocked(function_meta_class, function_meta_name) &&
+                    function_meta_name == "Function" &&
+                    ReadPointerAt(*memory, set_owner_player_id_function,
+                        Layout(profile, "object.outer"), function_outer) &&
+                    ReadReflectedObjectNameLocked(function_outer, function_outer_name) &&
+                    function_outer_name == "HTWheeledVehicleDrivable" &&
+                    ReadValue(*memory, set_owner_player_id_function +
+                        Layout(profile, "ufunction.numParms"), function_num_parms) &&
+                    ReadValue(*memory, set_owner_player_id_function +
+                        Layout(profile, "ufunction.parmsSize"), function_parms_size) &&
+                    ReadValue(*memory, set_owner_player_id_function +
+                        Layout(profile, "ufunction.returnValueOffset"), function_return_offset) &&
+                    ReadPointerAt(*memory, set_owner_player_id_function,
+                        Layout(profile, "ustruct.propertyLink"), function_property) &&
+                    function_num_parms == 1 && function_parms_size == 8 &&
+                    function_return_offset == 0xFFFFu &&
+                    ReadReflectedPropertyLocked(function_property, input) &&
+                    input.name == "InPlayerID" && input.element_size == 8 &&
+                    input.offset == 0 &&
+                    (input.type == "Int64Property" || input.type == "UInt64Property" ||
+                     input.type == "QWordProperty") && input.next == 0) {
+                    alignas(8) std::array<std::uint8_t, 8> role_id_parameters{};
+                    std::memcpy(role_id_parameters.data(), &local_role_id, sizeof(local_role_id));
+                    owner_id_set = InvokeProcessEventGuarded(process_event_invoker, spawned,
+                        set_owner_player_id_function, role_id_parameters.data(),
+                        role_id_parameters.size());
+                }
+            }
+            // If SetOwnerPlayerID is not exposed as a reflected function in this build,
+            // update the validated reflected field directly and verify its readback.
+            if (!owner_id_set) {
+                owner_id_set = memory->Write(spawned +
+                    static_cast<std::uintptr_t>(owner_player_id_property.offset),
+                    &local_role_id, sizeof(local_role_id));
+            }
+            std::uint64_t actual_owner_player_id{};
+            if (!owner_id_set ||
+                !ReadValue(*memory, spawned +
+                    static_cast<std::uintptr_t>(owner_player_id_property.offset),
+                    actual_owner_player_id) ||
+                actual_owner_player_id != local_role_id) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "vehicle OwnerPlayerID is not attributed to the local player role");
+            }
         }
 
         const std::array<double, 3> destination{
