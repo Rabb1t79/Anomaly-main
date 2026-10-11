@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <cctype>
 #include <string_view>
 #include <vector>
 
@@ -33,6 +34,7 @@ struct Context {
     std::string status{"正在读取游戏进程中的 Vehicle 载具数据"};
     std::string selected_vehicle_id{"Vehicle007"};
     std::string pending_vehicle_id;
+    std::string catalog_filter;
     std::vector<std::string> vehicle_ids;
     std::uint64_t catalog_tick{};
     std::atomic_bool apply_speed{};
@@ -317,12 +319,241 @@ void Update() {
     }
 }
 
+bool AsciiContainsInsensitive(std::string_view text, std::string_view filter) noexcept {
+    if (filter.empty()) return true;
+    if (filter.size() > text.size()) return false;
+    const auto equal_at = [&](std::size_t offset) {
+        for (std::size_t i = 0; i < filter.size(); ++i) {
+            const auto left = static_cast<unsigned char>(text[offset + i]);
+            const auto right = static_cast<unsigned char>(filter[i]);
+            if (std::tolower(left) != std::tolower(right)) return false;
+        }
+        return true;
+    };
+    for (std::size_t i = 0; i + filter.size() <= text.size(); ++i) {
+        if (equal_at(i)) return true;
+    }
+    return false;
+}
+
+void DrawDivider(const AnomalyUiServiceV1* ui) {
+    if (HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::separator)>(
+            ui, offsetof(AnomalyUiServiceV1, separator)) && ui->separator) {
+        ui->separator(ui->user);
+    } else {
+        DrawText(ui, "────────────────────────────────────────");
+    }
+}
+
+void DrawInlineGap(const AnomalyUiServiceV1* ui) {
+    if (HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::same_line)>(
+            ui, offsetof(AnomalyUiServiceV1, same_line)) && ui->same_line) {
+        ui->same_line(ui->user, 0.0F, 12.0F);
+    }
+}
+
+bool DrawButtonEnabled(
+    const AnomalyUiServiceV1* ui, std::string_view label, bool enabled) {
+    if (HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::button_enabled)>(
+            ui, offsetof(AnomalyUiServiceV1, button_enabled)) && ui->button_enabled) {
+        return ui->button_enabled(ui->user, anomaly::sdk::StringView(label),
+            0.0F, 0.0F, enabled ? 1 : 0) != 0;
+    }
+    return enabled && ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F) != 0;
+}
+
+void DrawSectionTitle(const AnomalyUiServiceV1* ui, std::string_view eyebrow, std::string_view title) {
+    DrawText(ui, eyebrow);
+    DrawText(ui, title);
+    DrawDivider(ui);
+}
+
+bool UiFieldAvailable(const AnomalyUiServiceV1* ui, std::size_t offset, std::size_t field_size) {
+    return ui != nullptr && ui->struct_size >= offset + field_size;
+}
+
+void DrawSummonTab(
+    const AnomalyUiServiceV1* ui,
+    const std::string& selected,
+    const std::vector<std::string>& ids,
+    bool player_position_valid) {
+    DrawSectionTitle(ui, "01  /  VEHICLE DEPLOYMENT", "载具召唤");
+
+    DrawText(ui, "当前选择");
+    DrawText(ui, selected.empty() ? "未选择载具" : ("◆  " + selected));
+
+    std::string current_filter;
+    {
+        std::scoped_lock lock(g_context.mutex);
+        current_filter = g_context.catalog_filter;
+    }
+    std::array<char, 128> filter_buffer{};
+    const std::size_t filter_length = (std::min)(current_filter.size(), filter_buffer.size() - 1);
+    std::copy_n(current_filter.data(), filter_length, filter_buffer.data());
+    const bool has_input_text =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, input_text),
+            sizeof(decltype(AnomalyUiServiceV1::input_text))) && ui->input_text;
+    if (has_input_text) {
+        DrawText(ui, "筛选目录");
+        if (ui->input_text(ui->user, anomaly::sdk::StringView("搜索 VehicleID"),
+                filter_buffer.data(), filter_buffer.size(), 0)) {
+            std::scoped_lock lock(g_context.mutex);
+            g_context.catalog_filter.assign(filter_buffer.data());
+        }
+        current_filter.assign(filter_buffer.data());
+    }
+
+    std::vector<std::size_t> filtered;
+    filtered.reserve((std::min)(ids.size(), std::size_t{256}));
+    const bool can_host_filter =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, filter_match),
+            sizeof(decltype(AnomalyUiServiceV1::filter_match))) && ui->filter_match;
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        bool matches = current_filter.empty();
+        if (!matches && can_host_filter) {
+            matches = ui->filter_match(ui->user, anomaly::sdk::StringView(current_filter),
+                anomaly::sdk::StringView(ids[i])) != 0;
+        } else if (!matches) {
+            matches = AsciiContainsInsensitive(ids[i], current_filter);
+        }
+        if (matches) filtered.push_back(i);
+    }
+
+    DrawText(ui, "车辆目录  /  " + std::to_string(filtered.size()) +
+        " 项匹配 · " + std::to_string(ids.size()) + " 项已读取");
+    if (ids.empty()) {
+        DrawText(ui, "正在读取运行时 Vehicle 名称；目录有效后这里会显示可选车辆。");
+    } else if (filtered.empty()) {
+        DrawText(ui, "没有匹配项。请修改筛选条件。");
+    } else {
+        const bool can_table =
+            UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_table),
+                sizeof(decltype(AnomalyUiServiceV1::end_table))) &&
+            ui->begin_table && ui->table_next_row && ui->table_next_column && ui->end_table;
+        bool table_open = false;
+        if (can_table) {
+            table_open = ui->begin_table(ui->user, anomaly::sdk::StringView("##vehicle-catalog"),
+                2, ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT, 0.0F, 270.0F) != 0;
+        }
+        const std::size_t limit = (std::min)(filtered.size(), std::size_t{256});
+        if (table_open) {
+            ui->table_next_row(ui->user);
+            ui->table_next_column(ui->user);
+            DrawText(ui, "VehicleID");
+            ui->table_next_column(ui->user);
+            DrawText(ui, "选择");
+            for (std::size_t row = 0; row < limit; ++row) {
+                const std::string& id = ids[filtered[row]];
+                const bool current = id == selected;
+                ui->table_next_row(ui->user);
+                ui->table_next_column(ui->user);
+                DrawText(ui, id);
+                ui->table_next_column(ui->user);
+                const std::string label = std::string(current ? "✓ 当前##" : "选择##") + id;
+                if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
+                    std::scoped_lock lock(g_context.mutex);
+                    g_context.pending_vehicle_id = id;
+                }
+            }
+            ui->end_table(ui->user);
+        } else {
+            for (std::size_t row = 0; row < (std::min)(limit, std::size_t{48}); ++row) {
+                const std::string& id = ids[filtered[row]];
+                const bool current = id == selected;
+                const std::string label = std::string(current ? "✓ 当前  " : "选用  ") + id;
+                if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
+                    std::scoped_lock lock(g_context.mutex);
+                    g_context.pending_vehicle_id = id;
+                }
+            }
+        }
+        if (filtered.size() > limit || (!table_open && limit > 48)) {
+            DrawText(ui, "当前显示有限数量的匹配项；使用上方筛选框定位其余车辆。");
+        }
+    }
+
+    DrawDivider(ui);
+    const bool can_summon = player_position_valid && !selected.empty() &&
+        std::ranges::find(ids, selected) != ids.end();
+    DrawText(ui, player_position_valid
+        ? "玩家坐标：有效  ·  召唤点按现有各轴偏移计算"
+        : "玩家坐标：尚未验证  ·  召唤按钮会保持禁用");
+    if (DrawButtonEnabled(ui, "召唤当前载具", can_summon)) {
+        g_context.summon.store(true, std::memory_order_release);
+    }
+}
+
+void DrawPerformanceTab(
+    const AnomalyUiServiceV1* ui, const Snapshot& snap, float ratio, float torque_ratio) {
+    DrawSectionTitle(ui, "02  /  PERFORMANCE TUNING", "速度与发动机");
+    if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
+        DrawText(ui, "驾驶状态：未检测到当前驾驶载具");
+    } else {
+        DrawText(ui, "驾驶状态：已识别当前载具");
+        DrawText(ui, "当前速度  /  " + std::to_string(snap.speed_kmh) + " km/h");
+        DrawText(ui, "当前车速倍率  /  " + std::to_string(snap.top_speed_ratio) + "x");
+    }
+
+    DrawDivider(ui);
+    DrawText(ui, "最高速度倍率");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("速度倍率"),
+                         &ratio, 0.05F, 20.0F)) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.speed_ratio = ratio;
+    }
+    DrawText(ui, "应用范围：当前玩家正在驾驶的载具");
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F)) {
+        g_context.apply_speed.store(true, std::memory_order_release);
+    }
+
+    DrawDivider(ui);
+    DrawText(ui, "发动机外部扭矩倍率");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("发动机扭矩倍率"),
+                         &torque_ratio, 0.05F, 20.0F)) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.engine_torque_ratio = torque_ratio;
+    }
+    DrawText(ui, "倍率以 Host 已验证的车辆原生参数为基准");
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用扭矩倍率"), 0.0F, 0.0F)) {
+        g_context.apply_torque.store(true, std::memory_order_release);
+    }
+    DrawDivider(ui);
+    if (ui->button(ui->user, anomaly::sdk::StringView("恢复默认倍率  /  1.0x"), 0.0F, 0.0F)) {
+        g_context.reset.store(true, std::memory_order_release);
+    }
+}
+
+void DrawChassisTab(const AnomalyUiServiceV1* ui, bool friction) {
+    DrawSectionTitle(ui, "03  /  CHASSIS & TRACTION", "底盘与车轮");
+    DrawText(ui, std::string("车轮摩擦状态  /  ") + (friction ? "开启" : "关闭"));
+    if (ui->button(ui->user, anomaly::sdk::StringView(
+            friction ? "关闭车轮摩擦" : "开启车轮摩擦"), 0.0F, 0.0F)) {
+        g_context.friction_toggle.store(true, std::memory_order_release);
+    }
+    DrawDivider(ui);
+    DrawText(ui, "注：此选项控制车辆运动组件的车轮摩擦状态。");
+}
+
+void DrawLegacyLayout(
+    const AnomalyUiServiceV1* ui, const Snapshot& snap, const std::string& status,
+    const std::string& selected, const std::vector<std::string>& ids,
+    float ratio, float torque_ratio, bool friction, bool player_position_valid) {
+    DrawSectionTitle(ui, "NTE  /  VEHICLE CONTROL", "载具控制");
+    DrawText(ui, "状态  /  " + status);
+    DrawDivider(ui);
+    DrawSummonTab(ui, selected, ids, player_position_valid);
+    DrawDivider(ui);
+    DrawPerformanceTab(ui, snap, ratio, torque_ratio);
+    DrawDivider(ui);
+    DrawChassisTab(ui, friction);
+}
+
 void Draw(const AnomalyUiServiceV1* ui) {
     if (!ui || !ui->begin_window || !ui->end_window || !ui->text ||
         !ui->button || !ui->slider_float) return;
 
     int open = 1;
-    anomaly::sdk::UiWindow window(ui, "NTE Vehicle", &open, 0);
+    anomaly::sdk::UiWindow window(ui, "NTE Vehicle  /  载具控制", &open, 0);
     if (!window) return;
 
     Snapshot snap;
@@ -330,7 +561,9 @@ void Draw(const AnomalyUiServiceV1* ui) {
     std::string selected;
     std::vector<std::string> ids;
     float ratio;
+    float torque_ratio;
     bool friction;
+    bool player_position_valid{};
     {
         std::scoped_lock lock(g_context.mutex);
         snap = g_context.snapshot;
@@ -338,67 +571,46 @@ void Draw(const AnomalyUiServiceV1* ui) {
         selected = g_context.selected_vehicle_id;
         ids = g_context.vehicle_ids;
         ratio = g_context.speed_ratio;
-        friction = g_context.friction_enabled;
-    }
-
-    DrawText(ui, "NTE 载具控制");
-    DrawText(ui, status);
-
-    DrawText(ui, "召唤载具");
-    DrawText(ui, "当前选择：" + selected);
-    if (ids.empty()) {
-        DrawText(ui, "正在读取运行时 Vehicle 名称...");
-    } else {
-        const std::size_t limit = (std::min)(ids.size(), std::size_t{96});
-        for (std::size_t i = 0; i < limit; ++i) {
-            const bool current = ids[i] == selected;
-            const std::string label = std::string(current ? "[当前] " : "") + ids[i];
-            if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
-                std::scoped_lock lock(g_context.mutex);
-                g_context.pending_vehicle_id = ids[i];
-            }
-        }
-        if (ids.size() > limit) {
-            DrawText(ui, "列表显示前 96 项；Host 目录仍保留全部运行时匹配项。");
-        }
-    }
-    if (ui->button(ui->user, anomaly::sdk::StringView("召唤当前载具"), 0.0F, 0.0F)) {
-        g_context.summon.store(true, std::memory_order_release);
-    }
-
-    if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
-        DrawText(ui, "当前没有检测到正在驾驶的载具；可先调整倍率，应用时需要有效驾驶载具。");
-    } else {
-        DrawText(ui, "当前速度：" + std::to_string(snap.speed_kmh) + " km/h");
-        DrawText(ui, "当前倍率：" + std::to_string(snap.top_speed_ratio) + "x");
-    }
-    // Keep the control visible even when the current vehicle snapshot is temporarily
-    // invalid; hiding it made the slider impossible to drag before a valid driving sample.
-    if (ui->slider_float(ui->user, anomaly::sdk::StringView("速度倍率"),
-                         &ratio, 0.05F, 20.0F)) {
-        std::scoped_lock lock(g_context.mutex);
-        g_context.speed_ratio = ratio;
-    }
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F))
-        g_context.apply_speed.store(true, std::memory_order_release);
-    float torque_ratio;
-    {
-        std::scoped_lock lock(g_context.mutex);
         torque_ratio = g_context.engine_torque_ratio;
+        friction = g_context.friction_enabled;
+        player_position_valid = g_context.player_position_valid;
     }
-    if (ui->slider_float(ui->user, anomaly::sdk::StringView("发动机扭矩倍率"),
-                         &torque_ratio, 0.05F, 20.0F)) {
-        std::scoped_lock lock(g_context.mutex);
-        g_context.engine_torque_ratio = torque_ratio;
-    }
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用扭矩倍率"), 0.0F, 0.0F))
-        g_context.apply_torque.store(true, std::memory_order_release);
-    if (ui->button(ui->user, anomaly::sdk::StringView("恢复 1.0x"), 0.0F, 0.0F))
-        g_context.reset.store(true, std::memory_order_release);
-    DrawText(ui, std::string("车轮摩擦：") + (friction ? "开启" : "关闭"));
-    if (ui->button(ui->user, anomaly::sdk::StringView("切换车轮摩擦"), 0.0F, 0.0F))
-        g_context.friction_toggle.store(true, std::memory_order_release);
 
+    DrawText(ui, "NTE VEHICLE  /  GAMEPLAY SYSTEM");
+    DrawText(ui, "载具目录 · 坐标召唤 · 速度与扭矩调校");
+    DrawText(ui, "运行状态  /  " + status);
+    DrawDivider(ui);
+
+    const bool has_tabs =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_tab_bar),
+            sizeof(decltype(AnomalyUiServiceV1::end_tab_bar))) &&
+        ui->begin_tab_bar && ui->begin_tab_item && ui->end_tab_item && ui->end_tab_bar;
+    bool tab_bar_open = false;
+    if (has_tabs) {
+        tab_bar_open = ui->begin_tab_bar(ui->user,
+            anomaly::sdk::StringView("##nte-vehicle-tabs"), ANOMALY_UI_TAB_BAR_V1_FITTING_POLICY_RESIZE_DOWN) != 0;
+    }
+    if (tab_bar_open) {
+        if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("载具召唤"), nullptr,
+                ANOMALY_UI_TAB_ITEM_V1_NONE, 1)) {
+            DrawSummonTab(ui, selected, ids, player_position_valid);
+            ui->end_tab_item(ui->user);
+        }
+        if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("性能调校"), nullptr,
+                ANOMALY_UI_TAB_ITEM_V1_NONE, 1)) {
+            DrawPerformanceTab(ui, snap, ratio, torque_ratio);
+            ui->end_tab_item(ui->user);
+        }
+        if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("底盘设置"), nullptr,
+                ANOMALY_UI_TAB_ITEM_V1_NONE, 1)) {
+            DrawChassisTab(ui, friction);
+            ui->end_tab_item(ui->user);
+        }
+        ui->end_tab_bar(ui->user);
+    } else {
+        DrawLegacyLayout(ui, snap, status, selected, ids, ratio, torque_ratio, friction,
+            player_position_valid);
+    }
 }
 
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_context) {
@@ -430,6 +642,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.snapshot = {};
     g_context.selected_vehicle_id = "Vehicle007";
     g_context.pending_vehicle_id.clear();
+    g_context.catalog_filter.clear();
     g_context.vehicle_ids.clear();
     g_context.status = "正在读取 Host 验证的运行时 Vehicle 目录";
     g_context.player_position_valid = false;
@@ -476,6 +689,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.8.3"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.8.4"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
