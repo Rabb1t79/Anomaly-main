@@ -35,8 +35,11 @@ struct Context {
     std::string selected_vehicle_id{"Vehicle007"};
     std::string pending_vehicle_id;
     std::string catalog_filter;
+    std::string last_summon{"-"};
     std::vector<std::string> vehicle_ids;
+    std::vector<std::string> vehicle_labels;
     std::uint64_t catalog_tick{};
+    std::atomic_bool refresh_catalog_requested{};
     std::atomic_bool apply_speed{};
     std::atomic_bool apply_torque{};
     std::atomic_bool reset{};
@@ -80,10 +83,47 @@ void DrawText(const AnomalyUiServiceV1* ui, std::string_view text) {
     }
 }
 
+std::string StatusDescription(std::string_view prefix, const AnomalyStatusV1& status) {
+    std::string result(prefix);
+    if (status.message.data != nullptr && status.message.size != 0) {
+        result += "：";
+        result.append(status.message.data, status.message.size);
+    } else {
+        result += "（Host 状态码 ";
+        result += std::to_string(status.code);
+        result += "）";
+    }
+    return result;
+}
+
+void SetLastSummon(std::string text) {
+    std::scoped_lock lock(g_context.mutex);
+    g_context.last_summon = std::move(text);
+}
+
+void QueueSelectionOffset(const std::vector<std::string>& ids,
+                          const std::string& selected, int offset) {
+    if (ids.empty()) return;
+    auto found = std::ranges::find(ids, selected);
+    std::size_t index = found == ids.end() ? 0U : static_cast<std::size_t>(found - ids.begin());
+    const auto count = static_cast<long long>(ids.size());
+    auto next = (static_cast<long long>(index) + offset) % count;
+    if (next < 0) next += count;
+    std::scoped_lock lock(g_context.mutex);
+    g_context.pending_vehicle_id = ids[static_cast<std::size_t>(next)];
+}
+
 // 目录内容来自当前 Host 已核验的实时 FNamePool；读取前后序号相同才发布完整目录。
 void RefreshCatalogOnGameThread() {
     const auto* vehicle = g_context.vehicle;
-    if (!vehicle || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at) return;
+    if (!vehicle || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at ||
+        !vehicle->catalog_label_at) {
+        SetStatus("目录读取失败：当前 Host 没有发布 Vehicle V3 的目录标签接口");
+        std::scoped_lock lock(g_context.mutex);
+        g_context.vehicle_ids.clear();
+        g_context.vehicle_labels.clear();
+        return;
+    }
 
     AnomalyNteVehicleCatalogSnapshotV1 before{};
     before.struct_size = sizeof(before);
@@ -91,23 +131,48 @@ void RefreshCatalogOnGameThread() {
     if (before_status.code != ANOMALY_STATUS_V1_OK ||
         (before.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) == 0 ||
         before.entry_count > 8192U) {
-        SetStatus("Host 尚未提供有效的载具目录；召唤保持禁用");
+        SetStatus(StatusDescription("目录读取失败", before_status));
+        std::scoped_lock lock(g_context.mutex);
+        g_context.vehicle_ids.clear();
+        g_context.vehicle_labels.clear();
         return;
     }
 
     std::vector<std::string> ids;
+    std::vector<std::string> labels;
     ids.reserve(before.entry_count);
+    labels.reserve(before.entry_count);
     for (std::uint32_t i = 0; i < before.entry_count; ++i) {
-        std::array<char, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES + 1U> buffer{};
-        std::size_t size = buffer.size();
-        const auto status = vehicle->vehicle_id_at(vehicle->user, i, buffer.data(), &size);
-        if (status.code != ANOMALY_STATUS_V1_OK || size <= 1U || size > buffer.size()) {
-            SetStatus("载具目录未能完整读取；选择与召唤保持禁用");
+        std::array<char, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES + 1U> id_buffer{};
+        std::array<char, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES * 2U + 8U> label_buffer{};
+        std::size_t id_size = id_buffer.size();
+        const auto id_status = vehicle->vehicle_id_at(vehicle->user, i, id_buffer.data(), &id_size);
+        if (id_status.code != ANOMALY_STATUS_V1_OK || id_size <= 1U || id_size > id_buffer.size()) {
+            SetStatus(StatusDescription("读取 RowName 失败（索引 " + std::to_string(i) + "）", id_status));
+            std::scoped_lock lock(g_context.mutex);
+            g_context.vehicle_ids.clear();
+            g_context.vehicle_labels.clear();
             return;
         }
-        ids.emplace_back(buffer.data(), size - 1U);
-        if (ids.back().empty()) {
-            SetStatus("载具目录包含空 VehicleID；选择与召唤保持禁用");
+
+        std::size_t label_size = label_buffer.size();
+        const auto label_status = vehicle->catalog_label_at(
+            vehicle->user, i, label_buffer.data(), &label_size);
+        if (label_status.code != ANOMALY_STATUS_V1_OK ||
+            label_size <= 1U || label_size > label_buffer.size()) {
+            SetStatus(StatusDescription("读取载具显示名称失败（索引 " + std::to_string(i) + "）", label_status));
+            std::scoped_lock lock(g_context.mutex);
+            g_context.vehicle_ids.clear();
+            g_context.vehicle_labels.clear();
+            return;
+        }
+        ids.emplace_back(id_buffer.data(), id_size - 1U);
+        labels.emplace_back(label_buffer.data(), label_size - 1U);
+        if (ids.back().empty() || labels.back().empty()) {
+            SetStatus("目录读取失败：存在空 RowName 或显示标签");
+            std::scoped_lock lock(g_context.mutex);
+            g_context.vehicle_ids.clear();
+            g_context.vehicle_labels.clear();
             return;
         }
     }
@@ -118,30 +183,36 @@ void RefreshCatalogOnGameThread() {
     if (after_status.code != ANOMALY_STATUS_V1_OK ||
         (after.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) == 0 ||
         after.sequence != before.sequence || after.entry_count != ids.size()) {
-        SetStatus("读取期间载具目录已变化；稍后重新读取");
+        SetStatus(StatusDescription("读取目录期间 DataTable 发生变化", after_status));
+        std::scoped_lock lock(g_context.mutex);
+        g_context.vehicle_ids.clear();
+        g_context.vehicle_labels.clear();
         return;
     }
 
-    std::string select_after_refresh;
+    std::string selected_id;
     {
         std::scoped_lock lock(g_context.mutex);
         g_context.vehicle_ids = std::move(ids);
+        g_context.vehicle_labels = std::move(labels);
         g_context.catalog_tick = after.sequence;
         if (std::ranges::find(g_context.vehicle_ids, g_context.selected_vehicle_id) ==
             g_context.vehicle_ids.end()) {
             g_context.selected_vehicle_id = g_context.vehicle_ids.empty()
                 ? std::string{} : g_context.vehicle_ids.front();
-            select_after_refresh = g_context.selected_vehicle_id;
         }
-        g_context.status = g_context.vehicle_ids.empty()
-            ? "Host 目录有效，但没有符合 Vehicle 条件的条目"
-            : "已完整读取 Host 验证的载具目录";
+        selected_id = g_context.selected_vehicle_id;
+        g_context.status = "已读取 " + std::to_string(g_context.vehicle_ids.size()) +
+            " 条 DT_VehicleData 记录";
     }
-    if (!select_after_refresh.empty()) {
-        const auto selected = vehicle->set_summon_vehicle_id(
-            vehicle->user, anomaly::sdk::StringView(select_after_refresh));
-        if (selected.code != ANOMALY_STATUS_V1_OK)
-            SetStatus("目录已读取，但 Host 未接受默认 VehicleID；请手动选择");
+
+    // Always synchronize the current UI selection with Host state. Otherwise the
+    // default item can look selected while selected_summon_vehicle_id is still empty.
+    if (!selected_id.empty()) {
+        const auto selected_status = vehicle->set_summon_vehicle_id(
+            vehicle->user, anomaly::sdk::StringView(selected_id));
+        if (selected_status.code != ANOMALY_STATUS_V1_OK)
+            SetStatus(StatusDescription("目录已读取，但 Host 未接受当前 RowName", selected_status));
     }
 }
 
