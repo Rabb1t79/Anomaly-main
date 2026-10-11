@@ -317,7 +317,7 @@ void Update() {
         const auto status = g_context.vehicle->set_top_speed_ratio(
             g_context.vehicle->user, ratio);
         if (status.code == ANOMALY_STATUS_V1_OK) {
-            SetStatus("车速倍率已应用：" + std::to_string(ratio) + "x");
+            SetStatus("当前车速与最高车速上限均已应用：" + std::to_string(ratio) + "x");
         } else if (status.message.data != nullptr && status.message.size != 0) {
             SetStatus("车速倍率应用失败：" + std::string(status.message.data, status.message.size));
         } else {
@@ -668,7 +668,7 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
-    DrawText(ui, "最高速度倍率");
+    DrawText(ui, "当前车速 / 最高车速倍率");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("速度倍率"),
                          &ratio, 0.05F, 20.0F)) {
         std::scoped_lock lock(g_context.mutex);
