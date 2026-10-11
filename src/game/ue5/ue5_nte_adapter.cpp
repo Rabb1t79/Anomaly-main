@@ -7571,21 +7571,6 @@ struct Ue5NteAdapter::State {
         return false;
     }
 
-    [[nodiscard]] static bool ContainsVehicleToken(std::string_view value) noexcept {
-        constexpr std::string_view token = "vehicle";
-        if (value.size() < token.size()) return false;
-        for (std::size_t start = 0; start + token.size() <= value.size(); ++start) {
-            bool match = true;
-            for (std::size_t offset = 0; offset < token.size(); ++offset) {
-                char c = value[start + offset];
-                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-                if (c != token[offset]) { match = false; break; }
-            }
-            if (match) return true;
-        }
-        return false;
-    }
-
     [[nodiscard]] bool EnsureVehicleCatalogLocked() noexcept {
         try {
             if (!NteVehicleProfileAvailable() || object_registry.items == 0 ||
@@ -7663,8 +7648,11 @@ struct Ue5NteAdapter::State {
                 std::memcpy(&number,
                     row_bytes.data() + static_cast<std::size_t>(vehicle_id_property.offset) + 4U, 4);
                 std::string id;
+                // DT_VehicleData 的 VehicleID 本身就是目录主键；不能要求 ID 文本包含
+                // “vehicle”，否则会把合法的数字键（例如 918）从 UI 目录中滤掉。
                 if (!ResolveFNameLocked(comparison_index, number, id) ||
-                    id.empty() || !ContainsVehicleToken(id) || id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                    id.empty() || id == "None" ||
+                    id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
                     continue;
                 }
                 next.push_back({std::move(id), comparison_index, number, row});
