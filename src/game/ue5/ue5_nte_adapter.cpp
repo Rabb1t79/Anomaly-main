@@ -8236,6 +8236,104 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    [[nodiscard]] bool VerifyActorLocationLocked(
+        const std::uintptr_t actor, const std::array<double, 3>& destination) noexcept {
+        try {
+            std::uintptr_t getter{};
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{};
+            std::uint16_t return_offset{};
+            if (actor == 0 ||
+                !FindExactObjectLocked(L"/Script/Engine.Actor.K2_GetActorLocation", getter) ||
+                !ReadValue(*memory, getter + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, getter + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, getter + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 1 || parms_size != 24 || return_offset != 0) {
+                return false;
+            }
+            ReflectedPropertyInfo ret;
+            if (!FindReflectedPropertyLocked(getter, "ReturnValue", ret, false) ||
+                ret.type != "StructProperty" || ret.element_size != 24 || ret.offset != 0) {
+                return false;
+            }
+            std::array<std::uint8_t, 24> location_bytes{};
+            if (!InvokeProcessEventGuarded(process_event_invoker, actor, getter,
+                    location_bytes.data(), location_bytes.size())) {
+                return false;
+            }
+            std::array<double, 3> actual{};
+            std::memcpy(actual.data(), location_bytes.data(), sizeof(actual));
+            constexpr double tolerance = 0.05;
+            for (std::size_t i = 0; i < destination.size(); ++i) {
+                if (!std::isfinite(destination[i]) || !std::isfinite(actual[i]) ||
+                    std::fabs(actual[i] - destination[i]) > tolerance) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool ApplyVehicleSpawnTransformLocked(
+        const std::uintptr_t actor,
+        const std::uintptr_t actor_class,
+        const std::array<std::uint8_t, 0x60>& transform,
+        const std::array<double, 3>& destination) noexcept {
+        try {
+            std::uintptr_t wheeled_class{};
+            if (actor == 0 || actor_class == 0 ||
+                !FindExactObjectLocked(L"/Script/HTGame.HTWheeledVehicleDrivable", wheeled_class)) {
+                return false;
+            }
+            if (!IsClassDerivedFromLocked(actor_class, wheeled_class)) {
+                // Non-wheeled vehicle actors keep the generic reflected location route.
+                return RelocateSpawnedVehicleLocked(actor, destination);
+            }
+
+            // Tokky's wheeled vehicle route calls SafeSetVehicleTransform so the
+            // transform reaches the vehicle-specific movement state, not just Actor.Location.
+            std::uintptr_t function{};
+            std::uintptr_t outer{};
+            std::string outer_name;
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{};
+            std::uint16_t return_offset{};
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.HTWheeledVehicleDrivable.SafeSetVehicleTransform",
+                    function) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+                !ReadReflectedObjectNameLocked(outer, outer_name) ||
+                outer_name != "HTWheeledVehicleDrivable" ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 2 || parms_size != 0x70 || return_offset != 0xFFFFu) {
+                return false;
+            }
+            ReflectedPropertyInfo new_transform, stop_movement;
+            if (!FindReflectedPropertyLocked(function, "NewTransform", new_transform, false) ||
+                new_transform.type != "StructProperty" || new_transform.element_size != 0x60 ||
+                new_transform.offset != 0 ||
+                !FindReflectedPropertyLocked(function, "bStopMovementImmediately", stop_movement, false) ||
+                stop_movement.type != "BoolProperty" || stop_movement.element_size != 1 ||
+                stop_movement.offset != 0x60) {
+                return false;
+            }
+            alignas(16) std::array<std::uint8_t, 0x70> parameters{};
+            std::memcpy(parameters.data(), transform.data(), transform.size());
+            parameters[0x60] = 1;
+            if (!InvokeProcessEventGuarded(process_event_invoker, actor,
+                    function, parameters.data(), parameters.size())) {
+                return false;
+            }
+            return VerifyActorLocationLocked(actor, destination);
+        } catch (...) {
+            return false;
+        }
+    }
+
     [[nodiscard]] bool SpawnVehicleDirectLocked(
         const std::uintptr_t actor_class,
         const std::array<double, 3>& destination,
@@ -8382,12 +8480,13 @@ struct Ue5NteAdapter::State {
             std::memcpy(&finished_actor, finish_parameters.data() + 0x78, sizeof(finished_actor));
             if (finished_actor != 0) spawned = finished_actor;
 
+            std::uintptr_t spawned_class{};
             if (!IsVehicleActorLocked(spawned) ||
-                !RelocateSpawnedVehicleLocked(spawned, destination) ||
+                !ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class) ||
+                !ApplyVehicleSpawnTransformLocked(spawned, spawned_class, transform, destination) ||
                 !InvokeVehicleSetOwnerLocked(spawned, player_pawn)) {
                 return false;
             }
-            std::uintptr_t spawned_class{};
             ReflectedPropertyInfo owner_property;
             std::uintptr_t actual_owner{};
             if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), spawned_class) ||
