@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "id": "anomaly.builtin.nte-attack-replay",
   "name": "NTE Attack Replay",
-  "description": "Native Anomaly NTE attack capture and replay for normal and skill attacks.",
+  "description": "Automatically records the first player-to-target damage event and replays real game attack input on successive Game ticks; never rewrites target HP.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.5.0",
+  "version": "1.7.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
