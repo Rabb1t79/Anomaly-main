@@ -6002,9 +6002,12 @@ struct Ue5NteAdapter::State {
                 std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
                 std::memcpy(&trigger_ability_system,
                     context.parameters.data() + 0x68U, sizeof(trigger_ability_system));
+                // SourceObj 在 Dump 中是任意 AActor 指针，可能是持有者的武器/伤害载体；
+                // 玩家归属由 pTriggerAbilityComp 的 AbilitySystemComponent 与玩家 ASC 精确绑定，
+                // 不能强制 SourceObj 必须等于玩家角色本体。
                 return context.function == bindings->replay_apply_by_actor &&
                     context.receiver == victim_ability_system &&
-                    source_actor == attacker &&
+                    source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U) &&
                     trigger_ability_system == attacker_ability_system;
             }
             if (context.kind == 2U) {
