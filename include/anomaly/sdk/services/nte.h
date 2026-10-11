@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 2u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 3u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -353,6 +353,12 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // Optional V2 tail field: sets the game-declared external torque ratio on
     // HTVehicleMovementComponent. Check struct_size before calling this pointer.
     AnomalyStatusV1 (ANOMALY_CALL *set_engine_torque_ratio)(void* user, float ratio);
+    // V3: explicitly invalidates/rebuilds DT_VehicleData on user request. Game-thread operation.
+    AnomalyStatusV1 (ANOMALY_CALL *refresh_catalog)(void* user);
+    // V3: display label corresponding to vehicle_id_at(index). Labels are RowName (VehicleID)
+    // where both names exist, so the catalog shows one row per DataTable row like Tokky's UI.
+    AnomalyStatusV1 (ANOMALY_CALL *catalog_label_at)(
+        void* user, uint32_t index, char* destination, size_t* inout_size);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
