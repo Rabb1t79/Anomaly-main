@@ -8682,35 +8682,17 @@ struct Ue5NteAdapter::State {
                 return false;
             }
 
-            // Reuse the local player's valid transform so rotation/scale retain native layout.
-            std::uintptr_t get_transform{};
-            std::uint8_t transform_num_parms{};
-            std::uint16_t transform_parms_size{};
-            std::uint16_t transform_return_offset{};
-            ReflectedPropertyInfo transform_return;
-            failure_reason = "K2_GetActorTransform reflection ABI validation failed";
-            if (!FindExactObjectLocked(L"/Script/Engine.Actor.K2_GetActorTransform", get_transform) ||
-                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.numParms"),
-                    transform_num_parms) ||
-                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.parmsSize"),
-                    transform_parms_size) ||
-                !ReadValue(*memory, get_transform + Layout(profile, "ufunction.returnValueOffset"),
-                    transform_return_offset) ||
-                transform_num_parms != 1 || transform_parms_size != 0x60 ||
-                transform_return_offset != 0 ||
-                !FindReflectedPropertyLocked(get_transform, "ReturnValue", transform_return, false) ||
-                transform_return.type != "StructProperty" || transform_return.element_size != 0x60 ||
-                transform_return.offset != 0) {
-                return false;
-            }
+            // 5.6.1 HTGame 的 BeginDeferredActorSpawnFromClass 已校验 SpawnTransform
+            // 为 0x60 字节 FTransform。这里直接构造单位旋转/单位缩放的变换，仅写入用户
+            // 指定的世界坐标，避免依赖不同 UE 版本中可能不存在或布局不同的
+            // K2_GetActorTransform 反射包装函数。
             alignas(16) std::array<std::uint8_t, 0x60> transform{};
-            failure_reason = "K2_GetActorTransform ProcessEvent failed";
-            if (!InvokeProcessEventGuarded(process_event_invoker, player_pawn,
-                    get_transform, transform.data(), transform.size())) {
-                return false;
-            }
-            // FTransform uses a 0x20-byte rotation followed by the FVector translation.
+            const double identity = 1.0;
+            const std::array<double, 3> unit_scale{1.0, 1.0, 1.0};
+            // UE5.6 FTransform：Rotation.W @ 0x18，Translation @ 0x20，Scale3D @ 0x40。
+            std::memcpy(transform.data() + 0x18, &identity, sizeof(identity));
             std::memcpy(transform.data() + 0x20, destination.data(), sizeof(double) * 3U);
+            std::memcpy(transform.data() + 0x40, unit_scale.data(), sizeof(unit_scale));
 
             std::uintptr_t begin_function{};
             std::uintptr_t statics_class{};
