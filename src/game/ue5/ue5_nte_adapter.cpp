@@ -8394,10 +8394,130 @@ struct Ue5NteAdapter::State {
             manager_property.offset < 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController.CheatManager property failed validation");
         }
+        std::uintptr_t manager_address{};
+        if (!AddAddress(player_controller, manager_property.offset, manager_address)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController.CheatManager address is invalid");
+        }
         std::uintptr_t cheat_manager{};
-        if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset), cheat_manager) ||
-            cheat_manager == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "game CheatManager instance is not available");
+        if (!ReadValue(*memory, manager_address, cheat_manager)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController.CheatManager could not be read");
+        }
+
+        // The 5.6.1 dump declares PlayerController.CheatClass separately from
+        // CheatManager. EnableCheats only creates a manager when CheatClass is
+        // configured; invoking EnableCheats with a null/default class can be a no-op.
+        // Validate class ancestry using the dump's UStruct::SuperStruct chain.
+        const auto class_derives_from = [this](
+            std::uintptr_t candidate, const std::string_view wanted_name) noexcept {
+            try {
+                const auto super_offset = Layout(profile, "ustruct.superStruct", -1);
+                if (super_offset < 0) return false;
+                for (std::size_t depth = 0; candidate != 0 && depth < 64U; ++depth) {
+                    std::string candidate_name;
+                    if (!ReadReflectedObjectNameLocked(candidate, candidate_name)) return false;
+                    if (candidate_name == wanted_name) return true;
+                    std::uintptr_t super{};
+                    if (!ReadNullablePointerAt(*memory, candidate, super_offset, super) ||
+                        super == 0 || super == candidate) return false;
+                    candidate = super;
+                }
+            } catch (...) {}
+            return false;
+        };
+
+        if (cheat_manager == 0) {
+            ReflectedPropertyInfo cheat_class_property;
+            if (!FindReflectedPropertyLocked(controller_class, "CheatClass", cheat_class_property, true) ||
+                cheat_class_property.type != "ClassProperty" ||
+                cheat_class_property.array_dim != 1 || cheat_class_property.element_size != 8 ||
+                cheat_class_property.offset < 0 || cheat_class_property.offset > 0x1000) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "HTPlayerController.CheatClass property failed ClassProperty ABI validation");
+            }
+            std::uintptr_t cheat_class_address{};
+            std::uintptr_t configured_cheat_class{};
+            if (!AddAddress(player_controller, cheat_class_property.offset, cheat_class_address) ||
+                !ReadValue(*memory, cheat_class_address, configured_cheat_class)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "HTPlayerController.CheatClass could not be read safely");
+            }
+
+            if (!class_derives_from(configured_cheat_class, "HTCheatManager")) {
+                std::uintptr_t ht_cheat_class{};
+                std::string ht_cheat_class_name;
+                if (!FindExactObjectLocked(L"/Script/HTGame.HTCheatManager", ht_cheat_class) ||
+                    !ReadReflectedObjectNameLocked(ht_cheat_class, ht_cheat_class_name) ||
+                    ht_cheat_class_name != "HTCheatManager" ||
+                    !class_derives_from(ht_cheat_class, "CheatManager")) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "dump-validated /Script/HTGame.HTCheatManager class could not be resolved");
+                }
+                // Set the documented TSubclassOf<UCheatManager> to the game's own subclass.
+                // Never overwrite a running manager; this branch is only reached when it is null.
+                if (!memory->Write(cheat_class_address, &ht_cheat_class, sizeof(ht_cheat_class))) {
+                    return Status(ANOMALY_STATUS_V1_FAILED,
+                        "HTPlayerController.CheatClass write failed; CheatManager remains unavailable");
+                }
+                std::uintptr_t verified_cheat_class{};
+                if (!ReadValue(*memory, cheat_class_address, verified_cheat_class) ||
+                    verified_cheat_class != ht_cheat_class) {
+                    return Status(ANOMALY_STATUS_V1_FAILED,
+                        "HTPlayerController.CheatClass readback did not match HTCheatManager");
+                }
+            }
+
+            std::uintptr_t enable_cheats_function{};
+            std::uintptr_t enable_function_class{};
+            std::uintptr_t enable_outer{};
+            std::string enable_function_name;
+            std::string enable_class_name;
+            std::string enable_outer_name;
+            std::uint8_t enable_num_parms{};
+            std::uint16_t enable_parms_size{};
+            std::uint16_t enable_return_offset{};
+            if (!FindExactObjectLocked(
+                    L"/Script/Engine.PlayerController.EnableCheats", enable_cheats_function) ||
+                !ReadReflectedObjectNameLocked(enable_cheats_function, enable_function_name) ||
+                enable_function_name != "EnableCheats" ||
+                !ReadPointerAt(*memory, enable_cheats_function,
+                    Layout(profile, "object.class"), enable_function_class) ||
+                !ReadPointerAt(*memory, enable_cheats_function,
+                    Layout(profile, "object.outer"), enable_outer) ||
+                !ReadReflectedObjectNameLocked(enable_function_class, enable_class_name) ||
+                enable_class_name != "Function" ||
+                !ReadReflectedObjectNameLocked(enable_outer, enable_outer_name) ||
+                enable_outer_name != "PlayerController" ||
+                !ReadValue(*memory, enable_cheats_function +
+                    static_cast<std::uintptr_t>(Layout(profile, "ufunction.numParms")), enable_num_parms) ||
+                !ReadValue(*memory, enable_cheats_function +
+                    static_cast<std::uintptr_t>(Layout(profile, "ufunction.parmsSize")), enable_parms_size) ||
+                !ReadValue(*memory, enable_cheats_function +
+                    static_cast<std::uintptr_t>(Layout(profile, "ufunction.returnValueOffset")), enable_return_offset) ||
+                enable_num_parms != 0U || enable_parms_size != 0U ||
+                enable_return_offset != 0xFFFFU) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Engine.PlayerController.EnableCheats failed zero-parameter ABI validation");
+            }
+            std::array<std::uint8_t, 1> empty_parameters{};
+            if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
+                    enable_cheats_function, empty_parameters.data(), 0U)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "Engine.PlayerController.EnableCheats ProcessEvent failed");
+            }
+            if (!ReadValue(*memory, manager_address, cheat_manager) || cheat_manager == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "EnableCheats was called with HTCheatManager configured, but the game did not create CheatManager");
+            }
+        }
+
+        if (!ObjectClassChainContainsLocked(cheat_manager, "HTCheatManager")) {
+            std::string actual_manager_class;
+            std::uintptr_t actual_class{};
+            if (ReadPointerAt(*memory, cheat_manager, Layout(profile, "object.class"), actual_class))
+                static_cast<void>(ReadReflectedObjectNameLocked(actual_class, actual_manager_class));
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "CheatManager instance is not HTCheatManager (actual class: " +
+                (actual_manager_class.empty() ? std::string("unreadable") : actual_manager_class) + ")");
         }
         VehicleFunctionBinding summon_binding{};
         static constexpr std::array<std::string_view, 1> cheat_manager_outer{"HTCheatManager"};
