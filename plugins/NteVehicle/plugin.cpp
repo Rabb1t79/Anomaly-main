@@ -36,6 +36,7 @@ struct Context {
     std::string pending_vehicle_id;
     std::string catalog_filter;
     std::string last_summon{"-"};
+    bool summon_enabled{true};
     std::vector<std::string> vehicle_ids;
     std::vector<std::string> vehicle_labels;
     std::uint64_t catalog_tick{};
@@ -496,8 +497,17 @@ void DrawSummonTab(
     const std::vector<std::string>& ids,
     const std::vector<std::string>& labels,
     const std::string& last_summon,
+    bool summon_enabled,
     bool player_position_valid) {
     DrawSectionTitle(ui, "01  /  VEHICLE DEPLOYMENT", "载具召唤");
+    int enabled_value = summon_enabled ? 1 : 0;
+    if (UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, checkbox),
+            sizeof(decltype(AnomalyUiServiceV1::checkbox))) && ui->checkbox &&
+        ui->checkbox(ui->user, anomaly::sdk::StringView("启用"), &enabled_value) != 0) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.summon_enabled = enabled_value != 0;
+    }
+    summon_enabled = enabled_value != 0;
     const auto label_at = [&labels, &ids](std::size_t i) -> std::string_view {
         return i < labels.size() && !labels[i].empty()
             ? std::string_view(labels[i]) : std::string_view(ids[i]);
@@ -622,10 +632,12 @@ void DrawSummonTab(
     if (has_catalog_child) ui->end_child(ui->user);
 
     DrawDivider(ui);
-    const bool can_summon = player_position_valid && has_selected;
-    DrawText(ui, player_position_valid
-        ? "玩家坐标：有效  ·  召唤点按各轴偏移计算"
-        : "玩家坐标：无效  ·  召唤按钮保持禁用");
+    const bool can_summon = summon_enabled && player_position_valid && has_selected;
+    DrawText(ui, !summon_enabled
+        ? "召唤功能已禁用"
+        : player_position_valid
+            ? "玩家坐标：有效  ·  召唤点按各轴偏移计算"
+            : "玩家坐标：无效  ·  召唤按钮保持禁用");
     if (DrawButtonEnabled(ui, "召唤", can_summon)) {
         g_context.summon.store(true, std::memory_order_release);
     }
@@ -703,7 +715,7 @@ void DrawLegacyLayout(
     DrawSectionTitle(ui, "NTE  /  VEHICLE CONTROL", "载具控制");
     DrawText(ui, "状态  /  " + status);
     DrawDivider(ui);
-    DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
+    DrawSummonTab(ui, selected, ids, labels, last_summon, summon_enabled, player_position_valid);
     DrawDivider(ui);
     DrawPerformanceTab(ui, snap, ratio, torque_ratio);
     DrawDivider(ui);
@@ -728,12 +740,14 @@ void Draw(const AnomalyUiServiceV1* ui) {
     float torque_ratio;
     bool friction;
     bool player_position_valid{};
+    bool summon_enabled{};
     {
         std::scoped_lock lock(g_context.mutex);
         snap = g_context.snapshot;
         status = g_context.status;
         selected = g_context.selected_vehicle_id;
         last_summon = g_context.last_summon;
+        summon_enabled = g_context.summon_enabled;
         ids = g_context.vehicle_ids;
         labels = g_context.vehicle_labels;
         ratio = g_context.speed_ratio;
@@ -759,7 +773,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     if (tab_bar_open) {
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("载具召唤"), nullptr,
                 ANOMALY_UI_TAB_ITEM_V1_NONE, 1)) {
-            DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
+            DrawSummonTab(ui, selected, ids, labels, last_summon, summon_enabled, player_position_valid);
             ui->end_tab_item(ui->user);
         }
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("性能调校"), nullptr,
@@ -821,6 +835,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.vehicle_ids.clear();
     g_context.vehicle_labels.clear();
     g_context.last_summon = "-";
+    g_context.summon_enabled = true;
     g_context.status = "正在读取 Host 验证的运行时 Vehicle 目录";
     g_context.player_position_valid = false;
     g_context.player_snapshot = {};
