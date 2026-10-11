@@ -898,15 +898,16 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
+    // Damage replay uses the Host's validated captured GameplayEffect call. Skill,
+    // invocation, names and signature services are optional enrichers; requiring them
+    // prevented replay from loading when those unrelated services were unavailable.
     if (!CombatReady(context->combat) || context->damage_replay == nullptr ||
-        context->damage_replay->replay_damage == nullptr || !SkillsReady(context->skills) ||
-        !InvocationReady(context->invocation) || !UiReady(context->ui) ||
-        context->signature == nullptr || context->names == nullptr ||
+        context->damage_replay->replay_damage == nullptr || !UiReady(context->ui) ||
         context->framework == nullptr || context->framework->tick_sequence == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
-            "Attack Replay requires raw NTE damage events, the GameplayEffect replay service, and UI");
+            "Attack Replay requires raw NTE damage events, the GameplayEffect replay service, framework ticks, and UI");
     }
 
     *plugin_context = context;
@@ -998,17 +999,22 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                 SameHandle(event.attacker, context->character) &&
                 SameHandle(event.victim, context->captured_target) &&
                 event.sequence > context->captured_damage_sequence &&
-                event.source_id == context->captured_damage_source_id) {
+                (event.source_id == context->captured_damage_source_id ||
+                 (!context->captured_damage_source_name.empty() &&
+                  !ReadDamageSourceName(context->combat, event.source_id).empty() &&
+                  ReadDamageSourceName(context->combat, event.source_id) ==
+                    context->captured_damage_source_name))) {
                 context->waiting_for_damage = false;
                 ++context->replay_done;
-                context->replay_last_tick = event.tick_sequence;
-                context->status = "已确认新的 DamageEvent，进入下一游戏帧";
+                // Rate limiting is based on the actual Game tick observed here,
+                // not the event's potentially earlier capture tick.
+                context->replay_last_tick = current_tick;
+                context->status = "已确认新的 DamageEvent，下一游戏帧继续";
             }
         } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
             context->replaying = false;
             context->waiting_for_damage = false;
-            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误";
-            ArmForNextAttack(*context);
+            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误；原始命中已保留，可查看错误并重试";
             return;
         }
 
@@ -1021,8 +1027,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
             context->replaying = false;
             context->waiting_for_damage = false;
-            context->status = "重放失败：GameplayEffect 已调用，但未观察到同一玩家、同一目标、同一伤害源的新 DamageEvent";
-            ArmForNextAttack(*context);
+            context->status = "重放超时：未确认同一玩家对同一目标的新伤害事件；原始命中已保留，可重试";
             return;
         }
         if (context->waiting_for_damage) return;
@@ -1055,7 +1060,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->status = "GameplayEffect 重放调用失败：ABI status=" +
                 std::to_string(replay_status.code);
         }
-        ArmForNextAttack(*context);
+        // Preserve the captured record after a Core refusal so the actual ABI/validation
+        // message remains visible and the user can retry without making another attack.
         return;
     }
     context->waiting_for_damage = true;
@@ -1171,7 +1177,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.8.0"),
+        anomaly::sdk::StringView("1.9.0"),
         Load,
         Start,
         Stop,
