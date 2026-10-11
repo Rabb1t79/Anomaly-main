@@ -1,0 +1,27 @@
+name: Temporary Tokky vehicle path analysis
+on:
+  push:
+    branches:
+      - analysis/tokky-vehicle-path-20261011
+permissions:
+  contents: read
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PE analysis libraries
+        run: python -m pip install --disable-pip-version-check pefile capstone
+      - name: Inspect Tokky-NTE.dll
+        run: |
+          python tools/analyze_tokky_vehicle_path.py
+          echo "---- RELEVANT SYMBOL XREFS (printed report) ----"
+          sed -n '1,900p' analysis-output/tokky_vehicle_xrefs.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tokky-vehicle-analysis
+          path: analysis-output/
+          if-no-files-found: error
