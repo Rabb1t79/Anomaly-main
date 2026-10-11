@@ -8509,16 +8509,8 @@ struct Ue5NteAdapter::State {
                     "HTCheatManager.MyPC initialization failed");
             }
 
-            VehicleFunctionBinding init_binding{};
-            static constexpr std::array<std::string_view, 1> engine_cheat_manager_outer{
-                "CheatManager"};
-            if (!FindVehicleFunctionLocked("ReceiveInitCheatManager",
-                    engine_cheat_manager_outer, "NoArgs", init_binding, "Engine") ||
-                !InvokeProcessEventGuarded(process_event_invoker, cheat_manager,
-                    init_binding.function, nullptr, 0)) {
-                return Status(ANOMALY_STATUS_V1_FAILED,
-                    "HTCheatManager instance was created but ReceiveInitCheatManager failed");
-            }
+            // Match APlayerController::EnableCheats ordering: publish the manager
+            // before its initialization event so callbacks can resolve it through PC.
             if (!memory->Write(player_controller +
                     static_cast<std::uintptr_t>(manager_property.offset),
                     &cheat_manager, sizeof(cheat_manager))) {
@@ -8531,6 +8523,17 @@ struct Ue5NteAdapter::State {
                 published_manager != cheat_manager) {
                 return Status(ANOMALY_STATUS_V1_FAILED,
                     "HTPlayerController.CheatManager assignment readback failed");
+            }
+            VehicleFunctionBinding init_binding{};
+            static constexpr std::array<std::string_view, 1> engine_cheat_manager_outer{
+                "CheatManager"};
+            alignas(8) std::array<std::uint8_t, 1> init_parameters{};
+            if (!FindVehicleFunctionLocked("ReceiveInitCheatManager",
+                    engine_cheat_manager_outer, "NoArgs", init_binding, "Engine") ||
+                !InvokeProcessEventGuarded(process_event_invoker, cheat_manager,
+                    init_binding.function, init_parameters.data(), 0)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTCheatManager instance was created but ReceiveInitCheatManager failed");
             }
         }
 
