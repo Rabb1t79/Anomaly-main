@@ -219,6 +219,26 @@ void RefreshCatalogOnGameThread() {
 void Update() {
     if (!g_context.vehicle || !g_context.started.load(std::memory_order_acquire)) return;
 
+    // Explicit refresh runs on Game thread; a failed scan waits for another user request
+    // instead of rescanning UObject/DataTable every frame.
+    if (g_context.refresh_catalog_requested.exchange(false, std::memory_order_acq_rel)) {
+        if (!g_context.vehicle->refresh_catalog) {
+            SetStatus("目录刷新失败：Host 没有发布 Vehicle V3 refresh_catalog 接口");
+        } else {
+            const auto refresh_status = g_context.vehicle->refresh_catalog(g_context.vehicle->user);
+            if (refresh_status.code == ANOMALY_STATUS_V1_OK) {
+                RefreshCatalogOnGameThread();
+            } else {
+                {
+                    std::scoped_lock lock(g_context.mutex);
+                    g_context.vehicle_ids.clear();
+                    g_context.vehicle_labels.clear();
+                }
+                SetStatus(StatusDescription("目录刷新失败", refresh_status));
+            }
+        }
+    }
+
     // Render only writes pending_vehicle_id under mutex; consume it under the same mutex.
     std::string pending_vehicle_id;
     {
@@ -234,23 +254,37 @@ void Update() {
             g_context.selected_vehicle_id = pending_vehicle_id;
             g_context.status = "已选择载具：" + pending_vehicle_id;
         } else {
-            SetStatus("载具选择失败");
+            SetStatus(StatusDescription("载具选择失败", status));
         }
     }
 
-    if (g_context.vehicle->catalog_snapshot) {
+    bool catalog_loaded{};
+    {
+        std::scoped_lock lock(g_context.mutex);
+        catalog_loaded = !g_context.vehicle_ids.empty();
+    }
+    if (catalog_loaded && g_context.vehicle->catalog_snapshot) {
         AnomalyNteVehicleCatalogSnapshotV1 catalog{};
         catalog.struct_size = sizeof(catalog);
         const auto catalog_status = g_context.vehicle->catalog_snapshot(
             g_context.vehicle->user, &catalog);
-        bool need_refresh = catalog_status.code == ANOMALY_STATUS_V1_OK &&
-            (catalog.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) != 0;
-        {
-            std::scoped_lock lock(g_context.mutex);
-            need_refresh = need_refresh &&
-                (g_context.vehicle_ids.empty() || catalog.sequence != g_context.catalog_tick);
+        if (catalog_status.code == ANOMALY_STATUS_V1_OK &&
+            (catalog.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) != 0) {
+            bool need_refresh{};
+            {
+                std::scoped_lock lock(g_context.mutex);
+                need_refresh = catalog.sequence != g_context.catalog_tick;
+            }
+            if (need_refresh) RefreshCatalogOnGameThread();
+        } else {
+            {
+                std::scoped_lock lock(g_context.mutex);
+                g_context.vehicle_ids.clear();
+                g_context.vehicle_labels.clear();
+            }
+            SetStatus(StatusDescription("载具目录失效", catalog_status) +
+                "；请点击「重新整理」重试");
         }
-        if (need_refresh) RefreshCatalogOnGameThread();
     }
 
     // Refresh the live player snapshot every Game update. Summon must not reuse stale coordinates.
@@ -325,11 +359,18 @@ void Update() {
         request.flags = ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
             ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER;
         std::string selected_id;
+        std::string selected_label;
         bool position_valid{};
         {
             std::scoped_lock lock(g_context.mutex);
             selected_id = g_context.selected_vehicle_id;
             position_valid = g_context.player_position_valid;
+            const auto selected_index = std::ranges::find(g_context.vehicle_ids, selected_id);
+            if (selected_index != g_context.vehicle_ids.end()) {
+                const auto index = static_cast<std::size_t>(selected_index - g_context.vehicle_ids.begin());
+                selected_label = index < g_context.vehicle_labels.size()
+                    ? g_context.vehicle_labels[index] : selected_id;
+            }
             if (position_valid) {
                 // The requested offset is signed by axis: X - 2000, Y + 2000, Z + 2000.
                 request.world_position[0] = g_context.player_snapshot.position[0] - 2000.0;
@@ -344,16 +385,22 @@ void Update() {
                 std::ranges::find(g_context.vehicle_ids, selected_id) != g_context.vehicle_ids.end();
         }
         if (!position_valid || !catalog_has_selection) {
-            SetStatus("召唤未执行：需要有效玩家坐标和当前目录中的 VehicleID");
+            const std::string reason = !position_valid
+                ? "召唤失败：玩家坐标当前无效"
+                : "召唤失败：当前选择未同步到 Host 载具目录";
+            SetStatus(reason);
+            SetLastSummon(reason);
         } else {
             const auto status = g_context.vehicle->summon_vehicle(
                 g_context.vehicle->user, &request);
             if (status.code == ANOMALY_STATUS_V1_OK) {
-                SetStatus("Host 已接受召唤请求；生成与 Actor.Owner 由 Host 后置核验");
-            } else if (status.message.data != nullptr && status.message.size != 0) {
-                SetStatus("召唤失败：" + std::string(status.message.data, status.message.size));
+                const std::string label = selected_label.empty() ? selected_id : selected_label;
+                SetStatus("已提交召唤：" + label);
+                SetLastSummon(label);
             } else {
-                SetStatus("召唤失败，Host 状态码 " + std::to_string(status.code));
+                const auto reason = StatusDescription("召唤失败", status);
+                SetStatus(reason);
+                SetLastSummon(reason);
             }
         }
     }
@@ -741,6 +788,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
 
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (plugin_context != &g_context) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
+    g_context.refresh_catalog_requested.store(true, std::memory_order_release);
     g_context.started.store(true, std::memory_order_release);
     return anomaly::sdk::Ok();
 }
