@@ -5,7 +5,7 @@
   "description": "Automatically captures player-to-target CharacterOnDamaged events and replays the exact validated HTAbilitySystemComponent GameplayEffect call once per Game tick; it never replays player input or rewrites target HP.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -30,19 +30,8 @@
     },
     {
       "id": "anomaly.nte.skills",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.nte.skill-invocation",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.interop.signature",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.ue5.names",
-      "minVersion": 2
+      "minVersion": 1,
+      "optional": true
     },
     {
       "id": "anomaly.ue5.framework",
@@ -56,10 +45,6 @@
   "capabilities": [
     "ui",
     "nte-combat-read",
-    "nte-skills-read",
-    "nte-skill-invocation",
-    "interop-signature",
-    "ue5-names",
     "game-events",
     "nte-damage-replay"
   ]
