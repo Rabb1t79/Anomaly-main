@@ -8164,8 +8164,8 @@ struct Ue5NteAdapter::State {
         try {
             // HTGame.VehicleData declares InVehicleTemple as TSoftClassPtr<UClass>
             // at row-relative offset 0xE0, size 0x28 in dump 5.6.1-0+UE5-HT.
-            // Do not interpret the first bytes as a TWeakObjectPtr: FSoftObjectPath
-            // precedes its weak cache in TSoftClassPtr. Ask Unreal to load/resolve it.
+            // Pass the complete reflected property to LoadClassAsset_Blocking so Unreal
+            // resolves the soft reference; do not guess at its private member layout.
             std::uintptr_t row_struct{};
             ReflectedPropertyInfo template_property;
             if (row == 0 || vehicle_catalog_table == 0 ||
