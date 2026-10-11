@@ -7943,6 +7943,25 @@ struct Ue5NteAdapter::State {
                 std::memcpy(&row, element + view.row_offset, sizeof(row));
                 if (row == 0 || !ReadableRange(*memory, row, row_bytes.size()) ||
                     !memory->Read(row, row_bytes.data(), row_bytes.size())) continue;
+
+                // DT_VehicleData 的 RowName 和 VehicleID 是两套独立的 FName。
+                // Tokky 列表中的 918、911、turbo 可能来自 RowName；必须把它们
+                // 与行内 VehicleID 一并保留，不能只枚举 VehicleID 字段。
+                if (view.row_offset >= 8) {
+                    std::uint32_t row_name_comparison_index{};
+                    std::uint32_t row_name_number{};
+                    std::memcpy(&row_name_comparison_index, element,
+                        sizeof(row_name_comparison_index));
+                    std::memcpy(&row_name_number, element + sizeof(row_name_comparison_index),
+                        sizeof(row_name_number));
+                    std::string row_name;
+                    if (ResolveFNameLocked(row_name_comparison_index, row_name_number, row_name) &&
+                        !row_name.empty() && row_name.size() < ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                        next.push_back({std::move(row_name), row_name_comparison_index,
+                            row_name_number, row});
+                    }
+                }
+
                 std::uint32_t comparison_index{};
                 std::uint32_t number{};
                 std::memcpy(&comparison_index,
