@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE Vehicle catalog and performance tuning. Enumerates the host-validated DT_VehicleData keys (including numeric IDs), summon and player positioning, and independent top-speed/engine-torque ratios.",
+  "description": "NTE Vehicle catalog and performance tuning. Enumerates DT_VehicleData rows with FText display names and VehicleID aliases, supports validated summon/player positioning, and independently scales current speed and the native top-speed limit.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
