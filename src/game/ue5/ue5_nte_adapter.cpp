@@ -9205,9 +9205,20 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT, "vehicle summon requires Game thread");
 
         std::scoped_lock lock(mutex);
-        if (player_controller == 0 || player_pawn == 0 || object_registry.items == 0 ||
-            !process_event_invoker || !EnsureVehicleCatalogLocked()) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "player, ProcessEvent, or vehicle catalog unavailable");
+        if (player_controller == 0 || player_pawn == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "召唤失败：当前 HTPlayerController 或玩家 Pawn 尚未解析");
+        }
+        if (object_registry.items == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "召唤失败：GObjects registry 尚未通过当前 dump 布局校验");
+        }
+        if (!process_event_invoker) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "召唤失败：Anomaly Host 的 ProcessEvent 调用通道不可用");
+        }
+        if (!EnsureVehicleCatalogLocked()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
         }
         if (selected_summon_vehicle_id.empty())
             return Status(ANOMALY_STATUS_V1_CONFLICT, "select a VehicleID from DT_VehicleData first");
