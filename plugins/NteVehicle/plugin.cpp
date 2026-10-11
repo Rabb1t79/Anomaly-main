@@ -421,57 +421,73 @@ void DrawSummonTab(
 
     DrawText(ui, "车辆目录  /  " + std::to_string(filtered.size()) +
         " 项匹配 · " + std::to_string(ids.size()) + " 项已读取");
-    if (ids.empty()) {
-        DrawText(ui, "正在读取运行时 Vehicle 名称；目录有效后这里会显示可选车辆。");
-    } else if (filtered.empty()) {
-        DrawText(ui, "没有匹配项。请修改筛选条件。");
-    } else {
-        const bool can_table =
-            UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_table),
-                sizeof(decltype(AnomalyUiServiceV1::end_table))) &&
-            ui->begin_table && ui->table_next_row && ui->table_next_column && ui->end_table;
-        bool table_open = false;
-        if (can_table) {
-            table_open = ui->begin_table(ui->user, anomaly::sdk::StringView("##vehicle-catalog"),
-                2, ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT, 0.0F, 270.0F) != 0;
-        }
-        const std::size_t limit = (std::min)(filtered.size(), std::size_t{256});
-        if (table_open) {
-            ui->table_next_row(ui->user);
-            ui->table_next_column(ui->user);
-            DrawText(ui, "VehicleID");
-            ui->table_next_column(ui->user);
-            DrawText(ui, "选择");
-            for (std::size_t row = 0; row < limit; ++row) {
-                const std::string& id = ids[filtered[row]];
-                const bool current = id == selected;
+
+    // 召唤目录必须拥有独立的边框与滚动区域，不跟随主面板的其他内容一起滚动。
+    // begin_child/end_child 是 append-only UI ABI 字段；调用前先检查 struct_size。
+    const bool has_catalog_child =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, begin_child),
+            sizeof(decltype(AnomalyUiServiceV1::begin_child))) &&
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_child),
+            sizeof(decltype(AnomalyUiServiceV1::end_child))) &&
+        ui->begin_child != nullptr && ui->end_child != nullptr;
+    const bool catalog_child_visible = has_catalog_child
+        ? ui->begin_child(ui->user, anomaly::sdk::StringView("##vehicle-catalog-scroll"),
+            0.0F, 285.0F, 1U) != 0
+        : true; // 旧 UI Host 没有 Child ABI 时退回受限列表，不调用缺失字段。
+
+    if (catalog_child_visible) {
+        if (ids.empty()) {
+            DrawText(ui, "正在读取运行时 Vehicle 名称；目录有效后这里会显示可选车辆。");
+        } else if (filtered.empty()) {
+            DrawText(ui, "没有匹配项。请修改筛选条件。");
+        } else {
+            const bool can_table =
+                UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_table),
+                    sizeof(decltype(AnomalyUiServiceV1::end_table))) &&
+                ui->begin_table && ui->table_next_row && ui->table_next_column && ui->end_table;
+            bool table_open = false;
+            if (can_table) {
+                // 让表格占满 Child 的可用高度；滚动条由外层固定高度的 Child 提供。
+                table_open = ui->begin_table(ui->user,
+                    anomaly::sdk::StringView("##vehicle-catalog-table"), 2,
+                    ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT, 0.0F, 0.0F) != 0;
+            }
+            if (table_open) {
                 ui->table_next_row(ui->user);
                 ui->table_next_column(ui->user);
-                DrawText(ui, id);
+                DrawText(ui, "VehicleID");
                 ui->table_next_column(ui->user);
-                const std::string label = std::string(current ? "✓ 当前##" : "选择##") + id;
-                if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
-                    std::scoped_lock lock(g_context.mutex);
-                    g_context.pending_vehicle_id = id;
+                DrawText(ui, "选择");
+                for (const std::size_t index : filtered) {
+                    const std::string& id = ids[index];
+                    const bool current = id == selected;
+                    ui->table_next_row(ui->user);
+                    ui->table_next_column(ui->user);
+                    DrawText(ui, id);
+                    ui->table_next_column(ui->user);
+                    const std::string label = std::string(current ? "✓ 当前##" : "选择##") + id;
+                    if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
+                        std::scoped_lock lock(g_context.mutex);
+                        g_context.pending_vehicle_id = id;
+                    }
+                }
+                ui->end_table(ui->user);
+            } else {
+                // 无 Table ABI 的旧 Host 也在 Child 里滚动；不人为截断目录数据。
+                for (const std::size_t index : filtered) {
+                    const std::string& id = ids[index];
+                    const bool current = id == selected;
+                    const std::string label = std::string(current ? "✓ 当前  " : "选用  ") + id;
+                    if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
+                        std::scoped_lock lock(g_context.mutex);
+                        g_context.pending_vehicle_id = id;
+                    }
                 }
             }
-            ui->end_table(ui->user);
-        } else {
-            for (std::size_t row = 0; row < (std::min)(limit, std::size_t{48}); ++row) {
-                const std::string& id = ids[filtered[row]];
-                const bool current = id == selected;
-                const std::string label = std::string(current ? "✓ 当前  " : "选用  ") + id;
-                if (ui->button(ui->user, anomaly::sdk::StringView(label), 0.0F, 0.0F)) {
-                    std::scoped_lock lock(g_context.mutex);
-                    g_context.pending_vehicle_id = id;
-                }
-            }
-        }
-        if (filtered.size() > limit || (!table_open && limit > 48)) {
-            DrawText(ui, "当前显示有限数量的匹配项；使用上方筛选框定位其余车辆。");
         }
     }
-
+    // ImGui BeginChild 只要被调用就必须配对 EndChild，即使 BeginChild 返回 false。
+    if (has_catalog_child) ui->end_child(ui->user);
     DrawDivider(ui);
     const bool can_summon = player_position_valid && !selected.empty() &&
         std::ranges::find(ids, selected) != ids.end();
@@ -689,6 +705,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.8.6"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.8.7"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
