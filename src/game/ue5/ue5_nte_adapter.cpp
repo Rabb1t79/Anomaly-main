@@ -3845,17 +3845,23 @@ struct Ue5NteAdapter::State {
         return ResolveObjectHandleLocked(handle, object) && object != 0;
     }
 
-    void RecordDamageEventLocked(AnomalyNteDamageEventV1 event) noexcept {
+    void RecordDamageEventLocked(
+        AnomalyNteDamageEventV1 event, const float raw_damage = 0.0F,
+        const ReplayEffectContext* replay_context = nullptr) noexcept {
         event.struct_size = sizeof(event);
         event.sequence = ++damage_event_sequence;
+        DamageRecord record{};
+        record.event = event;
+        record.raw_damage = raw_damage;
+        if (replay_context != nullptr) record.replay = *replay_context;
         if (damage_event_count == kDamageEventCapacity) {
-            damage_events[damage_event_start].event = event;
+            damage_events[damage_event_start] = record;
             damage_event_start = (damage_event_start + 1U) % kDamageEventCapacity;
             return;
         }
         const std::size_t slot =
             (damage_event_start + damage_event_count) % kDamageEventCapacity;
-        damage_events[slot].event = event;
+        damage_events[slot] = record;
         ++damage_event_count;
     }
 
@@ -5273,11 +5279,43 @@ struct Ue5NteAdapter::State {
         RecordCombatEventLocked(event);
     }
 
+    void CaptureReplayEffectInvocationLocked(
+        const CombatCaptureKind kind, const std::uintptr_t receiver,
+        const std::uintptr_t function, const std::span<const std::uint8_t> parameters,
+        const std::uint64_t capture_tick_sequence) noexcept {
+        if ((kind != CombatCaptureKind::GameplayEffectByActor &&
+                kind != CombatCaptureKind::GameplayEffectToTarget) ||
+            receiver == 0 || function == 0 ||
+            parameters.size() != kGameplayEffectReplayParameterBytes) return;
+        ReplayEffectContext captured{};
+        captured.valid = true;
+        captured.kind = kind == CombatCaptureKind::GameplayEffectByActor ? 1U : 2U;
+        captured.parameter_size = static_cast<std::uint16_t>(parameters.size());
+        captured.object_generation = object_generation;
+        captured.tick_sequence = capture_tick_sequence;
+        captured.receiver = receiver;
+        captured.function = function;
+        std::memcpy(captured.parameters.data(), parameters.data(), parameters.size());
+        std::size_t slot{};
+        if (replay_effect_call_count == kReplayEffectCallCapacity) {
+            slot = replay_effect_call_start;
+            replay_effect_call_start = (replay_effect_call_start + 1U) %
+                kReplayEffectCallCapacity;
+        } else {
+            slot = (replay_effect_call_start + replay_effect_call_count) %
+                kReplayEffectCallCapacity;
+            ++replay_effect_call_count;
+        }
+        replay_effect_calls[slot] = captured;
+    }
+
     void CaptureCombatProcessEventLocked(
         const CombatCaptureKind kind,
         const std::span<const std::uint8_t> parameters,
         const std::uint16_t info_offset,
-        const std::uint64_t capture_tick_sequence) noexcept {
+        const std::uint64_t capture_tick_sequence,
+        const std::uintptr_t receiver,
+        const std::uintptr_t function) noexcept {
         switch (kind) {
         case CombatCaptureKind::CharacterDamage:
             CaptureCharacterDamageBytesLocked(parameters, capture_tick_sequence);
@@ -5288,6 +5326,11 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::BuffAdd:
         case CombatCaptureKind::BuffRemove:
             CaptureBuffBytesLocked(parameters, capture_tick_sequence);
+            break;
+        case CombatCaptureKind::GameplayEffectByActor:
+        case CombatCaptureKind::GameplayEffectToTarget:
+            CaptureReplayEffectInvocationLocked(
+                kind, receiver, function, parameters, capture_tick_sequence);
             break;
         }
     }
@@ -5303,7 +5346,7 @@ struct Ue5NteAdapter::State {
             CaptureCombatProcessEventLocked(
                 capture.kind,
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
-                capture.info_offset, capture.tick_sequence);
+                capture.info_offset, capture.tick_sequence, capture.receiver, capture.function);
             ++read;
             ++drained;
         }
@@ -5332,6 +5375,7 @@ struct Ue5NteAdapter::State {
 
     void EnqueueCombatProcessEvent(
         const CombatCaptureBindings& bindings,
+        const std::uintptr_t receiver,
         const std::uintptr_t function,
         const void* const parameters) noexcept {
         if (parameters == nullptr) return;
@@ -5343,6 +5387,9 @@ struct Ue5NteAdapter::State {
             player_damage_queue_call_count.fetch_add(1, std::memory_order_relaxed);
         } else if (function == bindings.damage_widget) {
             damage_widget_call_count.fetch_add(1, std::memory_order_relaxed);
+        } else if (function == bindings.replay_apply_by_actor ||
+                   function == bindings.replay_apply_to_target) {
+            // Capture the bounded 0x78-byte Dump-validated HTAbilitySystemComponent call.
         } else if (std::ranges::any_of(
                        bindings.buffs, [function](const auto& buff) {
                            return buff.function != 0 && buff.function == function;
@@ -5387,7 +5434,13 @@ struct Ue5NteAdapter::State {
         CombatCaptureKind kind{};
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
-        if (function == bindings.damage || function == bindings.monster_damage) {
+        if (function == bindings.replay_apply_by_actor) {
+            kind = CombatCaptureKind::GameplayEffectByActor;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayParameterBytes);
+        } else if (function == bindings.replay_apply_to_target) {
+            kind = CombatCaptureKind::GameplayEffectToTarget;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayParameterBytes);
+        } else if (function == bindings.damage || function == bindings.monster_damage) {
             kind = CombatCaptureKind::Damage;
             info_offset = bindings.damage_info_offset;
             payload_size = 72;
@@ -5472,6 +5525,8 @@ struct Ue5NteAdapter::State {
         capture.payload_size = payload_size;
         capture.info_offset = 0;
         capture.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
+        capture.receiver = receiver;
+        capture.function = function;
         const auto* const source = static_cast<const std::uint8_t*>(parameters);
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
         combat_capture_write.store(write + 1U, std::memory_order_release);
@@ -16169,7 +16224,7 @@ void Ue5NteAdapter::OnCombatExecFunction(
         return;
     }
     state->EnqueueCombatProcessEvent(
-        *bindings, function, reinterpret_cast<void*>(parameters));
+        *bindings, receiver, function, reinterpret_cast<void*>(parameters));
     static_cast<void>(receiver);
 }
 
@@ -16214,7 +16269,7 @@ void Ue5NteAdapter::OnProcessEventPre(
         state->combat_capture_bindings.load(std::memory_order_acquire);
     if (combat_bindings != nullptr) {
         state->EnqueueCombatProcessEvent(
-            *combat_bindings, function, parameters);
+            *combat_bindings, object, function, parameters);
     }
     const auto endpoint = state->process_event_endpoint.load(std::memory_order_acquire);
     if (endpoint) endpoint->Dispatch(object, function, parameters);
