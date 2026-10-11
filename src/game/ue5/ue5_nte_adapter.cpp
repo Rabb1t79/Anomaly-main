@@ -762,6 +762,11 @@ struct Ue5NteAdapter::State {
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
+    struct VehicleDisplayNameBinding {
+        std::uintptr_t function{};
+        std::uintptr_t class_default_object{};
+        std::uint64_t object_generation{};
+    } vehicle_display_name_binding;
     struct VehicleCatalogEntry {
         // One record per DT row, not duplicate entries for the row key and VehicleID alias.
         std::string id;             // Canonical RowName where readable
@@ -7971,6 +7976,102 @@ struct Ue5NteAdapter::State {
             field("ReturnValue", "StructProperty", 8, 0x6C);
     }
 
+    // Convert the dump-declared FVehicleData.Name FText via the dump-declared
+    // KismetTextLibrary.Conv_TextToString UFunction. Do not guess at FText's private
+    // backing layout; the exact FText/ReturnValue properties and FString header are checked.
+    [[nodiscard]] bool ResolveVehicleDisplayNameLocked(
+        const std::uintptr_t row,
+        const ReflectedPropertyInfo& name_property,
+        std::string& display_name) noexcept {
+        display_name.clear();
+        try {
+            if (row == 0 || vehicle_display_name_binding.function == 0 ||
+                vehicle_display_name_binding.class_default_object == 0 ||
+                name_property.type != "TextProperty" || name_property.element_size != 0x10 ||
+                name_property.offset != 0x58 ||
+                !ReadableRange(*memory, row + static_cast<std::uintptr_t>(name_property.offset), 0x10)) {
+                return false;
+            }
+            alignas(16) std::array<std::uint8_t, 0x20> parameters{};
+            if (!memory->Read(row + static_cast<std::uintptr_t>(name_property.offset),
+                    parameters.data(), 0x10) ||
+                !InvokeProcessEventGuarded(process_event_invoker,
+                    vehicle_display_name_binding.class_default_object,
+                    vehicle_display_name_binding.function,
+                    parameters.data(), parameters.size())) {
+                return false;
+            }
+            NativeUtf16StringHeader text_header{};
+            std::memcpy(&text_header, parameters.data() + 0x10, sizeof(text_header));
+            if (!DecodeUtf16StringLocked(text_header, display_name)) return false;
+            display_name = TrimAscii(display_name);
+            return !display_name.empty();
+        } catch (...) {
+            display_name.clear();
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool ValidateVehicleDisplayNameBindingLocked() noexcept {
+        try {
+            if (vehicle_display_name_binding.object_generation != object_generation) {
+                vehicle_display_name_binding = {};
+                vehicle_display_name_binding.object_generation = object_generation;
+            }
+            if (vehicle_display_name_binding.function != 0 &&
+                vehicle_display_name_binding.class_default_object != 0) {
+                return true;
+            }
+            std::uintptr_t function{}, library_class{}, class_default_object{};
+            std::string outer_name, function_name, class_name;
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{}, return_offset{};
+            if (!FindExactObjectLocked(
+                    L"/Script/Engine.KismetTextLibrary.Conv_TextToString", function) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), library_class) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), class_default_object) ||
+                !ReadReflectedObjectNameLocked(library_class, outer_name) ||
+                !ReadReflectedObjectNameLocked(function, function_name) ||
+                outer_name != "KismetTextLibrary" || function_name != "Conv_TextToString" ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 2 || parms_size != 0x20 || return_offset != 0x10 ||
+                !ReadPointerAt(*memory, library_class,
+                    Layout(profile, "uclass.classDefaultObject"), class_default_object) ||
+                class_default_object == 0 ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), class_default_object) ||
+                !ReadReflectedObjectNameLocked(class_default_object, class_name) ||
+                class_name != "Function") {
+                return false;
+            }
+            ReflectedPropertyInfo input_text, output_string;
+            if (!FindReflectedPropertyLocked(function, "InText", input_text, false) ||
+                input_text.type != "TextProperty" || input_text.element_size != 0x10 ||
+                input_text.offset != 0 ||
+                !FindReflectedPropertyLocked(function, "ReturnValue", output_string, false) ||
+                output_string.type != "StrProperty" || output_string.element_size != 0x10 ||
+                output_string.offset != 0x10) {
+                return false;
+            }
+            vehicle_display_name_binding.function = function;
+            vehicle_display_name_binding.class_default_object = 0;
+            if (!ReadPointerAt(*memory, library_class,
+                    Layout(profile, "uclass.classDefaultObject"),
+                    vehicle_display_name_binding.class_default_object) ||
+                vehicle_display_name_binding.class_default_object == 0) {
+                vehicle_display_name_binding = {};
+                vehicle_display_name_binding.object_generation = object_generation;
+                return false;
+            }
+            return true;
+        } catch (...) {
+            vehicle_display_name_binding = {};
+            vehicle_display_name_binding.object_generation = object_generation;
+            return false;
+        }
+    }
+
     [[nodiscard]] bool EnsureVehicleCatalogLocked() noexcept {
         const auto fail = [this](const char* reason) noexcept {
             vehicle_catalog_failure_reason = reason;
@@ -8032,10 +8133,16 @@ struct Ue5NteAdapter::State {
             ReflectedPropertyInfo vehicle_id_property;
             if (!FindReflectedPropertyLocked(row_struct, "VehicleID", vehicle_id_property, true) ||
                 vehicle_id_property.type != "NameProperty" ||
-                vehicle_id_property.element_size != 8 || vehicle_id_property.offset < 0 ||
-                vehicle_id_property.offset + 8 > 0x400) {
+                vehicle_id_property.element_size != 8 || vehicle_id_property.offset != 0x08) {
                 return fail("VehicleData.VehicleID 的 NameProperty 类型/偏移校验失败");
             }
+            ReflectedPropertyInfo vehicle_name_property;
+            if (!FindReflectedPropertyLocked(row_struct, "Name", vehicle_name_property, true) ||
+                vehicle_name_property.type != "TextProperty" ||
+                vehicle_name_property.element_size != 0x10 || vehicle_name_property.offset != 0x58) {
+                return fail("VehicleData.Name 的 FText 类型/偏移校验失败");
+            }
+            const bool can_resolve_display_text = ValidateVehicleDisplayNameBindingLocked();
 
             const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
             SparseMapView view;
@@ -8090,8 +8197,20 @@ struct Ue5NteAdapter::State {
                 VehicleCatalogEntry entry{};
                 entry.id = row_name_valid ? row_name : vehicle_id;
                 entry.vehicle_id = vehicle_id_valid ? vehicle_id : entry.id;
-                entry.display_label = row_name_valid && vehicle_id_valid && row_name != vehicle_id
-                    ? row_name + " (" + vehicle_id + ")" : entry.id;
+                std::string display_name;
+                const bool display_name_valid = can_resolve_display_text &&
+                    ResolveVehicleDisplayNameLocked(row, vehicle_name_property, display_name);
+                if (display_name_valid && vehicle_id_valid && display_name != vehicle_id) {
+                    entry.display_label = display_name + " (" + vehicle_id + ")";
+                } else if (display_name_valid) {
+                    entry.display_label = display_name;
+                } else if (row_name_valid && vehicle_id_valid && row_name != vehicle_id) {
+                    // Clearly retain a usable identifier if FText conversion is unavailable;
+                    // never pass this display fallback back as a native function name.
+                    entry.display_label = row_name + " (" + vehicle_id + ")";
+                } else {
+                    entry.display_label = entry.id;
+                }
                 entry.name_comparison_index = row_name_valid
                     ? row_name_comparison_index : comparison_index;
                 entry.name_number = row_name_valid ? row_name_number : number;
