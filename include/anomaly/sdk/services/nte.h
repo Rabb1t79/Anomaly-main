@@ -366,12 +366,32 @@ typedef struct AnomalyNteAttackInputRequestV1 {
     uint32_t input_id;
     int32_t param;
 } AnomalyNteAttackInputRequestV1;
+// A replayable-damage snapshot exists only when the Host observed an actual player->target
+// damage event synchronously associated with a validated HTGame GameplayEffect application.
+typedef struct AnomalyNteDamageReplaySnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t token;
+    uint64_t tick_sequence;
+    AnomalyGenerationHandleV1 attacker;
+    AnomalyGenerationHandleV1 victim;
+    float damage;
+    uint32_t reserved;
+} AnomalyNteDamageReplaySnapshotV1;
+#define ANOMALY_NTE_DAMAGE_REPLAY_V1_VALID (1u << 0u)
 typedef struct AnomalyNteAttackInputServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     AnomalyStatusV1 (ANOMALY_CALL *press)(
         void* user, const AnomalyNteAttackInputRequestV1* request);
     AnomalyStatusV1 (ANOMALY_CALL *release)(
         void* user, const AnomalyNteAttackInputRequestV1* request);
+    // Optional size-gated tail fields. These replay the captured GameplayEffect application,
+    // not the input/animation that originally caused it. Completion is verified from a new
+    // combat DamageEvent; return OK alone is not proof that damage was applied.
+    AnomalyStatusV1 (ANOMALY_CALL *next_replayable_damage)(
+        void* user, uint64_t after_token, AnomalyNteDamageReplaySnapshotV1* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *replay_captured_damage)(
+        void* user, uint64_t token);
 } AnomalyNteAttackInputServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
