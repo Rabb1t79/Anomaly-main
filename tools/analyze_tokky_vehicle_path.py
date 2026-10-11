@@ -66,7 +66,7 @@ for x in strs:
     if old is None or len(x[2]) > len(old[2]):
         by_addr[x[0]] = x
 strs = sorted(by_addr.values())
-terms = re.compile(r"(vehicle|spawn|summon|cheatmanager|cheatspawn|htgame|htvehicle|vehicleid|setmaxenginetorque|invehiclet emple|drivable|vehiclecomponent|vehicledata|playercontroller|possess|setowner|spawnactor|spawnobject|my pc|my_pc)", re.I)
+terms = re.compile(r"(CheatSpawnVehicle|HTCheatManager|HTVehicleSummonSubsystem|ClientSpawnBicycleVehicle|ClientSpawnBoat|InVehicleTemple|SetMaxEngineTorque|HTVehicleComponent|HTVehicleDataAsset|VehicleData|SpawnActor|SpawnObject)", re.I)
 relevant = [s for s in strs if terms.search(s[2].replace("InVehicleTemple","InVehicleTemple"))]
 out("RELEVANT STRINGS")
 for va, off, s, enc in relevant:
@@ -77,7 +77,7 @@ md.detail = True
 md.skipdata = True
 decoded = []
 for sec in pe.sections:
-    if not (sec.Characteristics & 0x20000000):  # IMAGE_SCN_MEM_EXECUTE
+    if not (sec.Characteristics & 0x20000000) or not sec.Name.rstrip(b"\\0").startswith(b".text"):  # Analyze only the main executable text section
         continue
     raw = sec.get_data()
     addr = base + sec.VirtualAddress
