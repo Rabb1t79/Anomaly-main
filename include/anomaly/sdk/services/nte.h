@@ -355,8 +355,8 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_engine_torque_ratio)(void* user, float ratio);
     // V3: explicitly invalidates/rebuilds DT_VehicleData on user request. Game-thread operation.
     AnomalyStatusV1 (ANOMALY_CALL *refresh_catalog)(void* user);
-    // V3: display label corresponding to vehicle_id_at(index). Labels are RowName (VehicleID)
-    // where both names exist, so the catalog shows one row per DataTable row like Tokky's UI.
+    // V3: display label corresponding to vehicle_id_at(index). Labels use FVehicleData.Name (FText)
+    // followed by VehicleID, while RowName remains the canonical internal selection key.
     AnomalyStatusV1 (ANOMALY_CALL *catalog_label_at)(
         void* user, uint32_t index, char* destination, size_t* inout_size);
 } AnomalyNteVehicleServiceV1;
