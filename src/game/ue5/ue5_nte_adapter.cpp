@@ -796,9 +796,26 @@ struct Ue5NteAdapter::State {
 
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
+    static constexpr std::size_t kGameplayEffectReplayParameterBytes = 0x78;
+    struct ReplayEffectContext {
+        bool valid{};
+        std::uint8_t kind{}; // 1 = ByActor, 2 = ToTarget；均来自已验证的 HTGame UFunction。
+        std::uint16_t parameter_size{};
+        std::uint64_t object_generation{};
+        std::uint64_t tick_sequence{};
+        std::uintptr_t receiver{};
+        std::uintptr_t function{};
+        std::array<std::uint8_t, kGameplayEffectReplayParameterBytes> parameters{};
+    };
     struct DamageRecord {
         AnomalyNteDamageEventV1 event{};
+        float raw_damage{};
+        ReplayEffectContext replay{};
     };
+    static constexpr std::size_t kReplayEffectCallCapacity = 32;
+    std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
+    std::size_t replay_effect_call_start{};
+    std::size_t replay_effect_call_count{};
     std::array<DamageRecord, kDamageEventCapacity> damage_events{};
     std::size_t damage_event_start{};
     std::size_t damage_event_count{};
@@ -958,18 +975,23 @@ struct Ue5NteAdapter::State {
     // queue payload bounded to the largest useful value avoids copying the
     // 0x298-byte FGameplayEffectSpec for every buff notification.
     static constexpr std::size_t kCombatCapturePayloadBytes =
-        (std::max)(std::size_t{96}, sizeof(NteCharacterDamageCapture));
+        (std::max)((std::max)(std::size_t{0x78}, std::size_t{96}),
+            sizeof(NteCharacterDamageCapture));
     enum class CombatCaptureKind : std::uint8_t {
         CharacterDamage,
         Damage,
         BuffAdd,
         BuffRemove,
+        GameplayEffectByActor,
+        GameplayEffectToTarget,
     };
     struct PendingCombatCapture {
         CombatCaptureKind kind{};
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
         std::uint64_t tick_sequence{};
+        std::uintptr_t receiver{};
+        std::uintptr_t function{};
         std::array<std::uint8_t, kCombatCapturePayloadBytes> payload{};
     };
     std::array<PendingCombatCapture, kCombatCaptureQueueCapacity> combat_capture_queue{};
@@ -997,6 +1019,8 @@ struct Ue5NteAdapter::State {
         std::uint16_t damage_value_offset{0xFFFFU};
         std::uint16_t damage_source_offset{0xFFFFU};
         std::uint16_t damage_tags_offset{0xFFFFU};
+        std::uintptr_t replay_apply_by_actor{};
+        std::uintptr_t replay_apply_to_target{};
     };
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
@@ -7569,6 +7593,55 @@ struct Ue5NteAdapter::State {
             }
         }
         return false;
+    }
+
+    // Only these exact Dump-defined GameplayEffect entry points are eligible for
+    // replay. UFunction signature validation prevents invoking an approximate ABI.
+    [[nodiscard]] bool ValidateReplayEffectFunctionLocked(
+        const std::uintptr_t function, const bool by_actor) const {
+        if (function == 0) return false;
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name) ||
+            function_class_name != "Function" || outer_name != "HTAbilitySystemComponent" ||
+            function_name != (by_actor ? "K2_ApplyGameEffectWithClassByActor"
+                                       : "K2_ApplyGameplayEffectToTargetWithClass") ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+            parms_size != 0x78U || num_parms != (by_actor ? 5U : 6U) ||
+            return_offset != (by_actor ? 0x70U : 0x6CU)) {
+            return false;
+        }
+        const auto field = [&](const std::string_view name, const std::string_view type,
+                               const std::uint16_t size, const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            return FindReflectedPropertyLocked(function, name, property, false) &&
+                property.type == type && property.element_size == size &&
+                property.offset == offset && property.array_dim == 1;
+        };
+        if (by_actor) {
+            return field("SourceObj", "ObjectProperty", 8, 0x00) &&
+                field("GameplayEffect", "ClassProperty", 8, 0x08) &&
+                field("ModifyData", "StructProperty", 0x58, 0x10) &&
+                field("pTriggerAbilityComp", "ObjectProperty", 8, 0x68) &&
+                field("ReturnValue", "BoolProperty", 1, 0x70);
+        }
+        ReflectedPropertyInfo buff_event_type;
+        return field("GameplayEffect", "ClassProperty", 8, 0x00) &&
+            field("TargetAbilityCmp", "ObjectProperty", 8, 0x08) &&
+            field("ModifyData", "StructProperty", 0x58, 0x10) &&
+            FindReflectedPropertyLocked(function, "BuffEventType", buff_event_type, false) &&
+            (buff_event_type.type == "ByteProperty" || buff_event_type.type == "EnumProperty") &&
+            buff_event_type.element_size == 1 && buff_event_type.offset == 0x68 &&
+            field("bUsePredictionKey", "BoolProperty", 1, 0x69) &&
+            field("ReturnValue", "StructProperty", 8, 0x6C);
     }
 
     [[nodiscard]] bool EnsureVehicleCatalogLocked() noexcept {
