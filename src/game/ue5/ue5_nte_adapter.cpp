@@ -2329,6 +2329,9 @@ struct Ue5NteAdapter::State {
         if (id == ANOMALY_NTE_COMBAT_SERVICE_V1_ID) {
             return framework_hook_ready && NteCombatProfileAvailable();
         }
+        if (id == ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID) {
+            return framework_hook_ready && NteCombatProfileAvailable();
+        }
         if (id == ANOMALY_NTE_SKILLS_SERVICE_V1_ID) {
             return framework_hook_ready && NteSkillsProfileAvailable();
         }
@@ -14199,6 +14202,10 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             NextDamageEventThunk, CombatStatisticsThunk, DamageSourceNameThunk,
             DamageParticipantPathThunk, LatestCombatEventSequenceThunk,
             NextCombatEventThunk, CombatEventNameThunk, ParticipantDisplayNameThunk};
+        damage_replay_service = {
+            sizeof(AnomalyNteDamageReplayServiceV1),
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+            this, DamageReplayThunk};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
@@ -14250,6 +14257,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteEntitiesServiceV1 entities_service{};
     AnomalyNteActorsServiceV1 actors_service{};
     AnomalyNteCombatServiceV1 combat_service{};
+    AnomalyNteDamageReplayServiceV1 damage_replay_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
     AnomalyNteMetricsServiceV1 metrics_service{};
@@ -14818,6 +14826,14 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? State::NextDamageEvent(lease.User(), after_sequence, event)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageReplayThunk(
+        void* user, const AnomalyNteDamageReplayRequestV1* request) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->ReplayDamage(request)
             : StoppedStatus();
     }
 
@@ -15856,6 +15872,27 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
             ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION,
             &endpoint->combat_service,
+            [self, observer_endpoint] {
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
+                if (!locked || !observed ||
+                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) {
+                    return;
+                }
+                locked->player_demand.store(true, std::memory_order_release);
+                locked->combat_demand.store(true, std::memory_order_release);
+            },
+            semantic_lifetime)) {
+        return false;
+    }
+    const bool publish_damage_replay_service = framework_hook_ready &&
+        NteCombatProfileAvailable() &&
+        !IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
+    if (publish_damage_replay_service &&
+        !Publish(
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+            &endpoint->damage_replay_service,
             [self, observer_endpoint] {
                 const auto locked = self.lock();
                 const auto observed = observer_endpoint.lock();
