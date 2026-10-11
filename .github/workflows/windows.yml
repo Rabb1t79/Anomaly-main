@@ -1,23 +1,12 @@
 name: windows
 
 on:
-  push:
-    branches:
-      - '**'
-    tags:
-      - 'v*'
-    paths-ignore:
-      - '**/*.md'
-  pull_request:
-    paths-ignore:
-      - '**/*.md'
   workflow_dispatch:
     inputs:
       fixtures:
         description: Also build the development fixtures, diagnostic probes and test plugin packages
         type: boolean
         default: false
-
 jobs:
   build:
     permissions:
