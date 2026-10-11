@@ -6,7 +6,7 @@
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -27,7 +27,7 @@
     },
     {
       "id": "anomaly.nte.vehicle",
-      "minVersion": 2
+      "minVersion": 3
     },
     {
       "id": "anomaly.nte.player",
