@@ -75,9 +75,11 @@ jobs:
             set_target_properties(${target} PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
           endforeach()
           set_target_properties(nte_vehicle PROPERTIES
+            ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle"
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle"
             LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle")
           set_target_properties(nte_attack_replay PROPERTIES
+            ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay"
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay"
             LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay")
           '@
