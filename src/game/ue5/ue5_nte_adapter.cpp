@@ -8420,15 +8420,19 @@ struct Ue5NteAdapter::State {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                     "Engine.GameplayStatics.SpawnObject could not be resolved");
             }
+            std::uintptr_t spawn_function_meta_class{};
             std::uintptr_t spawn_object_class{};
             std::uintptr_t spawn_object_cdo{};
+            std::string spawn_function_meta_name;
             std::string spawn_object_class_name;
             std::uint8_t spawn_num_parms{};
             std::uint16_t spawn_parms_size{};
             std::uint16_t spawn_return_offset{};
             std::uintptr_t spawn_property{};
             if (!ReadPointerAt(*memory, spawn_object_function,
-                    Layout(profile, "object.class"), spawn_object_class) ||
+                    Layout(profile, "object.class"), spawn_function_meta_class) ||
+                !ReadReflectedObjectNameLocked(spawn_function_meta_class, spawn_function_meta_name) ||
+                spawn_function_meta_name != "Function" ||
                 !ReadPointerAt(*memory, spawn_object_function,
                     Layout(profile, "object.outer"), spawn_object_class) ||
                 !ReadValue(*memory, spawn_object_function +
