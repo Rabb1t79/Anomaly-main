@@ -16319,7 +16319,11 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         const bool invocation_service_ready =
             state->SemanticFeatureAvailable("nte.skill-invocation") &&
             !state->IsPublished(ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID);
-        if (combat_service_ready || skills_service_ready || invocation_service_ready) {
+        const bool damage_replay_service_ready =
+            state->NteCombatProfileAvailable() &&
+            !state->IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
+        if (combat_service_ready || skills_service_ready || invocation_service_ready ||
+            damage_replay_service_ready) {
             static_cast<void>(state->PublishAvailableServices(state));
         }
         state->RefreshPickupConfirmationLocked();
@@ -16448,6 +16452,8 @@ void Ue5NteAdapter::OnCombatExecFunction(
         function != bindings->monster_damage &&
         function != bindings->player_damage_queue &&
         function != bindings->damage_widget &&
+        function != bindings->replay_apply_by_actor &&
+        function != bindings->replay_apply_to_target &&
         !is_buff_function) {
         return;
     }
