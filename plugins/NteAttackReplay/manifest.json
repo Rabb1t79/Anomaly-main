@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "id": "anomaly.builtin.nte-attack-replay",
   "name": "NTE Attack Replay",
-  "description": "Automatically records the first player-to-target damage event and replays real game attack input on successive Game ticks; never rewrites target HP.",
+  "description": "Automatically captures player-to-target CharacterOnDamaged events and replays the exact validated HTAbilitySystemComponent GameplayEffect call once per Game tick; it never replays player input or rewrites target HP.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -49,7 +49,7 @@
       "minVersion": 1
     },
     {
-      "id": "anomaly.nte.attack-input",
+      "id": "anomaly.nte.damage-replay",
       "minVersion": 1
     }
   ],
@@ -61,6 +61,6 @@
     "interop-signature",
     "ue5-names",
     "game-events",
-    "nte-attack-input"
+    "nte-damage-replay"
   ]
 }
