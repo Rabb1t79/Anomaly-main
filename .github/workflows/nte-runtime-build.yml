@@ -1,0 +1,51 @@
+name: NTE Core build check
+
+on:
+  push:
+    branches:
+      - fix/nte-vehicle-tokky-direct-spawn-clean-20261011
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  core-msvc:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure MSVC x64
+        run: >-
+          cmake -S . -B build -A x64
+          -DANOMALY_BUILD_SDK_EXAMPLES=OFF
+          -DANOMALY_BUILD_BUILTIN_PLUGINS=OFF
+          -DANOMALY_BUILD_TEST_PLUGINS=OFF
+          -DANOMALY_BUILD_TEST_FIXTURES=OFF
+          -DANOMALY_BUILD_SYMBOLS=OFF
+
+      - name: Build Core and its dependencies
+        run: cmake --build build --config Release --target anomaly_core --parallel 2
+
+      - name: Verify output
+        shell: pwsh
+        run: |
+          $core = "build/bin/Release/Anomaly/Anomaly.Core.dll"
+          if (!(Test-Path $core)) {
+            Get-ChildItem build -Recurse -Filter "Anomaly.Core.dll" | Format-List FullName,Length
+            throw "Anomaly.Core.dll was not produced at the expected path."
+          }
+          Get-FileHash $core -Algorithm SHA256 | Format-List
+
+      - name: Upload Core build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anomaly-Core-Tokky-DirectSpawn-MSVC
+          path: build/bin/Release/Anomaly/Anomaly.Core.dll
+          if-no-files-found: error
+          retention-days: 14
