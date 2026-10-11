@@ -146,19 +146,20 @@ void RefreshCatalogOnGameThread() {
 void Update() {
     if (!g_context.vehicle || !g_context.started.load(std::memory_order_acquire)) return;
 
-    if (g_context.pending_vehicle_id.size() != 0) {
-        std::string id;
-        {
-            std::scoped_lock lock(g_context.mutex);
-            id = g_context.pending_vehicle_id;
-            g_context.pending_vehicle_id.clear();
-        }
+    // Render only writes pending_vehicle_id under mutex; consume it under the same mutex.
+    std::string pending_vehicle_id;
+    {
+        std::scoped_lock lock(g_context.mutex);
+        pending_vehicle_id = std::move(g_context.pending_vehicle_id);
+        g_context.pending_vehicle_id.clear();
+    }
+    if (!pending_vehicle_id.empty()) {
         const auto status = g_context.vehicle->set_summon_vehicle_id(
-            g_context.vehicle->user, anomaly::sdk::StringView(id));
+            g_context.vehicle->user, anomaly::sdk::StringView(pending_vehicle_id));
         if (status.code == ANOMALY_STATUS_V1_OK) {
             std::scoped_lock lock(g_context.mutex);
-            g_context.selected_vehicle_id = id;
-            g_context.status = "已选择载具：" + id;
+            g_context.selected_vehicle_id = pending_vehicle_id;
+            g_context.status = "已选择载具：" + pending_vehicle_id;
         } else {
             SetStatus("载具选择失败");
         }
@@ -475,6 +476,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.8.1"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.8.3"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
