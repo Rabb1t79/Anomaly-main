@@ -722,14 +722,14 @@ bool CaptureNextAttack(Context& context) {
     UpdateSkillCandidate(context);
 
     for (uint32_t i = 0; i < 16; ++i) {
-        AnomalyNteCombatEventV1 event{};
+        AnomalyNteDamageEventV1 event{};
         event.struct_size = sizeof(event);
-        const auto status = context.combat->next_event(
+        const auto status = context.combat->next_damage_event(
             context.combat->user, context.combat_cursor, &event);
         if (status.code == ANOMALY_STATUS_V1_NOT_FOUND) {
             // A stale cursor can happen when the Host replaces the combat ring or world.
             // Rebase to the current tail; old events must never be replayed as a new attack.
-            context.combat_cursor = context.combat->latest_event_sequence(
+            context.combat_cursor = context.combat->latest_damage_sequence(
                 context.combat->user);
             return false;
         }
@@ -738,28 +738,29 @@ bool CaptureNextAttack(Context& context) {
         }
         context.combat_cursor = event.sequence;
 
-        if (event.kind != ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE ||
+        if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
             !SameHandle(event.world, combatant.world) ||
-            !SameHandle(event.source, combatant.character) ||
-            event.target.id == 0 || SameHandle(event.target, combatant.character)) {
+            !SameHandle(event.attacker, combatant.character) ||
+            event.victim.id == 0 || SameHandle(event.victim, combatant.character)) {
             continue;
         }
 
         context.captured = true;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
-        context.captured_damage_value = event.value;
-        context.captured_basic_value = event.basic_value;
-        context.captured_final_value = event.final_value;
+        context.captured_damage_value = event.display_damage;
+        context.captured_basic_value = event.basic_damage;
+        context.captured_final_value = event.final_damage;
+        context.captured_damage_source_id = event.source_id;
         context.captured_damage_type = event.damage_type;
         context.captured_reaction_type = event.reaction_type;
-        context.captured_target = event.target;
+        context.captured_target = event.victim;
 
         // Cross-check the real DamageEvent source against the skill catalog.
         // Prefer an exact reflected ability display-name match over the skill that
         // merely happened to be active immediately before the hit.
         context.captured_damage_source_name =
-            ReadDamageSourceName(context.combat, event);
+            ReadDamageSourceName(context.combat, event.source_id);
         // A generic active-skill candidate is not proof that it caused this hit.
         // When the real DamageSource is available, keep only an exact name match.
         if (!context.captured_damage_source_name.empty()) {
@@ -805,15 +806,16 @@ bool CaptureNextAttack(Context& context) {
         context.captured_has_skill = context.captured_skill.id != 0;
         context.captured_ability_path =
             ReadAbilityPath(context.skills, context.captured_ability);
-        const bool input_ready = PrepareCapturedInput(context);
+        // 仅读取既有数据行做只读交叉参考；重放路径不会再次按键或激活技能。
+        static_cast<void>(PrepareCapturedInput(context));
         if (context.combat->participant_path_utf8 != nullptr) {
             size_t size = 0;
             const auto sizing = context.combat->participant_path_utf8(
-                context.combat->user, event.target, nullptr, &size);
+                context.combat->user, event.victim, nullptr, &size);
             if (sizing.code == ANOMALY_STATUS_V1_BUFFER_TOO_SMALL && size != 0) {
                 context.captured_target_path.resize(size);
                 if (context.combat->participant_path_utf8(
-                        context.combat->user, event.target,
+                        context.combat->user, event.victim,
                         context.captured_target_path.data(), &size).code == ANOMALY_STATUS_V1_OK) {
                     if (!context.captured_target_path.empty() &&
                         context.captured_target_path.back() == '\0') {
@@ -824,13 +826,9 @@ bool CaptureNextAttack(Context& context) {
                 }
             }
         }
-        context.status = !input_ready
-            ? "已记录真实伤害，但 DT_AbilityInput 无唯一有效的 InputID/Param；拒绝猜测并禁用重放"
-            : (context.captured_has_skill
-                ? (context.captured_damage_source_name.empty()
-                    ? "已自动捕获攻击；输入参数已从 DT_AbilityInput 解析"
-                    : "已自动捕获：已用真实 DamageSource 交叉匹配技能")
-                : "已自动捕获普通攻击链的第一次伤害，输入参数来自 MeleeAtack 数据行");
+        context.status = context.captured_damage_source_name.empty()
+            ? "已自动捕获实际玩家伤害事件；重放将使用 Host 捕获的原始 GameplayEffect 调用"
+            : "已自动捕获实际玩家伤害事件；DamageSource 已记录，等待重放";
         return true;
     }
     return false;
