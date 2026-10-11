@@ -797,8 +797,19 @@ struct Ue5NteAdapter::State {
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
     static constexpr std::size_t kGameplayEffectReplayParameterBytes = 0x78;
+    // HTGame dump: ModifyData@0x10 contains FBufferData, whose FGameplayTagContainer
+    // contains two TArray<FGameplayTag> objects at parameter offsets 0x18 and 0x28.
+    // Own the tag values because the original ProcessEvent parameter buffer and its
+    // temporary TArray allocations may be destroyed after the call returns.
+    static constexpr std::size_t kReplayGameplayTagCapacity = 64;
+    struct CapturedGameplayTagArray {
+        std::uint32_t count{};
+        std::array<std::uint64_t, kReplayGameplayTagCapacity> values{};
+    };
+    using CapturedGameplayTagArrays = std::array<CapturedGameplayTagArray, 2>;
     struct ReplayEffectContext {
         bool valid{};
+        bool tag_arrays_valid{};
         std::uint8_t kind{}; // 1 = ByActor, 2 = ToTarget；均来自已验证的 HTGame UFunction。
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
@@ -806,6 +817,7 @@ struct Ue5NteAdapter::State {
         std::uintptr_t receiver{};
         std::uintptr_t function{};
         std::array<std::uint8_t, kGameplayEffectReplayParameterBytes> parameters{};
+        CapturedGameplayTagArrays gameplay_tags{};
     };
     struct DamageRecord {
         AnomalyNteDamageEventV1 event{};
@@ -992,6 +1004,8 @@ struct Ue5NteAdapter::State {
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
+        bool replay_tag_arrays_valid{};
+        CapturedGameplayTagArrays replay_gameplay_tags{};
         std::array<std::uint8_t, kCombatCapturePayloadBytes> payload{};
     };
     std::array<PendingCombatCapture, kCombatCaptureQueueCapacity> combat_capture_queue{};
@@ -5285,19 +5299,23 @@ struct Ue5NteAdapter::State {
     void CaptureReplayEffectInvocationLocked(
         const CombatCaptureKind kind, const std::uintptr_t receiver,
         const std::uintptr_t function, const std::span<const std::uint8_t> parameters,
-        const std::uint64_t capture_tick_sequence) noexcept {
+        const std::uint64_t capture_tick_sequence,
+        const CapturedGameplayTagArrays& gameplay_tags,
+        const bool tag_arrays_valid) noexcept {
         if ((kind != CombatCaptureKind::GameplayEffectByActor &&
                 kind != CombatCaptureKind::GameplayEffectToTarget) ||
             receiver == 0 || function == 0 ||
             parameters.size() != kGameplayEffectReplayParameterBytes) return;
         ReplayEffectContext captured{};
         captured.valid = true;
+        captured.tag_arrays_valid = tag_arrays_valid;
         captured.kind = kind == CombatCaptureKind::GameplayEffectByActor ? 1U : 2U;
         captured.parameter_size = static_cast<std::uint16_t>(parameters.size());
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
         captured.receiver = receiver;
         captured.function = function;
+        captured.gameplay_tags = gameplay_tags;
         std::memcpy(captured.parameters.data(), parameters.data(), parameters.size());
         std::size_t slot{};
         if (replay_effect_call_count == kReplayEffectCallCapacity) {
@@ -5318,7 +5336,9 @@ struct Ue5NteAdapter::State {
         const std::uint16_t info_offset,
         const std::uint64_t capture_tick_sequence,
         const std::uintptr_t receiver,
-        const std::uintptr_t function) noexcept {
+        const std::uintptr_t function,
+        const CapturedGameplayTagArrays& gameplay_tags,
+        const bool tag_arrays_valid) noexcept {
         switch (kind) {
         case CombatCaptureKind::CharacterDamage:
             CaptureCharacterDamageBytesLocked(parameters, capture_tick_sequence);
@@ -5333,7 +5353,8 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::GameplayEffectByActor:
         case CombatCaptureKind::GameplayEffectToTarget:
             CaptureReplayEffectInvocationLocked(
-                kind, receiver, function, parameters, capture_tick_sequence);
+                kind, receiver, function, parameters, capture_tick_sequence,
+                gameplay_tags, tag_arrays_valid);
             break;
         }
     }
@@ -5349,7 +5370,8 @@ struct Ue5NteAdapter::State {
             CaptureCombatProcessEventLocked(
                 capture.kind,
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
-                capture.info_offset, capture.tick_sequence, capture.receiver, capture.function);
+                capture.info_offset, capture.tick_sequence, capture.receiver, capture.function,
+                capture.replay_gameplay_tags, capture.replay_tag_arrays_valid);
             ++read;
             ++drained;
         }
@@ -5373,6 +5395,40 @@ struct Ue5NteAdapter::State {
         capture.tick_sequence = capture_tick_sequence;
         std::memcpy(capture.payload.data(), source, capture.payload_size);
         combat_capture_write.store(write + 1U, std::memory_order_release);
+        return true;
+    }
+
+    // Copy the two FGameplayTagContainer TArrays while the original ProcessEvent
+    // parameter buffer is still alive. Replay may occur several frames later; raw
+    // pointers copied from FBufferData would otherwise be dangling.
+    [[nodiscard]] bool CaptureReplayGameplayTagsLocked(
+        const void* const parameters,
+        CapturedGameplayTagArrays& captured) const noexcept {
+        if (parameters == nullptr) return false;
+        const auto base = reinterpret_cast<std::uintptr_t>(parameters);
+        if (!ReadableRange(*memory, base, kGameplayEffectReplayParameterBytes)) return false;
+        struct TArrayView {
+            std::uintptr_t data{};
+            std::int32_t num{};
+            std::int32_t max{};
+        };
+        for (std::size_t index{}; index < captured.size(); ++index) {
+            const std::uintptr_t offset = 0x18U + static_cast<std::uintptr_t>(index) * 0x10U;
+            TArrayView view{};
+            if (!ReadValue(*memory, base + offset, view) ||
+                view.num < 0 || view.num > static_cast<std::int32_t>(kReplayGameplayTagCapacity) ||
+                view.max < view.num) {
+                return false;
+            }
+            captured[index] = {};
+            captured[index].count = static_cast<std::uint32_t>(view.num);
+            if (view.num == 0) continue;
+            const auto bytes = static_cast<std::size_t>(view.num) * sizeof(std::uint64_t);
+            if (view.data == 0 || !ReadableRange(*memory, view.data, bytes) ||
+                !memory->Read(view.data, captured[index].values.data(), bytes)) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -5530,8 +5586,15 @@ struct Ue5NteAdapter::State {
         capture.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
         capture.receiver = receiver;
         capture.function = function;
+        capture.replay_gameplay_tags = {};
+        capture.replay_tag_arrays_valid = true;
         const auto* const source = static_cast<const std::uint8_t*>(parameters);
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
+        if (kind == CombatCaptureKind::GameplayEffectByActor ||
+            kind == CombatCaptureKind::GameplayEffectToTarget) {
+            capture.replay_tag_arrays_valid =
+                CaptureReplayGameplayTagsLocked(parameters, capture.replay_gameplay_tags);
+        }
         combat_capture_write.store(write + 1U, std::memory_order_release);
     }
 
@@ -6077,6 +6140,10 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "original hit has no matching validated HTAbilitySystemComponent GameplayEffect call");
         }
+        if (!record->replay.tag_arrays_valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "original FBufferData tag arrays were not safely captured; refusing stale TArray replay");
+        }
         if (record->event.world.generation != world_generation ||
             record->replay.object_generation != object_generation) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
@@ -6104,11 +6171,36 @@ struct Ue5NteAdapter::State {
         }
 
         auto parameters = record->replay.parameters;
-        // Clear only the Dump-verified out/return field. All original effect parameters,
-        // including FBufferData, source/target and prediction settings, remain intact.
+        // Rebuild the dump-declared FGameplayTagContainer TArrays with call-scoped,
+        // owned storage. Never pass the original invocation's potentially freed pointers.
+        std::array<std::array<std::uint64_t, kReplayGameplayTagCapacity>, 2> replay_tag_storage{};
+        for (std::size_t index{}; index < record->replay.gameplay_tags.size(); ++index) {
+            const auto& source = record->replay.gameplay_tags[index];
+            if (source.count > kReplayGameplayTagCapacity) {
+                return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                    "captured FGameplayTagContainer exceeded its validated tag capacity");
+            }
+            if (source.count != 0) {
+                std::memcpy(replay_tag_storage[index].data(), source.values.data(),
+                    static_cast<std::size_t>(source.count) * sizeof(std::uint64_t));
+            }
+            const std::uintptr_t array_data = source.count != 0
+                ? reinterpret_cast<std::uintptr_t>(replay_tag_storage[index].data()) : 0;
+            const std::int32_t array_count = static_cast<std::int32_t>(source.count);
+            const std::uintptr_t array_offset = 0x18U + static_cast<std::uintptr_t>(index) * 0x10U;
+            std::memcpy(parameters.data() + array_offset, &array_data, sizeof(array_data));
+            std::memcpy(parameters.data() + array_offset + 8U,
+                &array_count, sizeof(array_count));
+            std::memcpy(parameters.data() + array_offset + 12U,
+                &array_count, sizeof(array_count));
+        }
+
+        // Clear only dump-verified out/return fields. The target-apply signature also
+        // exposes bUsePredictionKey@0x69; an old one-shot prediction key must not be reused.
         if (record->replay.kind == 1U) {
             parameters[0x70U] = 0;
         } else if (record->replay.kind == 2U) {
+            parameters[0x69U] = 0;
             std::memset(parameters.data() + 0x6CU, 0, sizeof(std::uint64_t));
         } else {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
