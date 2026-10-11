@@ -595,7 +595,7 @@ void DrawSummonTab(
             if (table_open) {
                 ui->table_next_row(ui->user);
                 ui->table_next_column(ui->user);
-                DrawText(ui, "RowName (VehicleID)");
+                DrawText(ui, "名称 (VehicleID)");
                 ui->table_next_column(ui->user);
                 DrawText(ui, "操作");
                 for (const std::size_t index : filtered) {
