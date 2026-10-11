@@ -8394,10 +8394,148 @@ struct Ue5NteAdapter::State {
             manager_property.offset < 0) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController.CheatManager property failed validation");
         }
+        std::uintptr_t ht_cheat_manager_class{};
+        if (!FindExactObjectLocked(L"/Script/HTGame.HTCheatManager", ht_cheat_manager_class) ||
+            ht_cheat_manager_class == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTCheatManager UClass could not be resolved from the 5.6.1 dump path");
+        }
+
         std::uintptr_t cheat_manager{};
-        if (!ReadValue(*memory, player_controller + static_cast<std::uintptr_t>(manager_property.offset), cheat_manager) ||
-            cheat_manager == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "game CheatManager instance is not available");
+        if (!ReadValue(*memory,
+                player_controller + static_cast<std::uintptr_t>(manager_property.offset),
+                cheat_manager)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "HTPlayerController.CheatManager pointer could not be read");
+        }
+
+        // Some retail game states leave APlayerController.CheatManager null even after
+        // EnableCheats. In that case, create the dump-declared HTCheatManager as a UObject
+        // owned by the live controller, wire its MyPC back-reference, and publish it only
+        // after the reflected object and fields have been validated.
+        if (cheat_manager == 0) {
+            std::uintptr_t spawn_object_function{};
+            if (!FindExactObjectLocked(L"/Script/Engine.GameplayStatics.SpawnObject",
+                    spawn_object_function) || spawn_object_function == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Engine.GameplayStatics.SpawnObject could not be resolved");
+            }
+            std::uintptr_t spawn_object_class{};
+            std::uintptr_t spawn_object_cdo{};
+            std::string spawn_object_class_name;
+            std::uint8_t spawn_num_parms{};
+            std::uint16_t spawn_parms_size{};
+            std::uint16_t spawn_return_offset{};
+            std::uintptr_t spawn_property{};
+            if (!ReadPointerAt(*memory, spawn_object_function,
+                    Layout(profile, "object.class"), spawn_object_class) ||
+                !ReadPointerAt(*memory, spawn_object_function,
+                    Layout(profile, "object.outer"), spawn_object_class) ||
+                !ReadValue(*memory, spawn_object_function +
+                    Layout(profile, "ufunction.numParms"), spawn_num_parms) ||
+                !ReadValue(*memory, spawn_object_function +
+                    Layout(profile, "ufunction.parmsSize"), spawn_parms_size) ||
+                !ReadValue(*memory, spawn_object_function +
+                    Layout(profile, "ufunction.returnValueOffset"), spawn_return_offset) ||
+                !ReadPointerAt(*memory, spawn_object_function,
+                    Layout(profile, "ustruct.propertyLink"), spawn_property) ||
+                spawn_num_parms != 3 || spawn_parms_size != 0x18 ||
+                spawn_return_offset != 0x10) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "GameplayStatics.SpawnObject reflected ABI failed validation");
+            }
+            if (!ReadReflectedObjectNameLocked(spawn_object_class, spawn_object_class_name) ||
+                spawn_object_class_name != "GameplayStatics" ||
+                !ReadPointerAt(*memory, spawn_object_class,
+                    Layout(profile, "uclass.classDefaultObject"), spawn_object_cdo) ||
+                spawn_object_cdo == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "GameplayStatics default object failed validation");
+            }
+            const std::array<std::string_view, 3> expected_names{
+                "ObjectClass", "Outer_0", "ReturnValue"};
+            const std::array<std::string_view, 3> expected_types{
+                "ClassProperty", "ObjectProperty", "ObjectProperty"};
+            const std::array<std::int32_t, 3> expected_offsets{0, 8, 16};
+            for (std::size_t i = 0; i < expected_names.size(); ++i) {
+                ReflectedPropertyInfo info;
+                if (spawn_property == 0 ||
+                    !ReadReflectedPropertyLocked(spawn_property, info) ||
+                    info.name != expected_names[i] || info.type != expected_types[i] ||
+                    info.element_size != 8 || info.array_dim != 1 ||
+                    info.offset != expected_offsets[i]) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "GameplayStatics.SpawnObject parameter layout failed validation");
+                }
+                spawn_property = info.next;
+            }
+            if (spawn_property != 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "GameplayStatics.SpawnObject has unexpected extra reflected parameters");
+            }
+
+            alignas(8) std::array<std::uint8_t, 0x18> spawn_parameters{};
+            std::memcpy(spawn_parameters.data(), &ht_cheat_manager_class,
+                sizeof(ht_cheat_manager_class));
+            std::memcpy(spawn_parameters.data() + 8, &player_controller,
+                sizeof(player_controller));
+            if (!InvokeProcessEventGuarded(process_event_invoker, spawn_object_cdo,
+                    spawn_object_function, spawn_parameters.data(), spawn_parameters.size())) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "GameplayStatics.SpawnObject(HTCheatManager, HTPlayerController) failed");
+            }
+            std::memcpy(&cheat_manager, spawn_parameters.data() + 0x10,
+                sizeof(cheat_manager));
+            std::uintptr_t created_class{};
+            ReflectedPropertyInfo my_pc_property;
+            if (cheat_manager == 0 ||
+                !ReadPointerAt(*memory, cheat_manager, Layout(profile, "object.class"),
+                    created_class) ||
+                created_class != ht_cheat_manager_class ||
+                !FindReflectedPropertyLocked(created_class, "MyPC", my_pc_property, true) ||
+                my_pc_property.type != "ObjectProperty" || my_pc_property.element_size != 8 ||
+                my_pc_property.offset != 0x88) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "SpawnObject did not return a validated HTCheatManager instance");
+            }
+            if (!memory->Write(cheat_manager +
+                    static_cast<std::uintptr_t>(my_pc_property.offset),
+                    &player_controller, sizeof(player_controller))) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTCheatManager.MyPC initialization failed");
+            }
+
+            VehicleFunctionBinding init_binding{};
+            static constexpr std::array<std::string_view, 1> engine_cheat_manager_outer{
+                "CheatManager"};
+            if (!FindVehicleFunctionLocked("ReceiveInitCheatManager",
+                    engine_cheat_manager_outer, "NoArgs", init_binding, "Engine") ||
+                !InvokeProcessEventGuarded(process_event_invoker, cheat_manager,
+                    init_binding.function, nullptr, 0)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTCheatManager instance was created but ReceiveInitCheatManager failed");
+            }
+            if (!memory->Write(player_controller +
+                    static_cast<std::uintptr_t>(manager_property.offset),
+                    &cheat_manager, sizeof(cheat_manager))) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTPlayerController.CheatManager assignment failed");
+            }
+            std::uintptr_t published_manager{};
+            if (!ReadValue(*memory, player_controller +
+                    static_cast<std::uintptr_t>(manager_property.offset), published_manager) ||
+                published_manager != cheat_manager) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTPlayerController.CheatManager assignment readback failed");
+            }
+        }
+
+        std::uintptr_t actual_cheat_manager_class{};
+        if (!ReadPointerAt(*memory, cheat_manager, Layout(profile, "object.class"),
+                actual_cheat_manager_class) ||
+            !IsClassDerivedFromLocked(actual_cheat_manager_class, ht_cheat_manager_class)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "live CheatManager is not an HTCheatManager instance");
         }
         VehicleFunctionBinding summon_binding{};
         static constexpr std::array<std::string_view, 1> cheat_manager_outer{"HTCheatManager"};
