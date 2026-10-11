@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Temporary static triage of the repository's Tokky-NTE.dll; no binary execution."""
 from __future__ import annotations
-import os, re, struct
+import os, re, struct, sys
 from pathlib import Path
 from bisect import bisect_right
 import pefile
@@ -9,9 +9,14 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_IMM, X86_OP_MEM
 from capstone.x86_const import X86_REG_RIP
 
-DLL = Path("Tokky-NTE.dll")
+DLL = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("Tokky-NTE.dll")
 OUT = Path("analysis-output")
 OUT.mkdir(exist_ok=True)
+if DLL.exists() and DLL.stat().st_size < 1024 and DLL.read_bytes().startswith(b"version https://git-lfs.github.com/spec/v1"):
+    msg = f"{DLL} is a Git LFS pointer, not the actual executable; configure checkout with lfs: true.\\n"
+    (OUT / f"{DLL.stem.lower()}_vehicle_xrefs.txt").write_text(msg, encoding="utf-8")
+    print(msg, end="")
+    raise SystemExit(0)
 data = DLL.read_bytes()
 pe = pefile.PE(str(DLL), fast_load=False)
 base = pe.OPTIONAL_HEADER.ImageBase
@@ -88,7 +93,9 @@ addr_ranges.sort(key=lambda x: x[0])
 range_starts = [x[0] for x in addr_ranges]
 for idx, ins in enumerate(decoded):
     targets = []
-    for op in ins.operands:
+    if ins.id == 0:  # Capstone SKIPDATA pseudo-instruction, not a decoded opcode.
+            continue
+        for op in ins.operands:
         if op.type == X86_OP_MEM and op.mem.base == X86_REG_RIP:
             targets.append((ins.address + ins.size + op.mem.disp, "rip-mem"))
         elif op.type == X86_OP_IMM:
@@ -132,6 +139,6 @@ for i, (idx, target, kind, strva, s, off, enc) in enumerate(xref):
     if len(seen) >= 140: break
 
 text = "\n".join(lines) + "\n"
-(OUT / "tokky_vehicle_xrefs.txt").write_text(text, encoding="utf-8")
+(OUT / f"{DLL.stem.lower()}_vehicle_xrefs.txt").write_text(text, encoding="utf-8")
 # Stable concise summary on Actions log for retrieval without downloading artifacts.
 print(text[:105000], end="")
