@@ -7980,6 +7980,28 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    // 车辆类名需要保留 vehicle token 检查；DT_VehicleData.VehicleID 则不能用这条规则筛选，
+    // 因为表里的合法主键（例如 918）可以是纯数字。
+    [[nodiscard]] static bool ContainsVehicleToken(std::string_view value) noexcept {
+        constexpr std::string_view token = "vehicle";
+        if (value.size() < token.size()) return false;
+        for (std::size_t start = 0; start + token.size() <= value.size(); ++start) {
+            bool match = true;
+            for (std::size_t offset = 0; offset < token.size(); ++offset) {
+                char character = value[start + offset];
+                if (character >= 'A' && character <= 'Z') {
+                    character = static_cast<char>(character - 'A' + 'a');
+                }
+                if (character != token[offset]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return true;
+        }
+        return false;
+    }
+
     [[nodiscard]] bool IsVehicleActorLocked(const std::uintptr_t object) const noexcept {
         if (object == 0) return false;
         try {
