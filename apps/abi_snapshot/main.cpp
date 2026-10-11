@@ -2221,6 +2221,25 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteDamageReplayRequestV1",
+        sizeof(AnomalyNteDamageReplayRequestV1),
+        alignof(AnomalyNteDamageReplayRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageReplayRequestV1, flags)},
+         {"damage_sequence", offsetof(AnomalyNteDamageReplayRequestV1, damage_sequence)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageReplayServiceV1",
+        sizeof(AnomalyNteDamageReplayServiceV1),
+        alignof(AnomalyNteDamageReplayServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageReplayServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageReplayServiceV1, user)},
+         {"replay_damage", offsetof(AnomalyNteDamageReplayServiceV1, replay_damage)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNteSkillFrameV1",
         sizeof(AnomalyNteSkillFrameV1),
         alignof(AnomalyNteSkillFrameV1),
@@ -2460,6 +2479,9 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION, "AnomalyNteActorsServiceV1", false);
     AppendService(output, ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION, "AnomalyNteCombatServiceV1", false);
+    AppendService(output, ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+        "AnomalyNteDamageReplayServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION, "AnomalyNteSkillsServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
