@@ -5953,6 +5953,170 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    [[nodiscard]] bool ReplayContextMatchesDamageLocked(
+        const ReplayEffectContext& context, const std::uintptr_t attacker,
+        const std::uintptr_t victim, const std::uint64_t source_id) const noexcept {
+        try {
+            if (!context.valid || context.parameter_size != kGameplayEffectReplayParameterBytes ||
+                context.object_generation != object_generation || attacker == 0 || victim == 0 ||
+                source_id == 0 || context.receiver == 0 || context.function == 0 ||
+                !ReadableRange(*memory, context.receiver, 0x20U) ||
+                !ReadableRange(*memory, context.function, 0x20U)) return false;
+            const auto* const bindings =
+                combat_capture_bindings.load(std::memory_order_acquire);
+            if (bindings == nullptr) return false;
+            const auto source_it = damage_source_objects.find(source_id);
+            if (source_it == damage_source_objects.end() || source_it->second == 0) return false;
+            const std::uintptr_t damage_source_object = source_it->second;
+
+            // DamageGEDef 在 HTDamageEvent 中是弱 UObject；只有它能和此次调用的
+            // GameplayEffect 类/CDO 对上时，才把这条调用作为该伤害的重放模板。
+            std::uintptr_t gameplay_effect_class{};
+            std::memcpy(&gameplay_effect_class,
+                context.parameters.data() + (context.kind == 1U ? 0x08U : 0x00U),
+                sizeof(gameplay_effect_class));
+            if (gameplay_effect_class == 0 ||
+                !ReadableRange(*memory, gameplay_effect_class, 0x20U)) return false;
+            std::uintptr_t class_default_object{};
+            if (!ReadPointerAt(*memory, gameplay_effect_class,
+                    Layout(profile, "uclass.classDefaultObject"), class_default_object)) return false;
+            bool source_matches_effect = class_default_object != 0 &&
+                damage_source_object == class_default_object;
+            if (!source_matches_effect) {
+                std::uintptr_t source_class{};
+                source_matches_effect =
+                    ReadPointerAt(*memory, damage_source_object,
+                        Layout(profile, "object.class"), source_class) &&
+                    source_class == gameplay_effect_class;
+            }
+            if (!source_matches_effect) return false;
+
+            std::uintptr_t attacker_ability_system{}, victim_ability_system{};
+            if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
+                !CurrentAbilitySystemLocked(victim, victim_ability_system)) return false;
+            if (context.kind == 1U) {
+                std::uintptr_t source_actor{}, trigger_ability_system{};
+                std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
+                std::memcpy(&trigger_ability_system,
+                    context.parameters.data() + 0x68U, sizeof(trigger_ability_system));
+                return context.function == bindings->replay_apply_by_actor &&
+                    context.receiver == victim_ability_system &&
+                    source_actor == attacker &&
+                    trigger_ability_system == attacker_ability_system;
+            }
+            if (context.kind == 2U) {
+                std::uintptr_t target_ability_system{};
+                std::memcpy(&target_ability_system,
+                    context.parameters.data() + 0x08U, sizeof(target_ability_system));
+                return context.function == bindings->replay_apply_to_target &&
+                    context.receiver == attacker_ability_system &&
+                    target_ability_system == victim_ability_system;
+            }
+            return false;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool FindReplayContextForDamageLocked(
+        const std::uintptr_t attacker, const std::uintptr_t victim,
+        const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
+        ReplayEffectContext& result) const noexcept {
+        if (replay_effect_call_count == 0) return false;
+        for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+            const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                reverse) % kReplayEffectCallCapacity;
+            const auto& candidate = replay_effect_calls[index];
+            const auto delta = candidate.tick_sequence >= capture_tick_sequence
+                ? candidate.tick_sequence - capture_tick_sequence
+                : capture_tick_sequence - candidate.tick_sequence;
+            // Calls are queued before the resulting CharacterOnDamaged callback; tolerate
+            // only the adjacent Host tick to cover a tick-boundary handoff.
+            if (!candidate.valid || delta > 1U) continue;
+            if (ReplayContextMatchesDamageLocked(
+                    candidate, attacker, victim, source_id)) {
+                result = candidate;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    AnomalyStatusV1 ReplayDamage(
+        const AnomalyNteDamageReplayRequestV1* request) noexcept {
+        if (request == nullptr || request->struct_size < sizeof(*request) ||
+            request->flags != 0 || request->damage_sequence == 0) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid damage replay request");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "damage replay must run on the Game thread");
+        }
+        std::scoped_lock lock(mutex);
+        const DamageRecord* record = nullptr;
+        for (std::size_t index{}; index < damage_event_count; ++index) {
+            const auto& candidate = damage_events[
+                (damage_event_start + index) % kDamageEventCapacity];
+            if (candidate.event.sequence == request->damage_sequence) {
+                record = &candidate;
+                break;
+            }
+        }
+        if (record == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "original damage sequence expired or was not found");
+        }
+        if (!record->replay.valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "original hit has no matching validated HTAbilitySystemComponent GameplayEffect call");
+        }
+        if (record->event.world.generation != world_generation ||
+            record->replay.object_generation != object_generation) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "original damage belongs to a stale world/object generation");
+        }
+        if (player_pawn == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "current player character is unavailable");
+        }
+        AnomalyGenerationHandleV1 live_player{};
+        if (!ObjectHandleLocked(player_pawn, live_player) ||
+            live_player.id != record->event.attacker.id ||
+            live_player.generation != record->event.attacker.generation) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured damage attacker is no longer the current player character");
+        }
+        std::uintptr_t attacker{}, victim{};
+        if (!ResolveObjectHandleLocked(record->event.attacker, attacker) ||
+            !ResolveObjectHandleLocked(record->event.victim, victim) ||
+            attacker != player_pawn || victim == 0 || attacker == victim ||
+            !ReplayContextMatchesDamageLocked(
+                record->replay, attacker, victim, record->event.source_id)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured GameplayEffect receiver/source/target no longer matches live player and victim");
+        }
+
+        auto parameters = record->replay.parameters;
+        // Clear only the Dump-verified out/return field. All original effect parameters,
+        // including FBufferData, source/target and prediction settings, remain intact.
+        if (record->replay.kind == 1U) {
+            parameters[0x70U] = 0;
+        } else if (record->replay.kind == 2U) {
+            std::memset(parameters.data() + 0x6CU, 0, sizeof(std::uint64_t));
+        } else {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "unsupported captured GameplayEffect call kind");
+        }
+        if (!InvokeNativeProcessEventLocked(
+                record->replay.receiver, record->replay.function,
+                parameters.data(), record->replay.parameter_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "validated HTAbilitySystemComponent GameplayEffect call failed");
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     void ProcessCharacterDamageLocked(
         const float damage,
         const std::int32_t source_index,
@@ -6004,7 +6168,11 @@ struct Ue5NteAdapter::State {
                     attacker == player_pawn);
             }
             event.final_damage = static_cast<std::int64_t>(std::llround(damage));
-            RecordDamageEventLocked(event);
+            ReplayEffectContext replay_context{};
+            const bool has_replay_context = FindReplayContextForDamageLocked(
+                attacker, victim, event.source_id, capture_tick_sequence, replay_context);
+            RecordDamageEventLocked(event, damage,
+                has_replay_context ? &replay_context : nullptr);
             AnomalyNteCombatEventV1 combat_event{};
             combat_event.kind = ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE;
             combat_event.tick_sequence = event.tick_sequence;
