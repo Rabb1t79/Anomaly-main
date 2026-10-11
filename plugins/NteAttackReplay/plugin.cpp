@@ -843,27 +843,30 @@ enum class ReplayCallResult : uint32_t {
 };
 
 // 重放通过 Host 暴露的原生攻击输入服务执行；每次按下后必须观察到新的玩家->目标 DamageEvent 才能计数。
-ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
-    if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
-    if (accepted != nullptr) *accepted = 0;
-    if (!context.captured || !context.captured_input_valid ||
-        context.attack_input == nullptr || context.attack_input->press == nullptr ||
-        context.attack_input->release == nullptr) {
-        if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+ReplayCallResult ReplayOnce(Context& context, AnomalyStatusV1* replay_status) {
+    if (replay_status != nullptr) {
+        *replay_status = Status(ANOMALY_STATUS_V1_OK);
+    }
+    if (!context.captured || context.captured_damage_sequence == 0 ||
+        context.damage_replay == nullptr ||
+        context.damage_replay->replay_damage == nullptr) {
+        if (replay_status != nullptr) {
+            *replay_status = Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "captured damage/replay service is unavailable");
+        }
         return ReplayCallResult::InvalidState;
     }
 
-    // Send one real gameplay input. Release is performed in the next Game tick;
-    // an accepted call is not counted until Update observes a new matching DamageEvent.
-    const auto status = context.attack_input->press(
-        context.attack_input->user, &context.captured_input_request);
-    if (status_code != nullptr) *status_code = status.code;
-    if (status.code != ANOMALY_STATUS_V1_OK) return ReplayCallResult::ServiceError;
-
-    context.active_input_request = context.captured_input_request;
-    context.release_input_pending = true;
-    if (accepted != nullptr) *accepted = 1;
-    return ReplayCallResult::Success;
+    // Reapply only the exact GameplayEffect context associated with the recorded DamageEvent.
+    // No player input, attack animation, or skill activation request is issued here.
+    AnomalyNteDamageReplayRequestV1 request{};
+    request.struct_size = sizeof(request);
+    request.damage_sequence = context.captured_damage_sequence;
+    const auto status = context.damage_replay->replay_damage(
+        context.damage_replay->user, &request);
+    if (replay_status != nullptr) *replay_status = status;
+    return status.code == ANOMALY_STATUS_V1_OK
+        ? ReplayCallResult::Success : ReplayCallResult::ServiceError;
 }
 
 AnomalyStatusV1 ANOMALY_CALL Load(
@@ -878,6 +881,9 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     context->combat = sdk_host.Query<AnomalyNteCombatServiceV1>(
         ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION).get();
+    context->damage_replay = sdk_host.Query<AnomalyNteDamageReplayServiceV1>(
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION).get();
     context->skills = sdk_host.Query<AnomalyNteSkillsServiceV1>(
         ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION).get();
@@ -896,17 +902,15 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
-    if (!CombatReady(context->combat) || !SkillsReady(context->skills) ||
+    if (!CombatReady(context->combat) || context->damage_replay == nullptr ||
+        context->damage_replay->replay_damage == nullptr || !SkillsReady(context->skills) ||
         !InvocationReady(context->invocation) || !UiReady(context->ui) ||
-        context->signature == nullptr || context->names == nullptr || context->framework == nullptr || context->attack_input == nullptr ||
-        context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr ||
-        context->framework->tick_sequence == nullptr ||
-        context->attack_input->press == nullptr ||
-        context->attack_input->release == nullptr) {
+        context->signature == nullptr || context->names == nullptr ||
+        context->framework == nullptr || context->framework->tick_sequence == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
-            "attack replay requires NTE combat, skills, skill-invocation and UI services");
+            "Attack Replay requires raw NTE damage events, the GameplayEffect replay service, and UI");
     }
 
     *plugin_context = context;
