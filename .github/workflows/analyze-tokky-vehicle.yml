@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -17,9 +19,12 @@ jobs:
         run: python -m pip install --disable-pip-version-check pefile capstone
       - name: Inspect Tokky-NTE.dll
         run: |
-          python tools/analyze_tokky_vehicle_path.py
-          echo "---- RELEVANT SYMBOL XREFS (printed report) ----"
-          sed -n '1,900p' analysis-output/tokky_vehicle_xrefs.txt
+          python tools/analyze_tokky_vehicle_path.py Tokky-NTE.dll
+          python tools/analyze_tokky_vehicle_path.py tokky-launcher.exe
+          echo "---- DLL: RELEVANT SYMBOL XREFS ----"
+          sed -n '1,650p' analysis-output/tokky-nte_vehicle_xrefs.txt
+          echo "---- LAUNCHER: RELEVANT SYMBOL XREFS ----"
+          sed -n '1,350p' analysis-output/tokky-launcher_vehicle_xrefs.txt
       - uses: actions/upload-artifact@v4
         with:
           name: tokky-vehicle-analysis
