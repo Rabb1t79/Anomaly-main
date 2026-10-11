@@ -778,8 +778,6 @@ struct Ue5NteAdapter::State {
         std::uint32_t name_comparison_index{};
         std::uint32_t name_number{};
         std::uintptr_t row{};
-        // Exact 0x28-byte TSoftClassPtr from FVehicleData::InVehicleTemple.
-        std::array<std::uint8_t, 0x28> soft_class_reference{};
     };
     std::vector<VehicleCatalogEntry> vehicle_catalog;
     std::uint64_t vehicle_catalog_generation{};
@@ -7663,15 +7661,6 @@ struct Ue5NteAdapter::State {
                 vehicle_id_property.type != "NameProperty" ||
                 vehicle_id_property.element_size != 8 || vehicle_id_property.offset < 0 ||
                 vehicle_id_property.offset + 8 > 0x400) return false;
-            ReflectedPropertyInfo in_vehicle_temple_property;
-            if (!FindReflectedPropertyLocked(
-                    row_struct, "InVehicleTemple", in_vehicle_temple_property, true) ||
-                in_vehicle_temple_property.type != "SoftClassProperty" ||
-                in_vehicle_temple_property.element_size != 0x28 ||
-                in_vehicle_temple_property.offset < 0 ||
-                in_vehicle_temple_property.offset + 0x28 > 0x400) return false;
-            const auto row_bytes_size = static_cast<std::size_t>((std::max)(
-                vehicle_id_property.offset + 8, in_vehicle_temple_property.offset + 0x28));
 
             const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
             SparseMapView view;
@@ -7683,7 +7672,7 @@ struct Ue5NteAdapter::State {
             if (!memory->Read(view.data, elements.data(), elements.size())) return false;
             std::vector<VehicleCatalogEntry> next;
             next.reserve(static_cast<std::size_t>(view.num - view.num_free));
-            std::vector<std::uint8_t> row_bytes(row_bytes_size);
+            std::vector<std::uint8_t> row_bytes(static_cast<std::size_t>(vehicle_id_property.offset) + 8U);
             for (std::int32_t slot = 0; slot < view.num; ++slot) {
                 const auto u_slot = static_cast<std::uint32_t>(slot);
                 if ((view.flags[static_cast<std::size_t>(u_slot) / 32U] &
@@ -7705,12 +7694,7 @@ struct Ue5NteAdapter::State {
                     id.empty() || !ContainsVehicleToken(id) || id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
                     continue;
                 }
-                std::array<std::uint8_t, 0x28> soft_class_reference{};
-                std::memcpy(soft_class_reference.data(),
-                    row_bytes.data() + static_cast<std::size_t>(in_vehicle_temple_property.offset),
-                    soft_class_reference.size());
-                next.push_back({
-                    std::move(id), comparison_index, number, row, soft_class_reference});
+                next.push_back({std::move(id), comparison_index, number, row});
             }
             std::ranges::sort(next, {}, &VehicleCatalogEntry::id);
             next.erase(std::unique(next.begin(), next.end(), [](const auto& lhs, const auto& rhs) {
@@ -8401,164 +8385,169 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "selected VehicleID is no longer in the current data table");
         }
 
-        // The 5.6.1 dump declares FVehicleData::InVehicleTemple as a 0x28-byte
-        // TSoftClassPtr<UClass>. Resolve that real row class and use the engine's
-        // deferred Actor-spawn lifecycle instead of manufacturing a CheatManager.
-        std::uintptr_t vehicle_class{};
-        std::uintptr_t actor_base_class{};
-        std::uintptr_t load_class_function{};
-        std::uintptr_t load_class_cdo{};
-        std::uintptr_t begin_spawn_function{};
-        std::uintptr_t gameplay_statics_cdo{};
-        std::uintptr_t finish_spawn_function{};
+        // The dump declares CheatSpawnVehicle(FName) on HTCheatManager, not on the player controller.
+        std::uintptr_t controller_class{};
+        ReflectedPropertyInfo manager_property;
+        if (!ReadPointerAt(*memory, player_controller, Layout(profile, "object.class"), controller_class) ||
+            !FindReflectedPropertyLocked(controller_class, "CheatManager", manager_property, true) ||
+            manager_property.type != "ObjectProperty" || manager_property.element_size != 8 ||
+            manager_property.offset < 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController.CheatManager property failed validation");
+        }
+        std::uintptr_t ht_cheat_manager_class{};
+        if (!FindExactObjectLocked(L"/Script/HTGame.HTCheatManager", ht_cheat_manager_class) ||
+            ht_cheat_manager_class == 0) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTCheatManager UClass could not be resolved from the 5.6.1 dump path");
+        }
 
-        struct ExpectedSpawnParameter {
-            std::string_view name;
-            std::string_view type;
-            std::int32_t element_size;
-            std::int32_t offset;
-            bool enum_or_byte{};
-        };
-        const auto resolve_static_function = [&](const wchar_t* path,
-                const std::string_view expected_name, const std::string_view expected_outer,
-                const std::uint8_t expected_num_parms, const std::uint16_t expected_parms_size,
-                const std::uint16_t expected_return_offset, std::uintptr_t& function,
-                std::uintptr_t& default_object) noexcept -> bool {
-            try {
-                std::string actual_name;
-                std::string meta_class_name;
-                std::string outer_name;
-                std::uintptr_t function_meta_class{};
-                std::uintptr_t outer_class{};
-                std::uint8_t num_parms{};
-                std::uint16_t parms_size{};
-                std::uint16_t return_offset{};
-                if (!FindExactObjectLocked(path, function) || function == 0 ||
-                    !ReadReflectedObjectNameLocked(function, actual_name) ||
-                    actual_name != expected_name ||
-                    !ReadPointerAt(*memory, function, Layout(profile, "object.class"),
-                        function_meta_class) ||
-                    !ReadReflectedObjectNameLocked(function_meta_class, meta_class_name) ||
-                    meta_class_name != "Function" ||
-                    !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer_class) ||
-                    !ReadReflectedObjectNameLocked(outer_class, outer_name) ||
-                    outer_name != expected_outer ||
-                    !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
-                    !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
-                    !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-                    num_parms != expected_num_parms || parms_size != expected_parms_size ||
-                    return_offset != expected_return_offset ||
-                    !ReadPointerAt(*memory, outer_class,
-                        Layout(profile, "uclass.classDefaultObject"), default_object) ||
-                    default_object == 0) return false;
-                return true;
-            } catch (...) {
-                return false;
+        std::uintptr_t cheat_manager{};
+        if (!ReadValue(*memory,
+                player_controller + static_cast<std::uintptr_t>(manager_property.offset),
+                cheat_manager)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "HTPlayerController.CheatManager pointer could not be read");
+        }
+
+        // Some retail game states leave APlayerController.CheatManager null even after
+        // EnableCheats. In that case, create the dump-declared HTCheatManager as a UObject
+        // owned by the live controller, wire its MyPC back-reference, and publish it only
+        // after the reflected object and fields have been validated.
+        if (cheat_manager == 0) {
+            std::uintptr_t spawn_object_function{};
+            if (!FindExactObjectLocked(L"/Script/Engine.GameplayStatics.SpawnObject",
+                    spawn_object_function) || spawn_object_function == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Engine.GameplayStatics.SpawnObject could not be resolved");
             }
-        };
-        const auto validate_parameter_chain = [&](const std::uintptr_t function,
-                const auto& expected) noexcept -> bool {
-            try {
-                std::uintptr_t property{};
-                if (!ReadPointerAt(*memory, function,
-                        Layout(profile, "ustruct.propertyLink"), property)) return false;
-                std::array<bool, 8> found{};
-                if (expected.size() > found.size()) return false;
-                std::size_t count{};
-                while (property != 0 && count < expected.size()) {
-                    ReflectedPropertyInfo info;
-                    if (!ReadReflectedPropertyLocked(property, info) ||
-                        info.array_dim != 1 || info.offset < 0 || info.element_size <= 0) return false;
-                    std::size_t match = expected.size();
-                    for (std::size_t i{}; i < expected.size(); ++i) {
-                        const auto& spec = expected[i];
-                        const bool type_matches = spec.enum_or_byte
-                            ? (info.type == "EnumProperty" || info.type == "ByteProperty")
-                            : info.type == spec.type;
-                        if (spec.name == info.name && type_matches &&
-                            spec.element_size == info.element_size && spec.offset == info.offset) {
-                            match = i;
-                            break;
-                        }
-                    }
-                    if (match == expected.size() || found[match]) return false;
-                    found[match] = true;
-                    property = info.next;
-                    ++count;
+            std::uintptr_t spawn_function_meta_class{};
+            std::uintptr_t spawn_object_class{};
+            std::uintptr_t spawn_object_cdo{};
+            std::string spawn_function_meta_name;
+            std::string spawn_object_class_name;
+            std::uint8_t spawn_num_parms{};
+            std::uint16_t spawn_parms_size{};
+            std::uint16_t spawn_return_offset{};
+            std::uintptr_t spawn_property{};
+            if (!ReadPointerAt(*memory, spawn_object_function,
+                    Layout(profile, "object.class"), spawn_function_meta_class) ||
+                !ReadReflectedObjectNameLocked(spawn_function_meta_class, spawn_function_meta_name) ||
+                spawn_function_meta_name != "Function" ||
+                !ReadPointerAt(*memory, spawn_object_function,
+                    Layout(profile, "object.outer"), spawn_object_class) ||
+                !ReadValue(*memory, spawn_object_function +
+                    Layout(profile, "ufunction.numParms"), spawn_num_parms) ||
+                !ReadValue(*memory, spawn_object_function +
+                    Layout(profile, "ufunction.parmsSize"), spawn_parms_size) ||
+                !ReadValue(*memory, spawn_object_function +
+                    Layout(profile, "ufunction.returnValueOffset"), spawn_return_offset) ||
+                !ReadPointerAt(*memory, spawn_object_function,
+                    Layout(profile, "ustruct.propertyLink"), spawn_property) ||
+                spawn_num_parms != 3 || spawn_parms_size != 0x18 ||
+                spawn_return_offset != 0x10) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "GameplayStatics.SpawnObject reflected ABI failed validation");
+            }
+            if (!ReadReflectedObjectNameLocked(spawn_object_class, spawn_object_class_name) ||
+                spawn_object_class_name != "GameplayStatics" ||
+                !ReadPointerAt(*memory, spawn_object_class,
+                    Layout(profile, "uclass.classDefaultObject"), spawn_object_cdo) ||
+                spawn_object_cdo == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "GameplayStatics default object failed validation");
+            }
+            const std::array<std::string_view, 3> expected_names{
+                "ObjectClass", "Outer_0", "ReturnValue"};
+            const std::array<std::string_view, 3> expected_types{
+                "ClassProperty", "ObjectProperty", "ObjectProperty"};
+            const std::array<std::int32_t, 3> expected_offsets{0, 8, 16};
+            for (std::size_t i = 0; i < expected_names.size(); ++i) {
+                ReflectedPropertyInfo info;
+                if (spawn_property == 0 ||
+                    !ReadReflectedPropertyLocked(spawn_property, info) ||
+                    info.name != expected_names[i] || info.type != expected_types[i] ||
+                    info.element_size != 8 || info.array_dim != 1 ||
+                    info.offset != expected_offsets[i]) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "GameplayStatics.SpawnObject parameter layout failed validation");
                 }
-                return property == 0 && count == expected.size() &&
-                    std::ranges::all_of(found.begin(), found.begin() +
-                        static_cast<std::ptrdiff_t>(expected.size()), [](bool value) { return value; });
-            } catch (...) {
-                return false;
+                spawn_property = info.next;
             }
-        };
+            if (spawn_property != 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "GameplayStatics.SpawnObject has unexpected extra reflected parameters");
+            }
 
-        if (!resolve_static_function(
-                L"/Script/Engine.KismetSystemLibrary.LoadClassAsset_Blocking",
-                "LoadClassAsset_Blocking", "KismetSystemLibrary", 2, 0x30, 0x28,
-                load_class_function, load_class_cdo)) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "KismetSystemLibrary.LoadClassAsset_Blocking ABI is unavailable");
-        }
-        const std::array<ExpectedSpawnParameter, 2> load_class_parameters{{
-            {"AssetClass", "SoftClassProperty", 0x28, 0x00, false},
-            {"ReturnValue", "ObjectProperty", 8, 0x28, false},
-        }};
-        if (!validate_parameter_chain(load_class_function, load_class_parameters)) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "LoadClassAsset_Blocking soft-class parameter layout failed validation");
+            alignas(8) std::array<std::uint8_t, 0x18> spawn_parameters{};
+            std::memcpy(spawn_parameters.data(), &ht_cheat_manager_class,
+                sizeof(ht_cheat_manager_class));
+            std::memcpy(spawn_parameters.data() + 8, &player_controller,
+                sizeof(player_controller));
+            if (!InvokeProcessEventGuarded(process_event_invoker, spawn_object_cdo,
+                    spawn_object_function, spawn_parameters.data(), spawn_parameters.size())) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "GameplayStatics.SpawnObject(HTCheatManager, HTPlayerController) failed");
+            }
+            std::memcpy(&cheat_manager, spawn_parameters.data() + 0x10,
+                sizeof(cheat_manager));
+            std::uintptr_t created_class{};
+            ReflectedPropertyInfo my_pc_property;
+            if (cheat_manager == 0 ||
+                !ReadPointerAt(*memory, cheat_manager, Layout(profile, "object.class"),
+                    created_class) ||
+                created_class != ht_cheat_manager_class ||
+                !FindReflectedPropertyLocked(created_class, "MyPC", my_pc_property, true) ||
+                my_pc_property.type != "ObjectProperty" || my_pc_property.element_size != 8 ||
+                my_pc_property.offset != 0x88) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "SpawnObject did not return a validated HTCheatManager instance");
+            }
+            if (!memory->Write(cheat_manager +
+                    static_cast<std::uintptr_t>(my_pc_property.offset),
+                    &player_controller, sizeof(player_controller))) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTCheatManager.MyPC initialization failed");
+            }
+
+            // Match APlayerController::EnableCheats ordering: publish the manager
+            // before its initialization event so callbacks can resolve it through PC.
+            if (!memory->Write(player_controller +
+                    static_cast<std::uintptr_t>(manager_property.offset),
+                    &cheat_manager, sizeof(cheat_manager))) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTPlayerController.CheatManager assignment failed");
+            }
+            std::uintptr_t published_manager{};
+            if (!ReadValue(*memory, player_controller +
+                    static_cast<std::uintptr_t>(manager_property.offset), published_manager) ||
+                published_manager != cheat_manager) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTPlayerController.CheatManager assignment readback failed");
+            }
+            VehicleFunctionBinding init_binding{};
+            static constexpr std::array<std::string_view, 1> engine_cheat_manager_outer{
+                "CheatManager"};
+            alignas(8) std::array<std::uint8_t, 1> init_parameters{};
+            if (!FindVehicleFunctionLocked("ReceiveInitCheatManager",
+                    engine_cheat_manager_outer, "NoArgs", init_binding, "Engine") ||
+                !InvokeProcessEventGuarded(process_event_invoker, cheat_manager,
+                    init_binding.function, init_parameters.data(), 0)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTCheatManager instance was created but ReceiveInitCheatManager failed");
+            }
         }
 
-        alignas(8) std::array<std::uint8_t, 0x30> load_class_arguments{};
-        std::memcpy(load_class_arguments.data(), selected->soft_class_reference.data(),
-            selected->soft_class_reference.size());
-        if (!InvokeProcessEventGuarded(process_event_invoker, load_class_cdo,
-                load_class_function, load_class_arguments.data(), load_class_arguments.size())) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "LoadClassAsset_Blocking(InVehicleTemple) ProcessEvent failed");
-        }
-        std::memcpy(&vehicle_class, load_class_arguments.data() + 0x28, sizeof(vehicle_class));
-        std::string vehicle_class_name;
-        if (vehicle_class == 0 ||
-            !ReadReflectedObjectNameLocked(vehicle_class, vehicle_class_name) ||
-            !ContainsVehicleToken(vehicle_class_name) ||
-            !FindExactObjectLocked(L"/Script/Engine.Actor", actor_base_class) ||
-            !IsClassDerivedFromLocked(vehicle_class, actor_base_class)) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "DT_VehicleData.InVehicleTemple did not resolve to a vehicle Actor class");
-        }
-
-        if (!resolve_static_function(
-                L"/Script/Engine.GameplayStatics.BeginDeferredActorSpawnFromClass",
-                "BeginDeferredActorSpawnFromClass", "GameplayStatics", 7, 0x90, 0x88,
-                begin_spawn_function, gameplay_statics_cdo) ||
-            !resolve_static_function(
-                L"/Script/Engine.GameplayStatics.FinishSpawningActor",
-                "FinishSpawningActor", "GameplayStatics", 4, 0x80, 0x78,
-                finish_spawn_function, gameplay_statics_cdo)) {
+        std::uintptr_t actual_cheat_manager_class{};
+        if (!ReadPointerAt(*memory, cheat_manager, Layout(profile, "object.class"),
+                actual_cheat_manager_class) ||
+            !IsClassDerivedFromLocked(actual_cheat_manager_class, ht_cheat_manager_class)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "GameplayStatics deferred Actor-spawn ABI is unavailable");
+                "live CheatManager is not an HTCheatManager instance");
         }
-        const std::array<ExpectedSpawnParameter, 7> begin_spawn_parameters{{
-            {"WorldContextObject", "ObjectProperty", 8, 0x00, false},
-            {"ActorClass", "ClassProperty", 8, 0x08, false},
-            {"SpawnTransform", "StructProperty", 0x60, 0x10, false},
-            {"CollisionHandlingOverride", "", 1, 0x70, true},
-            {"Owner", "ObjectProperty", 8, 0x78, false},
-            {"TransformScaleMethod", "", 1, 0x80, true},
-            {"ReturnValue", "ObjectProperty", 8, 0x88, false},
-        }};
-        const std::array<ExpectedSpawnParameter, 4> finish_spawn_parameters{{
-            {"Actor", "ObjectProperty", 8, 0x00, false},
-            {"SpawnTransform", "StructProperty", 0x60, 0x10, false},
-            {"TransformScaleMethod", "", 1, 0x70, true},
-            {"ReturnValue", "ObjectProperty", 8, 0x78, false},
-        }};
-        if (!validate_parameter_chain(begin_spawn_function, begin_spawn_parameters) ||
-            !validate_parameter_chain(finish_spawn_function, finish_spawn_parameters)) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "GameplayStatics deferred Actor-spawn parameter layout failed validation");
+        VehicleFunctionBinding summon_binding{};
+        static constexpr std::array<std::string_view, 1> cheat_manager_outer{"HTCheatManager"};
+        if (!FindVehicleFunctionLocked("CheatSpawnVehicle", cheat_manager_outer, "NameInput", summon_binding)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTCheatManager.CheatSpawnVehicle(FName) ABI validation failed");
         }
 
         // Capture existing vehicle actors so the spawned actor must be new before relocation/ownership.
@@ -8574,116 +8563,44 @@ struct Ue5NteAdapter::State {
                 existing.insert(object);
         }
 
-        std::array<std::uint8_t, 0x60> spawn_transform{};
-        const double one = 1.0;
-        std::memcpy(spawn_transform.data() + 0x18, &one, sizeof(one)); // Quaternion W
-        std::memcpy(spawn_transform.data() + 0x20, &request->world_position[0], sizeof(double));
-        std::memcpy(spawn_transform.data() + 0x28, &request->world_position[1], sizeof(double));
-        std::memcpy(spawn_transform.data() + 0x30, &request->world_position[2], sizeof(double));
-        std::memcpy(spawn_transform.data() + 0x40, &one, sizeof(one));
-        std::memcpy(spawn_transform.data() + 0x48, &one, sizeof(one));
-        std::memcpy(spawn_transform.data() + 0x50, &one, sizeof(one));
-
-        // CollisionHandlingOverride=AlwaysSpawn keeps the requested coordinates exact.
-        // TransformScaleMethod=SelectDefaultAtRuntime preserves the class's native scale.
-        constexpr std::uint8_t always_spawn = 1;
-        constexpr std::uint8_t select_default_scale = 2;
-        alignas(16) std::array<std::uint8_t, 0x90> begin_parameters{};
-        std::memcpy(begin_parameters.data(), &player_controller, sizeof(player_controller));
-        std::memcpy(begin_parameters.data() + 0x08, &vehicle_class, sizeof(vehicle_class));
-        std::memcpy(begin_parameters.data() + 0x10, spawn_transform.data(), spawn_transform.size());
-        std::memcpy(begin_parameters.data() + 0x70, &always_spawn, sizeof(always_spawn));
-        std::memcpy(begin_parameters.data() + 0x78, &player_pawn, sizeof(player_pawn));
-        std::memcpy(begin_parameters.data() + 0x80, &select_default_scale, sizeof(select_default_scale));
-        if (!InvokeProcessEventGuarded(process_event_invoker, gameplay_statics_cdo,
-                begin_spawn_function, begin_parameters.data(), begin_parameters.size())) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "GameplayStatics.BeginDeferredActorSpawnFromClass ProcessEvent failed");
-        }
-        std::uintptr_t spawned{};
-        std::memcpy(&spawned, begin_parameters.data() + 0x88, sizeof(spawned));
-        if (spawned == 0 || existing.contains(spawned) || !IsVehicleActorLocked(spawned)) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "BeginDeferredActorSpawnFromClass did not return a new vehicle Actor");
+        std::array<std::uint8_t, 8> parameters{};
+        std::memcpy(parameters.data() + summon_binding.parameter_offset,
+            &selected->name_comparison_index, sizeof(selected->name_comparison_index));
+        std::memcpy(parameters.data() + summon_binding.parameter_offset + sizeof(std::uint32_t),
+            &selected->name_number, sizeof(selected->name_number));
+        if (!InvokeProcessEventGuarded(process_event_invoker, cheat_manager,
+                summon_binding.function, parameters.data(), summon_binding.parms_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "CheatSpawnVehicle(FName) ProcessEvent failed");
         }
 
-        // Assign the exact selected DT_VehicleData VehicleID before FinishSpawningActor
-        // executes the Blueprint construction lifecycle. The class is loaded from the same
-        // row's InVehicleTemple, but its inherited VehicleID field must still match the row.
-        std::uintptr_t pending_vehicle_class{};
-        ReflectedPropertyInfo pending_vehicle_id_property;
-        if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"),
-                pending_vehicle_class) ||
-            !FindReflectedPropertyLocked(pending_vehicle_class, "VehicleID",
-                pending_vehicle_id_property, true) ||
-            pending_vehicle_id_property.type != "NameProperty" ||
-            pending_vehicle_id_property.element_size != 8 ||
-            pending_vehicle_id_property.offset < 0) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "spawned class does not expose a validated VehicleID FName field");
-        }
-        const std::array<std::uint32_t, 2> requested_vehicle_name{
-            selected->name_comparison_index, selected->name_number};
-        const auto pending_vehicle_id_address = spawned +
-            static_cast<std::uintptr_t>(pending_vehicle_id_property.offset);
-        if (!memory->Write(pending_vehicle_id_address, requested_vehicle_name.data(),
-                sizeof(requested_vehicle_name))) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "could not initialize spawned actor VehicleID before construction");
-        }
-        std::array<std::uint32_t, 2> pending_vehicle_name_readback{};
-        if (!memory->Read(pending_vehicle_id_address, pending_vehicle_name_readback.data(),
-                sizeof(pending_vehicle_name_readback)) ||
-            pending_vehicle_name_readback != requested_vehicle_name) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "spawned actor VehicleID does not match the selected DT_VehicleData row");
-        }
-
-        alignas(16) std::array<std::uint8_t, 0x80> finish_parameters{};
-        std::memcpy(finish_parameters.data(), &spawned, sizeof(spawned));
-        std::memcpy(finish_parameters.data() + 0x10, spawn_transform.data(), spawn_transform.size());
-        std::memcpy(finish_parameters.data() + 0x70, &select_default_scale, sizeof(select_default_scale));
-        if (!InvokeProcessEventGuarded(process_event_invoker, gameplay_statics_cdo,
-                finish_spawn_function, finish_parameters.data(), finish_parameters.size())) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "GameplayStatics.FinishSpawningActor ProcessEvent failed");
-        }
-        std::uintptr_t finished_actor{};
-        std::memcpy(&finished_actor, finish_parameters.data() + 0x78, sizeof(finished_actor));
-        if (finished_actor == 0 || finished_actor != spawned || !IsVehicleActorLocked(finished_actor)) {
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                "FinishSpawningActor did not finish the newly created vehicle Actor");
-        }
-
-        // Refresh the live registry and confirm Unreal registered the returned instance.
+        // GObjects count can grow during CheatSpawnVehicle. Reload the live registry header
+        // instead of scanning only the cached count from the beginning of this game tick.
         ObjectRegistryState after_spawn_registry;
         const auto* gobjects_symbol = Symbol("ue5.GObjects");
         if (gobjects_symbol == nullptr || !gobjects_symbol->Available() ||
             !LoadObjectRegistry(profile, *memory, gobjects_symbol->address, after_spawn_registry)) {
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "vehicle Actor was created, but live GObjects could not be refreshed");
+                "spawn dispatched, but live GObjects could not be refreshed; position/owner not verified");
         }
-        bool registered_spawned_actor = false;
+        std::uintptr_t spawned{};
         const std::uint32_t after_spawn_count =
             (std::min)(after_spawn_registry.count, after_spawn_registry.max_count);
         for (std::uint32_t index = 0; index < after_spawn_count; ++index) {
             std::uintptr_t object{};
             std::uint32_t serial{};
-            if (ReadObjectSlot(*memory, after_spawn_registry, index, object, serial) &&
-                object == spawned) {
-                registered_spawned_actor = true;
+            if (ReadObjectSlot(*memory, after_spawn_registry, index, object, serial) && object != 0 &&
+                !existing.contains(object) && IsVehicleActorLocked(object)) {
+                spawned = object;
                 break;
             }
         }
-        if (!registered_spawned_actor) {
+        if (spawned == 0) {
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "vehicle Actor returned by GameplayStatics is missing from live GObjects");
+                "spawn was dispatched, but the new vehicle actor could not be identified; position/owner not verified");
         }
-
-        // Wheeled drivable vehicles carry a second attribution field, OwnerPlayerID,
-        // separate from UObject.Actor.Owner. Populate it from the local HTPlayerState role ID
-        // whenever that field exists on the selected vehicle class; water vehicle classes that
-        // do not define OwnerPlayerID continue to use the verified Actor.Owner path below.
+        // HTWheeledVehicleDrivable has a distinct 64-bit OwnerPlayerID field.
+        // Populate it from the local HTPlayerState/AHottaPlayerState role ID when present;
+        // water vehicle classes without that field still use Actor.Owner below.
         std::uintptr_t spawned_class_for_owner{};
         ReflectedPropertyInfo owner_player_id_property;
         if (!ReadPointerAt(*memory, spawned, Layout(profile, "object.class"),
@@ -8728,7 +8645,7 @@ struct Ue5NteAdapter::State {
                     static_cast<std::uintptr_t>(role_id_property.offset), local_role_id) ||
                 local_role_id == 0) {
                 return Status(ANOMALY_STATUS_V1_FAILED,
-                    "could not resolve local HTPlayerState.m_nRoleId for vehicle ownership");
+                    "could not resolve local AHottaPlayerState.m_nRoleId for vehicle ownership");
             }
 
             bool owner_id_set = false;
@@ -8778,8 +8695,8 @@ struct Ue5NteAdapter::State {
                         role_id_parameters.size());
                 }
             }
-            // If SetOwnerPlayerID is not exposed as a reflected function in this build,
-            // update the validated reflected field directly and verify its readback.
+            // If the function isn't reflected in this build, keep attribution explicit
+            // and verify the field write instead of silently reporting an unowned vehicle.
             if (!owner_id_set) {
                 owner_id_set = memory->Write(spawned +
                     static_cast<std::uintptr_t>(owner_player_id_property.offset),
