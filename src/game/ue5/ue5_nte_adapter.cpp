@@ -785,6 +785,10 @@ struct Ue5NteAdapter::State {
     std::uintptr_t vehicle_catalog_table{};
     bool vehicle_catalog_valid{};
     const char* vehicle_catalog_failure_reason{"catalog has not been scanned"};
+    // Names converted from FText are cached by canonical row key so explicit refreshes
+    // do not allocate a fresh engine FString for every unchanged catalog row.
+    std::unordered_map<std::string, std::string> vehicle_display_name_cache;
+    std::uint64_t vehicle_display_name_cache_generation{};
     std::string selected_summon_vehicle_id;
     struct AttackInputFunctionBinding {
         std::uintptr_t function{};
@@ -8096,6 +8100,12 @@ struct Ue5NteAdapter::State {
                     game_thread_id.load(std::memory_order_acquire)) {
                 return fail("载具目录前置条件未通过：Profile、对象表、ProcessEvent 或 Game 线程不可用");
             }
+            if (vehicle_display_name_cache_generation != object_generation) {
+                vehicle_display_name_cache.clear();
+                vehicle_display_name_cache_generation = object_generation;
+                vehicle_display_name_binding = {};
+                vehicle_display_name_binding.object_generation = object_generation;
+            }
             if (vehicle_catalog_valid && vehicle_catalog_generation == object_generation &&
                 vehicle_catalog_table != 0) return true;
 
@@ -8156,6 +8166,9 @@ struct Ue5NteAdapter::State {
                 return fail("VehicleData.Name 的 FText 类型/偏移校验失败");
             }
             const bool can_resolve_display_text = ValidateVehicleDisplayNameBindingLocked();
+            if (!can_resolve_display_text) {
+                return fail("Engine.KismetTextLibrary.Conv_TextToString 的 FText/FString 反射 ABI 未通过 dump 校验");
+            }
 
             const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
             SparseMapView view;
@@ -8211,8 +8224,16 @@ struct Ue5NteAdapter::State {
                 entry.id = row_name_valid ? row_name : vehicle_id;
                 entry.vehicle_id = vehicle_id_valid ? vehicle_id : entry.id;
                 std::string display_name;
-                const bool display_name_valid = can_resolve_display_text &&
-                    ResolveVehicleDisplayNameLocked(row, vehicle_name_property, display_name);
+                bool display_name_valid = false;
+                const auto cached_display_name = vehicle_display_name_cache.find(entry.id);
+                if (cached_display_name != vehicle_display_name_cache.end()) {
+                    display_name = cached_display_name->second;
+                    display_name_valid = !display_name.empty();
+                } else if (can_resolve_display_text &&
+                    ResolveVehicleDisplayNameLocked(row, vehicle_name_property, display_name)) {
+                    vehicle_display_name_cache.emplace(entry.id, display_name);
+                    display_name_valid = true;
+                }
                 if (display_name_valid && vehicle_id_valid && display_name != vehicle_id) {
                     entry.display_label = display_name + " (" + vehicle_id + ")";
                 } else if (display_name_valid) {
