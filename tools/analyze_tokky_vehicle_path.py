@@ -3,9 +3,11 @@
 from __future__ import annotations
 import os, re, struct
 from pathlib import Path
+from bisect import bisect_right
 import pefile
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_IMM, X86_OP_MEM
+from capstone.x86_const import X86_REG_RIP
 
 DLL = Path("Tokky-NTE.dll")
 OUT = Path("analysis-output")
@@ -81,17 +83,22 @@ addr_ranges = []
 for va, off, s, enc in relevant:
     addr_ranges.append((va, va + max(len(s) + 1, 8), va, s, off, enc))
 xref = []
+# Binary-search target-address ranges instead of comparing every instruction to every string.
+addr_ranges.sort(key=lambda x: x[0])
+range_starts = [x[0] for x in addr_ranges]
 for idx, ins in enumerate(decoded):
     targets = []
     for op in ins.operands:
-        if op.type == X86_OP_MEM and op.mem.base == 41: # X86_REG_RIP (stable value in capstone x86)
+        if op.type == X86_OP_MEM and op.mem.base == X86_REG_RIP:
             targets.append((ins.address + ins.size + op.mem.disp, "rip-mem"))
         elif op.type == X86_OP_IMM:
             val = int(op.imm) & 0xffffffffffffffff
             if base <= val < base + pe.OPTIONAL_HEADER.SizeOfImage:
                 targets.append((val, "imm"))
     for target, kind in targets:
-        for lo, hi, strva, s, off, enc in addr_ranges:
+        at = bisect_right(range_starts, target) - 1
+        if at >= 0:
+            lo, hi, strva, s, off, enc = addr_ranges[at]
             if lo <= target < hi:
                 xref.append((idx, target, kind, strva, s, off, enc))
 # Score references to likely implementation strings above UI labels.
