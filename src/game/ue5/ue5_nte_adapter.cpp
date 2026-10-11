@@ -8437,19 +8437,41 @@ struct Ue5NteAdapter::State {
             }
 
             alignas(8) std::array<std::uint8_t, 8> out{};
-            if (vehicle_bindings.current_vehicle_receiver == 0 ||
-                !InvokeProcessEventGuarded(process_event_invoker,
-                    vehicle_bindings.current_vehicle_receiver,
-                    vehicle_bindings.current_vehicle.function, out.data(),
-                    vehicle_bindings.current_vehicle.parms_size)) {
-                vehicle_valid = false;
-                current_vehicle_object = 0;
-                vehicle_movement_component = 0;
-                return false;
-            }
             std::uintptr_t vehicle{};
-            std::memcpy(&vehicle, out.data() + vehicle_bindings.current_vehicle.return_offset, sizeof(vehicle));
-            if (vehicle == 0 || !ReadableRange(*memory, vehicle, 0x20U)) {
+            bool vehicle_return_valid = false;
+            const auto invoke_current_vehicle = [&](VehicleFunctionBinding& binding,
+                    std::uintptr_t receiver, std::uintptr_t& result) noexcept {
+                result = 0;
+                out.fill(0);
+                if (receiver == 0 || binding.function == 0 ||
+                    !InvokeProcessEventGuarded(process_event_invoker, receiver,
+                        binding.function, out.data(), binding.parms_size)) {
+                    return false;
+                }
+                std::memcpy(&result, out.data() + binding.return_offset, sizeof(result));
+                return result != 0 && ReadableRange(*memory, result, 0x20U);
+            };
+            vehicle_return_valid = invoke_current_vehicle(
+                vehicle_bindings.current_vehicle,
+                vehicle_bindings.current_vehicle_receiver, vehicle);
+
+            // Dump confirms both current-vehicle functions. If the Controller variant exists
+            // but returns null for this live state, still try the Character-owned Tokky fallback.
+            if (!vehicle_return_valid && player_pawn != 0 &&
+                vehicle_bindings.current_vehicle_receiver != player_pawn) {
+                VehicleFunctionBinding character_binding{};
+                if (FindVehicleFunctionLocked("BP_GetCurrentDirvingVehicle", player_character_outer,
+                        "ObjectReturn", character_binding)) {
+                    std::uintptr_t fallback_vehicle{};
+                    if (invoke_current_vehicle(character_binding, player_pawn, fallback_vehicle)) {
+                        vehicle_bindings.current_vehicle = character_binding;
+                        vehicle_bindings.current_vehicle_receiver = player_pawn;
+                        vehicle = fallback_vehicle;
+                        vehicle_return_valid = true;
+                    }
+                }
+            }
+            if (!vehicle_return_valid) {
                 vehicle_valid = false;
                 current_vehicle_object = 0;
                 vehicle_movement_component = 0;
