@@ -9639,6 +9639,27 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::RemoveHeadUpBattleMarkBuffControl);
                     lookup_optional(NteFunctionKind::AddMonsterBufferControl);
                     lookup_optional(NteFunctionKind::GetMonsterStaticData);
+
+                    // 仅当 Dump 中的函数路径、参数尺寸、字段偏移和返回值布局全匹配时，
+                    // 才捕获可重放的调用；验证失败时仍保留只读战斗服务。
+                    std::uintptr_t replay_apply_by_actor{};
+                    if (FindExactObjectLocked(
+                            L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor",
+                            replay_apply_by_actor) &&
+                        ValidateReplayEffectFunctionLocked(replay_apply_by_actor, true)) {
+                        next_capture_bindings.replay_apply_by_actor = replay_apply_by_actor;
+                    }
+                    std::uintptr_t replay_apply_to_target{};
+                    if (FindExactObjectLocked(
+                            L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass",
+                            replay_apply_to_target) &&
+                        ValidateReplayEffectFunctionLocked(replay_apply_to_target, false)) {
+                        next_capture_bindings.replay_apply_to_target = replay_apply_to_target;
+                    }
+                    if (next_capture_bindings.replay_apply_by_actor == 0 ||
+                        next_capture_bindings.replay_apply_to_target == 0) {
+                        direct_lookup_succeeded = false;
+                    }
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
@@ -9656,6 +9677,8 @@ struct Ue5NteAdapter::State {
                     next_capture_bindings.monster_damage != 0 ||
                     next_capture_bindings.player_damage_queue != 0 ||
                     next_capture_bindings.damage_widget != 0 ||
+                    next_capture_bindings.replay_apply_by_actor != 0 ||
+                    next_capture_bindings.replay_apply_to_target != 0 ||
                     std::ranges::any_of(next_capture_bindings.buffs,
                         [](const auto& buff) { return buff.function != 0; });
                 if (has_capture_binding) {
