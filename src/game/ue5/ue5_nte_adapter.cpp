@@ -8112,11 +8112,28 @@ struct Ue5NteAdapter::State {
             ++vehicle_catalog_sequence;
             if (vehicle_catalog_sequence == 0) ++vehicle_catalog_sequence;
             vehicle_catalog_failure_reason = "目录读取成功";
-            if (!selected_summon_vehicle_id.empty() &&
-                std::ranges::none_of(vehicle_catalog, [&](const auto& entry) {
-                    return entry.id == selected_summon_vehicle_id ||
-                        entry.vehicle_id == selected_summon_vehicle_id;
-                })) selected_summon_vehicle_id.clear();
+            if (!selected_summon_vehicle_id.empty()) {
+                // Normalize a previously selected VehicleID alias to the unique canonical RowName.
+                // The summon path always resolves the canonical row key, never a display label.
+                const auto exact = std::ranges::find(
+                    vehicle_catalog, selected_summon_vehicle_id, &VehicleCatalogEntry::id);
+                if (exact != vehicle_catalog.end()) {
+                    selected_summon_vehicle_id = exact->id;
+                } else {
+                    const VehicleCatalogEntry* alias_match{};
+                    bool alias_ambiguous{};
+                    for (const auto& entry : vehicle_catalog) {
+                        if (entry.vehicle_id != selected_summon_vehicle_id) continue;
+                        if (alias_match != nullptr && alias_match->row != entry.row) {
+                            alias_ambiguous = true;
+                            break;
+                        }
+                        alias_match = &entry;
+                    }
+                    selected_summon_vehicle_id =
+                        alias_match != nullptr && !alias_ambiguous ? alias_match->id : std::string{};
+                }
+            }
             return true;
         } catch (...) {
             vehicle_catalog.clear();
