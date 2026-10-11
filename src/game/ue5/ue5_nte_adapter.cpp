@@ -757,20 +757,26 @@ struct Ue5NteAdapter::State {
         VehicleFunctionBinding set_max_engine_torque{};
         VehicleFunctionBinding summon_vehicle{};
         VehicleFunctionBinding set_wheel_friction{};
+        std::uintptr_t set_delayed_velocity_restore{};
         std::uintptr_t current_vehicle_receiver{};
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
     struct VehicleCatalogEntry {
-        std::string id;
+        // One record per DT row, not duplicate entries for the row key and VehicleID alias.
+        std::string id;             // Canonical RowName where readable
+        std::string vehicle_id;     // Row's independent VehicleID FName
+        std::string display_label;  // Tokky-style "RowName (VehicleID)"
         std::uint32_t name_comparison_index{};
         std::uint32_t name_number{};
         std::uintptr_t row{};
     };
     std::vector<VehicleCatalogEntry> vehicle_catalog;
     std::uint64_t vehicle_catalog_generation{};
+    std::uint64_t vehicle_catalog_sequence{};
     std::uintptr_t vehicle_catalog_table{};
     bool vehicle_catalog_valid{};
+    const char* vehicle_catalog_failure_reason{"catalog has not been scanned"};
     std::string selected_summon_vehicle_id;
     struct AttackInputFunctionBinding {
         std::uintptr_t function{};
@@ -7966,11 +7972,15 @@ struct Ue5NteAdapter::State {
     }
 
     [[nodiscard]] bool EnsureVehicleCatalogLocked() noexcept {
+        const auto fail = [this](const char* reason) noexcept {
+            vehicle_catalog_failure_reason = reason;
+            return false;
+        };
         try {
             if (!NteVehicleProfileAvailable() || object_registry.items == 0 ||
                 !process_event_invoker || GetCurrentThreadId() !=
                     game_thread_id.load(std::memory_order_acquire)) {
-                return false;
+                return fail("载具目录前置条件未通过：Profile、对象表、ProcessEvent 或 Game 线程不可用");
             }
             if (vehicle_catalog_valid && vehicle_catalog_generation == object_generation &&
                 vehicle_catalog_table != 0) return true;
@@ -7978,50 +7988,67 @@ struct Ue5NteAdapter::State {
             VehicleFunctionBinding asset_binding{};
             static constexpr std::array<std::string_view, 1> data_outer{"HTGameData"};
             if (!FindVehicleFunctionLocked("GetVehicleDataAsset", data_outer,
-                    "ObjectReturn", asset_binding)) return false;
-            std::uintptr_t data_class{};
-            std::uintptr_t default_object{};
+                    "ObjectReturn", asset_binding)) {
+                return fail("HTGameData.GetVehicleDataAsset 的反射签名未通过 dump 校验");
+            }
+            std::uintptr_t data_class{}, default_object{};
             if (!ReadPointerAt(*memory, asset_binding.function,
                     Layout(profile, "object.outer"), data_class) ||
                 !ReadPointerAt(*memory, data_class,
                     Layout(profile, "uclass.classDefaultObject"), default_object) ||
-                default_object == 0) return false;
+                default_object == 0) {
+                return fail("GetVehicleDataAsset 的类或 CDO 无法解析");
+            }
             std::array<std::uint8_t, 8> output{};
             if (!InvokeProcessEventGuarded(process_event_invoker, default_object,
-                    asset_binding.function, output.data(), output.size())) return false;
+                    asset_binding.function, output.data(), output.size())) {
+                return fail("GetVehicleDataAsset ProcessEvent 调用失败");
+            }
             std::uintptr_t vehicle_asset{};
             std::memcpy(&vehicle_asset, output.data() + asset_binding.return_offset,
                 sizeof(vehicle_asset));
-            if (vehicle_asset == 0) return false;
+            if (vehicle_asset == 0) return fail("GetVehicleDataAsset 返回空对象");
 
             std::uintptr_t asset_class{};
             ReflectedPropertyInfo data_table_property;
             if (!ReadPointerAt(*memory, vehicle_asset, Layout(profile, "object.class"), asset_class) ||
                 !FindReflectedPropertyLocked(asset_class, "DT_VehicleData", data_table_property, true) ||
                 data_table_property.type != "ObjectProperty" ||
-                data_table_property.element_size != 8 || data_table_property.offset < 0) return false;
+                data_table_property.element_size != 8 || data_table_property.offset < 0) {
+                return fail("HTVehicleDataAsset.DT_VehicleData 属性类型或偏移未通过 dump 校验");
+            }
             std::uintptr_t table{};
             if (!ReadValue(*memory, vehicle_asset + static_cast<std::uintptr_t>(data_table_property.offset), table) ||
-                table == 0) return false;
+                table == 0) {
+                return fail("HTVehicleDataAsset.DT_VehicleData 当前为空或不可读");
+            }
             std::uintptr_t row_struct{};
             std::string row_struct_name;
             if (!ReadPointerAt(*memory, table, Layout(profile, "dataTable.rowStruct"), row_struct) ||
                 !ReadReflectedObjectNameLocked(row_struct, row_struct_name) ||
-                row_struct_name != "VehicleData") return false;
+                row_struct_name != "VehicleData") {
+                return fail("DT_VehicleData.RowStruct 不是 dump 预期的 VehicleData");
+            }
             ReflectedPropertyInfo vehicle_id_property;
             if (!FindReflectedPropertyLocked(row_struct, "VehicleID", vehicle_id_property, true) ||
                 vehicle_id_property.type != "NameProperty" ||
                 vehicle_id_property.element_size != 8 || vehicle_id_property.offset < 0 ||
-                vehicle_id_property.offset + 8 > 0x400) return false;
+                vehicle_id_property.offset + 8 > 0x400) {
+                return fail("VehicleData.VehicleID 的 NameProperty 类型/偏移校验失败");
+            }
 
             const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
             SparseMapView view;
             if (row_map_offset < 0 ||
                 !ReadSparseMapViewLocked(table + static_cast<std::uintptr_t>(row_map_offset), view) ||
-                view.num <= 0 || view.num > 4096 || view.num_free > view.num) return false;
+                view.num <= 0 || view.num > 4096 || view.num_free > view.num) {
+                return fail("DT_VehicleData.RowMap 的 sparse map 布局或条目数未通过校验");
+            }
             std::vector<std::uint8_t> elements(static_cast<std::size_t>(view.num) *
                 static_cast<std::size_t>(view.stride));
-            if (!memory->Read(view.data, elements.data(), elements.size())) return false;
+            if (!memory->Read(view.data, elements.data(), elements.size())) {
+                return fail("DT_VehicleData.RowMap 元素数组不可读");
+            }
             std::vector<VehicleCatalogEntry> next;
             next.reserve(static_cast<std::size_t>(view.num - view.num_free));
             std::vector<std::uint8_t> row_bytes(static_cast<std::size_t>(vehicle_id_property.offset) + 8U);
@@ -8036,57 +8063,66 @@ struct Ue5NteAdapter::State {
                 if (row == 0 || !ReadableRange(*memory, row, row_bytes.size()) ||
                     !memory->Read(row, row_bytes.data(), row_bytes.size())) continue;
 
-                // DT_VehicleData 的 RowName 和 VehicleID 是两套独立的 FName。
-                // Tokky 列表中的 918、911、turbo 可能来自 RowName；必须把它们
-                // 与行内 VehicleID 一并保留，不能只枚举 VehicleID 字段。
-                if (view.row_offset >= 8) {
-                    std::uint32_t row_name_comparison_index{};
-                    std::uint32_t row_name_number{};
-                    std::memcpy(&row_name_comparison_index, element,
-                        sizeof(row_name_comparison_index));
-                    std::memcpy(&row_name_number, element + sizeof(row_name_comparison_index),
-                        sizeof(row_name_number));
-                    std::string row_name;
-                    if (ResolveFNameLocked(row_name_comparison_index, row_name_number, row_name) &&
-                        !row_name.empty() && row_name.size() < ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
-                        next.push_back({std::move(row_name), row_name_comparison_index,
-                            row_name_number, row});
-                    }
-                }
+                std::uint32_t row_name_comparison_index{}, row_name_number{};
+                std::memcpy(&row_name_comparison_index, element, sizeof(row_name_comparison_index));
+                std::memcpy(&row_name_number, element + sizeof(row_name_comparison_index),
+                    sizeof(row_name_number));
+                std::string row_name;
+                const bool row_name_valid =
+                    ResolveFNameLocked(row_name_comparison_index, row_name_number, row_name) &&
+                    !row_name.empty() && row_name != "None" &&
+                    row_name.size() < ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES;
 
-                std::uint32_t comparison_index{};
-                std::uint32_t number{};
+                std::uint32_t comparison_index{}, number{};
                 std::memcpy(&comparison_index,
                     row_bytes.data() + static_cast<std::size_t>(vehicle_id_property.offset), 4);
                 std::memcpy(&number,
                     row_bytes.data() + static_cast<std::size_t>(vehicle_id_property.offset) + 4U, 4);
-                std::string id;
-                // DT_VehicleData 的 VehicleID 本身就是目录主键；不能要求 ID 文本包含
-                // “vehicle”，否则会把合法的数字键（例如 918）从 UI 目录中滤掉。
-                if (!ResolveFNameLocked(comparison_index, number, id) ||
-                    id.empty() || id == "None" ||
-                    id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
-                    continue;
-                }
-                next.push_back({std::move(id), comparison_index, number, row});
+                std::string vehicle_id;
+                const bool vehicle_id_valid =
+                    ResolveFNameLocked(comparison_index, number, vehicle_id) &&
+                    !vehicle_id.empty() && vehicle_id != "None" &&
+                    vehicle_id.size() < ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES;
+                if (!row_name_valid && !vehicle_id_valid) continue;
+
+                // Tokky displays one DataTable row as "RowName (VehicleID)".
+                // Use the row key for selection, but keep VehicleID as a legacy alias.
+                VehicleCatalogEntry entry{};
+                entry.id = row_name_valid ? row_name : vehicle_id;
+                entry.vehicle_id = vehicle_id_valid ? vehicle_id : entry.id;
+                entry.display_label = row_name_valid && vehicle_id_valid && row_name != vehicle_id
+                    ? row_name + " (" + vehicle_id + ")" : entry.id;
+                entry.name_comparison_index = row_name_valid
+                    ? row_name_comparison_index : comparison_index;
+                entry.name_number = row_name_valid ? row_name_number : number;
+                entry.row = row;
+                next.push_back(std::move(entry));
             }
             std::ranges::sort(next, {}, &VehicleCatalogEntry::id);
             next.erase(std::unique(next.begin(), next.end(), [](const auto& lhs, const auto& rhs) {
                 return lhs.id == rhs.id;
             }), next.end());
+            if (next.empty()) {
+                return fail("DT_VehicleData 已找到，但没有解析出有效 RowName/VehicleID；请点「重新整理」查看是否可重新读取");
+            }
             vehicle_catalog = std::move(next);
             vehicle_catalog_generation = object_generation;
             vehicle_catalog_table = table;
             vehicle_catalog_valid = true;
+            ++vehicle_catalog_sequence;
+            if (vehicle_catalog_sequence == 0) ++vehicle_catalog_sequence;
+            vehicle_catalog_failure_reason = "目录读取成功";
             if (!selected_summon_vehicle_id.empty() &&
                 std::ranges::none_of(vehicle_catalog, [&](const auto& entry) {
-                    return entry.id == selected_summon_vehicle_id;
+                    return entry.id == selected_summon_vehicle_id ||
+                        entry.vehicle_id == selected_summon_vehicle_id;
                 })) selected_summon_vehicle_id.clear();
             return true;
         } catch (...) {
             vehicle_catalog.clear();
             vehicle_catalog_valid = false;
             vehicle_catalog_table = 0;
+            vehicle_catalog_failure_reason = "读取 DT_VehicleData 时发生 C++ 异常";
             return false;
         }
     }
