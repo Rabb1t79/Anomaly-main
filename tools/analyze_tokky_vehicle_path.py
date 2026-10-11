@@ -93,9 +93,10 @@ addr_ranges.sort(key=lambda x: x[0])
 range_starts = [x[0] for x in addr_ranges]
 for idx, ins in enumerate(decoded):
     targets = []
-    if ins.id == 0:  # Capstone SKIPDATA pseudo-instruction, not a decoded opcode.
-            continue
-        for op in ins.operands:
+    # Capstone SKIPDATA pseudo-instructions represent bytes that are not code.
+    if ins.id == 0:
+        continue
+    for op in ins.operands:
         if op.type == X86_OP_MEM and op.mem.base == X86_REG_RIP:
             targets.append((ins.address + ins.size + op.mem.disp, "rip-mem"))
         elif op.type == X86_OP_IMM:
@@ -108,7 +109,6 @@ for idx, ins in enumerate(decoded):
             lo, hi, strva, s, off, enc = addr_ranges[at]
             if lo <= target < hi:
                 xref.append((idx, target, kind, strva, s, off, enc))
-# Score references to likely implementation strings above UI labels.
 def score(s):
     z=s.lower()
     val=0
