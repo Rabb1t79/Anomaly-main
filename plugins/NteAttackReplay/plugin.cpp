@@ -54,6 +54,7 @@ struct Context final {
     // Draw belongs to Render while Update belongs to Game; serialize their shared state.
     std::mutex state_mutex;
     const AnomalyNteCombatServiceV1* combat{};
+    const AnomalyNteDamageReplayServiceV1* damage_replay{};
     const AnomalyNteSkillsServiceV1* skills{};
     const AnomalyNteSkillInvocationServiceV1* invocation{};
     const AnomalyUiServiceV1* ui{};
@@ -75,6 +76,7 @@ struct Context final {
     AnomalyGenerationHandleV1 captured_target{};
     int32_t captured_input_id{-1};
     uint64_t captured_damage_sequence{};
+    uint64_t captured_damage_source_id{};
     int32_t captured_input_param{};
     AnomalyNteAttackInputRequestV1 captured_input_request{};
     bool captured_input_valid{};
@@ -124,14 +126,15 @@ bool HasField(const Struct* value, std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 检查战斗服务结构长度以及 latest_event_sequence、next_event、current_combatant 等回调是否存在；只有事件序列、事件读取和当前战斗角色查询同时可用时，攻击捕获逻辑才继续运行。
+// 只消费 Host 捕获的实际 CharacterOnDamaged 伤害流，不用合并后的 Unified CombatEvent 序列代替伤害序列。
 bool CombatReady(const AnomalyNteCombatServiceV1* service) noexcept {
     return HasField<AnomalyNteCombatServiceV1,
-                    decltype(AnomalyNteCombatServiceV1::next_event)>(
-               service, offsetof(AnomalyNteCombatServiceV1, next_event)) &&
-           service->latest_event_sequence != nullptr &&
-           service->next_event != nullptr &&
-           service->current_combatant != nullptr;
+                    decltype(AnomalyNteCombatServiceV1::next_damage_event)>(
+               service, offsetof(AnomalyNteCombatServiceV1, next_damage_event)) &&
+           service->latest_damage_sequence != nullptr &&
+           service->next_damage_event != nullptr &&
+           service->current_combatant != nullptr &&
+           service->source_name_utf8 != nullptr;
 }
 
 // SkillsReady 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -499,29 +502,24 @@ std::string ReadAbilityPath(
 }
 
 std::string ReadDamageSourceName(
-    const AnomalyNteCombatServiceV1* combat,
-    const AnomalyNteCombatEventV1& event) {
-    // The unified combat stream exposes the event's DamageSource name through
-    // event_name_utf8(event). name_id is not the source_id accepted by
-    // source_name_utf8, so passing name_id to source_name_utf8 can silently
-    // lose the skill correlation and incorrectly fall back to normal input.
-    if (combat == nullptr || combat->event_name_utf8 == nullptr || event.name_id == 0) {
+    const AnomalyNteCombatServiceV1* combat, const uint64_t source_id) {
+    if (combat == nullptr || combat->source_name_utf8 == nullptr || source_id == 0) {
         return {};
     }
     size_t size = 0;
-    const auto sizing = combat->event_name_utf8(
-        combat->user, &event, nullptr, &size);
+    const auto sizing = combat->source_name_utf8(
+        combat->user, source_id, nullptr, &size);
     if (sizing.code != ANOMALY_STATUS_V1_OK &&
         sizing.code != ANOMALY_STATUS_V1_BUFFER_TOO_SMALL) {
         return {};
     }
     if (size == 0) return {};
-    std::string result(size, '\0');
-    if (combat->event_name_utf8(
-            combat->user, &event, result.data(), &size).code != ANOMALY_STATUS_V1_OK) {
+    std::string result(size, '\\0');
+    if (combat->source_name_utf8(
+            combat->user, source_id, result.data(), &size).code != ANOMALY_STATUS_V1_OK) {
         return {};
     }
-    if (!result.empty() && result.back() == '\0') result.pop_back();
+    if (!result.empty() && result.back() == '\\0') result.pop_back();
     return result;
 }
 
@@ -673,6 +671,7 @@ void ArmForNextAttack(Context& context) {
     context.captured_target = {};
     context.captured_input_id = -1;
     context.captured_damage_sequence = 0;
+    context.captured_damage_source_id = 0;
     context.captured_input_param = 0;
     context.captured_input_request = {};
     context.captured_input_valid = false;
@@ -699,7 +698,7 @@ void ArmForNextAttack(Context& context) {
     // Starting at the current tail prevents an old combat event from being mistaken
     // for the next attack after a world change or plugin restart.
     if (context.combat != nullptr) {
-        context.combat_cursor = context.combat->latest_event_sequence(
+        context.combat_cursor = context.combat->latest_damage_sequence(
             context.combat->user);
     }
 }
