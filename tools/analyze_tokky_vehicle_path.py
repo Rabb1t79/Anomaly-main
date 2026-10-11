@@ -77,13 +77,13 @@ md.detail = True
 md.skipdata = True
 decoded = []
 for sec in pe.sections:
-    if not (sec.Characteristics & 0x20000000) or not sec.Name.rstrip(b"\\0").startswith(b".text"):  # Analyze only the main executable text section
+    if not (sec.Characteristics & 0x20000000):  # Include Tokky protected executable sections (.tkn0/.tkn1) and launcher VM sections.
         continue
     raw = sec.get_data()
     addr = base + sec.VirtualAddress
     insns = list(md.disasm(raw, addr))
     decoded.extend(insns)
-    out(f"DISASM_SECTION {sec.Name.decode(errors='replace').rstrip(chr(0))}: {len(insns)} instructions")
+    out(f"DISASM_SECTION {sec.Name.decode(errors='replace').rstrip(chr(0))}: {len(insns)} instructions; start={addr:#x}; end={addr+len(raw):#x}")
 addr_ranges = []
 for va, off, s, enc in relevant:
     addr_ranges.append((va, va + max(len(s) + 1, 8), va, s, off, enc))
