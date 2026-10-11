@@ -67,13 +67,14 @@ for va, off, s, enc in relevant:
 # Map executable bytes and identify RIP-relative/direct refs to these strings.
 md = Cs(CS_ARCH_X86, CS_MODE_64)
 md.detail = True
+md.skipdata = True
 decoded = []
 for sec in pe.sections:
     if not (sec.Characteristics & 0x20000000):  # IMAGE_SCN_MEM_EXECUTE
         continue
     raw = sec.get_data()
     addr = base + sec.VirtualAddress
-    insns = list(md.disasm(raw, addr, skipdata=True))
+    insns = list(md.disasm(raw, addr))
     decoded.extend(insns)
     out(f"DISASM_SECTION {sec.Name.decode(errors='replace').rstrip(chr(0))}: {len(insns)} instructions")
 addr_ranges = []
