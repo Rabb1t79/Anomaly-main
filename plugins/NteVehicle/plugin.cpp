@@ -451,8 +451,20 @@ void Update() {
                 const std::string label = selected_label.empty() ? selected_id : selected_label;
                 const std::string detail = status.message.data != nullptr && status.message.size != 0
                     ? std::string(status.message.data, status.message.size)
-                    : std::string("Host 返回成功，但没有召唤后置验证信息；请确认 Core 与插件来自同一次 Runtime 构建");
-                const std::string result = "召唤结果：" + label + " (" + selected_id + ")；" + detail;
+                    : std::string{};
+                constexpr std::string_view verified_prefix = "召唤已实际生成并通过后置验证：";
+                const bool postcondition_verified =
+                    !detail.empty() && detail.find(verified_prefix) == 0;
+                std::string result;
+                if (postcondition_verified) {
+                    result = "召唤结果：" + label + " (" + selected_id + ")；" + detail;
+                } else {
+                    // An OK status without the Core's explicit postcondition marker is not
+                    // proof that a new vehicle exists. Never present this as a successful summon.
+                    result = "召唤状态未验证：" + label + " (" + selected_id +
+                        ")；Host 返回 OK，但没有明确的实际生成/后置验证标记";
+                    if (!detail.empty()) result += "；Host 信息：" + detail;
+                }
                 SetStatus(result);
                 SetLastSummon(result);
             } else {
@@ -894,7 +906,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     DrawText(ui, "NTE VEHICLE  /  GAMEPLAY SYSTEM");
     DrawText(ui, "载具目录 · 坐标召唤 · 速度与扭矩调校");
     DrawText(ui, "运行状态  /  " + status);
-    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.2 · 2026-10-13-nonplayer-vehicles");
+    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.3 · 2026-10-13-summon-postcondition");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0) {
         DrawText(ui, "当前驾驶载具  /  " +
             (snap.vehicle_class_name.empty() ? std::string("未知类名") : snap.vehicle_class_name) +
@@ -1040,6 +1052,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.2"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.9.3"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
