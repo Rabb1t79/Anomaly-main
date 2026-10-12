@@ -24,6 +24,7 @@ struct Snapshot {
     bool friction{true};
     std::uint64_t vehicle_entity_id{};
     std::string vehicle_class_name;
+    std::string vehicle_snapshot_status{"Host 尚未返回当前驾驶载具状态"};
 };
 
 struct Context {
@@ -452,9 +453,15 @@ void Update() {
         } else {
             g_context.snapshot.vehicle_class_name.clear();
         }
-        g_context.status = g_context.status;
+        g_context.snapshot.vehicle_snapshot_status.clear();
     } else {
         g_context.snapshot.flags = 0;
+        g_context.snapshot.vehicle_entity_id = 0;
+        g_context.snapshot.vehicle_class_name.clear();
+        g_context.snapshot.vehicle_snapshot_status =
+            status.message.data != nullptr && status.message.size != 0
+                ? std::string(status.message.data, status.message.size)
+                : "Host 载具快照状态码 " + std::to_string(status.code);
     }
 }
 
@@ -595,11 +602,9 @@ void DrawSummonTab(
         std::to_string(current_page + 1U) + " / " + std::to_string(page_count) + " 页");
 
     DrawText(ui, "载具目录分页");
-    if (ui->button(ui->user, anomaly::sdk::StringView("上一页"), 0.0F, 0.0F) &&
-        current_page > 0U) --current_page;
+    if (DrawButtonEnabled(ui, "◀ 上一页", current_page > 0U)) --current_page;
     DrawInlineGap(ui);
-    if (ui->button(ui->user, anomaly::sdk::StringView("下一页"), 0.0F, 0.0F) &&
-        current_page + 1U < page_count) ++current_page;
+    if (DrawButtonEnabled(ui, "下一页 ▶", current_page + 1U < page_count)) ++current_page;
     DrawText(ui, "当前页 / " + std::to_string(current_page + 1U) +
         " / " + std::to_string(page_count));
 
@@ -809,6 +814,17 @@ void Draw(const AnomalyUiServiceV1* ui) {
     DrawText(ui, "NTE VEHICLE  /  GAMEPLAY SYSTEM");
     DrawText(ui, "载具目录 · 坐标召唤 · 速度与扭矩调校");
     DrawText(ui, "运行状态  /  " + status);
+    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.1 · 2026-10-13-vehicle-fix");
+    if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0) {
+        DrawText(ui, "当前驾驶载具  /  " +
+            (snap.vehicle_class_name.empty() ? std::string("未知类名") : snap.vehicle_class_name) +
+            " (" + (snap.vehicle_entity_id != 0
+                ? "#" + std::to_string(snap.vehicle_entity_id) : std::string("#编号未知")) + ")");
+    } else {
+        DrawText(ui, "当前驾驶载具  /  未识别；Host 状态：" +
+            (snap.vehicle_snapshot_status.empty()
+                ? std::string("当前驾驶载具对象不可用") : snap.vehicle_snapshot_status));
+    }
     DrawDivider(ui);
 
     const bool has_tabs =
