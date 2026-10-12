@@ -8521,7 +8521,7 @@ struct Ue5NteAdapter::State {
                     property.offset == offset && property.array_dim == 1 &&
                     property.structure != 0 &&
                     ReadReflectedObjectNameLocked(property.structure, struct_name) &&
-                    struct_name == "Vector";
+                    (struct_name == "Vector" || struct_name == "FVector");
             };
             ReflectedPropertyInfo forward_speed;
             return vector_field("InLinearVelocity", 0x00) &&
