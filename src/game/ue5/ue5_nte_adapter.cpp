@@ -804,6 +804,9 @@ struct Ue5NteAdapter::State {
     std::uintptr_t current_vehicle_object{};
     std::uintptr_t vehicle_movement_component{};
     float vehicle_top_speed_ratio{1.0F};
+    // Track current-velocity scaling separately from the top-speed limiter. A failed
+    // velocity restore must not advance this baseline or a retry would scale by 1.0.
+    float vehicle_current_velocity_ratio{1.0F};
     float vehicle_engine_torque_ratio{1.0F};
     float vehicle_base_engine_torque{};
     std::uintptr_t vehicle_base_torque_component{};
@@ -8654,6 +8657,7 @@ struct Ue5NteAdapter::State {
                 vehicle_base_engine_torque_valid = false;
                 vehicle_engine_torque_ratio = 1.0F;
                 vehicle_top_speed_ratio = 1.0F;
+                vehicle_current_velocity_ratio = 1.0F;
                 vehicle_speed_kmh = 0.0F;
                 // Refresh the Tokky-referenced delayed velocity binding for this component.
                 vehicle_bindings.set_delayed_velocity_restore = 0;
@@ -8772,7 +8776,7 @@ struct Ue5NteAdapter::State {
         if (vehicle_bindings.set_top_speed_ratio.function == 0)
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "HTGame.HTWheeledVehicleBase.SetTopSpeedRatio(float) failed dump ABI validation");
-        const float previous_ratio = vehicle_top_speed_ratio;
+        const float previous_ratio = vehicle_current_velocity_ratio;
         if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "tracked top-speed multiplier is invalid; refusing a partial update");
@@ -8789,6 +8793,9 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.set_top_speed_ratio.parms_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED, "SetTopSpeedRatio ProcessEvent failed");
         }
+        // The top-speed limiter and current-velocity restore are independent outcomes.
+        // Keep the limiter's state even if the current-speed path fails, but do not
+        // advance vehicle_current_velocity_ratio until SetDelayedVelocityRestore succeeds.
         vehicle_top_speed_ratio = ratio;
 
         if (vehicle_bindings.set_delayed_velocity_restore == 0) {
@@ -8886,6 +8893,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "最高车速上限已应用；当前车速恢复失败：SetDelayedVelocityRestore ProcessEvent 调用失败");
         }
+        vehicle_current_velocity_ratio = ratio;
         return Status(ANOMALY_STATUS_V1_OK,
             "最高车速上限与当前速度均已应用倍率；当前速度通过 SetDelayedVelocityRestore 提交给车辆物理组件");
     }
