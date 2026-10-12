@@ -807,6 +807,9 @@ struct Ue5NteAdapter::State {
     // Track current-velocity scaling separately from the top-speed limiter. A failed
     // velocity restore must not advance this baseline or a retry would scale by 1.0.
     float vehicle_current_velocity_ratio{1.0F};
+    std::string vehicle_delayed_velocity_restore_failure_reason;
+    std::string vehicle_speed_restore_status;
+    std::string vehicle_summon_status_message;
     float vehicle_engine_torque_ratio{1.0F};
     float vehicle_base_engine_torque{};
     std::uintptr_t vehicle_base_torque_component{};
@@ -8493,9 +8496,14 @@ struct Ue5NteAdapter::State {
     // through ProcessEvent. Validate its exact HTGame signature before using it to
     // preserve the requested linear velocity after Chaos updates the vehicle body.
     [[nodiscard]] bool ValidateDelayedVelocityRestoreLocked(
-        const std::uintptr_t function) const noexcept {
+        const std::uintptr_t function,
+        std::string& failure_reason) const noexcept {
         try {
-            if (function == 0) return false;
+            const auto fail = [&failure_reason](std::string message) {
+                failure_reason = std::move(message);
+                return false;
+            };
+            if (function == 0) return fail("UFunction 指针为空");
             std::uintptr_t outer{}, function_class{};
             std::string outer_name, function_class_name, function_name;
             std::uint8_t num_parms{};
@@ -8504,32 +8512,67 @@ struct Ue5NteAdapter::State {
                 !ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
                 !ReadReflectedObjectNameLocked(outer, outer_name) ||
                 !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
-                !ReadReflectedObjectNameLocked(function, function_name) ||
-                outer_name != "HTVehicleMovementComponent" || function_class_name != "Function" ||
-                function_name != "SetDelayedVelocityRestore" ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-                num_parms != 3 || parms_size != 0x38 || return_offset != 0xFFFFU) {
-                return false;
+                !ReadReflectedObjectNameLocked(function, function_name)) {
+                return fail("无法读取 UFunction 的 Outer / Class / Name 反射信息");
             }
-            const auto vector_field = [&](std::string_view name, std::uint16_t offset) {
+            if (outer_name != "HTVehicleMovementComponent" ||
+                function_class_name != "Function" || function_name != "SetDelayedVelocityRestore") {
+                return fail("UFunction 对象不匹配：Outer=" + outer_name +
+                    "，Class=" + function_class_name + "，Name=" + function_name);
+            }
+            if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+                return fail("无法读取 SetDelayedVelocityRestore 的 NumParms / ParmsSize / ReturnValueOffset");
+            }
+            if (num_parms != 3 || parms_size != 0x38 || return_offset != 0xFFFFU) {
+                return fail("SetDelayedVelocityRestore 尺寸不符：期望 NumParms=3、ParmsSize=56、ReturnValueOffset=65535；实际 NumParms=" +
+                    std::to_string(num_parms) + "、ParmsSize=" + std::to_string(parms_size) +
+                    "、ReturnValueOffset=" + std::to_string(return_offset));
+            }
+            const auto vector_field = [&](std::string_view name, std::int32_t expected_offset) {
                 ReflectedPropertyInfo property;
+                if (!FindReflectedPropertyLocked(function, name, property, false)) {
+                    failure_reason = "缺少参数 " + std::string(name) + "（PropertyLink 未找到）";
+                    return false;
+                }
+                if (property.type != "StructProperty" || property.element_size != 0x18 ||
+                    property.offset != expected_offset || property.array_dim != 1 || property.structure == 0) {
+                    failure_reason = "参数 " + std::string(name) + " 字段布局不符：Type=" +
+                        property.type + "、Size=" + std::to_string(property.element_size) +
+                        "、Offset=" + std::to_string(property.offset) +
+                        "、ArrayDim=" + std::to_string(property.array_dim);
+                    return false;
+                }
                 std::string struct_name;
-                return FindReflectedPropertyLocked(function, name, property, false) &&
-                    property.type == "StructProperty" && property.element_size == 0x18 &&
-                    property.offset == offset && property.array_dim == 1 &&
-                    property.structure != 0 &&
-                    ReadReflectedObjectNameLocked(property.structure, struct_name) &&
-                    (struct_name == "Vector" || struct_name == "FVector");
+                if (!ReadReflectedObjectNameLocked(property.structure, struct_name)) {
+                    failure_reason = "无法读取参数 " + std::string(name) + " 的 FVector 结构名";
+                    return false;
+                }
+                if (struct_name != "Vector" && struct_name != "FVector") {
+                    failure_reason = "参数 " + std::string(name) +
+                        " 的结构类型不是 Vector/FVector，实际为 " + struct_name;
+                    return false;
+                }
+                return true;
             };
+            if (!vector_field("InLinearVelocity", 0x00) ||
+                !vector_field("InAngularVelocity", 0x18)) return false;
             ReflectedPropertyInfo forward_speed;
-            return vector_field("InLinearVelocity", 0x00) &&
-                vector_field("InAngularVelocity", 0x18) &&
-                FindReflectedPropertyLocked(function, "InForwardSpeed", forward_speed, false) &&
-                forward_speed.type == "FloatProperty" && forward_speed.element_size == 4 &&
-                forward_speed.offset == 0x30 && forward_speed.array_dim == 1;
+            if (!FindReflectedPropertyLocked(function, "InForwardSpeed", forward_speed, false)) {
+                return fail("缺少参数 InForwardSpeed（PropertyLink 未找到）");
+            }
+            if (forward_speed.type != "FloatProperty" || forward_speed.element_size != 4 ||
+                forward_speed.offset != 0x30 || forward_speed.array_dim != 1) {
+                return fail("参数 InForwardSpeed 字段布局不符：Type=" + forward_speed.type +
+                    "、Size=" + std::to_string(forward_speed.element_size) +
+                    "、Offset=" + std::to_string(forward_speed.offset) +
+                    "、ArrayDim=" + std::to_string(forward_speed.array_dim));
+            }
+            failure_reason.clear();
+            return true;
         } catch (...) {
+            try { failure_reason = "读取 SetDelayedVelocityRestore 反射签名时发生异常"; } catch (...) {}
             return false;
         }
     }
@@ -8660,16 +8703,21 @@ struct Ue5NteAdapter::State {
                 vehicle_top_speed_ratio = 1.0F;
                 vehicle_current_velocity_ratio = 1.0F;
                 vehicle_speed_kmh = 0.0F;
-                // Refresh the Tokky-referenced delayed velocity binding for this component.
+                // Revalidate this dump-defined UFunction for each movement component.
                 vehicle_bindings.set_delayed_velocity_restore = 0;
+                vehicle_delayed_velocity_restore_failure_reason.clear();
             }
             if (vehicle_bindings.set_delayed_velocity_restore == 0) {
                 std::uintptr_t delayed_restore{};
-                if (FindExactObjectLocked(
+                if (!FindExactObjectLocked(
                         L"/Script/HTGame.HTVehicleMovementComponent.SetDelayedVelocityRestore",
-                        delayed_restore) &&
-                    ValidateDelayedVelocityRestoreLocked(delayed_restore)) {
+                        delayed_restore)) {
+                    vehicle_delayed_velocity_restore_failure_reason =
+                        "未能在 GObjects 中找到 /Script/HTGame.HTVehicleMovementComponent.SetDelayedVelocityRestore";
+                } else if (ValidateDelayedVelocityRestoreLocked(
+                               delayed_restore, vehicle_delayed_velocity_restore_failure_reason)) {
                     vehicle_bindings.set_delayed_velocity_restore = delayed_restore;
+                    vehicle_delayed_velocity_restore_failure_reason.clear();
                 }
             }
 
@@ -8731,7 +8779,15 @@ struct Ue5NteAdapter::State {
         if (snapshot == nullptr || snapshot->struct_size < minimum_size)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
         const std::uint32_t caller_size = snapshot->struct_size;
-        const bool has_torque_tail = caller_size >= sizeof(*snapshot);
+        const bool has_torque_tail = caller_size >=
+            offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio) +
+            sizeof(snapshot->engine_torque_ratio);
+        const bool has_vehicle_id_tail = caller_size >=
+            offsetof(AnomalyNteVehicleSnapshotV1, vehicle_entity_id) +
+            sizeof(snapshot->vehicle_entity_id);
+        const bool has_vehicle_class_tail = caller_size >=
+            offsetof(AnomalyNteVehicleSnapshotV1, vehicle_class_name) +
+            sizeof(snapshot->vehicle_class_name);
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle snapshot must run on Game thread");
         std::scoped_lock lock(mutex);
@@ -8743,6 +8799,8 @@ struct Ue5NteAdapter::State {
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
         if (has_torque_tail) snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
+        if (has_vehicle_id_tail) snapshot->vehicle_entity_id = 0;
+        if (has_vehicle_class_tail) snapshot->vehicle_class_name[0] = '\0';
         if (!RefreshVehicleLocked()) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "current driving vehicle is unavailable");
         }
@@ -8763,6 +8821,26 @@ struct Ue5NteAdapter::State {
         snapshot->top_speed_ratio = vehicle_top_speed_ratio;
         snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
         if (has_torque_tail) snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
+        if (has_vehicle_id_tail) {
+            std::uintptr_t index_address{};
+            std::int32_t internal_index{-1};
+            if (AddAddress(current_vehicle_object, Layout(profile, "object.internalIndex"), index_address) &&
+                ReadValue(*memory, index_address, internal_index) && internal_index >= 0) {
+                snapshot->vehicle_entity_id =
+                    static_cast<std::uint64_t>(static_cast<std::uint32_t>(internal_index)) + 1U;
+            }
+        }
+        if (has_vehicle_class_tail) {
+            std::uintptr_t class_object{};
+            std::string class_name;
+            if (ReadPointerAt(*memory, current_vehicle_object, Layout(profile, "object.class"), class_object) &&
+                ReadReflectedObjectNameLocked(class_object, class_name)) {
+                const std::size_t copy_size = (std::min)(class_name.size(),
+                    static_cast<std::size_t>(ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES));
+                std::copy_n(class_name.data(), copy_size, snapshot->vehicle_class_name);
+                snapshot->vehicle_class_name[copy_size] = '\0';
+            }
+        }
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -8800,8 +8878,12 @@ struct Ue5NteAdapter::State {
         vehicle_top_speed_ratio = ratio;
 
         if (vehicle_bindings.set_delayed_velocity_restore == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "最高车速上限已应用；当前车速恢复失败：dump 定义的 SetDelayedVelocityRestore ABI 未通过校验");
+            vehicle_speed_restore_status =
+                "最高车速上限已应用；当前车速恢复失败：" +
+                (vehicle_delayed_velocity_restore_failure_reason.empty()
+                    ? std::string("反射验证失败，但未返回具体阶段")
+                    : vehicle_delayed_velocity_restore_failure_reason);
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_speed_restore_status.c_str());
         }
 
         // Read the current native Velocity FVector. The write is submitted through
@@ -8821,7 +8903,7 @@ struct Ue5NteAdapter::State {
         }
         std::string velocity_struct_name;
         if (!ReadReflectedObjectNameLocked(velocity_property.structure, velocity_struct_name) ||
-            velocity_struct_name != "Vector") {
+            (velocity_struct_name != "Vector" && velocity_struct_name != "FVector")) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "最高车速上限已应用；当前车速恢复失败：Velocity 不是 dump 定义的 FVector");
         }
@@ -9440,7 +9522,22 @@ struct Ue5NteAdapter::State {
             const char* direct_spawn_failure{};
             if (SpawnVehicleDirectLocked(
                     direct_vehicle_class, direct_destination, direct_spawned, direct_spawn_failure)) {
-                return Status(ANOMALY_STATUS_V1_OK);
+                std::string class_name = "Vehicle";
+                std::uintptr_t class_object{};
+                if (ReadPointerAt(*memory, direct_spawned, Layout(profile, "object.class"), class_object))
+                    static_cast<void>(ReadReflectedObjectNameLocked(class_object, class_name));
+                std::uint64_t entity_id{};
+                std::uintptr_t index_address{};
+                std::int32_t internal_index{-1};
+                if (AddAddress(direct_spawned, Layout(profile, "object.internalIndex"), index_address) &&
+                    ReadValue(*memory, index_address, internal_index) && internal_index >= 0)
+                    entity_id = static_cast<std::uint64_t>(static_cast<std::uint32_t>(internal_index)) + 1U;
+                vehicle_summon_status_message = "召唤已实际生成并通过后置验证：" + class_name;
+                if (entity_id != 0) vehicle_summon_status_message += " (#" + std::to_string(entity_id) + ")";
+                vehicle_summon_status_message += "；目标位置=(" + std::to_string(direct_destination[0]) +
+                    ", " + std::to_string(direct_destination[1]) + ", " + std::to_string(direct_destination[2]) +
+                    ")；Actor.Owner 已核验为本地玩家 Pawn";
+                return Status(ANOMALY_STATUS_V1_OK, vehicle_summon_status_message.c_str());
             }
             // The detailed failure stage tells us whether no actor was created or a
             // post-spawn invariant failed. Do not dispatch a second spawn when an actor
@@ -9551,7 +9648,22 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "vehicle position verified but Actor.Owner is not the local player pawn");
         }
-        return Status(ANOMALY_STATUS_V1_OK);
+        std::string class_name = "Vehicle";
+        std::uintptr_t class_object{};
+        if (ReadPointerAt(*memory, spawned, Layout(profile, "object.class"), class_object))
+            static_cast<void>(ReadReflectedObjectNameLocked(class_object, class_name));
+        std::uint64_t entity_id{};
+        std::uintptr_t index_address{};
+        std::int32_t internal_index{-1};
+        if (AddAddress(spawned, Layout(profile, "object.internalIndex"), index_address) &&
+            ReadValue(*memory, index_address, internal_index) && internal_index >= 0)
+            entity_id = static_cast<std::uint64_t>(static_cast<std::uint32_t>(internal_index)) + 1U;
+        vehicle_summon_status_message = "召唤已实际生成并通过后置验证：" + class_name;
+        if (entity_id != 0) vehicle_summon_status_message += " (#" + std::to_string(entity_id) + ")";
+        vehicle_summon_status_message += "；目标位置=(" + std::to_string(destination[0]) +
+            ", " + std::to_string(destination[1]) + ", " + std::to_string(destination[2]) +
+            ")；Actor.Owner 已核验为本地玩家 Pawn";
+        return Status(ANOMALY_STATUS_V1_OK, vehicle_summon_status_message.c_str());
     }
 
     AnomalyStatusV1 VehicleSetWheelFriction(bool enabled) noexcept {

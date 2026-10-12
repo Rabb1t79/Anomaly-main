@@ -22,6 +22,8 @@ struct Snapshot {
     float top_speed_ratio{1.0F};
     float engine_torque_ratio{1.0F};
     bool friction{true};
+    std::uint64_t vehicle_entity_id{};
+    std::string vehicle_class_name;
 };
 
 struct Context {
@@ -396,8 +398,12 @@ void Update() {
                 g_context.vehicle->user, &request);
             if (status.code == ANOMALY_STATUS_V1_OK) {
                 const std::string label = selected_label.empty() ? selected_id : selected_label;
-                SetStatus("已提交召唤：" + label);
-                SetLastSummon(label);
+                const std::string detail = status.message.data != nullptr && status.message.size != 0
+                    ? std::string(status.message.data, status.message.size)
+                    : std::string("Host 返回成功，但没有召唤后置验证信息；请确认 Core 与插件来自同一次 Runtime 构建");
+                const std::string result = "召唤结果：" + label + " (" + selected_id + ")；" + detail;
+                SetStatus(result);
+                SetLastSummon(result);
             } else {
                 const auto reason = StatusDescription("召唤失败", status);
                 SetStatus(reason);
@@ -432,6 +438,20 @@ void Update() {
         g_context.snapshot.top_speed_ratio = snapshot.top_speed_ratio;
         g_context.snapshot.engine_torque_ratio = snapshot.engine_torque_ratio;
         g_context.snapshot.friction = snapshot.wheel_friction_enabled != 0;
+        if (snapshot.struct_size >= offsetof(AnomalyNteVehicleSnapshotV1, vehicle_entity_id) +
+                sizeof(snapshot.vehicle_entity_id))
+            g_context.snapshot.vehicle_entity_id = snapshot.vehicle_entity_id;
+        else
+            g_context.snapshot.vehicle_entity_id = 0;
+        if (snapshot.struct_size >= offsetof(AnomalyNteVehicleSnapshotV1, vehicle_class_name) +
+                sizeof(snapshot.vehicle_class_name)) {
+            g_context.snapshot.vehicle_class_name.assign(
+                snapshot.vehicle_class_name,
+                std::find(snapshot.vehicle_class_name,
+                    snapshot.vehicle_class_name + sizeof(snapshot.vehicle_class_name), '\0'));
+        } else {
+            g_context.snapshot.vehicle_class_name.clear();
+        }
         g_context.status = g_context.status;
     } else {
         g_context.snapshot.flags = 0;
@@ -574,6 +594,15 @@ void DrawSummonTab(
         " 项匹配 · " + std::to_string(ids.size()) + " 辆已读取 · 第 " +
         std::to_string(current_page + 1U) + " / " + std::to_string(page_count) + " 页");
 
+    DrawText(ui, "载具目录分页");
+    if (ui->button(ui->user, anomaly::sdk::StringView("上一页"), 0.0F, 0.0F) &&
+        current_page > 0U) --current_page;
+    DrawInlineGap(ui);
+    if (ui->button(ui->user, anomaly::sdk::StringView("下一页"), 0.0F, 0.0F) &&
+        current_page + 1U < page_count) ++current_page;
+    DrawText(ui, "当前页 / " + std::to_string(current_page + 1U) +
+        " / " + std::to_string(page_count));
+
     std::vector<std::size_t> visible_indices;
     const std::size_t page_begin = current_page * kVehiclesPerPage;
     const std::size_t page_end = (std::min)(filtered.size(), page_begin + kVehiclesPerPage);
@@ -646,13 +675,6 @@ void DrawSummonTab(
     // EndChild is required even when BeginChild returns false.
     if (has_catalog_child) ui->end_child(ui->user);
 
-    DrawInlineGap(ui);
-    if (ui->button(ui->user, anomaly::sdk::StringView("上一页"), 0.0F, 0.0F) &&
-        current_page > 0U) --current_page;
-    DrawInlineGap(ui);
-    if (ui->button(ui->user, anomaly::sdk::StringView("下一页"), 0.0F, 0.0F) &&
-        current_page + 1U < page_count) ++current_page;
-
     DrawDivider(ui);
     const bool can_summon = summon_enabled && player_position_valid && has_selected;
     DrawText(ui, !summon_enabled
@@ -685,6 +707,10 @@ void DrawPerformanceTab(
         DrawText(ui, "驾驶状态：未检测到当前驾驶载具");
     } else {
         DrawText(ui, "驾驶状态：已识别当前载具");
+        DrawText(ui, "当前驾驶载具 / " +
+            (snap.vehicle_class_name.empty() ? std::string("未知类名") : snap.vehicle_class_name) +
+            " (" + (snap.vehicle_entity_id != 0
+                ? "#" + std::to_string(snap.vehicle_entity_id) : std::string("#编号未知")) + ")");
         const double display_speed = std::isfinite(snap.speed_kmh)
             ? std::floor(std::fabs(snap.speed_kmh)) : 0.0;
         DrawText(ui, "当前速度  /  " + std::to_string(static_cast<std::uint64_t>(display_speed)) + " km/h");
