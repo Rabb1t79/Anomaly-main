@@ -85,7 +85,13 @@ void SetStatus(std::string text) {
 }
 
 void DrawText(const AnomalyUiServiceV1* ui, std::string_view text) {
-    if (ui != nullptr && ui->text != nullptr) {
+    if (ui == nullptr) return;
+    const auto wrapped_offset = offsetof(AnomalyUiServiceV1, text_wrapped);
+    if (ui->struct_size >= wrapped_offset +
+            sizeof(decltype(AnomalyUiServiceV1::text_wrapped)) &&
+        ui->text_wrapped != nullptr) {
+        ui->text_wrapped(ui->user, anomaly::sdk::StringView(text));
+    } else if (ui->text != nullptr) {
         ui->text(ui->user, anomaly::sdk::StringView(text));
     }
 }
@@ -549,8 +555,6 @@ void DrawDivider(const AnomalyUiServiceV1* ui) {
     if (HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::separator)>(
             ui, offsetof(AnomalyUiServiceV1, separator)) && ui->separator) {
         ui->separator(ui->user);
-    } else {
-        DrawText(ui, "────────────────────────────────────────");
     }
 }
 
@@ -646,16 +650,16 @@ void DrawSummonTab(
     const std::size_t page_count = filtered.empty()
         ? 1U : (filtered.size() + kVehiclesPerPage - 1U) / kVehiclesPerPage;
     if (current_page >= page_count) current_page = page_count - 1U;
-    DrawText(ui, "数量  /  " + std::to_string(filtered.size()) +
-        " 项匹配 · " + std::to_string(ids.size()) + " 辆已读取 · 第 " +
+    if (has_selected) {
+        if (ui->button(ui->user, anomaly::sdk::StringView("上一项"), 0.0F, 0.0F))
+            QueueSelectionOffset(ids, selected, -1);
+        DrawInlineGap(ui);
+        if (ui->button(ui->user, anomaly::sdk::StringView("下一项"), 0.0F, 0.0F))
+            QueueSelectionOffset(ids, selected, 1);
+    }
+    DrawText(ui, "数量 / " + std::to_string(filtered.size()) +
+        " 项匹配 / " + std::to_string(ids.size()) + " 辆已读取 / 第 " +
         std::to_string(current_page + 1U) + " / " + std::to_string(page_count) + " 页");
-
-    DrawText(ui, "载具目录分页");
-    if (DrawButtonEnabled(ui, "◀ 上一页", current_page > 0U)) --current_page;
-    DrawInlineGap(ui);
-    if (DrawButtonEnabled(ui, "下一页 ▶", current_page + 1U < page_count)) ++current_page;
-    DrawText(ui, "当前页 / " + std::to_string(current_page + 1U) +
-        " / " + std::to_string(page_count));
 
     std::vector<std::size_t> visible_indices;
     const std::size_t page_begin = current_page * kVehiclesPerPage;
@@ -672,10 +676,17 @@ void DrawSummonTab(
         UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_child),
             sizeof(decltype(AnomalyUiServiceV1::end_child))) &&
         ui->begin_child != nullptr && ui->end_child != nullptr;
-    const bool catalog_child_visible = has_catalog_child
-        ? ui->begin_child(ui->user, anomaly::sdk::StringView("##vehicle-catalog-scroll"),
-            0.0F, 285.0F, 1U) != 0
-        : true;
+    const bool has_auto_fit_child =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y),
+            sizeof(decltype(AnomalyUiServiceV1::begin_child_auto_fit_y))) &&
+        ui->begin_child_auto_fit_y != nullptr;
+    const bool catalog_child_visible = has_auto_fit_child
+        ? ui->begin_child_auto_fit_y(ui->user,
+            anomaly::sdk::StringView("##vehicle-catalog-scroll"), 0.0F, 0.0F) != 0
+        : has_catalog_child
+            ? ui->begin_child(ui->user, anomaly::sdk::StringView("##vehicle-catalog-scroll"),
+                0.0F, 285.0F, 1U) != 0
+            : true;
 
     if (catalog_child_visible) {
         if (ids.empty()) {
@@ -689,7 +700,7 @@ void DrawSummonTab(
                 ui->begin_table && ui->table_next_row && ui->table_next_column && ui->end_table;
             const bool table_open = can_table && ui->begin_table(ui->user,
                 anomaly::sdk::StringView("##vehicle-catalog-table"), 2,
-                ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT, 0.0F, 0.0F) != 0;
+                ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP, 0.0F, 0.0F) != 0;
             if (table_open) {
                 ui->table_next_row(ui->user);
                 ui->table_next_column(ui->user);
@@ -704,7 +715,7 @@ void DrawSummonTab(
                     DrawText(ui, label_at(index));
                     ui->table_next_column(ui->user);
                     const std::string button_label =
-                        std::string(current ? "✓ 当前##" : "选择##") + id;
+                        std::string(current ? "当前##" : "选择##") + id;
                     if (ui->button(ui->user, anomaly::sdk::StringView(button_label), 0.0F, 0.0F)) {
                         std::scoped_lock lock(g_context.mutex);
                         g_context.pending_vehicle_id = id;
@@ -716,7 +727,7 @@ void DrawSummonTab(
                     const std::string& id = ids[index];
                     const bool current = id == selected;
                     const std::string button_label =
-                        std::string(current ? "✓ 当前  " : "选用  ") +
+                        std::string(current ? "当前  " : "选用  ") +
                         std::string(label_at(index)) + "##" + id;
                     if (ui->button(ui->user, anomaly::sdk::StringView(button_label), 0.0F, 0.0F)) {
                         std::scoped_lock lock(g_context.mutex);
@@ -727,23 +738,23 @@ void DrawSummonTab(
         }
     }
     // EndChild is required even when BeginChild returns false.
-    if (has_catalog_child) ui->end_child(ui->user);
+    if ((has_catalog_child || has_auto_fit_child) && ui->end_child != nullptr)
+        ui->end_child(ui->user);
+
+    DrawText(ui, "载具目录分页");
+    if (DrawButtonEnabled(ui, "上一页", current_page > 0U)) --current_page;
+    DrawInlineGap(ui);
+    if (DrawButtonEnabled(ui, "下一页", current_page + 1U < page_count)) ++current_page;
+    DrawText(ui, "当前页 / " + std::to_string(current_page + 1U) +
+        " / " + std::to_string(page_count));
 
     DrawDivider(ui);
     const bool can_summon = player_position_valid && has_selected;
     DrawText(ui, player_position_valid
         ? "玩家坐标：有效"
-        : "玩家坐标：无效  ·  召唤按钮保持禁用");
+        : "玩家坐标：无效  /  召唤按钮保持禁用");
     if (DrawButtonEnabled(ui, "召唤", can_summon)) {
         g_context.summon.store(true, std::memory_order_release);
-    }
-    if (has_selected) {
-        DrawInlineGap(ui);
-        if (ui->button(ui->user, anomaly::sdk::StringView("上一项"), 0.0F, 0.0F))
-            QueueSelectionOffset(ids, selected, -1);
-        DrawInlineGap(ui);
-        if (ui->button(ui->user, anomaly::sdk::StringView("下一项"), 0.0F, 0.0F))
-            QueueSelectionOffset(ids, selected, 1);
     }
     DrawDivider(ui);
     if (ui->button(ui->user, anomaly::sdk::StringView("重新整理"), 0.0F, 0.0F)) {
@@ -887,7 +898,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     }
 
     if (!status.empty()) DrawText(ui, "运行状态  /  " + status);
-    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.4 · 2026-10-13-ui-speed-spawn");
+    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.4 / 2026-10-13-ui-speed-spawn");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0) {
         DrawText(ui, "当前驾驶载具  /  " +
             (snap.vehicle_class_name.empty() ? std::string("未知类名") : snap.vehicle_class_name) +
@@ -1032,6 +1043,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.4"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.9.5"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
