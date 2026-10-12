@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 3u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 4u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -363,6 +363,11 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // followed by VehicleID, while RowName remains the canonical internal selection key.
     AnomalyStatusV1 (ANOMALY_CALL *catalog_label_at)(
         void* user, uint32_t index, char* destination, size_t* inout_size);
+    // V4: batch controls for instantiated HTWheeledVehicleBase actors in loaded levels,
+    // excluding the local player's currently driven vehicle. Both callbacks are Game-thread-only
+    // and validate live Actor / movement-component instances before mutation.
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_top_speed_ratio)(void* user, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(void* user, float ratio);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
