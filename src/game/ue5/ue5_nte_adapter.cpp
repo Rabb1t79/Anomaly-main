@@ -8168,10 +8168,11 @@ struct Ue5NteAdapter::State {
                 vehicle_name_property.element_size != 0x10 || vehicle_name_property.offset != 0x58) {
                 return fail("VehicleData.Name 的 FText 类型/偏移校验失败");
             }
+            // FText conversion enriches the label, but it is not a prerequisite for
+            // enumerating DT_VehicleData. If the optional conversion ABI is unavailable,
+            // publish the canonical RowName / VehicleID fallback below rather than losing
+            // otherwise valid rows such as numeric VehicleID entries (e.g. 918 or 911).
             const bool can_resolve_display_text = ValidateVehicleDisplayNameBindingLocked();
-            if (!can_resolve_display_text) {
-                return fail("Engine.KismetTextLibrary.Conv_TextToString 的 FText/FString 反射 ABI 未通过 dump 校验");
-            }
 
             const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
             SparseMapView view;
@@ -8779,7 +8780,7 @@ struct Ue5NteAdapter::State {
         const float previous_ratio = vehicle_current_velocity_ratio;
         if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "tracked top-speed multiplier is invalid; refusing a partial update");
+                "tracked current-velocity multiplier is invalid; refusing a partial update");
         }
 
         // Always apply the known-native limit first. Failure to read movement velocity
