@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE Vehicle 0.9.3: player-only vehicle tuning plus separate batch controls for non-player vehicles; summon success requires the Core postcondition markered levels.",
+  "description": "NTE Vehicle 0.9.4: player-only vehicle tuning plus separate batch controls for non-player vehicles; summon success is shown only after the Core's explicit postcondition validation.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
