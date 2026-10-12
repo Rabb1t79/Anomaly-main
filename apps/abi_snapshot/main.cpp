@@ -1779,7 +1779,9 @@ std::string BuildSnapshot() {
          {"speed_kmh", offsetof(AnomalyNteVehicleSnapshotV1, speed_kmh)},
          {"top_speed_ratio", offsetof(AnomalyNteVehicleSnapshotV1, top_speed_ratio)},
          {"wheel_friction_enabled", offsetof(AnomalyNteVehicleSnapshotV1, wheel_friction_enabled)},
-         {"engine_torque_ratio", offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio)}},
+         {"engine_torque_ratio", offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio)},
+         {"vehicle_entity_id", offsetof(AnomalyNteVehicleSnapshotV1, vehicle_entity_id)},
+         {"vehicle_class_name", offsetof(AnomalyNteVehicleSnapshotV1, vehicle_class_name)}},
         false);
     AppendStruct(
         output,
@@ -1817,7 +1819,13 @@ std::string BuildSnapshot() {
          {"vehicle_id_at", offsetof(AnomalyNteVehicleServiceV1, vehicle_id_at)},
          {"set_summon_vehicle_id", offsetof(AnomalyNteVehicleServiceV1, set_summon_vehicle_id)},
          {"summon_vehicle", offsetof(AnomalyNteVehicleServiceV1, summon_vehicle)},
-         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)}},
+         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)},
+         {"refresh_catalog", offsetof(AnomalyNteVehicleServiceV1, refresh_catalog)},
+         {"catalog_label_at", offsetof(AnomalyNteVehicleServiceV1, catalog_label_at)},
+         {"set_other_vehicles_top_speed_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)},
+         {"set_other_vehicles_engine_torque_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)}},
         false);
     AppendStruct(
         output,
