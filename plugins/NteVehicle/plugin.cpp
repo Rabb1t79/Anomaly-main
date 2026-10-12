@@ -38,8 +38,7 @@ struct Context {
     std::string selected_vehicle_id{"Vehicle007"};
     std::string pending_vehicle_id;
     std::string catalog_filter;
-    std::string last_summon{"-"};
-    bool summon_enabled{true};
+    std::string last_summon{};
     std::vector<std::string> vehicle_ids;
     std::vector<std::string> vehicle_labels;
     std::uint64_t catalog_tick{};
@@ -426,10 +425,10 @@ void Update() {
                     ? g_context.vehicle_labels[index] : selected_id;
             }
             if (position_valid) {
-                // The requested offset is signed by axis: X - 2000, Y + 2000, Z + 2000.
-                request.world_position[0] = g_context.player_snapshot.position[0] - 2000.0;
-                request.world_position[1] = g_context.player_snapshot.position[1] + 2000.0;
-                request.world_position[2] = g_context.player_snapshot.position[2] + 2000.0;
+                // The requested offset stays close to the player: X - 500, Y + 500, Z + 500.
+                request.world_position[0] = g_context.player_snapshot.position[0] - 500.0;
+                request.world_position[1] = g_context.player_snapshot.position[1] + 500.0;
+                request.world_position[2] = g_context.player_snapshot.position[2] + 500.0;
             }
         }
         bool catalog_has_selection{};
@@ -457,16 +456,18 @@ void Update() {
                     !detail.empty() && detail.find(verified_prefix) == 0;
                 std::string result;
                 if (postcondition_verified) {
-                    result = "召唤结果：" + label + " (" + selected_id + ")；" + detail;
+                    // Successful summons stay silent; only failure or unverified states show a message.
+                    SetStatus({});
+                    SetLastSummon({});
                 } else {
                     // An OK status without the Core's explicit postcondition marker is not
-                    // proof that a new vehicle exists. Never present this as a successful summon.
+                    // proof that a new vehicle exists; keep this diagnostic visible.
                     result = "召唤状态未验证：" + label + " (" + selected_id +
                         ")；Host 返回 OK，但没有明确的实际生成/后置验证标记";
                     if (!detail.empty()) result += "；Host 信息：" + detail;
+                    SetStatus(result);
+                    SetLastSummon(result);
                 }
-                SetStatus(result);
-                SetLastSummon(result);
             } else {
                 const auto reason = StatusDescription("召唤失败", status);
                 SetStatus(reason);
@@ -586,29 +587,15 @@ void DrawSummonTab(
     const std::vector<std::string>& ids,
     const std::vector<std::string>& labels,
     const std::string& last_summon,
-    bool summon_enabled,
     bool player_position_valid) {
     DrawSectionTitle(ui, "01  /  VEHICLE DEPLOYMENT", "载具召唤");
-    int enabled_value = summon_enabled ? 1 : 0;
-    if (UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, checkbox),
-            sizeof(decltype(AnomalyUiServiceV1::checkbox))) && ui->checkbox &&
-        ui->checkbox(ui->user, anomaly::sdk::StringView("启用"), &enabled_value) != 0) {
-        std::scoped_lock lock(g_context.mutex);
-        g_context.summon_enabled = enabled_value != 0;
-    }
-    summon_enabled = enabled_value != 0;
     const auto label_at = [&labels, &ids](std::size_t i) -> std::string_view {
         return i < labels.size() && !labels[i].empty()
             ? std::string_view(labels[i]) : std::string_view(ids[i]);
     };
     const auto selected_index = std::ranges::find(ids, selected);
     const bool has_selected = selected_index != ids.end();
-    const std::size_t selected_i = has_selected
-        ? static_cast<std::size_t>(selected_index - ids.begin()) : 0U;
-
-    DrawText(ui, "当前选择");
-    DrawText(ui, has_selected ? ("◆  " + std::string(label_at(selected_i))) : "未选择载具");
-    DrawText(ui, "上次召唤： " + last_summon);
+    if (!last_summon.empty()) DrawText(ui, "上次召唤：" + last_summon);
 
     std::string current_filter;
     {
@@ -743,12 +730,10 @@ void DrawSummonTab(
     if (has_catalog_child) ui->end_child(ui->user);
 
     DrawDivider(ui);
-    const bool can_summon = summon_enabled && player_position_valid && has_selected;
-    DrawText(ui, !summon_enabled
-        ? "召唤功能已禁用"
-        : player_position_valid
-            ? "玩家坐标：有效  ·  召唤点按各轴偏移计算"
-            : "玩家坐标：无效  ·  召唤按钮保持禁用");
+    const bool can_summon = player_position_valid && has_selected;
+    DrawText(ui, player_position_valid
+        ? "玩家坐标：有效"
+        : "玩家坐标：无效  ·  召唤按钮保持禁用");
     if (DrawButtonEnabled(ui, "召唤", can_summon)) {
         g_context.summon.store(true, std::memory_order_release);
     }
@@ -853,12 +838,12 @@ void DrawLegacyLayout(
     const AnomalyUiServiceV1* ui, const Snapshot& snap, const std::string& status,
     const std::string& selected, const std::vector<std::string>& ids,
     const std::vector<std::string>& labels, const std::string& last_summon,
-    bool summon_enabled, float ratio, float torque_ratio,
+    float ratio, float torque_ratio,
     float other_speed_ratio, float other_torque_ratio, bool friction, bool player_position_valid) {
     DrawSectionTitle(ui, "NTE  /  VEHICLE CONTROL", "载具控制");
-    DrawText(ui, "状态  /  " + status);
+    if (!status.empty()) DrawText(ui, "状态  /  " + status);
     DrawDivider(ui);
-    DrawSummonTab(ui, selected, ids, labels, last_summon, summon_enabled, player_position_valid);
+    DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
     DrawDivider(ui);
     DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio, other_torque_ratio);
     DrawDivider(ui);
@@ -885,14 +870,12 @@ void Draw(const AnomalyUiServiceV1* ui) {
     float other_torque_ratio;
     bool friction;
     bool player_position_valid{};
-    bool summon_enabled{};
     {
         std::scoped_lock lock(g_context.mutex);
         snap = g_context.snapshot;
         status = g_context.status;
         selected = g_context.selected_vehicle_id;
         last_summon = g_context.last_summon;
-        summon_enabled = g_context.summon_enabled;
         ids = g_context.vehicle_ids;
         labels = g_context.vehicle_labels;
         ratio = g_context.speed_ratio;
@@ -903,10 +886,8 @@ void Draw(const AnomalyUiServiceV1* ui) {
         player_position_valid = g_context.player_position_valid;
     }
 
-    DrawText(ui, "NTE VEHICLE  /  GAMEPLAY SYSTEM");
-    DrawText(ui, "载具目录 · 坐标召唤 · 速度与扭矩调校");
-    DrawText(ui, "运行状态  /  " + status);
-    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.3 · 2026-10-13-summon-postcondition");
+    if (!status.empty()) DrawText(ui, "运行状态  /  " + status);
+    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.4 · 2026-10-13-ui-speed-spawn");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0) {
         DrawText(ui, "当前驾驶载具  /  " +
             (snap.vehicle_class_name.empty() ? std::string("未知类名") : snap.vehicle_class_name) +
@@ -931,7 +912,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     if (tab_bar_open) {
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("载具召唤"), nullptr,
                 ANOMALY_UI_TAB_ITEM_V1_NONE, 1)) {
-            DrawSummonTab(ui, selected, ids, labels, last_summon, summon_enabled, player_position_valid);
+            DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
             ui->end_tab_item(ui->user);
         }
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("性能调校"), nullptr,
@@ -946,7 +927,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         }
         ui->end_tab_bar(ui->user);
     } else {
-        DrawLegacyLayout(ui, snap, status, selected, ids, labels, last_summon, summon_enabled,
+        DrawLegacyLayout(ui, snap, status, selected, ids, labels, last_summon,
             ratio, torque_ratio, other_speed_ratio, other_torque_ratio, friction, player_position_valid);
     }
 }
@@ -1004,8 +985,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.catalog_filter.clear();
     g_context.vehicle_ids.clear();
     g_context.vehicle_labels.clear();
-    g_context.last_summon = "-";
-    g_context.summon_enabled = true;
+    g_context.last_summon.clear();
     g_context.status = "正在读取 Host 验证的运行时 Vehicle 目录";
     g_context.player_position_valid = false;
     g_context.player_snapshot = {};
@@ -1052,6 +1032,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.3"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.9.4"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
