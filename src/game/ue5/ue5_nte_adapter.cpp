@@ -8530,8 +8530,8 @@ struct Ue5NteAdapter::State {
                 !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
                 return fail("无法读取 SetDelayedVelocityRestore 的 NumParms / ParmsSize / ReturnValueOffset");
             }
-            if (num_parms != 3 || parms_size != 0x38 || return_offset != 0xFFFFU) {
-                return fail("SetDelayedVelocityRestore 尺寸不符：期望 NumParms=3、ParmsSize=56、ReturnValueOffset=65535；实际 NumParms=" +
+            if (num_parms != 3 || parms_size != 0x34 || return_offset != 0xFFFFU) {
+                return fail("SetDelayedVelocityRestore 尺寸不符：期望 NumParms=3、ParmsSize=52、ReturnValueOffset=65535；实际 NumParms=" +
                     std::to_string(num_parms) + "、ParmsSize=" + std::to_string(parms_size) +
                     "、ReturnValueOffset=" + std::to_string(return_offset));
             }
@@ -8963,8 +8963,8 @@ struct Ue5NteAdapter::State {
         }
 
         // Tokky passes zero angular velocity and the desired forward speed in cm/s.
-        // This function is dump-defined as three parameters, size 0x38, offsets 0/0x18/0x30.
-        alignas(16) std::array<std::uint8_t, 0x38> delayed_parameters{};
+        // This function is dump-defined as three parameters, size 0x34 (52 bytes), offsets 0/0x18/0x30.
+        alignas(16) std::array<std::uint8_t, 0x34> delayed_parameters{};
         std::memcpy(delayed_parameters.data(), velocity.data(), sizeof(velocity));
         constexpr std::array<double, 3> zero_angular_velocity{};
         std::memcpy(delayed_parameters.data() + 0x18,
@@ -9328,7 +9328,7 @@ struct Ue5NteAdapter::State {
                 record_failure("InForwardSpeed 超出有效数值范围");
                 continue;
             }
-            alignas(16) std::array<std::uint8_t, 0x38> delayed_parameters{};
+            alignas(16) std::array<std::uint8_t, 0x34> delayed_parameters{};
             std::memcpy(delayed_parameters.data(), velocity.data(), sizeof(velocity));
             constexpr std::array<double, 3> zero_angular_velocity{};
             std::memcpy(delayed_parameters.data() + 0x18,
