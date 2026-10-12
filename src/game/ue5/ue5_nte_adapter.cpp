@@ -8754,7 +8754,10 @@ struct Ue5NteAdapter::State {
             // This path is only used when the dump-declared HTVehicleMovementComponent
             // SetExternalTorqueRatio API did not validate. Both layout numbers come from
             // the supplied 5.6.1-0+UE5-HT dump, and the baseline is cached per component.
-            if (vehicle_bindings.set_external_torque_ratio.function == 0 &&
+            // Keep the original MaxTorque baseline ready whenever the alternate API exists.
+            // The primary API can resolve correctly but still fail at runtime; in that case the
+            // fallback must not depend on whether the primary binding was found.
+            if (vehicle_bindings.set_max_engine_torque.function != 0 &&
                 (movement_component != vehicle_base_torque_component ||
                     !vehicle_base_engine_torque_valid)) {
                 vehicle_base_torque_component = movement_component;
@@ -8994,30 +8997,69 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         if (!RefreshVehicleLocked() || vehicle_movement_component == 0)
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current vehicle movement component is unavailable");
+
+        // Try the already-working game-native path first. A successful ProcessEvent is final;
+        // never call both setters on the same request.
+        const auto& external = vehicle_bindings.set_external_torque_ratio;
         std::array<std::uint8_t, 8> parameters{};
-        if (vehicle_bindings.set_external_torque_ratio.function != 0) {
-            std::memcpy(parameters.data() + vehicle_bindings.set_external_torque_ratio.parameter_offset,
-                &ratio, sizeof(ratio));
-            if (!InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
-                    vehicle_bindings.set_external_torque_ratio.function, parameters.data(),
-                    vehicle_bindings.set_external_torque_ratio.parms_size))
-                return Status(ANOMALY_STATUS_V1_FAILED, "SetExternalTorqueRatio ProcessEvent failed");
-            vehicle_engine_torque_ratio = ratio;
-            return Status(ANOMALY_STATUS_V1_OK);
+        bool external_binding_valid = external.function != 0 &&
+            external.parms_size != 0 && external.parms_size <= parameters.size() &&
+            external.parameter_offset + sizeof(ratio) <= external.parms_size;
+        if (external_binding_valid) {
+            parameters.fill(0);
+            std::memcpy(parameters.data() + external.parameter_offset, &ratio, sizeof(ratio));
+            if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
+                    external.function, parameters.data(), external.parms_size)) {
+                vehicle_engine_torque_ratio = ratio;
+                return Status(ANOMALY_STATUS_V1_OK, "SetExternalTorqueRatio applied");
+            }
         }
-        if (vehicle_bindings.set_max_engine_torque.function != 0 && vehicle_base_engine_torque_valid) {
-            const float torque = vehicle_base_engine_torque * ratio;
-            std::memcpy(parameters.data() + vehicle_bindings.set_max_engine_torque.parameter_offset,
-                &torque, sizeof(torque));
-            if (!InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
-                    vehicle_bindings.set_max_engine_torque.function, parameters.data(),
-                    vehicle_bindings.set_max_engine_torque.parms_size))
-                return Status(ANOMALY_STATUS_V1_FAILED, "SetMaxEngineTorque ProcessEvent failed");
-            vehicle_engine_torque_ratio = ratio;
-            return Status(ANOMALY_STATUS_V1_OK);
+
+        // Fallback is also attempted after a runtime failure of SetExternalTorqueRatio, not only
+        // when reflection could not find the primary function.
+        const auto& fallback = vehicle_bindings.set_max_engine_torque;
+        const bool fallback_binding_valid = fallback.function != 0 &&
+            fallback.parms_size != 0 && fallback.parms_size <= parameters.size() &&
+            fallback.parameter_offset + sizeof(float) <= fallback.parms_size;
+        if (fallback_binding_valid) {
+            if (vehicle_base_torque_component != vehicle_movement_component ||
+                !vehicle_base_engine_torque_valid) {
+                vehicle_base_torque_component = vehicle_movement_component;
+                const auto baseline_offset = Layout(profile, "vehicle.maxEngineTorque", -1);
+                float baseline{};
+                if (baseline_offset >= 0 && ReadValue(*memory,
+                        vehicle_movement_component + static_cast<std::uintptr_t>(baseline_offset), baseline) &&
+                    std::isfinite(baseline) && baseline > 0.0F) {
+                    vehicle_base_engine_torque = baseline;
+                    vehicle_base_engine_torque_valid = true;
+                } else {
+                    vehicle_base_engine_torque_valid = false;
+                }
+            }
+            if (vehicle_base_engine_torque_valid) {
+                const float torque = vehicle_base_engine_torque * ratio;
+                if (std::isfinite(torque)) {
+                    parameters.fill(0);
+                    std::memcpy(parameters.data() + fallback.parameter_offset, &torque, sizeof(torque));
+                    if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
+                            fallback.function, parameters.data(), fallback.parms_size)) {
+                        vehicle_engine_torque_ratio = ratio;
+                        return Status(ANOMALY_STATUS_V1_OK,
+                            external_binding_valid
+                                ? "SetExternalTorqueRatio failed; SetMaxEngineTorque fallback applied"
+                                : "SetMaxEngineTorque fallback applied");
+                    }
+                }
+            }
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                external_binding_valid
+                    ? "SetExternalTorqueRatio and SetMaxEngineTorque both failed"
+                    : "SetMaxEngineTorque fallback failed");
         }
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-            "dump-declared SetExternalTorqueRatio and validated MaxTorque fallback are unavailable");
+            external_binding_valid
+                ? "SetExternalTorqueRatio failed and SetMaxEngineTorque fallback is unavailable"
+                : "both torque setter paths are unavailable");
     }
 
 
@@ -9143,8 +9185,7 @@ struct Ue5NteAdapter::State {
                 static_cast<void>(FindVehicleFunctionLocked("SetExternalTorqueRatio", movement_outer,
                     "FloatInput", vehicle_bindings.set_external_torque_ratio));
             }
-            if (need_torque && vehicle_bindings.set_external_torque_ratio.function == 0 &&
-                vehicle_bindings.set_max_engine_torque.function == 0) {
+            if (need_torque && vehicle_bindings.set_max_engine_torque.function == 0) {
                 static constexpr std::array<std::string_view, 1> chaos_movement_outer{
                     "ChaosWheeledVehicleMovementComponent"};
                 static_cast<void>(FindVehicleFunctionLocked("SetMaxEngineTorque", chaos_movement_outer,
@@ -9385,7 +9426,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, vehicle_other_torque_status.c_str());
         }
 
-        std::size_t applied{}, failed{};
+        std::size_t applied{}, failed{}, external_applied{}, fallback_applied{};
         std::string first_failure;
         const auto record_failure = [&first_failure](std::string reason) {
             if (first_failure.empty()) first_failure = std::move(reason);
@@ -9401,10 +9442,9 @@ struct Ue5NteAdapter::State {
                 !ObjectClassChainContainsLocked(movement, "HTVehicleMovementComponent")) {
                 ++failed;
                 record_failure("载具实例缺少经过校验的 HTVehicleMovementComponent");
-                continue;
-            }
-
-            bool invoked{};
+             bool invoked{};
+            bool used_fallback{};
+            std::string primary_failure;
             if (torque_binding.function != 0 && torque_binding.parms_size != 0 &&
                 torque_binding.parms_size <= 0x1000U &&
                 torque_binding.parameter_offset + sizeof(float) <= torque_binding.parms_size) {
@@ -9412,8 +9452,13 @@ struct Ue5NteAdapter::State {
                 std::memcpy(parameters.data() + torque_binding.parameter_offset, &ratio, sizeof(ratio));
                 invoked = InvokeProcessEventGuarded(process_event_invoker, movement,
                     torque_binding.function, parameters.data(), parameters.size());
-                if (!invoked) record_failure("SetExternalTorqueRatio ProcessEvent 失败");
-            } else if (max_torque_binding.function != 0 &&
+                if (!invoked) primary_failure = "SetExternalTorqueRatio ProcessEvent 失败";
+            } else {
+                primary_failure = "SetExternalTorqueRatio 绑定或参数布局不可用";
+            }
+
+            // A failed primary invocation must fall through to the alternate setter on this actor.
+            if (!invoked && max_torque_binding.function != 0 &&
                 max_torque_binding.parms_size != 0 &&
                 max_torque_binding.parms_size <= 0x1000U &&
                 max_torque_binding.parameter_offset + sizeof(float) <= max_torque_binding.parms_size) {
@@ -9427,9 +9472,7 @@ struct Ue5NteAdapter::State {
                         baseline_it = other_vehicle_base_torques.emplace(movement, baseline).first;
                     }
                 }
-                if (baseline_it == other_vehicle_base_torques.end()) {
-                    record_failure("SetMaxEngineTorque 回退缺少该实例的有效原始 MaxTorque");
-                } else {
+                if (baseline_it != other_vehicle_base_torques.end()) {
                     const float torque = baseline_it->second * ratio;
                     if (std::isfinite(torque)) {
                         std::vector<std::uint8_t> parameters(max_torque_binding.parms_size);
@@ -9437,21 +9480,32 @@ struct Ue5NteAdapter::State {
                             &torque, sizeof(torque));
                         invoked = InvokeProcessEventGuarded(process_event_invoker, movement,
                             max_torque_binding.function, parameters.data(), parameters.size());
-                        if (!invoked) record_failure("SetMaxEngineTorque ProcessEvent 失败");
+                        if (invoked) used_fallback = true;
+                        else record_failure(primary_failure + "; SetMaxEngineTorque ProcessEvent 失败");
                     } else {
-                        record_failure("缩放后的 MaxTorque 数值无效");
+                        record_failure(primary_failure + "; 缩放后的 MaxTorque 数值无效");
                     }
+                } else {
+                    record_failure(primary_failure + "; SetMaxEngineTorque 回退缺少该实例的有效原始 MaxTorque");
                 }
-            } else {
-                record_failure("没有可用的已验证扭矩修改函数");
+            } else if (!invoked) {
+                record_failure(primary_failure + "; SetMaxEngineTorque 回退绑定不可用");
             }
-            if (invoked) ++applied;
+            if (invoked) {
+                ++applied;
+                if (used_fallback) ++fallback_applied;
+                else ++external_applied;
+            } else {
+                ++failed;
+            }d) ++applied;
             else ++failed;
         }
 
         vehicle_other_torque_status = "非玩家车辆发动机扭矩倍率 " + std::to_string(ratio) +
             "x：扫描到 " + std::to_string(actors.size()) + " 辆，应用成功 " +
-            std::to_string(applied) + " 辆，失败 " + std::to_string(failed) + " 辆";
+            std::to_string(applied) + " 辆（SetExternalTorqueRatio " +
+            std::to_string(external_applied) + " 辆，SetMaxEngineTorque 备用 " +
+            std::to_string(fallback_applied) + " 辆），失败 " + std::to_string(failed) + " 辆";
         if (unreadable_slots != 0)
             vehicle_other_torque_status += "；跳过不可读 Actor 槽 " + std::to_string(unreadable_slots);
         if (!first_failure.empty()) vehicle_other_torque_status += "；首个问题：" + first_failure;
