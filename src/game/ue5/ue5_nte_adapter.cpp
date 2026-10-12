@@ -815,8 +815,7 @@ struct Ue5NteAdapter::State {
     std::uintptr_t vehicle_base_torque_component{};
     bool vehicle_base_engine_torque_valid{};
     bool vehicle_wheel_friction_enabled{true};
-    // Track prior ratios / base torque per non-player movement component; never share the
-    // local player's component baseline with NPC, ambient, or summoned vehicle instances.
+    // 按非玩家载具的 MovementComponent 分别保存速率倍率和原始扭矩基准，绝不与玩家载具共用状态。
     std::unordered_map<std::uintptr_t, float> other_vehicle_velocity_ratios;
     std::unordered_map<std::uintptr_t, float> other_vehicle_base_torques;
     std::string vehicle_other_speed_status;
@@ -9022,9 +9021,8 @@ struct Ue5NteAdapter::State {
     }
 
 
-    // Enumerate live Actor instances from every currently loaded Level. This is deliberately
-    // separate from DT_VehicleData: catalog rows are spawn definitions, not world instances.
-    // No UObject pointers escape Core; all mutation remains guarded and Game-thread-only.
+    // 从当前 World 已加载的所有 Level 枚举实时 Actor 实例；它与 DT_VehicleData 目录分离，因为目录行是
+    // 召唤定义，不是场景实例。UE 对象指针不离开 Core，批量修改只在 Game 线程执行。
     [[nodiscard]] bool CollectOtherVehicleActorsLocked(
         std::vector<std::uintptr_t>& actors,
         std::size_t& unreadable_slots,
@@ -9037,10 +9035,11 @@ struct Ue5NteAdapter::State {
             const auto actors_offset = Layout(profile, "level.actors", -1);
             const auto maximum_actors = Layout(profile, "entities.maxCount", 16384);
             const auto maximum_levels = Layout(profile, "entities.maxLevels", 4096);
-            if (world_pointer == 0 || levels_offset < 0 || actors_offset < 0 ||
+            if (world_pointer == 0 || !NteActorsLayoutAvailable() ||
+                levels_offset < 0 || actors_offset < 0 ||
                 maximum_actors <= 0 || maximum_actors > 1000000 ||
                 maximum_levels <= 0 || maximum_levels > 4096) {
-                failure_reason = "无法安全枚举非玩家载具：World / Level Actor 数组布局不可用";
+                failure_reason = "无法安全枚举非玩家载具：World、Level Actor 布局或 NTE Actors 特性门禁不可用";
                 return false;
             }
 
@@ -9103,8 +9102,7 @@ struct Ue5NteAdapter::State {
                         !seen.insert(actor).second ||
                         !ReadableRange(*memory, actor, 0x20U)) continue;
 
-                    // Must be a real Actor instance belonging to the game's wheeled vehicle
-                    // hierarchy, not a DataTable row, CDO, arbitrary component, or name-only match.
+                    // 仅接受真实 Actor 实例及游戏的轮式载具继承链；排除 DataTable 行、CDO、组件和仅名称匹配。
                     if (!IsVehicleActorLocked(actor) ||
                         !ObjectClassChainContainsLocked(actor, "HTWheeledVehicleBase")) continue;
                     actors.push_back(actor);
@@ -9129,9 +9127,8 @@ struct Ue5NteAdapter::State {
                 other_vehicle_velocity_ratios.clear();
                 other_vehicle_base_torques.clear();
             }
-            // Opportunistically refresh the current player vehicle so its identity can be
-            // excluded. This may return false when the player is not driving; bindings are
-            // still discovered before that result is returned.
+            // 刷新当前玩家载具，以便批量枚举时排除它；玩家未驾驶时此调用可以返回 false，
+            // 后续仍会独立解析批量修改所需的函数绑定。
             static_cast<void>(RefreshVehicleLocked());
             static constexpr std::array<std::string_view, 1> vehicle_outer{"HTWheeledVehicleBase"};
             static constexpr std::array<std::string_view, 1> movement_outer{"HTVehicleMovementComponent"};
@@ -9181,7 +9178,6 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleSetOtherVehiclesTopSpeedRatio(float ratio) noexcept {
-        vehicle_other_speed_status.clear();
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
                 "non-player vehicle speed ratio must be 0.05..20.0");
@@ -9190,6 +9186,7 @@ struct Ue5NteAdapter::State {
                 "non-player vehicle speed mutation requires Game thread");
 
         std::scoped_lock lock(mutex);
+        vehicle_other_speed_status.clear();
         if (!EnsureOtherVehicleMutationBindingsLocked(true, false)) {
             vehicle_other_speed_status =
                 "非玩家车辆速率修改不可用：车辆反射绑定或玩家控制器未通过校验";
@@ -9361,7 +9358,6 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleSetOtherVehiclesEngineTorqueRatio(float ratio) noexcept {
-        vehicle_other_torque_status.clear();
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
                 "non-player vehicle torque ratio must be 0.05..20.0");
@@ -9370,6 +9366,7 @@ struct Ue5NteAdapter::State {
                 "non-player vehicle torque mutation requires Game thread");
 
         std::scoped_lock lock(mutex);
+        vehicle_other_torque_status.clear();
         if (!EnsureOtherVehicleMutationBindingsLocked(false, true)) {
             vehicle_other_torque_status =
                 "非玩家车辆扭矩修改不可用：SetExternalTorqueRatio / 已验证扭矩回退函数不可用";
