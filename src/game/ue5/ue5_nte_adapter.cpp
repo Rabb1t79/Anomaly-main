@@ -9882,7 +9882,14 @@ struct Ue5NteAdapter::State {
             }
             std::uintptr_t finished_actor{};
             std::memcpy(&finished_actor, finish_parameters.data() + 0x78, sizeof(finished_actor));
-            if (finished_actor != 0) spawned = finished_actor;
+            // FinishSpawningActor declares an Actor* return in the supplied dump.
+            // A successful ProcessEvent call without a non-null returned actor is not
+            // sufficient evidence that deferred spawning completed.
+            if (finished_actor == 0) {
+                failure_reason = "GameplayStatics.FinishSpawningActor returned a null actor";
+                return false;
+            }
+            spawned = finished_actor;
 
             std::uintptr_t spawned_class{};
             failure_reason = "spawned actor did not validate as a Vehicle-derived Actor";
