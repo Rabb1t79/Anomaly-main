@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE Vehicle 0.9.2: player-only vehicle tuning plus separate batch speed and torque controls for non-player vehicle instances in loaded levels.",
+  "description": "NTE Vehicle 0.9.3: player-only vehicle tuning plus separate batch controls for non-player vehicles; summon success requires the Core postcondition markered levels.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
