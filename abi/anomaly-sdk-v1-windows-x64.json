@@ -50,7 +50,7 @@
     "ANOMALY_NTE_MAP_LANDMARKS_SERVICE_V1_VERSION": 1,
     "ANOMALY_NTE_MAP_LANDMARK_V1_ID_MAX_BYTES": 128,
     "ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES": 2048,
-    "ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION": 2,
+    "ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION": 3,
     "ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION": 1,
     "ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES": 128,
     "ANOMALY_NTE_VEHICLE_V1_VALID": 1,
@@ -1512,7 +1512,7 @@
       }
     },
     "AnomalyNteVehicleServiceV1": {
-      "size": 88,
+      "size": 104,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
@@ -1526,7 +1526,9 @@
         "vehicle_id_at": 56,
         "set_summon_vehicle_id": 64,
         "summon_vehicle": 72,
-        "set_engine_torque_ratio": 80
+        "set_engine_torque_ratio": 80,
+        "refresh_catalog": 88,
+        "catalog_label_at": 96
       }
     },
     "AnomalyNteAttackInputRequestV1": {
