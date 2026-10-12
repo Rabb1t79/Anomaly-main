@@ -564,8 +564,23 @@ void DrawSummonTab(
         if (matches) filtered.push_back(i);
     }
 
+    // Keep the catalog compact: show only five choices per page while preserving filtering.
+    constexpr std::size_t kVehiclesPerPage = 5U;
+    static std::size_t current_page = 0U;
+    const std::size_t page_count = filtered.empty()
+        ? 1U : (filtered.size() + kVehiclesPerPage - 1U) / kVehiclesPerPage;
+    if (current_page >= page_count) current_page = page_count - 1U;
     DrawText(ui, "数量  /  " + std::to_string(filtered.size()) +
-        " 项匹配 · " + std::to_string(ids.size()) + " 辆已读取");
+        " 项匹配 · " + std::to_string(ids.size()) + " 辆已读取 · 第 " +
+        std::to_string(current_page + 1U) + " / " + std::to_string(page_count) + " 页");
+
+    std::vector<std::size_t> visible_indices;
+    const std::size_t page_begin = current_page * kVehiclesPerPage;
+    const std::size_t page_end = (std::min)(filtered.size(), page_begin + kVehiclesPerPage);
+    if (page_begin < page_end) {
+        visible_indices.assign(filtered.begin() + static_cast<std::ptrdiff_t>(page_begin),
+            filtered.begin() + static_cast<std::ptrdiff_t>(page_end));
+    }
 
     // The list stays in a dedicated bordered child with its own vertical scrollbar.
     const bool has_catalog_child =
@@ -598,7 +613,7 @@ void DrawSummonTab(
                 DrawText(ui, "名称 (VehicleID)");
                 ui->table_next_column(ui->user);
                 DrawText(ui, "操作");
-                for (const std::size_t index : filtered) {
+                for (const std::size_t index : visible_indices) {
                     const std::string& id = ids[index];
                     const bool current = id == selected;
                     ui->table_next_row(ui->user);
@@ -614,7 +629,7 @@ void DrawSummonTab(
                 }
                 ui->end_table(ui->user);
             } else {
-                for (const std::size_t index : filtered) {
+                for (const std::size_t index : visible_indices) {
                     const std::string& id = ids[index];
                     const bool current = id == selected;
                     const std::string button_label =
@@ -630,6 +645,13 @@ void DrawSummonTab(
     }
     // EndChild is required even when BeginChild returns false.
     if (has_catalog_child) ui->end_child(ui->user);
+
+    DrawInlineGap(ui);
+    if (ui->button(ui->user, anomaly::sdk::StringView("上一页"), 0.0F, 0.0F) &&
+        current_page > 0U) --current_page;
+    DrawInlineGap(ui);
+    if (ui->button(ui->user, anomaly::sdk::StringView("下一页"), 0.0F, 0.0F) &&
+        current_page + 1U < page_count) ++current_page;
 
     DrawDivider(ui);
     const bool can_summon = summon_enabled && player_position_valid && has_selected;
@@ -663,7 +685,9 @@ void DrawPerformanceTab(
         DrawText(ui, "驾驶状态：未检测到当前驾驶载具");
     } else {
         DrawText(ui, "驾驶状态：已识别当前载具");
-        DrawText(ui, "当前速度  /  " + std::to_string(snap.speed_kmh) + " km/h");
+        const double display_speed = std::isfinite(snap.speed_kmh)
+            ? std::floor(std::fabs(snap.speed_kmh)) : 0.0;
+        DrawText(ui, "当前速度  /  " + std::to_string(static_cast<std::uint64_t>(display_speed)) + " km/h");
         DrawText(ui, "当前车速倍率  /  " + std::to_string(snap.top_speed_ratio) + "x");
     }
 
