@@ -9301,7 +9301,7 @@ struct Ue5NteAdapter::State {
             const auto& getter = vehicle_bindings.speed_kmh;
             if (getter.function != 0 && getter.parms_size <= 0x1000U &&
                 getter.return_offset + sizeof(float) <= getter.parms_size) {
-                std::vector<std::uint8_t> speed_parameters((std::max)(getter.parms_size, 8U));
+                std::vector<std::uint8_t> speed_parameters((std::max)(static_cast<std::size_t>(getter.parms_size), std::size_t{8}));
                 if (InvokeProcessEventGuarded(process_event_invoker, movement,
                         getter.function, speed_parameters.data(), getter.parms_size)) {
                     float current_speed_kmh{};
