@@ -293,10 +293,9 @@ typedef struct AnomalyNteNavigationServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *stop_movement)(void* user);
 } AnomalyNteNavigationServiceV1;
 
-// Host-owned UE5 vehicle bridge. Version 2 adds a catalog read directly from
-// HTVehicleDataAsset.DT_VehicleData, selection by a validated table ID, and a
-// position/owner-aware summon request. No UE object pointer crosses the plugin ABI.
-// All reflective reads and mutations are bounded, Game-thread operations.
+// Host 管理的 UE5 载具桥接接口：V2 增加实时目录和位置/归属召唤，V3 增加目录刷新和显示标签，
+// V4 增加对非玩家载具实例的批量速率与扭矩控制。插件 ABI 不暴露 UE 对象指针；反射读取与修改
+// 均受边界约束，并且只允许在 Game 线程执行。
 typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SPEED (1u << 1u)
@@ -363,9 +362,8 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // followed by VehicleID, while RowName remains the canonical internal selection key.
     AnomalyStatusV1 (ANOMALY_CALL *catalog_label_at)(
         void* user, uint32_t index, char* destination, size_t* inout_size);
-    // V4: batch controls for instantiated HTWheeledVehicleBase actors in loaded levels,
-    // excluding the local player's currently driven vehicle. Both callbacks are Game-thread-only
-    // and validate live Actor / movement-component instances before mutation.
+    // V4：批量控制已加载关卡中的 HTWheeledVehicleBase 实例，排除本地玩家当前驾驶的载具。
+    // 两个回调只能在 Game 线程运行，且会在修改前校验实时 Actor 与运动组件实例。
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_top_speed_ratio)(void* user, float ratio);
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(void* user, float ratio);
 } AnomalyNteVehicleServiceV1;
