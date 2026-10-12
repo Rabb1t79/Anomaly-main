@@ -9181,7 +9181,9 @@ struct Ue5NteAdapter::State {
                 !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
                 !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
                 num_parms != 2 || parms_size != 0x70 || return_offset != 0xFFFFu) {
-                return false;
+                // The vehicle-specific helper is optional for this subclass/build.
+                // Fall back to the reflected Actor route instead of aborting the spawn.
+                return RelocateSpawnedVehicleLocked(actor, destination);
             }
             ReflectedPropertyInfo new_transform, stop_movement;
             if (!FindReflectedPropertyLocked(function, "NewTransform", new_transform, false) ||
@@ -9190,14 +9192,18 @@ struct Ue5NteAdapter::State {
                 !FindReflectedPropertyLocked(function, "bStopMovementImmediately", stop_movement, false) ||
                 stop_movement.type != "BoolProperty" || stop_movement.element_size != 1 ||
                 stop_movement.offset != 0x60) {
-                return false;
+                // Reflection details can differ by subclass; the generic Actor setter
+                // remains independently ABI-validated before it is called.
+                return RelocateSpawnedVehicleLocked(actor, destination);
             }
             alignas(16) std::array<std::uint8_t, 0x70> parameters{};
             std::memcpy(parameters.data(), transform.data(), transform.size());
             parameters[0x60] = 1;
             if (!InvokeProcessEventGuarded(process_event_invoker, actor,
                     function, parameters.data(), parameters.size())) {
-                return false;
+                // Do not let a failed vehicle-specific call prevent the generic route
+                // from attempting the same destination on the already-spawned actor.
+                return RelocateSpawnedVehicleLocked(actor, destination);
             }
             if (VerifyActorLocationLocked(actor, destination)) return true;
 
