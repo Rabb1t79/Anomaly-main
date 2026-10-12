@@ -9199,7 +9199,15 @@ struct Ue5NteAdapter::State {
                     function, parameters.data(), parameters.size())) {
                 return false;
             }
-            return VerifyActorLocationLocked(actor, destination);
+            if (VerifyActorLocationLocked(actor, destination)) return true;
+
+            // SafeSetVehicleTransform is the vehicle-native route, but some vehicle
+            // subclasses update their movement state without immediately exposing the
+            // same value through Actor.K2_GetActorLocation. Fall back to the validated
+            // Actor location setter and require its own postcondition before reporting
+            // failure. This does not create a second actor; it only relocates the actor
+            // already returned by FinishSpawningActor.
+            return RelocateSpawnedVehicleLocked(actor, destination);
         } catch (...) {
             return false;
         }
