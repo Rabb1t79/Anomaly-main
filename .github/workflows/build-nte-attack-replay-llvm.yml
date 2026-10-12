@@ -78,7 +78,7 @@ jobs:
           if ($exportText -notmatch 'AnomalyPluginEntryV1') { throw 'plugin.dll is missing AnomalyPluginEntryV1' }
           if ($exportText -notmatch 'AnomalyPluginCxxThrowV1') { throw 'plugin.dll is missing AnomalyPluginCxxThrowV1' }
 
-          $out = Join-Path $env:GITHUB_WORKSPACE 'dist/NteAttackReplay-1.8.0-windows-x64.zip'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'dist/NteAttackReplay-1.9.0-windows-x64.zip'
           New-Item -ItemType Directory -Force (Split-Path $out -Parent) | Out-Null
           Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath $out -Force
           Get-FileHash $out -Algorithm SHA256 | Format-List
@@ -86,7 +86,7 @@ jobs:
       - name: Upload verified SDK plugin
         uses: actions/upload-artifact@v4
         with:
-          name: NteAttackReplay-1.8.0-SDK-windows-x64
-          path: dist/NteAttackReplay-1.8.0-windows-x64.zip
+          name: NteAttackReplay-1.9.0-SDK-windows-x64
+          path: dist/NteAttackReplay-1.9.0-windows-x64.zip
           if-no-files-found: error
           retention-days: 14
