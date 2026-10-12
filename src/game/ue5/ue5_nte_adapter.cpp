@@ -815,6 +815,12 @@ struct Ue5NteAdapter::State {
     std::uintptr_t vehicle_base_torque_component{};
     bool vehicle_base_engine_torque_valid{};
     bool vehicle_wheel_friction_enabled{true};
+    // Track prior ratios / base torque per non-player movement component; never share the
+    // local player's component baseline with NPC, ambient, or summoned vehicle instances.
+    std::unordered_map<std::uintptr_t, float> other_vehicle_velocity_ratios;
+    std::unordered_map<std::uintptr_t, float> other_vehicle_base_torques;
+    std::string vehicle_other_speed_status;
+    std::string vehicle_other_torque_status;
     float vehicle_speed_kmh{};
     bool vehicle_valid{};
 
@@ -9015,6 +9021,448 @@ struct Ue5NteAdapter::State {
             "dump-declared SetExternalTorqueRatio and validated MaxTorque fallback are unavailable");
     }
 
+
+    // Enumerate live Actor instances from every currently loaded Level. This is deliberately
+    // separate from DT_VehicleData: catalog rows are spawn definitions, not world instances.
+    // No UObject pointers escape Core; all mutation remains guarded and Game-thread-only.
+    [[nodiscard]] bool CollectOtherVehicleActorsLocked(
+        std::vector<std::uintptr_t>& actors,
+        std::size_t& unreadable_slots,
+        std::string& failure_reason) noexcept {
+        try {
+            actors.clear();
+            unreadable_slots = 0;
+            failure_reason.clear();
+            const auto levels_offset = Layout(profile, "world.levels", -1);
+            const auto actors_offset = Layout(profile, "level.actors", -1);
+            const auto maximum_actors = Layout(profile, "entities.maxCount", 16384);
+            const auto maximum_levels = Layout(profile, "entities.maxLevels", 4096);
+            if (world_pointer == 0 || levels_offset < 0 || actors_offset < 0 ||
+                maximum_actors <= 0 || maximum_actors > 1000000 ||
+                maximum_levels <= 0 || maximum_levels > 4096) {
+                failure_reason = "无法安全枚举非玩家载具：World / Level Actor 数组布局不可用";
+                return false;
+            }
+
+            std::uintptr_t levels_array{}, levels_count_address{};
+            std::int32_t level_count{};
+            if (!ReadPointerAt(*memory, world_pointer, levels_offset, levels_array) ||
+                !AddAddress(world_pointer,
+                    levels_offset + static_cast<std::int64_t>(sizeof(std::uintptr_t)),
+                    levels_count_address) ||
+                !ReadValue(*memory, levels_count_address, level_count) ||
+                level_count <= 0 || level_count > maximum_levels || levels_array == 0) {
+                failure_reason = "无法安全枚举非玩家载具：World.Levels TArray 校验失败";
+                return false;
+            }
+
+            std::vector<std::uintptr_t> levels;
+            levels.reserve(static_cast<std::size_t>(level_count));
+            for (std::int32_t i = 0; i < level_count; ++i) {
+                std::uintptr_t slot{}, level{};
+                if (!AddAddress(levels_array,
+                        static_cast<std::int64_t>(i) * sizeof(std::uintptr_t), slot) ||
+                    !ReadValue(*memory, slot, level)) {
+                    failure_reason = "无法安全枚举非玩家载具：读取 World.Levels[" +
+                        std::to_string(i) + "] 失败";
+                    return false;
+                }
+                if (level != 0) levels.push_back(level);
+            }
+            if (levels.empty()) {
+                failure_reason = "无法安全枚举非玩家载具：当前 World 没有可读取的 Level";
+                return false;
+            }
+
+            std::unordered_set<std::uintptr_t> seen;
+            seen.reserve(256);
+            std::int64_t total_actor_slots{};
+            for (const std::uintptr_t level : levels) {
+                std::uintptr_t actor_array{}, count_address{};
+                std::int32_t actor_count{};
+                if (!ReadPointerAt(*memory, level, actors_offset, actor_array) ||
+                    !AddAddress(level, actors_offset +
+                        static_cast<std::int64_t>(sizeof(std::uintptr_t)), count_address) ||
+                    !ReadValue(*memory, count_address, actor_count) ||
+                    actor_count < 0 ||
+                    actor_count > maximum_actors - total_actor_slots ||
+                    (actor_count != 0 && actor_array == 0)) {
+                    failure_reason = "无法安全枚举非玩家载具：Level.Actors TArray 校验失败";
+                    return false;
+                }
+                total_actor_slots += actor_count;
+                for (std::int32_t i = 0; i < actor_count; ++i) {
+                    std::uintptr_t slot{}, actor{};
+                    if (!AddAddress(actor_array,
+                            static_cast<std::int64_t>(i) * sizeof(std::uintptr_t), slot) ||
+                        !ReadValue(*memory, slot, actor)) {
+                        ++unreadable_slots;
+                        continue;
+                    }
+                    if (actor == 0 || actor == current_vehicle_object ||
+                        !seen.insert(actor).second ||
+                        !ReadableRange(*memory, actor, 0x20U)) continue;
+
+                    // Must be a real Actor instance belonging to the game's wheeled vehicle
+                    // hierarchy, not a DataTable row, CDO, arbitrary component, or name-only match.
+                    if (!IsVehicleActorLocked(actor) ||
+                        !ObjectClassChainContainsLocked(actor, "HTWheeledVehicleBase")) continue;
+                    actors.push_back(actor);
+                }
+            }
+            return true;
+        } catch (...) {
+            failure_reason = "枚举非玩家载具时发生异常；本次批量操作已中止";
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool EnsureOtherVehicleMutationBindingsLocked(
+        const bool need_speed,
+        const bool need_torque) noexcept {
+        try {
+            if (!NteVehicleProfileAvailable() || !process_event_invoker ||
+                player_controller == 0) return false;
+            if (vehicle_bindings.object_generation != object_generation) {
+                vehicle_bindings = {};
+                vehicle_bindings.object_generation = object_generation;
+                other_vehicle_velocity_ratios.clear();
+                other_vehicle_base_torques.clear();
+            }
+            // Opportunistically refresh the current player vehicle so its identity can be
+            // excluded. This may return false when the player is not driving; bindings are
+            // still discovered before that result is returned.
+            static_cast<void>(RefreshVehicleLocked());
+            static constexpr std::array<std::string_view, 1> vehicle_outer{"HTWheeledVehicleBase"};
+            static constexpr std::array<std::string_view, 1> movement_outer{"HTVehicleMovementComponent"};
+            if (need_speed && vehicle_bindings.set_top_speed_ratio.function == 0 &&
+                !FindVehicleFunctionLocked("SetTopSpeedRatio", vehicle_outer, "FloatInput",
+                    vehicle_bindings.set_top_speed_ratio)) return false;
+            if (need_speed && vehicle_bindings.speed_kmh.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", movement_outer,
+                    "FloatReturn", vehicle_bindings.speed_kmh));
+            }
+            if (need_torque && vehicle_bindings.set_external_torque_ratio.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("SetExternalTorqueRatio", movement_outer,
+                    "FloatInput", vehicle_bindings.set_external_torque_ratio));
+            }
+            if (need_torque && vehicle_bindings.set_external_torque_ratio.function == 0 &&
+                vehicle_bindings.set_max_engine_torque.function == 0) {
+                static constexpr std::array<std::string_view, 1> chaos_movement_outer{
+                    "ChaosWheeledVehicleMovementComponent"};
+                static_cast<void>(FindVehicleFunctionLocked("SetMaxEngineTorque", chaos_movement_outer,
+                    "FloatInput", vehicle_bindings.set_max_engine_torque, "ChaosVehicles"));
+            }
+            if (need_speed && vehicle_bindings.set_delayed_velocity_restore == 0) {
+                std::uintptr_t delayed_restore{};
+                if (FindExactObjectLocked(
+                        L"/Script/HTGame.HTVehicleMovementComponent.SetDelayedVelocityRestore",
+                        delayed_restore) &&
+                    ValidateDelayedVelocityRestoreLocked(
+                        delayed_restore, vehicle_delayed_velocity_restore_failure_reason)) {
+                    vehicle_bindings.set_delayed_velocity_restore = delayed_restore;
+                    vehicle_delayed_velocity_restore_failure_reason.clear();
+                } else if (vehicle_delayed_velocity_restore_failure_reason.empty()) {
+                    vehicle_delayed_velocity_restore_failure_reason =
+                        "未能解析或通过校验：HTVehicleMovementComponent.SetDelayedVelocityRestore";
+                }
+            }
+            return (need_speed
+                    ? vehicle_bindings.set_top_speed_ratio.function != 0
+                    : true) &&
+                (need_torque
+                    ? vehicle_bindings.set_external_torque_ratio.function != 0 ||
+                        (vehicle_bindings.set_max_engine_torque.function != 0 &&
+                            Layout(profile, "vehicle.maxEngineTorque", -1) >= 0)
+                    : true);
+        } catch (...) {
+            return false;
+        }
+    }
+
+    AnomalyStatusV1 VehicleSetOtherVehiclesTopSpeedRatio(float ratio) noexcept {
+        vehicle_other_speed_status.clear();
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "non-player vehicle speed ratio must be 0.05..20.0");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "non-player vehicle speed mutation requires Game thread");
+
+        std::scoped_lock lock(mutex);
+        if (!EnsureOtherVehicleMutationBindingsLocked(true, false)) {
+            vehicle_other_speed_status =
+                "非玩家车辆速率修改不可用：车辆反射绑定或玩家控制器未通过校验";
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_other_speed_status.c_str());
+        }
+
+        std::vector<std::uintptr_t> actors;
+        std::size_t unreadable_slots{};
+        std::string scan_failure;
+        if (!CollectOtherVehicleActorsLocked(actors, unreadable_slots, scan_failure)) {
+            vehicle_other_speed_status = scan_failure;
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_other_speed_status.c_str());
+        }
+        if (actors.empty()) {
+            vehicle_other_speed_status = "当前已加载关卡中没有可修改的非玩家 HTWheeledVehicleBase 实例";
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, vehicle_other_speed_status.c_str());
+        }
+
+        std::size_t cap_applied{}, velocity_applied{}, partial{}, failed{};
+        std::string first_failure;
+        const auto record_failure = [&first_failure](std::string reason) {
+            if (first_failure.empty()) first_failure = std::move(reason);
+        };
+        const auto delayed_function = vehicle_bindings.set_delayed_velocity_restore;
+        for (const std::uintptr_t actor : actors) {
+            std::uintptr_t movement{};
+            const auto movement_offset = Layout(profile, "vehicle.movementComponent", -1);
+            if (movement_offset < 0 ||
+                !ReadPointerAt(*memory, actor, movement_offset, movement) || movement == 0 ||
+                !ReadableRange(*memory, movement, 0x20U) ||
+                !ObjectClassChainContainsLocked(movement, "HTVehicleMovementComponent")) {
+                ++failed;
+                record_failure("载具实例缺少经过校验的 HTVehicleMovementComponent");
+                continue;
+            }
+
+            const auto& speed_binding = vehicle_bindings.set_top_speed_ratio;
+            if (speed_binding.function == 0 || speed_binding.parms_size == 0 ||
+                speed_binding.parms_size > 0x1000U ||
+                speed_binding.parameter_offset + sizeof(float) > speed_binding.parms_size) {
+                ++failed;
+                record_failure("SetTopSpeedRatio 参数布局不可用");
+                continue;
+            }
+            std::vector<std::uint8_t> cap_parameters(speed_binding.parms_size);
+            std::memcpy(cap_parameters.data() + speed_binding.parameter_offset, &ratio, sizeof(ratio));
+            if (!InvokeProcessEventGuarded(process_event_invoker, actor,
+                    speed_binding.function, cap_parameters.data(), cap_parameters.size())) {
+                ++failed;
+                record_failure("HTWheeledVehicleBase.SetTopSpeedRatio ProcessEvent 失败");
+                continue;
+            }
+            ++cap_applied;
+
+            if (delayed_function == 0) {
+                ++partial;
+                record_failure(vehicle_delayed_velocity_restore_failure_reason.empty()
+                    ? "SetDelayedVelocityRestore 反射验证失败"
+                    : vehicle_delayed_velocity_restore_failure_reason);
+                continue;
+            }
+
+            std::uintptr_t movement_class{};
+            ReflectedPropertyInfo velocity_property;
+            if (!ReadPointerAt(*memory, movement, Layout(profile, "object.class"), movement_class) ||
+                !FindHeldPropertyLocked(movement_class, "Velocity", velocity_property) ||
+                velocity_property.type != "StructProperty" || velocity_property.element_size != 0x18 ||
+                velocity_property.offset < 0 || velocity_property.array_dim != 1 ||
+                velocity_property.structure == 0) {
+                ++partial;
+                record_failure("Velocity 属性未通过 FVector 布局校验");
+                continue;
+            }
+            std::string velocity_struct_name;
+            if (!ReadReflectedObjectNameLocked(velocity_property.structure, velocity_struct_name) ||
+                (velocity_struct_name != "Vector" && velocity_struct_name != "FVector")) {
+                ++partial;
+                record_failure("Velocity 不是 dump 定义的 Vector/FVector");
+                continue;
+            }
+            std::array<double, 3> velocity{};
+            if (!ReadValue(*memory, movement +
+                    static_cast<std::uintptr_t>(velocity_property.offset), velocity) ||
+                !std::ranges::all_of(velocity, [](double value) { return std::isfinite(value); })) {
+                ++partial;
+                record_failure("无法读取该载具当前的有效 Velocity FVector");
+                continue;
+            }
+
+            auto previous_it = other_vehicle_velocity_ratios.find(movement);
+            const float previous_ratio = previous_it == other_vehicle_velocity_ratios.end()
+                ? 1.0F : previous_it->second;
+            if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
+                ++partial;
+                record_failure("该 movement component 的历史速率倍率状态无效");
+                continue;
+            }
+            const double velocity_scale = static_cast<double>(ratio) /
+                static_cast<double>(previous_ratio);
+            for (double& component : velocity) component *= velocity_scale;
+            if (!std::ranges::all_of(velocity, [](double value) { return std::isfinite(value); })) {
+                ++partial;
+                record_failure("缩放后的 Velocity 数值无效");
+                continue;
+            }
+
+            double forward_speed_cm_s{};
+            bool forward_speed_valid = false;
+            const auto& getter = vehicle_bindings.speed_kmh;
+            if (getter.function != 0 && getter.parms_size <= 0x1000U &&
+                getter.return_offset + sizeof(float) <= getter.parms_size) {
+                std::vector<std::uint8_t> speed_parameters((std::max)(getter.parms_size, 8U));
+                if (InvokeProcessEventGuarded(process_event_invoker, movement,
+                        getter.function, speed_parameters.data(), getter.parms_size)) {
+                    float current_speed_kmh{};
+                    std::memcpy(&current_speed_kmh,
+                        speed_parameters.data() + getter.return_offset, sizeof(current_speed_kmh));
+                    if (std::isfinite(current_speed_kmh)) {
+                        forward_speed_cm_s = static_cast<double>(current_speed_kmh) *
+                            (100.0 / 3.6) * velocity_scale;
+                        forward_speed_valid = std::isfinite(forward_speed_cm_s);
+                    }
+                }
+            }
+            if (!forward_speed_valid) {
+                const double magnitude = std::sqrt(
+                    velocity[0] * velocity[0] + velocity[1] * velocity[1] +
+                    velocity[2] * velocity[2]);
+                if (!std::isfinite(magnitude)) {
+                    ++partial;
+                    record_failure("无法推导该载具的有效前向速度");
+                    continue;
+                }
+                forward_speed_cm_s = magnitude;
+            }
+            const float forward_speed = static_cast<float>(forward_speed_cm_s);
+            if (!std::isfinite(forward_speed)) {
+                ++partial;
+                record_failure("InForwardSpeed 超出有效数值范围");
+                continue;
+            }
+            alignas(16) std::array<std::uint8_t, 0x38> delayed_parameters{};
+            std::memcpy(delayed_parameters.data(), velocity.data(), sizeof(velocity));
+            constexpr std::array<double, 3> zero_angular_velocity{};
+            std::memcpy(delayed_parameters.data() + 0x18,
+                zero_angular_velocity.data(), sizeof(zero_angular_velocity));
+            std::memcpy(delayed_parameters.data() + 0x30, &forward_speed, sizeof(forward_speed));
+            if (!InvokeProcessEventGuarded(process_event_invoker, movement,
+                    delayed_function, delayed_parameters.data(), delayed_parameters.size())) {
+                ++partial;
+                record_failure("SetDelayedVelocityRestore ProcessEvent 调用失败");
+                continue;
+            }
+            other_vehicle_velocity_ratios[movement] = ratio;
+            ++velocity_applied;
+        }
+
+        vehicle_other_speed_status = "非玩家车辆速率倍率 " + std::to_string(ratio) +
+            "x：扫描到 " + std::to_string(actors.size()) + " 辆；最高车速上限已应用 " +
+            std::to_string(cap_applied) + " 辆，当前速度恢复成功 " +
+            std::to_string(velocity_applied) + " 辆，部分成功 " +
+            std::to_string(partial) + " 辆，失败 " + std::to_string(failed) + " 辆";
+        if (unreadable_slots != 0)
+            vehicle_other_speed_status += "；跳过不可读 Actor 槽 " + std::to_string(unreadable_slots);
+        if (!first_failure.empty()) vehicle_other_speed_status += "；首个问题：" + first_failure;
+        if (cap_applied == 0 || partial != 0 || failed != 0 || unreadable_slots != 0)
+            return Status(ANOMALY_STATUS_V1_FAILED, vehicle_other_speed_status.c_str());
+        return Status(ANOMALY_STATUS_V1_OK, vehicle_other_speed_status.c_str());
+    }
+
+    AnomalyStatusV1 VehicleSetOtherVehiclesEngineTorqueRatio(float ratio) noexcept {
+        vehicle_other_torque_status.clear();
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "non-player vehicle torque ratio must be 0.05..20.0");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "non-player vehicle torque mutation requires Game thread");
+
+        std::scoped_lock lock(mutex);
+        if (!EnsureOtherVehicleMutationBindingsLocked(false, true)) {
+            vehicle_other_torque_status =
+                "非玩家车辆扭矩修改不可用：SetExternalTorqueRatio / 已验证扭矩回退函数不可用";
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_other_torque_status.c_str());
+        }
+
+        std::vector<std::uintptr_t> actors;
+        std::size_t unreadable_slots{};
+        std::string scan_failure;
+        if (!CollectOtherVehicleActorsLocked(actors, unreadable_slots, scan_failure)) {
+            vehicle_other_torque_status = scan_failure;
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_other_torque_status.c_str());
+        }
+        if (actors.empty()) {
+            vehicle_other_torque_status = "当前已加载关卡中没有可修改的非玩家 HTWheeledVehicleBase 实例";
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, vehicle_other_torque_status.c_str());
+        }
+
+        std::size_t applied{}, failed{};
+        std::string first_failure;
+        const auto record_failure = [&first_failure](std::string reason) {
+            if (first_failure.empty()) first_failure = std::move(reason);
+        };
+        const auto torque_binding = vehicle_bindings.set_external_torque_ratio;
+        const auto max_torque_binding = vehicle_bindings.set_max_engine_torque;
+        for (const std::uintptr_t actor : actors) {
+            std::uintptr_t movement{};
+            const auto movement_offset = Layout(profile, "vehicle.movementComponent", -1);
+            if (movement_offset < 0 ||
+                !ReadPointerAt(*memory, actor, movement_offset, movement) || movement == 0 ||
+                !ReadableRange(*memory, movement, 0x20U) ||
+                !ObjectClassChainContainsLocked(movement, "HTVehicleMovementComponent")) {
+                ++failed;
+                record_failure("载具实例缺少经过校验的 HTVehicleMovementComponent");
+                continue;
+            }
+
+            bool invoked{};
+            if (torque_binding.function != 0 && torque_binding.parms_size != 0 &&
+                torque_binding.parms_size <= 0x1000U &&
+                torque_binding.parameter_offset + sizeof(float) <= torque_binding.parms_size) {
+                std::vector<std::uint8_t> parameters(torque_binding.parms_size);
+                std::memcpy(parameters.data() + torque_binding.parameter_offset, &ratio, sizeof(ratio));
+                invoked = InvokeProcessEventGuarded(process_event_invoker, movement,
+                    torque_binding.function, parameters.data(), parameters.size());
+                if (!invoked) record_failure("SetExternalTorqueRatio ProcessEvent 失败");
+            } else if (max_torque_binding.function != 0 &&
+                max_torque_binding.parms_size != 0 &&
+                max_torque_binding.parms_size <= 0x1000U &&
+                max_torque_binding.parameter_offset + sizeof(float) <= max_torque_binding.parms_size) {
+                auto baseline_it = other_vehicle_base_torques.find(movement);
+                if (baseline_it == other_vehicle_base_torques.end()) {
+                    const auto baseline_offset = Layout(profile, "vehicle.maxEngineTorque", -1);
+                    float baseline{};
+                    if (baseline_offset >= 0 &&
+                        ReadValue(*memory, movement + static_cast<std::uintptr_t>(baseline_offset), baseline) &&
+                        std::isfinite(baseline) && baseline > 0.0F) {
+                        baseline_it = other_vehicle_base_torques.emplace(movement, baseline).first;
+                    }
+                }
+                if (baseline_it == other_vehicle_base_torques.end()) {
+                    record_failure("SetMaxEngineTorque 回退缺少该实例的有效原始 MaxTorque");
+                } else {
+                    const float torque = baseline_it->second * ratio;
+                    if (std::isfinite(torque)) {
+                        std::vector<std::uint8_t> parameters(max_torque_binding.parms_size);
+                        std::memcpy(parameters.data() + max_torque_binding.parameter_offset,
+                            &torque, sizeof(torque));
+                        invoked = InvokeProcessEventGuarded(process_event_invoker, movement,
+                            max_torque_binding.function, parameters.data(), parameters.size());
+                        if (!invoked) record_failure("SetMaxEngineTorque ProcessEvent 失败");
+                    } else {
+                        record_failure("缩放后的 MaxTorque 数值无效");
+                    }
+                }
+            } else {
+                record_failure("没有可用的已验证扭矩修改函数");
+            }
+            if (invoked) ++applied;
+            else ++failed;
+        }
+
+        vehicle_other_torque_status = "非玩家车辆发动机扭矩倍率 " + std::to_string(ratio) +
+            "x：扫描到 " + std::to_string(actors.size()) + " 辆，应用成功 " +
+            std::to_string(applied) + " 辆，失败 " + std::to_string(failed) + " 辆";
+        if (unreadable_slots != 0)
+            vehicle_other_torque_status += "；跳过不可读 Actor 槽 " + std::to_string(unreadable_slots);
+        if (!first_failure.empty()) vehicle_other_torque_status += "；首个问题：" + first_failure;
+        if (applied == 0 || failed != 0 || unreadable_slots != 0)
+            return Status(ANOMALY_STATUS_V1_FAILED, vehicle_other_torque_status.c_str());
+        return Status(ANOMALY_STATUS_V1_OK, vehicle_other_torque_status.c_str());
+    }
+
     AnomalyStatusV1 VehicleCatalogSnapshot(
         AnomalyNteVehicleCatalogSnapshotV1* snapshot) noexcept {
         if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot))
@@ -14880,7 +15328,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleCatalogSnapshotThunk,
             VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk,
             VehicleSetEngineTorqueRatioThunk, VehicleCatalogRefreshThunk,
-            VehicleCatalogLabelAtThunk};
+            VehicleCatalogLabelAtThunk, VehicleSetOtherVehiclesTopSpeedRatioThunk,
+            VehicleSetOtherVehiclesEngineTorqueRatioThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -15228,6 +15677,22 @@ private:
         void* user, float ratio) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSetEngineTorqueRatio(ratio) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetOtherVehiclesTopSpeedRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesTopSpeedRatio(ratio)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetOtherVehiclesEngineTorqueRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesEngineTorqueRatio(ratio)
+            : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetWheelFrictionThunk(
