@@ -542,6 +542,11 @@ void ANOMALY_CALL Text(void*, AnomalyStringViewV1 value) {
     ImGui::TextUnformatted(text.data(), text.data() + text.size());
 }
 
+void ANOMALY_CALL TextWrapped(void*, AnomalyStringViewV1 value) {
+    const std::string text = Copy(value);
+    ImGui::TextWrapped("%s", text.c_str());
+}
+
 int ANOMALY_CALL Button(
     void*, AnomalyStringViewV1 label, float width, float height) {
     const std::string text = Copy(label);
@@ -737,17 +742,43 @@ int ANOMALY_CALL BeginChild(
         text.c_str(), ImVec2(width, height), static_cast<ImGuiChildFlags>(flags)) ? 1 : 0;
 }
 
+int ANOMALY_CALL BeginChildAutoFitY(
+    void*, AnomalyStringViewV1 id, float width, float max_height) {
+    const std::string text = Copy(id);
+    const float available_height = ImGui::GetContentRegionAvail().y;
+    float height_limit = std::isfinite(available_height)
+        ? (std::max)(1.0F, available_height) : 1.0F;
+    if (std::isfinite(max_height) && max_height > 0.0F) {
+        height_limit = (std::min)(height_limit, max_height);
+    }
+    // Auto-fit the bordered list around its header and rows. If the content is taller
+    // than the visible parent area, the maximum constraint keeps the child scrollable
+    // instead of letting it paint into clipped, invisible space below the window.
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(1.0F, 1.0F),
+        ImVec2((std::numeric_limits<float>::max)(), height_limit));
+    return ImGui::BeginChild(
+        text.c_str(), ImVec2(width, 0.0F),
+        ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY) ? 1 : 0;
+}
+
 void ANOMALY_CALL EndChild(void*) { ImGui::EndChild(); }
 
 int ANOMALY_CALL BeginTable(
     void*, AnomalyStringViewV1 id, std::int32_t columns, std::uint32_t flags,
     float outer_width, float outer_height) {
-    constexpr std::uint32_t kKnownFlags = ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT;
-    if (columns <= 0 || (flags & ~kKnownFlags) != 0) return 0;
+    constexpr std::uint32_t kKnownFlags =
+        ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT |
+        ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP;
+    if (columns <= 0 || (flags & ~kKnownFlags) != 0 ||
+        (flags & kKnownFlags) == kKnownFlags) return 0;
     const std::string text = Copy(id);
     ImGuiTableFlags imgui_flags = ImGuiTableFlags_None;
     if ((flags & ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT) != 0) {
         imgui_flags |= ImGuiTableFlags_SizingFixedFit;
+    }
+    if ((flags & ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP) != 0) {
+        imgui_flags |= ImGuiTableFlags_SizingStretchProp;
     }
     return ImGui::BeginTable(
         text.c_str(), columns, imgui_flags,
@@ -1109,7 +1140,8 @@ const AnomalyUiServiceV1 kUiService{
     CloseCurrentPopup, FilterMatch, FrameState,
     SetNextWindowSizeConstraints, GetWindowSize, InputUInt32, InputDouble,
     DeveloperModeEnabled, InputText, ButtonEnabled, SameLine, SetCursorPosX, TextLink,
-    BeginTabBar, BeginTabItem, EndTabItem, EndTabBar};
+    BeginTabBar, BeginTabItem, EndTabItem, EndTabBar,
+    TextWrapped, BeginChildAutoFitY};
 
 }  // namespace
 
