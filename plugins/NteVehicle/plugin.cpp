@@ -46,12 +46,16 @@ struct Context {
     std::atomic_bool refresh_catalog_requested{};
     std::atomic_bool apply_speed{};
     std::atomic_bool apply_torque{};
+    std::atomic_bool apply_other_speed{};
+    std::atomic_bool apply_other_torque{};
     std::atomic_bool reset{};
     std::atomic_bool summon{};
     std::atomic_bool friction_toggle{};
     std::atomic_bool started{};
     float speed_ratio{1.0F};
     float engine_torque_ratio{1.0F};
+    float other_speed_ratio{1.0F};
+    float other_torque_ratio{1.0F};
     bool friction_enabled{true};
 } g_context;
 
@@ -354,6 +358,52 @@ void Update() {
                 SetStatus("发动机扭矩倍率应用失败，Host 状态码 " +
                     std::to_string(status.code));
             }
+        }
+    }
+
+    if (g_context.apply_other_speed.exchange(false, std::memory_order_acq_rel)) {
+        float ratio;
+        {
+            std::scoped_lock lock(g_context.mutex);
+            ratio = g_context.other_speed_ratio;
+        }
+        const bool available =
+            HasField<AnomalyNteVehicleServiceV1,
+                decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_top_speed_ratio)>(
+                    g_context.vehicle,
+                    offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)) &&
+            g_context.vehicle->set_other_vehicles_top_speed_ratio != nullptr;
+        if (!available) {
+            SetStatus("非玩家车辆速率倍率不可用：Host Runtime 未发布 Vehicle V4 接口");
+        } else {
+            const auto status = g_context.vehicle->set_other_vehicles_top_speed_ratio(
+                g_context.vehicle->user, ratio);
+            SetStatus(status.code == ANOMALY_STATUS_V1_OK
+                ? StatusDescription("非玩家车辆速率修改完成", status)
+                : StatusDescription("非玩家车辆速率修改未完全成功", status));
+        }
+    }
+
+    if (g_context.apply_other_torque.exchange(false, std::memory_order_acq_rel)) {
+        float ratio;
+        {
+            std::scoped_lock lock(g_context.mutex);
+            ratio = g_context.other_torque_ratio;
+        }
+        const bool available =
+            HasField<AnomalyNteVehicleServiceV1,
+                decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_engine_torque_ratio)>(
+                    g_context.vehicle,
+                    offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)) &&
+            g_context.vehicle->set_other_vehicles_engine_torque_ratio != nullptr;
+        if (!available) {
+            SetStatus("非玩家车辆扭矩倍率不可用：Host Runtime 未发布 Vehicle V4 接口");
+        } else {
+            const auto status = g_context.vehicle->set_other_vehicles_engine_torque_ratio(
+                g_context.vehicle->user, ratio);
+            SetStatus(status.code == ANOMALY_STATUS_V1_OK
+                ? StatusDescription("非玩家车辆扭矩修改完成", status)
+                : StatusDescription("非玩家车辆扭矩修改未完全成功", status));
         }
     }
 
@@ -706,7 +756,8 @@ void DrawSummonTab(
 }
 
 void DrawPerformanceTab(
-    const AnomalyUiServiceV1* ui, const Snapshot& snap, float ratio, float torque_ratio) {
+    const AnomalyUiServiceV1* ui, const Snapshot& snap,
+    float ratio, float torque_ratio, float other_speed_ratio, float other_torque_ratio) {
     DrawSectionTitle(ui, "02  /  PERFORMANCE TUNING", "速度与发动机");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
         DrawText(ui, "驾驶状态：未检测到当前驾驶载具");
@@ -746,6 +797,30 @@ void DrawPerformanceTab(
         g_context.apply_torque.store(true, std::memory_order_release);
     }
     DrawDivider(ui);
+    DrawSectionTitle(ui, "02B  /  OTHER VEHICLE INSTANCES", "其他载具实例");
+    DrawText(ui, "应用范围：当前已加载关卡中的 HTWheeledVehicleBase 实例；排除玩家当前驾驶载具");
+    DrawText(ui, "非玩家车辆最高车速倍率");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("其他车辆速度倍率"),
+                         &other_speed_ratio, 0.05F, 20.0F)) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.other_speed_ratio = other_speed_ratio;
+    }
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用其他车辆速率倍率"), 0.0F, 0.0F)) {
+        g_context.apply_other_speed.store(true, std::memory_order_release);
+    }
+
+    DrawDivider(ui);
+    DrawText(ui, "非玩家车辆发动机外部扭矩倍率");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("其他车辆扭矩倍率"),
+                         &other_torque_ratio, 0.05F, 20.0F)) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.other_torque_ratio = other_torque_ratio;
+    }
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用其他车辆扭矩倍率"), 0.0F, 0.0F)) {
+        g_context.apply_other_torque.store(true, std::memory_order_release);
+    }
+
+    DrawDivider(ui);
     if (ui->button(ui->user, anomaly::sdk::StringView("恢复默认倍率  /  1.0x"), 0.0F, 0.0F)) {
         g_context.reset.store(true, std::memory_order_release);
     }
@@ -766,13 +841,14 @@ void DrawLegacyLayout(
     const AnomalyUiServiceV1* ui, const Snapshot& snap, const std::string& status,
     const std::string& selected, const std::vector<std::string>& ids,
     const std::vector<std::string>& labels, const std::string& last_summon,
-    bool summon_enabled, float ratio, float torque_ratio, bool friction, bool player_position_valid) {
+    bool summon_enabled, float ratio, float torque_ratio,
+    float other_speed_ratio, float other_torque_ratio, bool friction, bool player_position_valid) {
     DrawSectionTitle(ui, "NTE  /  VEHICLE CONTROL", "载具控制");
     DrawText(ui, "状态  /  " + status);
     DrawDivider(ui);
     DrawSummonTab(ui, selected, ids, labels, last_summon, summon_enabled, player_position_valid);
     DrawDivider(ui);
-    DrawPerformanceTab(ui, snap, ratio, torque_ratio);
+    DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio, other_torque_ratio);
     DrawDivider(ui);
     DrawChassisTab(ui, friction);
 }
@@ -793,6 +869,8 @@ void Draw(const AnomalyUiServiceV1* ui) {
     std::vector<std::string> labels;
     float ratio;
     float torque_ratio;
+    float other_speed_ratio;
+    float other_torque_ratio;
     bool friction;
     bool player_position_valid{};
     bool summon_enabled{};
@@ -807,6 +885,8 @@ void Draw(const AnomalyUiServiceV1* ui) {
         labels = g_context.vehicle_labels;
         ratio = g_context.speed_ratio;
         torque_ratio = g_context.engine_torque_ratio;
+        other_speed_ratio = g_context.other_speed_ratio;
+        other_torque_ratio = g_context.other_torque_ratio;
         friction = g_context.friction_enabled;
         player_position_valid = g_context.player_position_valid;
     }
@@ -814,7 +894,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     DrawText(ui, "NTE VEHICLE  /  GAMEPLAY SYSTEM");
     DrawText(ui, "载具目录 · 坐标召唤 · 速度与扭矩调校");
     DrawText(ui, "运行状态  /  " + status);
-    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.1 · 2026-10-13-vehicle-fix");
+    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.2 · 2026-10-13-nonplayer-vehicles");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0) {
         DrawText(ui, "当前驾驶载具  /  " +
             (snap.vehicle_class_name.empty() ? std::string("未知类名") : snap.vehicle_class_name) +
@@ -844,7 +924,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         }
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("性能调校"), nullptr,
                 ANOMALY_UI_TAB_ITEM_V1_NONE, 1)) {
-            DrawPerformanceTab(ui, snap, ratio, torque_ratio);
+            DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio, other_torque_ratio);
             ui->end_tab_item(ui->user);
         }
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("底盘设置"), nullptr,
@@ -855,7 +935,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         ui->end_tab_bar(ui->user);
     } else {
         DrawLegacyLayout(ui, snap, status, selected, ids, labels, last_summon, summon_enabled,
-            ratio, torque_ratio, friction, player_position_valid);
+            ratio, torque_ratio, other_speed_ratio, other_torque_ratio, friction, player_position_valid);
     }
 }
 
@@ -878,7 +958,15 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
         !HasField<AnomalyNteVehicleServiceV1,
             decltype(AnomalyNteVehicleServiceV1::catalog_label_at)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, catalog_label_at)) ||
-        !vehicle->catalog_label_at || !player->snapshot) {
+        !vehicle->catalog_label_at ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_top_speed_ratio)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)) ||
+        !vehicle->set_other_vehicles_top_speed_ratio ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_engine_torque_ratio)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)) ||
+        !vehicle->set_other_vehicles_engine_torque_ratio || !player->snapshot) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
 
@@ -887,12 +975,16 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.started.store(false, std::memory_order_release);
     g_context.apply_speed.store(false, std::memory_order_release);
     g_context.apply_torque.store(false, std::memory_order_release);
+    g_context.apply_other_speed.store(false, std::memory_order_release);
+    g_context.apply_other_torque.store(false, std::memory_order_release);
     g_context.reset.store(false, std::memory_order_release);
     g_context.summon.store(false, std::memory_order_release);
     g_context.friction_toggle.store(false, std::memory_order_release);
     g_context.refresh_catalog_requested.store(false, std::memory_order_release);
     g_context.speed_ratio = 1.0F;
     g_context.engine_torque_ratio = 1.0F;
+    g_context.other_speed_ratio = 1.0F;
+    g_context.other_torque_ratio = 1.0F;
     g_context.friction_enabled = true;
     g_context.snapshot = {};
     g_context.selected_vehicle_id = "Vehicle007";
@@ -948,6 +1040,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.8.8"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.9.2"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
