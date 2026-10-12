@@ -9497,8 +9497,7 @@ struct Ue5NteAdapter::State {
                 else ++external_applied;
             } else {
                 ++failed;
-            }d) ++applied;
-            else ++failed;
+            }
         }
 
         vehicle_other_torque_status = "非玩家车辆发动机扭矩倍率 " + std::to_string(ratio) +
