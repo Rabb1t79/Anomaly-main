@@ -1251,7 +1251,9 @@ std::string BuildSnapshot() {
          {"begin_tab_bar", offsetof(AnomalyUiServiceV1, begin_tab_bar)},
          {"begin_tab_item", offsetof(AnomalyUiServiceV1, begin_tab_item)},
          {"end_tab_item", offsetof(AnomalyUiServiceV1, end_tab_item)},
-         {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)}},
+         {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)},
+         {"text_wrapped", offsetof(AnomalyUiServiceV1, text_wrapped)},
+         {"begin_child_auto_fit_y", offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y)}},
         false);
     AppendStruct(
         output,
