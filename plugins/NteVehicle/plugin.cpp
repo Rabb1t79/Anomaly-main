@@ -826,7 +826,7 @@ void DrawPerformanceTab(
     DrawDivider(ui);
     DrawSectionTitle(ui, "02B  /  OTHER VEHICLE INSTANCES", "其他载具实例");
     DrawText(ui, "应用范围：当前已加载关卡中的 HTWheeledVehicleBase 实例；排除玩家当前驾驶载具");
-    DrawText(ui, "目标最高速 = 70 km/h x 因子；因子范围 0.6024x 到 10x");
+    DrawText(ui, "目标最高速 = 70 km/h × 速度因子");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("其他车辆速度倍率"),
                          &other_speed_ratio, 0.05F, 10.0F)) {
         std::scoped_lock lock(g_context.mutex);
@@ -955,7 +955,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         }
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("性能调校"), nullptr,
                 ANOMALY_UI_TAB_ITEM_V1_NONE, 1)) {
-            DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio, other_torque_ratio);
+            DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio, other_speed_floor_ratio, other_torque_ratio);
             ui->end_tab_item(ui->user);
         }
         if (ui->begin_tab_item(ui->user, anomaly::sdk::StringView("底盘设置"), nullptr,
