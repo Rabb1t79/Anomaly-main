@@ -672,13 +672,11 @@ void DrawSummonTab(
     DrawText(ui, "数量 / " + std::to_string(filtered.size()) +
         " 项匹配 / " + std::to_string(ids.size()) + " 辆已读取 / 第 " +
         std::to_string(current_page + 1U) + " / " + std::to_string(page_count) + " 页");
-    if (has_selected) {
-        if (ui->button(ui->user, anomaly::sdk::StringView("上一项"), 0.0F, 0.0F))
-            QueueSelectionOffset(ids, selected, -1);
-        DrawInlineGap(ui);
-        if (ui->button(ui->user, anomaly::sdk::StringView("下一项"), 0.0F, 0.0F))
-            QueueSelectionOffset(ids, selected, 1);
-    }
+    if (DrawButtonEnabled(ui, "上一页", current_page > 0U)) --current_page;
+    DrawInlineGap(ui);
+    if (DrawButtonEnabled(ui, "下一页", current_page + 1U < page_count)) ++current_page;
+    DrawText(ui, "第 " + std::to_string(current_page + 1U) +
+        " / " + std::to_string(page_count) + " 页");
 
     std::vector<std::size_t> visible_indices;
     const std::size_t page_begin = current_page * kVehiclesPerPage;
@@ -699,8 +697,9 @@ void DrawSummonTab(
         UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y),
             sizeof(decltype(AnomalyUiServiceV1::begin_child_auto_fit_y))) &&
         ui->begin_child_auto_fit_y != nullptr;
+    // 固定列表视口高度，末页即使不足五项也不再缩放；长标签仍可在子窗口内滚动。
     const float catalog_height = static_cast<float>(
-        38U + visible_indices.size() * 34U + 8U);
+        38U + kVehiclesPerPage * 34U + 8U);
     const bool catalog_child_visible = has_catalog_child
         ? ui->begin_child(ui->user, anomaly::sdk::StringView("##vehicle-catalog-scroll"),
             0.0F, catalog_height, 1U) != 0
@@ -767,12 +766,13 @@ void DrawSummonTab(
     if (DrawButtonEnabled(ui, "召唤", can_summon)) {
         g_context.summon.store(true, std::memory_order_release);
     }
-    DrawText(ui, "载具目录分页");
-    if (DrawButtonEnabled(ui, "上一页", current_page > 0U)) --current_page;
-    DrawInlineGap(ui);
-    if (DrawButtonEnabled(ui, "下一页", current_page + 1U < page_count)) ++current_page;
-    DrawText(ui, "当前页 / " + std::to_string(current_page + 1U) +
-        " / " + std::to_string(page_count));
+    if (has_selected) {
+        if (ui->button(ui->user, anomaly::sdk::StringView("上一项"), 0.0F, 0.0F))
+            QueueSelectionOffset(ids, selected, -1);
+        DrawInlineGap(ui);
+        if (ui->button(ui->user, anomaly::sdk::StringView("下一项"), 0.0F, 0.0F))
+            QueueSelectionOffset(ids, selected, 1);
+    }
     DrawDivider(ui);
     if (ui->button(ui->user, anomaly::sdk::StringView("重新整理"), 0.0F, 0.0F)) {
         g_context.refresh_catalog_requested.store(true, std::memory_order_release);

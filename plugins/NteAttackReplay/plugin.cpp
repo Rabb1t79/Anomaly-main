@@ -21,7 +21,7 @@
  * 本次改动行为说明：
  * - 修正设定次数的语义：目标总伤害次数 N 包含原始命中，追加次数为 N-1。
  * - 每个 Game tick 最多追加一次原始 GameplayEffect 调用。
- * - 保留真实 DamageEvent 确认、Game 线程执行和停止/超时保护。
+ * - 只在目标死亡、上下文失效或宿主调用出错时停止；不使用经过时间作为连锁终止条件。
  */
 // 捕获玩家对目标的第一条真实伤害事件；后续重放的是原始 GameplayEffect，而非玩家动作。
 #include "anomaly/sdk/cpp.hpp"
@@ -33,7 +33,6 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <new>
@@ -157,6 +156,19 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
            service->begin_window != nullptr && service->end_window != nullptr &&
            service->text != nullptr && service->checkbox != nullptr && service->button != nullptr &&
            service->input_uint32 != nullptr && service->input_double != nullptr;
+}
+
+// 优先使用宿主的 Anomaly 字体换行接口；旧版 Host 则回退到基础文本接口。
+void DrawText(const AnomalyUiServiceV1* ui, std::string_view text) {
+    if (ui == nullptr) return;
+    const auto wrapped_offset = offsetof(AnomalyUiServiceV1, text_wrapped);
+    if (ui->struct_size >= wrapped_offset +
+            sizeof(decltype(AnomalyUiServiceV1::text_wrapped)) &&
+        ui->text_wrapped != nullptr) {
+        ui->text_wrapped(ui->user, anomaly::sdk::StringView(text));
+    } else if (ui->text != nullptr) {
+        ui->text(ui->user, anomaly::sdk::StringView(text));
+    }
 }
 
 AnomalyStatusV1 Status(uint32_t code, std::string_view message = {}) noexcept {
@@ -1007,8 +1019,6 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
-
     // 伤害事件确认与调用提交分开处理。GameplayEffect 对应的伤害事件可能在后续 tick 才进入事件流，
     // 但不能因此额外空等一帧；每个新的 Game tick 仍最多提交一次追加调用。
     for (uint32_t scanned = 0; scanned < 64U; ++scanned) {
@@ -1080,8 +1090,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (ui->set_next_window_size != nullptr) {
         ui->set_next_window_size(ui->user, 430.0F, 0.0F, 4U);
     }
-    // begin_window/end_window are always paired. The host UI follows ImGui's
-    // Begin/End rule: End is required even when Begin returns false.
+    // begin_window/end_window 必须配对；即使 Begin 返回不可见也必须调用 End。
     const int window_visible = ui->begin_window(
         ui->user, anomaly::sdk::StringView("自动伤害录制/重放"), &open, 0);
     if (window_visible != 0) {
@@ -1091,59 +1100,55 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             if (next_enabled != context->enabled) {
                 context->enabled = next_enabled;
                 if (context->enabled) {
-                    // Enabling replay must not reset or interrupt the always-on recorder.
+                    // 启用只打开持续重放，不清除已经自动捕获的真实攻击。
                     context->status = context->captured
-                        ? "已启用重放：已保留当前自动捕获"
-                        : "已启用重放：自动等待下一次攻击";
+                        ? "已启用：继续使用当前捕获"
+                        : "已启用：等待玩家下一次攻击";
                 } else {
-                    // Disabling replay must not stop recording or discard a captured attack.
-                    // Draw is Render-domain code; disable replay through the Game-domain request.
+                    // Draw 位于 Render 域；停止请求交给 Game 域执行。
                     context->stop_requested.store(true, std::memory_order_release);
                     context->status = context->captured
-                        ? "自动记录中：重放功能未启用（已保留当前捕获）"
-                        : "自动记录中：重放功能未启用";
+                        ? "已停用：保留当前捕获，继续记录"
+                        : "已停用：继续自动记录";
                 }
             }
         }
 
-        ui->text(ui->user, anomaly::sdk::StringView(
-            context->enabled ? context->status : "自动记录中：重放功能未启用"));
-
+        DrawText(ui, context->enabled
+            ? std::string_view(context->status)
+            : std::string_view("已停用：继续自动记录"));
         if (ui->separator != nullptr) ui->separator(ui->user);
 
-    if (ui->input_uint32 != nullptr) {
-        ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("连锁速率（每隔多少个游戏帧追加一次；1=每帧）"),
-            &context->replay_rate_ticks, 1, 120);
-        context->replay_rate_ticks = std::clamp(context->replay_rate_ticks, 1u, 120u);
-    }
+        if (ui->input_uint32 != nullptr) {
+            ui->input_uint32(
+                ui->user, anomaly::sdk::StringView("连锁速率（Game tick 间隔；1=每帧）"),
+                &context->replay_rate_ticks, 1, 120);
+            context->replay_rate_ticks = std::clamp(context->replay_rate_ticks, 1u, 120u);
+        }
 
-    if (context->captured) {
-        ui->text(ui->user, anomaly::sdk::StringView(
-            context->captured_ability_path.empty()
-                ? "已捕获玩家→目标的攻击/伤害事件"
-                : context->captured_ability_path));
-        if (!context->captured_damage_source_name.empty()) {
-            ui->text(ui->user, anomaly::sdk::StringView(
-                "DamageSource：" + context->captured_damage_source_name));
+        if (context->captured) {
+            DrawText(ui, context->captured_ability_path.empty()
+                ? std::string_view("已捕获玩家→目标的攻击/伤害事件")
+                : std::string_view(context->captured_ability_path));
+            if (!context->captured_damage_source_name.empty()) {
+                DrawText(ui, "DamageSource：" + context->captured_damage_source_name);
+            }
+            if (!context->captured_target_path.empty()) {
+                DrawText(ui, "目标：" + context->captured_target_path);
+            }
+            DrawText(ui, "连锁：已提交 " + std::to_string(context->replay_issued) +
+                " 次 / 已确认 " + std::to_string(context->replay_done) + " 次");
+            DrawText(ui,
+                "启用后持续追加捕获到的原始 GameplayEffect，不重放按键或动画；"
+                "每隔设定的 Game tick 提交一次，直至目标死亡或上下文失效。"
+                "确认次数只统计同一玩家、同一目标、同一 DamageSource 的新 DamageEvent。");
+        } else {
+            DrawText(ui, "自动等待玩家下一次攻击；无需手动录制。");
         }
-        if (!context->captured_target_path.empty()) {
-            ui->text(ui->user, anomaly::sdk::StringView(
-                "目标：" + context->captured_target_path));
-        }
-        const std::string progress =
-            "持续连锁：已提交 " + std::to_string(context->replay_issued) +
-            " 次；已确认伤害 " + std::to_string(context->replay_done) + " 次";
-        ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("总伤害次数包含已经发生的原始命中；剩余调用每个新 Game tick 最多提交一次，不等待前一条事件确认才提交下一帧。确认数只统计同一玩家、同一目标、同一 DamageSource 的新 DamageEvent；不会重放按键、动画或技能激活。"));
-    } else {
-        ui->text(ui->user, anomaly::sdk::StringView(
-            "无需手动录制：插件自动等待下一次玩家攻击"));
-    }
 
         ui->end_window(ui->user);
     } else {
-        // end_window must also be called when begin_window returned false.
+        // Begin 返回不可见时也必须调用对应的 End。
         ui->end_window(ui->user);
     }
 }
