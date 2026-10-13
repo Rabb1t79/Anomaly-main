@@ -6106,8 +6106,14 @@ struct Ue5NteAdapter::State {
             std::uintptr_t class_default_object{};
             if (!ReadPointerAt(*memory, gameplay_effect_class,
                     Layout(profile, "uclass.classDefaultObject"), class_default_object)) return false;
-            bool source_matches_effect = class_default_object != 0 &&
-                damage_source_object == class_default_object;
+            // HTDamageEvent.DamageGEDef may be recorded as the exact UClass
+            // pointer, its CDO, or an instance whose UClass is that GameplayEffect.
+            // Accept only these identity relationships; do not loosen attacker/target/
+            // receiver/function validation below.
+            bool source_matches_effect =
+                damage_source_object == gameplay_effect_class ||
+                (class_default_object != 0 &&
+                    damage_source_object == class_default_object);
             if (!source_matches_effect) {
                 std::uintptr_t source_class{};
                 source_matches_effect =
