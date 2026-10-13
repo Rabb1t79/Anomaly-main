@@ -9011,8 +9011,11 @@ struct Ue5NteAdapter::State {
         constexpr float kTokkyMinValidField = 0.6024F;
         constexpr float kTokkyDefaultTorque = 1000.0F;
         constexpr float kTokkyDefaultRpm = 6000.0F;
-        constexpr float kMinimumAppliedRatio = 0.05F;
-        constexpr float kMaximumAppliedRatio = 20.0F;
+        // The user-facing Tokky factor is clamped to 0.6024..10.0. The derived
+        // effective TopSpeedRatio is targetKmH / originalTopSpeed and is not clamped
+        // by Tokky; allow its full finite positive result.
+        constexpr float kMinimumEffectiveRatio = 0.0000001F;
+        constexpr float kMaximumEffectiveRatio = 2000.0F;
         if (!baseline.valid || !std::isfinite(configured_multiplier) ||
             configured_multiplier < 0.05F || configured_multiplier > 20.0F) return false;
 
@@ -9023,7 +9026,7 @@ struct Ue5NteAdapter::State {
             ? baseline.top_speed_kmh : kTokkyBaseSpeedKmh;
         const float speed_ratio = target_speed_kmh / baseline_speed_kmh;
         if (!std::isfinite(target_speed_kmh) || !std::isfinite(speed_ratio) ||
-            speed_ratio < kMinimumAppliedRatio || speed_ratio > kMaximumAppliedRatio) return false;
+            speed_ratio < kMinimumEffectiveRatio || speed_ratio > kMaximumEffectiveRatio) return false;
 
         const float base_engine_torque = baseline.engine_max_torque > kTokkyMinValidField
             ? baseline.engine_max_torque : kTokkyDefaultTorque;
@@ -9086,8 +9089,8 @@ struct Ue5NteAdapter::State {
                 vehicle_speed_field_baseline.engine_max_torque = vehicle_base_engine_torque;
             }
             vehicle_speed_field_baseline_component = vehicle_movement_component;
-            const float baseline_ratio = current_fields_before.top_speed_ratio >= 0.05F &&
-                current_fields_before.top_speed_ratio <= 20.0F
+            const float baseline_ratio = current_fields_before.top_speed_ratio > 0.0F &&
+                current_fields_before.top_speed_ratio <= 2000.0F
                 ? current_fields_before.top_speed_ratio : 1.0F;
             vehicle_top_speed_ratio = baseline_ratio;
             vehicle_current_velocity_ratio = baseline_ratio;
@@ -9101,9 +9104,9 @@ struct Ue5NteAdapter::State {
                     std::isfinite(vehicle_base_engine_torque);
             }
         }
-        if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F ||
-            !std::isfinite(previous_top_speed_ratio) || previous_top_speed_ratio < 0.05F ||
-            previous_top_speed_ratio > 20.0F) {
+        if (!std::isfinite(previous_ratio) || previous_ratio <= 0.0F || previous_ratio > 2000.0F ||
+            !std::isfinite(previous_top_speed_ratio) || previous_top_speed_ratio <= 0.0F ||
+            previous_top_speed_ratio > 2000.0F) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "tracked current-velocity multiplier is invalid; refusing a partial update");
         }
@@ -9771,12 +9774,12 @@ struct Ue5NteAdapter::State {
             }
 
             auto previous_it = other_vehicle_velocity_ratios.find(movement);
-            const float baseline_ratio = baseline_it->second.top_speed_ratio >= 0.05F &&
-                baseline_it->second.top_speed_ratio <= 20.0F
+            const float baseline_ratio = baseline_it->second.top_speed_ratio > 0.0F &&
+                baseline_it->second.top_speed_ratio <= 2000.0F
                 ? baseline_it->second.top_speed_ratio : 1.0F;
             const float previous_ratio = previous_it == other_vehicle_velocity_ratios.end()
                 ? baseline_ratio : previous_it->second;
-            if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
+            if (!std::isfinite(previous_ratio) || previous_ratio <= 0.0F || previous_ratio > 2000.0F) {
                 ++partial;
                 record_failure("该 movement component 的历史速率倍率状态无效");
                 continue;
