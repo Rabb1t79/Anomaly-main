@@ -7,25 +7,23 @@
 /*
  * 中文维护说明：
  * 1. 本文件是 NTE Attack Replay 插件的实现；本分支不修改 Anomaly 宿主核心。
- * 2. 插件始终监听玩家对目标产生的真实 DamageEvent，并记录攻击上下文。
- * 3. 普通攻击不依赖技能句柄；其重放路径依据 HTGame 中已确认的
- *    DT_AbilityInput / HTAbilityInputRow / MeleeAtack / InputID / Param
- *    以及 ActivateAbilityFromID、ReleaseAbilityFromID 反射函数执行。
- * 4. 技能攻击继续通过 Anomaly NTE skill-invocation 服务执行。
- * 5. Draw 只产生请求；真正的游戏调用在 Update 的 Game 域执行，避免跨线程
- *    直接操作游戏对象。
- * 6. 每次重放只有在之后观察到新的“玩家 -> 非玩家目标”DamageEvent 后，
- *    才计为一次成功重放；仅收到 accepted=1 不作为成功依据。
- * 7. 本文件中的原生偏移、函数名、DataTable 字段和 ProcessEvent 调用链，
- *    均对应当前项目/HTGame 证据；禁止把未经验证的猜测写入这里。
+ * 2. 插件自动捕获玩家对非玩家目标造成的真实 CharacterOnDamaged 事件。
+ * 3. 重放只调用 Core 提供的、与该伤害事件严格匹配的 GameplayEffect 调用上下文；
+ *    不模拟按键、不触发攻击动画、不重新激活技能，也不直接修改目标 HP。
+ * 4. UI 只提交请求；重放在 Update 的 Game 回调域执行。
+ * 5. 每次追加伤害只有在观察到同一玩家对同一目标产生新的匹配 DamageEvent 后才计数；
+ *    单次调用成功或返回 OK 本身不代表实际伤害已经发生。
+ * 6. 设定值 N 表示包含原始命中的总伤害次数；原始命中已发生，只追加 N-1 次，
+ *    每个 Game tick 最多调用一次并等待真实伤害事件确认。
+ * 7. Core 的原生参数、函数签名和调用上下文以当前项目的 HTGame dump/ABI 证据为准，
+ *    不把未经验证的猜测写成实现依据。
  *
  * 本次改动行为说明：
- * - 新增/完善普通攻击原生输入绑定与重放路径。
- * - 增加对 DataTable 行结构、属性类型、参数大小的运行时校验。
- * - 增加重放后的真实 DamageEvent 验证。
- * - 保留自动捕获、技能重放和 UI 请求/游戏线程分离行为。
+ * - 修正设定次数的语义：目标总伤害次数 N 包含原始命中，追加次数为 N-1。
+ * - 每个 Game tick 最多追加一次原始 GameplayEffect 调用。
+ * - 保留真实 DamageEvent 确认、Game 线程执行和停止/超时保护。
  */
-// Record the first player->target DAMAGE event; normal attacks do not require a skill.
+// 捕获玩家对目标的第一条真实伤害事件；后续重放的是原始 GameplayEffect，而非玩家动作。
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
@@ -841,7 +839,7 @@ enum class ReplayCallResult : uint32_t {
     Rejected,
 };
 
-// 重放通过 Host 暴露的原生攻击输入服务执行；每次按下后必须观察到新的玩家->目标 DamageEvent 才能计数。
+// 重放通过 Host 的已验证 GameplayEffect 服务执行；每次追加后必须观察到新的玩家->目标 DamageEvent 才计数。
 ReplayCallResult ReplayOnce(Context& context, AnomalyStatusV1* replay_status) {
     if (replay_status != nullptr) {
         *replay_status = Status(ANOMALY_STATUS_V1_OK);
@@ -1179,7 +1177,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.9.0"),
+        anomaly::sdk::StringView("1.9.1"),
         Load,
         Start,
         Stop,
