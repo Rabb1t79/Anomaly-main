@@ -6139,14 +6139,17 @@ struct Ue5NteAdapter::State {
             if (gameplay_effect_class == 0 ||
                 !ReadableRange(*memory, gameplay_effect_class, 0x20U)) return false;
             std::uintptr_t class_default_object{};
-            if (!ReadPointerAt(*memory, gameplay_effect_class,
-                    Layout(profile, "uclass.classDefaultObject"), class_default_object)) return false;
-            // DamageGEDef is validated as WeakObjectProperty, not specifically as a CDO.
-            // Some native paths store the GameplayEffect UClass itself. Accept that exact
-            // pointer identity, while retaining the existing CDO/instance-class checks.
+            // CDO lookup adds one valid identity route; it must not gate the independent
+            // exact UClass/object-class checks below.
+            const bool class_default_object_available = ReadPointerAt(
+                *memory, gameplay_effect_class,
+                Layout(profile, "uclass.classDefaultObject"), class_default_object);
+            // HTDamageEvent::DamageGEDef is TWeakObjectPtr<UHTGamePlayEffect>; the apply
+            // argument is TSubclassOf<UGameplayEffect> in the supplied HTGame dump.
+            // Accept only pointer/CDO/exact-class identity; keep source correlation strict.
             bool source_matches_effect =
                 damage_source_object == gameplay_effect_class ||
-                (class_default_object != 0 &&
+                (class_default_object_available &&
                     damage_source_object == class_default_object);
             if (!source_matches_effect) {
                 std::uintptr_t source_class{};
@@ -6238,7 +6241,9 @@ struct Ue5NteAdapter::State {
         }
         if (!record->replay.valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "original hit has no matching validated HTAbilitySystemComponent GameplayEffect call");
+                replay_effect_call_count == 0
+                    ? "no validated HTAbilitySystemComponent/HTAbilityCharacter GameplayEffect call was captured by Core"
+                    : "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick");
         }
         if (!record->replay.tag_arrays_valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
