@@ -691,7 +691,7 @@
     "ustruct.children": 72,
     "ufield.next": 40,
     "ufunction.execFunction": 216,
-    "fstack.locals": 24,
+    "fstack.locals": 32,
     "escMenu.buttonClickedVtableOffset": 1392,
     "ffield.class": 8,
     "ffield.name": 32,
