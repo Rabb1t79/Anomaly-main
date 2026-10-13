@@ -990,6 +990,23 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         context->framework->user);
     if (!context->replaying) return;
 
+    // 只有当前战斗快照确认指向该目标时，才依据死亡标志或 HP 停止连锁。
+    AnomalyNteCombatantSnapshotV1 target_state{};
+    target_state.struct_size = sizeof(target_state);
+    const auto target_status = context->combat->current_combatant(
+        context->combat->user, &target_state);
+    if (target_status.code == ANOMALY_STATUS_V1_OK &&
+        SameHandle(target_state.world, context->world) &&
+        SameHandle(target_state.target, context->captured_target) &&
+        (((target_state.flags & ANOMALY_NTE_COMBATANT_V1_DEAD) != 0) ||
+         (std::isfinite(target_state.hp) && target_state.hp <= 0.0))) {
+        context->replaying = false;
+        context->waiting_for_damage = false;
+        ArmForNextAttack(*context);
+        context->status = "目标已死亡，持续连锁结束";
+        return;
+    }
+
     const auto now = std::chrono::steady_clock::now();
 
     // 伤害事件确认与调用提交分开处理。GameplayEffect 对应的伤害事件可能在后续 tick 才进入事件流，
@@ -1122,21 +1139,6 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     } else {
         ui->text(ui->user, anomaly::sdk::StringView(
             "无需手动录制：插件自动等待下一次玩家攻击"));
-    }
-
-    if (context->enabled && !context->replaying && context->captured) {
-        if (ui->button(
-                ui->user, anomaly::sdk::StringView("开始重放"), 0.0F, 0.0F) != 0) {
-            // Draw 只提交请求；Update 在 Game 线程调用 Host 的捕获伤害重放服务。
-            context->replay_requested.store(true, std::memory_order_release);
-            context->status = "已提交重放请求";
-        }
-    } else if (context->replaying) {
-        if (ui->button(
-                ui->user, anomaly::sdk::StringView("停止重放"), 0.0F, 0.0F) != 0) {
-            // Draw only posts the stop request; Update() applies it in Game domain.
-            context->stop_requested.store(true, std::memory_order_release);
-        }
     }
 
         ui->end_window(ui->user);
