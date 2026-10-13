@@ -777,13 +777,14 @@ void DrawPerformanceTab(
         const double display_speed = std::isfinite(snap.speed_kmh)
             ? std::floor(std::fabs(snap.speed_kmh)) : 0.0;
         DrawText(ui, "当前速度  /  " + std::to_string(static_cast<std::uint64_t>(display_speed)) + " km/h");
-        DrawText(ui, "当前车速倍率  /  " + std::to_string(snap.top_speed_ratio) + "x");
+        DrawText(ui, "实际 TopSpeedRatio（相对载具原始最高速）/ " +
+        std::to_string(snap.top_speed_ratio) + "x");
     }
 
     DrawDivider(ui);
-    DrawText(ui, "当前车速 / 最高车速倍率");
+    DrawText(ui, "Tokky 目标最高速 = 70 km/h x 因子；因子范围 0.6024x 到 10x");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("速度倍率"),
-                         &ratio, 0.05F, 20.0F)) {
+                         &ratio, 0.6024F, 10.0F)) {
         std::scoped_lock lock(g_context.mutex);
         g_context.speed_ratio = ratio;
     }
@@ -806,9 +807,9 @@ void DrawPerformanceTab(
     DrawDivider(ui);
     DrawSectionTitle(ui, "02B  /  OTHER VEHICLE INSTANCES", "其他载具实例");
     DrawText(ui, "应用范围：当前已加载关卡中的 HTWheeledVehicleBase 实例；排除玩家当前驾驶载具");
-    DrawText(ui, "非玩家车辆最高车速倍率");
+    DrawText(ui, "Tokky 目标最高速 = 70 km/h x 因子；因子范围 0.6024x 到 10x");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("其他车辆速度倍率"),
-                         &other_speed_ratio, 0.05F, 20.0F)) {
+                         &other_speed_ratio, 0.6024F, 10.0F)) {
         std::scoped_lock lock(g_context.mutex);
         g_context.other_speed_ratio = other_speed_ratio;
     }
