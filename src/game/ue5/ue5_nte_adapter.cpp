@@ -9691,7 +9691,10 @@ struct Ue5NteAdapter::State {
                 !ObjectClassChainContainsLocked(movement, "HTVehicleMovementComponent")) {
                 ++failed;
                 record_failure("载具实例缺少经过校验的 HTVehicleMovementComponent");
-             bool invoked{};
+                continue;
+            }
+
+            bool invoked{};
             bool used_fallback{};
             std::string primary_failure;
             if (torque_binding.function != 0 && torque_binding.parms_size != 0 &&
