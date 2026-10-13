@@ -853,6 +853,8 @@ struct Ue5NteAdapter::State {
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
     static constexpr std::size_t kGameplayEffectReplayParameterBytes = 0x78;
+    // Dump: HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor uses 0x80 bytes.
+    static constexpr std::size_t kGameplayEffectReplayMaxParameterBytes = 0x80;
     // HTGame dump: ModifyData@0x10 contains FBufferData, whose FGameplayTagContainer
     // contains two TArray<FGameplayTag> objects at parameter offsets 0x18 and 0x28.
     // Own the tag values because the original ProcessEvent parameter buffer and its
@@ -872,7 +874,7 @@ struct Ue5NteAdapter::State {
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
-        std::array<std::uint8_t, kGameplayEffectReplayParameterBytes> parameters{};
+        std::array<std::uint8_t, kGameplayEffectReplayMaxParameterBytes> parameters{};
         CapturedGameplayTagArrays gameplay_tags{};
     };
     struct DamageRecord {
@@ -1052,6 +1054,7 @@ struct Ue5NteAdapter::State {
         BuffRemove,
         GameplayEffectByActor,
         GameplayEffectToTarget,
+        GameplayEffectActivationByActor,
     };
     struct PendingCombatCapture {
         CombatCaptureKind kind{};
@@ -1091,6 +1094,7 @@ struct Ue5NteAdapter::State {
         std::uint16_t damage_tags_offset{0xFFFFU};
         std::uintptr_t replay_apply_by_actor{};
         std::uintptr_t replay_apply_to_target{};
+        std::uintptr_t replay_activate_by_actor{};
     };
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
@@ -5362,14 +5366,19 @@ struct Ue5NteAdapter::State {
         const std::uint64_t capture_tick_sequence,
         const CapturedGameplayTagArrays& gameplay_tags,
         const bool tag_arrays_valid) noexcept {
+        const std::size_t expected_parameter_size =
+            kind == CombatCaptureKind::GameplayEffectActivationByActor
+                ? kGameplayEffectReplayMaxParameterBytes : kGameplayEffectReplayParameterBytes;
         if ((kind != CombatCaptureKind::GameplayEffectByActor &&
-                kind != CombatCaptureKind::GameplayEffectToTarget) ||
+                kind != CombatCaptureKind::GameplayEffectToTarget &&
+                kind != CombatCaptureKind::GameplayEffectActivationByActor) ||
             receiver == 0 || function == 0 ||
-            parameters.size() != kGameplayEffectReplayParameterBytes) return;
+            parameters.size() != expected_parameter_size) return;
         ReplayEffectContext captured{};
         captured.valid = true;
         captured.tag_arrays_valid = tag_arrays_valid;
-        captured.kind = kind == CombatCaptureKind::GameplayEffectByActor ? 1U : 2U;
+        captured.kind = kind == CombatCaptureKind::GameplayEffectByActor ? 1U :
+            kind == CombatCaptureKind::GameplayEffectToTarget ? 2U : 3U;
         captured.parameter_size = static_cast<std::uint16_t>(parameters.size());
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
@@ -5412,6 +5421,7 @@ struct Ue5NteAdapter::State {
             break;
         case CombatCaptureKind::GameplayEffectByActor:
         case CombatCaptureKind::GameplayEffectToTarget:
+        case CombatCaptureKind::GameplayEffectActivationByActor:
             CaptureReplayEffectInvocationLocked(
                 kind, receiver, function, parameters, capture_tick_sequence,
                 gameplay_tags, tag_arrays_valid);
@@ -5463,17 +5473,19 @@ struct Ue5NteAdapter::State {
     // pointers copied from FBufferData would otherwise be dangling.
     [[nodiscard]] bool CaptureReplayGameplayTagsLocked(
         const void* const parameters,
-        CapturedGameplayTagArrays& captured) const noexcept {
-        if (parameters == nullptr) return false;
+        CapturedGameplayTagArrays& captured,
+        const std::size_t parameter_size,
+        const std::uintptr_t array_offset_base) const noexcept {
+        if (parameters == nullptr || parameter_size > kGameplayEffectReplayMaxParameterBytes) return false;
         const auto base = reinterpret_cast<std::uintptr_t>(parameters);
-        if (!ReadableRange(*memory, base, kGameplayEffectReplayParameterBytes)) return false;
+        if (!ReadableRange(*memory, base, parameter_size)) return false;
         struct TArrayView {
             std::uintptr_t data{};
             std::int32_t num{};
             std::int32_t max{};
         };
         for (std::size_t index{}; index < captured.size(); ++index) {
-            const std::uintptr_t offset = 0x18U + static_cast<std::uintptr_t>(index) * 0x10U;
+            const std::uintptr_t offset = array_offset_base + static_cast<std::uintptr_t>(index) * 0x10U;
             TArrayView view{};
             if (!ReadValue(*memory, base + offset, view) ||
                 view.num < 0 || view.num > static_cast<std::int32_t>(kReplayGameplayTagCapacity) ||
@@ -5507,7 +5519,8 @@ struct Ue5NteAdapter::State {
         } else if (function == bindings.damage_widget) {
             damage_widget_call_count.fetch_add(1, std::memory_order_relaxed);
         } else if (function == bindings.replay_apply_by_actor ||
-                   function == bindings.replay_apply_to_target) {
+                   function == bindings.replay_apply_to_target ||
+                   function == bindings.replay_activate_by_actor) {
             // Capture the bounded 0x78-byte Dump-validated HTAbilitySystemComponent call.
         } else if (std::ranges::any_of(
                        bindings.buffs, [function](const auto& buff) {
@@ -5559,6 +5572,9 @@ struct Ue5NteAdapter::State {
         } else if (function == bindings.replay_apply_to_target) {
             kind = CombatCaptureKind::GameplayEffectToTarget;
             payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayParameterBytes);
+        } else if (function == bindings.replay_activate_by_actor) {
+            kind = CombatCaptureKind::GameplayEffectActivationByActor;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayMaxParameterBytes);
         } else if (function == bindings.damage || function == bindings.monster_damage) {
             kind = CombatCaptureKind::Damage;
             info_offset = bindings.damage_info_offset;
@@ -5652,8 +5668,10 @@ struct Ue5NteAdapter::State {
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
         if (kind == CombatCaptureKind::GameplayEffectByActor ||
             kind == CombatCaptureKind::GameplayEffectToTarget) {
-            capture.replay_tag_arrays_valid =
-                CaptureReplayGameplayTagsLocked(parameters, capture.replay_gameplay_tags);
+            const std::uintptr_t tag_arrays_offset =
+                kind == CombatCaptureKind::GameplayEffectActivationByActor ? 0x20U : 0x18U;
+            capture.replay_tag_arrays_valid = CaptureReplayGameplayTagsLocked(
+                parameters, capture.replay_gameplay_tags, payload_size, tag_arrays_offset);
         }
         combat_capture_write.store(write + 1U, std::memory_order_release);
     }
@@ -6083,7 +6101,11 @@ struct Ue5NteAdapter::State {
         const ReplayEffectContext& context, const std::uintptr_t attacker,
         const std::uintptr_t victim, const std::uint64_t source_id) const noexcept {
         try {
-            if (!context.valid || context.parameter_size != kGameplayEffectReplayParameterBytes ||
+            const std::size_t expected_parameter_size = context.kind == 3U
+                ? kGameplayEffectReplayMaxParameterBytes : kGameplayEffectReplayParameterBytes;
+            if (!context.valid ||
+                (context.kind != 1U && context.kind != 2U && context.kind != 3U) ||
+                context.parameter_size != expected_parameter_size ||
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
                 source_id == 0 || context.receiver == 0 || context.function == 0 ||
                 !ReadableRange(*memory, context.receiver, 0x20U) ||
@@ -6098,8 +6120,10 @@ struct Ue5NteAdapter::State {
             // DamageGEDef 在 HTDamageEvent 中是弱 UObject；只有它能和此次调用的
             // GameplayEffect 类/CDO 对上时，才把这条调用作为该伤害的重放模板。
             std::uintptr_t gameplay_effect_class{};
+            const std::uintptr_t effect_class_offset = context.kind == 1U ? 0x08U :
+                context.kind == 2U ? 0x00U : 0x10U;
             std::memcpy(&gameplay_effect_class,
-                context.parameters.data() + (context.kind == 1U ? 0x08U : 0x00U),
+                context.parameters.data() + effect_class_offset,
                 sizeof(gameplay_effect_class));
             if (gameplay_effect_class == 0 ||
                 !ReadableRange(*memory, gameplay_effect_class, 0x20U)) return false;
@@ -6146,6 +6170,20 @@ struct Ue5NteAdapter::State {
                 return context.function == bindings->replay_apply_to_target &&
                     context.receiver == attacker_ability_system &&
                     target_ability_system == victim_ability_system;
+            }
+            if (context.kind == 3U) {
+                std::uintptr_t world_context{}, source_actor{}, trigger_ability_system{};
+                std::memcpy(&world_context, context.parameters.data(), sizeof(world_context));
+                std::memcpy(&source_actor, context.parameters.data() + 0x08U, sizeof(source_actor));
+                std::memcpy(&trigger_ability_system,
+                    context.parameters.data() + 0x70U, sizeof(trigger_ability_system));
+                // The dump-declared character wrapper must target the damaged character
+                // and carry the live player's ASC as its trigger source.
+                return context.function == bindings->replay_activate_by_actor &&
+                    context.receiver == victim && world_context != 0 &&
+                    ReadableRange(*memory, world_context, 0x20U) && source_actor != 0 &&
+                    ReadableRange(*memory, source_actor, 0x20U) &&
+                    trigger_ability_system == attacker_ability_system;
             }
             return false;
         } catch (...) {
@@ -6204,7 +6242,7 @@ struct Ue5NteAdapter::State {
         }
         if (!record->replay.valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "original hit has no matching validated HTAbilitySystemComponent GameplayEffect call");
+                "original hit has no matching validated native GameplayEffect call");
         }
         if (!record->replay.tag_arrays_valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -6253,7 +6291,8 @@ struct Ue5NteAdapter::State {
             const std::uintptr_t array_data = source.count != 0
                 ? reinterpret_cast<std::uintptr_t>(replay_tag_storage[index].data()) : 0;
             const std::int32_t array_count = static_cast<std::int32_t>(source.count);
-            const std::uintptr_t array_offset = 0x18U + static_cast<std::uintptr_t>(index) * 0x10U;
+            const std::uintptr_t array_offset = (record->replay.kind == 3U ? 0x20U : 0x18U) +
+                static_cast<std::uintptr_t>(index) * 0x10U;
             std::memcpy(parameters.data() + array_offset, &array_data, sizeof(array_data));
             std::memcpy(parameters.data() + array_offset + 8U,
                 &array_count, sizeof(array_count));
@@ -6268,6 +6307,8 @@ struct Ue5NteAdapter::State {
         } else if (record->replay.kind == 2U) {
             parameters[0x69U] = 0;
             std::memset(parameters.data() + 0x6CU, 0, sizeof(std::uint64_t));
+        } else if (record->replay.kind == 3U) {
+            parameters[0x78U] = 0;
         } else {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "unsupported captured GameplayEffect call kind");
@@ -8029,6 +8070,41 @@ struct Ue5NteAdapter::State {
             buff_event_type.element_size == 1 && buff_event_type.offset == 0x68 &&
             field("bUsePredictionKey", "BoolProperty", 1, 0x69) &&
             field("ReturnValue", "StructProperty", 8, 0x6C);
+    }
+
+    [[nodiscard]] bool ValidateReplayEffectActivationFunctionLocked(
+        const std::uintptr_t function) const {
+        if (function == 0) return false;
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name) ||
+            function_class_name != "Function" || outer_name != "HTAbilityCharacter" ||
+            function_name != "K2_ActivateGameEffectsWithClassByActor" ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+            parms_size != 0x80U || num_parms != 6U || return_offset != 0x78U) {
+            return false;
+        }
+        const auto field = [&](const std::string_view name, const std::string_view type,
+                               const std::uint16_t size, const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            return FindReflectedPropertyLocked(function, name, property, false) &&
+                property.type == type && property.element_size == size &&
+                property.offset == offset && property.array_dim == 1;
+        };
+        return field("WorldContextObject", "ObjectProperty", 8, 0x00) &&
+            field("SourceObj", "ObjectProperty", 8, 0x08) &&
+            field("GameplayEffect", "ClassProperty", 8, 0x10) &&
+            field("ModifyData", "StructProperty", 0x58, 0x18) &&
+            field("pTriggerAbilityComp", "ObjectProperty", 8, 0x70) &&
+            field("ReturnValue", "BoolProperty", 1, 0x78);
     }
 
     // Convert the dump-declared FVehicleData.Name FText via the dump-declared
@@ -11540,6 +11616,15 @@ struct Ue5NteAdapter::State {
                         ValidateReplayEffectFunctionLocked(replay_apply_to_target, false)) {
                         next_capture_bindings.replay_apply_to_target = replay_apply_to_target;
                     }
+                    // 本体 dump 还声明了角色级封装函数。若其内部直接调用 ASC 原生方法，
+                    // 内层调用未必经过 ProcessEvent，因此同时捕获此 dump 已声明的入口。
+                    std::uintptr_t replay_activate_by_actor{};
+                    if (FindExactObjectLocked(
+                            L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor",
+                            replay_activate_by_actor) &&
+                        ValidateReplayEffectActivationFunctionLocked(replay_activate_by_actor)) {
+                        next_capture_bindings.replay_activate_by_actor = replay_activate_by_actor;
+                    }
                     if (next_capture_bindings.replay_apply_by_actor == 0 ||
                         next_capture_bindings.replay_apply_to_target == 0) {
                         direct_lookup_succeeded = false;
@@ -11563,6 +11648,7 @@ struct Ue5NteAdapter::State {
                     next_capture_bindings.damage_widget != 0 ||
                     next_capture_bindings.replay_apply_by_actor != 0 ||
                     next_capture_bindings.replay_apply_to_target != 0 ||
+                    next_capture_bindings.replay_activate_by_actor != 0 ||
                     std::ranges::any_of(next_capture_bindings.buffs,
                         [](const auto& buff) { return buff.function != 0; });
                 if (has_capture_binding) {
@@ -18205,6 +18291,7 @@ void Ue5NteAdapter::OnCombatExecFunction(
         function != bindings->damage_widget &&
         function != bindings->replay_apply_by_actor &&
         function != bindings->replay_apply_to_target &&
+        function != bindings->replay_activate_by_actor &&
         !is_buff_function) {
         return;
     }
