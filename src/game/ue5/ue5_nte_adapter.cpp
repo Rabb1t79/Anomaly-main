@@ -18431,9 +18431,7 @@ Ue5NteAdapter::CombatExecFunctionTargets() const noexcept {
         if (function == 0 || snapshot.count >= snapshot.entries.size()) return;
 
         std::uintptr_t target{};
-        if (!ReadPointerAt(
-                *state->memory,
-                function + static_cast<std::uintptr_t>(exec_offset), target) ||
+        if (!ReadPointerAt(*state->memory, function, exec_offset, target) ||
             target == 0) {
             return;
         }
