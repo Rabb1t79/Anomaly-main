@@ -73,10 +73,12 @@ jobs:
           endforeach()
           set_target_properties(nte_vehicle PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle"
-            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle")
+            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle"
+            ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle")
           set_target_properties(nte_attack_replay PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay"
-            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay")
+            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay"
+            ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay")
           '@
           $cmakeLists = $cmakeLists.Replace('@ROOT@', $root)
           Set-Content -LiteralPath (Join-Path $sourceDir 'CMakeLists.txt') -Value $cmakeLists -Encoding UTF8
