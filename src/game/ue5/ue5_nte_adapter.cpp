@@ -9091,15 +9091,16 @@ struct Ue5NteAdapter::State {
             const bool rollback_ok = WriteVehicleSpeedFieldSnapshotLocked(
                 vehicle_movement_component, current_fields_before, rollback_failure);
             vehicle_top_speed_ratio = previous_top_speed_ratio;
-            return Status(ANOMALY_STATUS_V1_FAILED,
-                (std::string("SetTopSpeedRatio 已调用，但 Tokky 风格速度字段写入失败：") +
-                    (field_failure.empty() ? "目标字段计算无效" : field_failure) +
-                    (rollback_ok ? "；已回滚字段" : "；字段回滚不完整：" + rollback_failure)).c_str());
+            vehicle_speed_restore_status =
+                std::string("SetTopSpeedRatio 已调用，但 Tokky 风格速度字段写入失败：") +
+                (field_failure.empty() ? "目标字段计算无效" : field_failure) +
+                (rollback_ok ? "；已回滚字段" : "；字段回滚不完整：" + rollback_failure);
+            return Status(ANOMALY_STATUS_V1_FAILED, vehicle_speed_restore_status.c_str());
         }
 
         if (vehicle_bindings.set_delayed_velocity_restore == 0) {
             vehicle_speed_restore_status =
-                "最高车速上限已应用；当前车速恢复失败：" +
+                "Tokky 风格最高车速/发动机字段已应用；当前车速恢复失败：" +
                 (vehicle_delayed_velocity_restore_failure_reason.empty()
                     ? std::string("反射验证失败，但未返回具体阶段")
                     : vehicle_delayed_velocity_restore_failure_reason);
@@ -9198,7 +9199,7 @@ struct Ue5NteAdapter::State {
         }
         vehicle_current_velocity_ratio = ratio;
         return Status(ANOMALY_STATUS_V1_OK,
-            "最高车速上限与当前速度均已应用倍率；当前速度通过 SetDelayedVelocityRestore 提交给车辆物理组件");
+            "Tokky 风格速度上限、发动机参数与当前速度均已应用倍率");
     }
 
     AnomalyStatusV1 VehicleSetEngineTorqueRatio(float ratio) noexcept {
