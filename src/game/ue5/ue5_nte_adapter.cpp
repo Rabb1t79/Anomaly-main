@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <initializer_list>
@@ -882,16 +883,28 @@ struct Ue5NteAdapter::State {
         std::array<std::uint8_t, kGameplayEffectReplayMaxParameterBytes> parameters{};
         CapturedGameplayTagArrays gameplay_tags{};
     };
+    // Evidence captured with each hit to distinguish absent native calls from failed matching.
+    struct ReplayCaptureDiagnostics {
+        std::uint16_t captured_count{};
+        std::uint16_t in_window_count{};
+        std::uint16_t outside_window_count{};
+        std::array<std::uint16_t, 4> captured_by_kind{};
+        std::array<std::uint16_t, 4> in_window_by_kind{};
+        std::uint32_t binding_mask{};
+    };
     struct DamageRecord {
         AnomalyNteDamageEventV1 event{};
         float raw_damage{};
         ReplayEffectContext replay{};
+        ReplayCaptureDiagnostics replay_diagnostics{};
     };
     static constexpr std::size_t kReplayEffectCallCapacity = 32;
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
     std::size_t replay_effect_call_start{};
     std::size_t replay_effect_call_count{};
     std::array<DamageRecord, kDamageEventCapacity> damage_events{};
+    // Status messages borrow this persistent buffer; do not return a temporary string.
+    std::array<char, 512> replay_context_diagnostic_message{};
     std::size_t damage_event_start{};
     std::size_t damage_event_count{};
     std::uint64_t damage_event_sequence{};
@@ -3935,13 +3948,15 @@ struct Ue5NteAdapter::State {
 
     void RecordDamageEventLocked(
         AnomalyNteDamageEventV1 event, const float raw_damage = 0.0F,
-        const ReplayEffectContext* replay_context = nullptr) noexcept {
+        const ReplayEffectContext* replay_context = nullptr,
+        const ReplayCaptureDiagnostics* replay_diagnostics = nullptr) noexcept {
         event.struct_size = sizeof(event);
         event.sequence = ++damage_event_sequence;
         DamageRecord record{};
         record.event = event;
         record.raw_damage = raw_damage;
         if (replay_context != nullptr) record.replay = *replay_context;
+        if (replay_diagnostics != nullptr) record.replay_diagnostics = *replay_diagnostics;
         if (damage_event_count == kDamageEventCapacity) {
             damage_events[damage_event_start] = record;
             damage_event_start = (damage_event_start + 1U) % kDamageEventCapacity;
@@ -6228,7 +6243,34 @@ struct Ue5NteAdapter::State {
     [[nodiscard]] bool FindReplayContextForDamageLocked(
         const std::uintptr_t attacker, const std::uintptr_t victim,
         const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
-        ReplayEffectContext& result) const noexcept {
+        ReplayEffectContext& result,
+        ReplayCaptureDiagnostics* const diagnostics = nullptr) const noexcept {
+        if (diagnostics != nullptr) {
+            *diagnostics = {};
+            if (const auto* bindings =
+                    combat_capture_bindings.load(std::memory_order_acquire)) {
+                if (bindings->replay_apply_by_actor != 0) diagnostics->binding_mask |= 1U << 0U;
+                if (bindings->replay_apply_to_target != 0) diagnostics->binding_mask |= 1U << 1U;
+                if (bindings->replay_activate_by_actor != 0) diagnostics->binding_mask |= 1U << 2U;
+                if (bindings->replay_activate_simple != 0) diagnostics->binding_mask |= 1U << 3U;
+            }
+            diagnostics->captured_count = static_cast<std::uint16_t>(replay_effect_call_count);
+            for (std::size_t i{}; i < replay_effect_call_count; ++i) {
+                const auto index = (replay_effect_call_start + i) % kReplayEffectCallCapacity;
+                const auto& candidate = replay_effect_calls[index];
+                if (!candidate.valid || candidate.kind < 1U || candidate.kind > 4U) continue;
+                ++diagnostics->captured_by_kind[candidate.kind - 1U];
+                const auto delta = candidate.tick_sequence >= capture_tick_sequence
+                    ? candidate.tick_sequence - capture_tick_sequence
+                    : capture_tick_sequence - candidate.tick_sequence;
+                if (delta <= 1U) {
+                    ++diagnostics->in_window_count;
+                    ++diagnostics->in_window_by_kind[candidate.kind - 1U];
+                } else {
+                    ++diagnostics->outside_window_count;
+                }
+            }
+        }
         if (replay_effect_call_count == 0) return false;
         // Pass 1: prefer exact DamageGEDef-to-class/CDO identity matches.
         for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
@@ -6298,8 +6340,28 @@ struct Ue5NteAdapter::State {
                 "original damage sequence expired or was not found");
         }
         if (!record->replay.valid) {
+            const auto& d = record->replay_diagnostics;
+            std::snprintf(
+                replay_context_diagnostic_message.data(),
+                replay_context_diagnostic_message.size(),
+                "original hit has no matching validated native GameplayEffect call "
+                "[bindings=0x%X; calls=%u; near=%u; outside=%u; "
+                "kinds(total=%u/%u/%u/%u,near=%u/%u/%u/%u); hit_tick=%llu]",
+                static_cast<unsigned int>(d.binding_mask),
+                static_cast<unsigned int>(d.captured_count),
+                static_cast<unsigned int>(d.in_window_count),
+                static_cast<unsigned int>(d.outside_window_count),
+                static_cast<unsigned int>(d.captured_by_kind[0]),
+                static_cast<unsigned int>(d.captured_by_kind[1]),
+                static_cast<unsigned int>(d.captured_by_kind[2]),
+                static_cast<unsigned int>(d.captured_by_kind[3]),
+                static_cast<unsigned int>(d.in_window_by_kind[0]),
+                static_cast<unsigned int>(d.in_window_by_kind[1]),
+                static_cast<unsigned int>(d.in_window_by_kind[2]),
+                static_cast<unsigned int>(d.in_window_by_kind[3]),
+                static_cast<unsigned long long>(record->event.tick_sequence));
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "original hit has no matching validated native GameplayEffect call");
+                replay_context_diagnostic_message.data());
         }
         if (!record->replay.tag_arrays_valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -6434,10 +6496,12 @@ struct Ue5NteAdapter::State {
             }
             event.final_damage = static_cast<std::int64_t>(std::llround(damage));
             ReplayEffectContext replay_context{};
+            ReplayCaptureDiagnostics replay_diagnostics{};
             const bool has_replay_context = FindReplayContextForDamageLocked(
-                attacker, victim, event.source_id, capture_tick_sequence, replay_context);
+                attacker, victim, event.source_id, capture_tick_sequence,
+                replay_context, &replay_diagnostics);
             RecordDamageEventLocked(event, damage,
-                has_replay_context ? &replay_context : nullptr);
+                has_replay_context ? &replay_context : nullptr, &replay_diagnostics);
             AnomalyNteCombatEventV1 combat_event{};
             combat_event.kind = ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE;
             combat_event.tick_sequence = event.tick_sequence;
