@@ -753,7 +753,7 @@ void DrawSummonTab(
         }
     }
     // EndChild is required even when BeginChild returns false.
-    if ((has_catalog_child || has_auto_fit_child) && ui->end_child != nullptr)
+    if (has_catalog_child && ui->end_child != nullptr)
         ui->end_child(ui->user);
 
     DrawDivider(ui);
