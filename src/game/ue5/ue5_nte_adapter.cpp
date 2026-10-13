@@ -762,6 +762,22 @@ struct Ue5NteAdapter::State {
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
+    // Dump-verified mutable fields used by Tokky's vehicle-speed path.
+    // Offsets live in the active NTE profile and are required by the vehicle layout validator.
+    struct VehicleSpeedFieldBaseline {
+        float max_linear_velocity{};
+        float top_speed_kmh{};
+        float mobile_top_speed_kmh{};
+        float reverse_top_speed_kmh{};
+        float top_speed_ratio{};
+        float engine_max_torque{};
+        float engine_max_rpm{};
+        float comfort_max_engine_torque{};
+        float comfort_max_engine_rpm{};
+        float comfort_top_speed_kmh{};
+        std::uint8_t enable_top_speed_limit{};
+        bool valid{};
+    };
     struct VehicleDisplayNameBinding {
         std::uintptr_t function{};
         std::uintptr_t class_default_object{};
@@ -814,10 +830,14 @@ struct Ue5NteAdapter::State {
     float vehicle_base_engine_torque{};
     std::uintptr_t vehicle_base_torque_component{};
     bool vehicle_base_engine_torque_valid{};
+    VehicleSpeedFieldBaseline vehicle_speed_field_baseline{};
+    std::uintptr_t vehicle_speed_field_baseline_component{};
     bool vehicle_wheel_friction_enabled{true};
     // 按非玩家载具的 MovementComponent 分别保存速率倍率和原始扭矩基准，绝不与玩家载具共用状态。
     std::unordered_map<std::uintptr_t, float> other_vehicle_velocity_ratios;
     std::unordered_map<std::uintptr_t, float> other_vehicle_base_torques;
+    std::unordered_map<std::uintptr_t, VehicleSpeedFieldBaseline> other_vehicle_speed_field_baselines;
+    std::unordered_map<std::uintptr_t, float> other_vehicle_speed_field_ratios;
     std::string vehicle_other_speed_status;
     std::string vehicle_other_torque_status;
     float vehicle_speed_kmh{};
@@ -1716,7 +1736,12 @@ struct Ue5NteAdapter::State {
                 "dataTable.rowMapElementStride", "dataTable.rowMapRowOffset",
                 "dataTable.rowMapFlagsData", "dataTable.rowMapFlagsNum",
                 "dataTable.rowMapFlagsMax", "dataTable.rowMapInlineFlags", "dataTable.maxRows",
-                "vehicle.movementComponent"}) &&
+                "vehicle.movementComponent", "vehicle.maxEngineTorque",
+                "vehicle.maxEngineRPM", "vehicle.maxLinearVelocity", "vehicle.topSpeedInKmH",
+                "vehicle.mobileTopSpeedInKmH", "vehicle.reverseTopSpeedInKmH",
+                "vehicle.enableTopSpeedLimit", "vehicle.topSpeedRatio",
+                "vehicle.comfortMaxEngineTorque", "vehicle.comfortMaxEngineRPM",
+                "vehicle.comfortTopSpeedInKmH"}) &&
             FeatureDeclaresDependency(profile, kNteVehicleFeature, "nte.player") &&
             FeatureDeclaresDependency(profile, kNteVehicleFeature, "ue5.names") &&
             FeatureDeclaresDependency(profile, kNteVehicleFeature, "ue5.objects") &&
@@ -8597,6 +8622,10 @@ struct Ue5NteAdapter::State {
                 vehicle_movement_component = 0;
                 vehicle_base_torque_component = 0;
                 vehicle_base_engine_torque_valid = false;
+                vehicle_speed_field_baseline = {};
+                vehicle_speed_field_baseline_component = 0;
+                other_vehicle_speed_field_baselines.clear();
+                other_vehicle_speed_field_ratios.clear();
             }
 
             static constexpr std::array<std::string_view, 1> controller_outer{"HTPlayerController"};
@@ -8708,6 +8737,8 @@ struct Ue5NteAdapter::State {
                 vehicle_top_speed_ratio = 1.0F;
                 vehicle_current_velocity_ratio = 1.0F;
                 vehicle_speed_kmh = 0.0F;
+                vehicle_speed_field_baseline = {};
+                vehicle_speed_field_baseline_component = 0;
                 // Revalidate this dump-defined UFunction for each movement component.
                 vehicle_bindings.set_delayed_velocity_restore = 0;
                 vehicle_delayed_velocity_restore_failure_reason.clear();
@@ -8852,6 +8883,146 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    // All offsets are copied from the supplied 5.6.1-0+UE5-HT dump. A full
+    // UHTVehicleMovementComponent-sized readable range is required before touching fields.
+    [[nodiscard]] bool ReadVehicleSpeedFieldSnapshotLocked(
+        const std::uintptr_t movement,
+        VehicleSpeedFieldBaseline& snapshot) noexcept {
+        try {
+            snapshot = {};
+            if (movement == 0 || !ReadableRange(*memory, movement, 0x1810U)) return false;
+            const auto read_float = [&](const std::string_view key, float& value) {
+                const auto offset = Layout(profile, key, -1);
+                std::uintptr_t address{};
+                if (offset < 0 || offset > 0x1810 - static_cast<std::int64_t>(sizeof(float)) ||
+                    !AddAddress(movement, offset, address) ||
+                    !ReadValue(*memory, address, value) ||
+                    !std::isfinite(value) || value < 0.0F || value > 1000000000.0F) return false;
+                return true;
+            };
+            if (!read_float("vehicle.maxLinearVelocity", snapshot.max_linear_velocity) ||
+                !read_float("vehicle.topSpeedInKmH", snapshot.top_speed_kmh) ||
+                !read_float("vehicle.mobileTopSpeedInKmH", snapshot.mobile_top_speed_kmh) ||
+                !read_float("vehicle.reverseTopSpeedInKmH", snapshot.reverse_top_speed_kmh) ||
+                !read_float("vehicle.topSpeedRatio", snapshot.top_speed_ratio) ||
+                !read_float("vehicle.maxEngineTorque", snapshot.engine_max_torque) ||
+                !read_float("vehicle.maxEngineRPM", snapshot.engine_max_rpm) ||
+                !read_float("vehicle.comfortMaxEngineTorque", snapshot.comfort_max_engine_torque) ||
+                !read_float("vehicle.comfortMaxEngineRPM", snapshot.comfort_max_engine_rpm) ||
+                !read_float("vehicle.comfortTopSpeedInKmH", snapshot.comfort_top_speed_kmh)) {
+                return false;
+            }
+            const auto enabled_offset = Layout(profile, "vehicle.enableTopSpeedLimit", -1);
+            std::uintptr_t enabled_address{};
+            if (enabled_offset < 0 || enabled_offset >= 0x1810 ||
+                !AddAddress(movement, enabled_offset, enabled_address) ||
+                !ReadValue(*memory, enabled_address, snapshot.enable_top_speed_limit) ||
+                snapshot.enable_top_speed_limit > 1U) {
+                return false;
+            }
+            snapshot.valid = true;
+            return true;
+        } catch (...) {
+            snapshot = {};
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool WriteVehicleSpeedFieldSnapshotLocked(
+        const std::uintptr_t movement,
+        const VehicleSpeedFieldBaseline& values,
+        std::string& failure_reason) noexcept {
+        try {
+            failure_reason.clear();
+            if (!values.valid || movement == 0 || !ReadableRange(*memory, movement, 0x1810U)) {
+                failure_reason = "载具速度字段快照或 MovementComponent 布局无效";
+                return false;
+            }
+            const auto write_float = [&](const std::string_view key, const float value) {
+                const auto offset = Layout(profile, key, -1);
+                std::uintptr_t address{};
+                if (offset < 0 || offset > 0x1810 - static_cast<std::int64_t>(sizeof(float)) ||
+                    !std::isfinite(value) || value < 0.0F || value > 1000000000.0F ||
+                    !AddAddress(movement, offset, address) ||
+                    !memory->Write(address, &value, sizeof(value))) {
+                    failure_reason = "写入速度字段失败：" + std::string(key);
+                    return false;
+                }
+                float readback{};
+                if (!ReadValue(*memory, address, readback) || !std::isfinite(readback) ||
+                    std::abs(readback - value) > (std::max)(0.001F, std::abs(value) * 0.0001F)) {
+                    failure_reason = "速度字段回读验证失败：" + std::string(key);
+                    return false;
+                }
+                return true;
+            };
+            if (!write_float("vehicle.maxEngineTorque", values.engine_max_torque) ||
+                !write_float("vehicle.maxEngineRPM", values.engine_max_rpm) ||
+                !write_float("vehicle.maxLinearVelocity", values.max_linear_velocity) ||
+                !write_float("vehicle.topSpeedInKmH", values.top_speed_kmh) ||
+                !write_float("vehicle.mobileTopSpeedInKmH", values.mobile_top_speed_kmh) ||
+                !write_float("vehicle.reverseTopSpeedInKmH", values.reverse_top_speed_kmh) ||
+                !write_float("vehicle.topSpeedRatio", values.top_speed_ratio) ||
+                !write_float("vehicle.comfortMaxEngineTorque", values.comfort_max_engine_torque) ||
+                !write_float("vehicle.comfortMaxEngineRPM", values.comfort_max_engine_rpm) ||
+                !write_float("vehicle.comfortTopSpeedInKmH", values.comfort_top_speed_kmh)) {
+                return false;
+            }
+            const auto enabled_offset = Layout(profile, "vehicle.enableTopSpeedLimit", -1);
+            std::uintptr_t enabled_address{};
+            if (enabled_offset < 0 || enabled_offset >= 0x1810 ||
+                !AddAddress(movement, enabled_offset, enabled_address) ||
+                !memory->Write(enabled_address, &values.enable_top_speed_limit,
+                    sizeof(values.enable_top_speed_limit))) {
+                failure_reason = "写入速度限制开关失败";
+                return false;
+            }
+            std::uint8_t enabled_readback{};
+            if (!ReadValue(*memory, enabled_address, enabled_readback) ||
+                enabled_readback != values.enable_top_speed_limit) {
+                failure_reason = "速度限制开关回读验证失败";
+                return false;
+            }
+            return true;
+        } catch (...) {
+            try { failure_reason = "写入 Tokky 风格载具速度字段时发生异常"; } catch (...) {}
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool MakeVehicleSpeedFieldTargets(
+        const VehicleSpeedFieldBaseline& baseline,
+        const float ratio,
+        VehicleSpeedFieldBaseline& targets) const noexcept {
+        if (!baseline.valid || !std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
+            return false;
+        targets = baseline;
+        targets.max_linear_velocity = baseline.max_linear_velocity * ratio;
+        targets.top_speed_kmh = baseline.top_speed_kmh * ratio;
+        targets.mobile_top_speed_kmh = baseline.mobile_top_speed_kmh * ratio;
+        targets.reverse_top_speed_kmh = baseline.reverse_top_speed_kmh * ratio;
+        targets.top_speed_ratio = ratio;
+        targets.engine_max_torque = baseline.engine_max_torque * ratio;
+        targets.engine_max_rpm = baseline.engine_max_rpm * ratio;
+        targets.comfort_max_engine_torque = baseline.comfort_max_engine_torque * ratio;
+        targets.comfort_max_engine_rpm = baseline.comfort_max_engine_rpm * ratio;
+        targets.comfort_top_speed_kmh = baseline.comfort_top_speed_kmh * ratio;
+        // Tokky's fast-speed configuration enables the limiter; at 1.0x restore its
+        // original flag so "reset" returns the vehicle's captured native configuration.
+        targets.enable_top_speed_limit = ratio == 1.0F
+            ? baseline.enable_top_speed_limit : static_cast<std::uint8_t>(1U);
+        targets.valid = std::ranges::all_of(
+            std::array<float, 10>{
+                targets.max_linear_velocity, targets.top_speed_kmh, targets.mobile_top_speed_kmh,
+                targets.reverse_top_speed_kmh, targets.top_speed_ratio, targets.engine_max_torque,
+                targets.engine_max_rpm, targets.comfort_max_engine_torque,
+                targets.comfort_max_engine_rpm, targets.comfort_top_speed_kmh},
+            [](const float value) {
+                return std::isfinite(value) && value >= 0.0F && value <= 1000000000.0F;
+            });
+        return targets.valid;
+    }
+
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
@@ -8864,7 +9035,26 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "HTGame.HTWheeledVehicleBase.SetTopSpeedRatio(float) failed dump ABI validation");
         const float previous_ratio = vehicle_current_velocity_ratio;
-        if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F) {
+        const float previous_top_speed_ratio = vehicle_top_speed_ratio;
+        VehicleSpeedFieldBaseline current_fields_before{};
+        if (!ReadVehicleSpeedFieldSnapshotLocked(vehicle_movement_component, current_fields_before)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "速度字段修改失败：MovementComponent 原始字段未通过 Dump 布局/读值校验");
+        }
+        if (vehicle_speed_field_baseline_component != vehicle_movement_component ||
+            !vehicle_speed_field_baseline.valid) {
+            vehicle_speed_field_baseline = current_fields_before;
+            // If the native torque fallback baseline was captured before this speed change,
+            // keep that original value; otherwise this first snapshot is the baseline.
+            if (vehicle_base_torque_component == vehicle_movement_component &&
+                vehicle_base_engine_torque_valid) {
+                vehicle_speed_field_baseline.engine_max_torque = vehicle_base_engine_torque;
+            }
+            vehicle_speed_field_baseline_component = vehicle_movement_component;
+        }
+        if (!std::isfinite(previous_ratio) || previous_ratio < 0.05F || previous_ratio > 20.0F ||
+            !std::isfinite(previous_top_speed_ratio) || previous_top_speed_ratio < 0.05F ||
+            previous_top_speed_ratio > 20.0F) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "tracked current-velocity multiplier is invalid; refusing a partial update");
         }
@@ -8880,10 +9070,32 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.set_top_speed_ratio.parms_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED, "SetTopSpeedRatio ProcessEvent failed");
         }
-        // The top-speed limiter and current-velocity restore are independent outcomes.
-        // Keep the limiter's state even if the current-speed path fails, but do not
-        // advance vehicle_current_velocity_ratio until SetDelayedVelocityRestore succeeds.
+        // Tokky does more than call SetTopSpeedRatio: it scales the movement component's
+        // velocity cap, forward/reverse/mobile speed limits, engine torque/RPM (including
+        // comfort mode), and TopSpeedRatio. Apply those dump-verified fields from a captured
+        // baseline so repeated slider changes are absolute multipliers, not cumulative writes.
         vehicle_top_speed_ratio = ratio;
+        VehicleSpeedFieldBaseline field_targets{};
+        std::string field_failure;
+        if (!MakeVehicleSpeedFieldTargets(vehicle_speed_field_baseline, ratio, field_targets) ||
+            !WriteVehicleSpeedFieldSnapshotLocked(vehicle_movement_component, field_targets, field_failure)) {
+            // Best-effort rollback of the native ratio and every field we touched this call.
+            std::array<std::uint8_t, 8> rollback_parameters{};
+            std::memcpy(rollback_parameters.data() +
+                    vehicle_bindings.set_top_speed_ratio.parameter_offset,
+                &previous_top_speed_ratio, sizeof(previous_top_speed_ratio));
+            static_cast<void>(InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+                vehicle_bindings.set_top_speed_ratio.function, rollback_parameters.data(),
+                vehicle_bindings.set_top_speed_ratio.parms_size));
+            std::string rollback_failure;
+            const bool rollback_ok = WriteVehicleSpeedFieldSnapshotLocked(
+                vehicle_movement_component, current_fields_before, rollback_failure);
+            vehicle_top_speed_ratio = previous_top_speed_ratio;
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                (std::string("SetTopSpeedRatio 已调用，但 Tokky 风格速度字段写入失败：") +
+                    (field_failure.empty() ? "目标字段计算无效" : field_failure) +
+                    (rollback_ok ? "；已回滚字段" : "；字段回滚不完整：" + rollback_failure)).c_str());
+        }
 
         if (vehicle_bindings.set_delayed_velocity_restore == 0) {
             vehicle_speed_restore_status =
@@ -9037,7 +9249,7 @@ struct Ue5NteAdapter::State {
                 }
             }
             if (vehicle_base_engine_torque_valid) {
-                const float torque = vehicle_base_engine_torque * ratio;
+                const float torque = vehicle_base_engine_torque * ratio * vehicle_top_speed_ratio;
                 if (std::isfinite(torque)) {
                     parameters.fill(0);
                     std::memcpy(parameters.data() + fallback.parameter_offset, &torque, sizeof(torque));
@@ -9168,6 +9380,8 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.object_generation = object_generation;
                 other_vehicle_velocity_ratios.clear();
                 other_vehicle_base_torques.clear();
+                other_vehicle_speed_field_baselines.clear();
+                other_vehicle_speed_field_ratios.clear();
             }
             // 刷新当前玩家载具，以便批量枚举时排除它；玩家未驾驶时此调用可以返回 false，
             // 后续仍会独立解析批量修改所需的函数绑定。
@@ -9246,7 +9460,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, vehicle_other_speed_status.c_str());
         }
 
-        std::size_t cap_applied{}, velocity_applied{}, partial{}, failed{};
+        std::size_t cap_applied{}, speed_fields_applied{}, velocity_applied{}, partial{}, failed{};
         std::string first_failure;
         const auto record_failure = [&first_failure](std::string reason) {
             if (first_failure.empty()) first_failure = std::move(reason);
@@ -9262,6 +9476,23 @@ struct Ue5NteAdapter::State {
                 ++failed;
                 record_failure("载具实例缺少经过校验的 HTVehicleMovementComponent");
                 continue;
+            }
+
+            VehicleSpeedFieldBaseline fields_before{};
+            if (!ReadVehicleSpeedFieldSnapshotLocked(movement, fields_before)) {
+                ++failed;
+                record_failure("MovementComponent 速度字段未通过 Dump 布局/读值校验");
+                continue;
+            }
+            auto baseline_it = other_vehicle_speed_field_baselines.find(movement);
+            if (baseline_it == other_vehicle_speed_field_baselines.end()) {
+                VehicleSpeedFieldBaseline baseline = fields_before;
+                const auto torque_baseline = other_vehicle_base_torques.find(movement);
+                if (torque_baseline != other_vehicle_base_torques.end())
+                    baseline.engine_max_torque = torque_baseline->second;
+                else
+                    other_vehicle_base_torques.emplace(movement, baseline.engine_max_torque);
+                baseline_it = other_vehicle_speed_field_baselines.emplace(movement, baseline).first;
             }
 
             const auto& speed_binding = vehicle_bindings.set_top_speed_ratio;
@@ -9281,6 +9512,22 @@ struct Ue5NteAdapter::State {
                 continue;
             }
             ++cap_applied;
+
+            VehicleSpeedFieldBaseline field_targets{};
+            std::string field_failure;
+            if (!MakeVehicleSpeedFieldTargets(baseline_it->second, ratio, field_targets) ||
+                !WriteVehicleSpeedFieldSnapshotLocked(movement, field_targets, field_failure)) {
+                std::string rollback_failure;
+                static_cast<void>(WriteVehicleSpeedFieldSnapshotLocked(
+                    movement, fields_before, rollback_failure));
+                ++partial;
+                record_failure(field_failure.empty()
+                    ? "Tokky 风格速度字段目标计算失败"
+                    : "Tokky 风格速度字段写入失败：" + field_failure);
+            } else {
+                other_vehicle_speed_field_ratios[movement] = ratio;
+                ++speed_fields_applied;
+            }
 
             if (delayed_function == 0) {
                 ++partial;
@@ -9387,7 +9634,8 @@ struct Ue5NteAdapter::State {
 
         vehicle_other_speed_status = "非玩家车辆速率倍率 " + std::to_string(ratio) +
             "x：扫描到 " + std::to_string(actors.size()) + " 辆；最高车速上限已应用 " +
-            std::to_string(cap_applied) + " 辆，当前速度恢复成功 " +
+            std::to_string(cap_applied) + " 辆，Tokky 风格速度/发动机字段应用成功 " +
+            std::to_string(speed_fields_applied) + " 辆，当前速度恢复成功 " +
             std::to_string(velocity_applied) + " 辆，部分成功 " +
             std::to_string(partial) + " 辆，失败 " + std::to_string(failed) + " 辆";
         if (unreadable_slots != 0)
@@ -9473,7 +9721,10 @@ struct Ue5NteAdapter::State {
                     }
                 }
                 if (baseline_it != other_vehicle_base_torques.end()) {
-                    const float torque = baseline_it->second * ratio;
+                    const auto speed_it = other_vehicle_speed_field_ratios.find(movement);
+                    const float speed_ratio = speed_it == other_vehicle_speed_field_ratios.end()
+                        ? 1.0F : speed_it->second;
+                    const float torque = baseline_it->second * ratio * speed_ratio;
                     if (std::isfinite(torque)) {
                         std::vector<std::uint8_t> parameters(max_torque_binding.parms_size);
                         std::memcpy(parameters.data() + max_torque_binding.parameter_offset,
