@@ -99,7 +99,7 @@ struct Context final {
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
     std::atomic_bool stop_requested{false};
-    // replay_count is the desired total hit count, including the original hit. Additional effects are applied one per Game tick.
+    // replay_count 表示包含原始命中的目标总伤害次数；追加效果每个 Game tick 最多提交一次。
     uint32_t replay_count{10};
     uint32_t replay_done{};
     uint32_t replay_issued{};
@@ -970,12 +970,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_issued = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            // The original hit is already counted. Issue exactly total-1 replays.
+            // 原始命中已经计为第 1 次；只提交目标总次数减 1 的追加调用。
             context->replay_target_count = context->replay_count > 0U
                 ? context->replay_count - 1U : 0U;
             context->replay_last_tick = context->captured_tick_sequence;
-            // Set the event cursor once, before the first replay. Re-basing it before
-            // every call would discard a prior frame's delayed damage confirmation.
+            // 在首次追加前只设置一次事件游标；每次调用前重新定位会漏掉前一帧延迟到达的伤害确认。
             context->replay_damage_cursor = context->combat->latest_damage_sequence(
                 context->combat->user);
             context->replay_damage_deadline =
@@ -994,9 +993,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     const auto now = std::chrono::steady_clock::now();
 
-    // Consume the event stream independently of replay submission. GameplayEffect
-    // callbacks may be surfaced on a later tick, while the next replay must still
-    // be submitted once per new Game tick rather than waiting an extra frame.
+    // 伤害事件确认与调用提交分开处理。GameplayEffect 对应的伤害事件可能在后续 tick 才进入事件流，
+    // 但不能因此额外空等一帧；每个新的 Game tick 仍最多提交一次追加调用。
     for (uint32_t scanned = 0; scanned < 64U; ++scanned) {
         AnomalyNteDamageEventV1 event{};
         event.struct_size = sizeof(event);
@@ -1032,7 +1030,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     context->waiting_for_damage = context->replay_done < context->replay_issued;
 
-    // A setting of one means the captured original hit already satisfies the target.
+    // 设定总次数为 1 时，已捕获的原始命中已经满足目标次数。
     if (context->replay_done >= context->replay_target_count &&
         context->replay_issued >= context->replay_target_count) {
         context->replaying = false;
@@ -1041,8 +1039,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         return;
     }
 
-    // If no matching damage event arrives for two seconds, stop submitting rather
-    // than producing an unbounded stream of unconfirmed GameplayEffect calls.
+    // 两秒内没有匹配的伤害事件时停止提交，避免在未确认伤害的情况下持续调用 GameplayEffect。
     if (context->replay_done < context->replay_issued &&
         now >= context->replay_damage_deadline) {
         context->replaying = false;
@@ -1051,8 +1048,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         return;
     }
 
-    // Submit at most one exact GameplayEffect replay on each distinct Game tick.
-    // Damage confirmation is tracked separately and can arrive on a later tick.
+    // 每个不同的 Game tick 最多重放一次原始 GameplayEffect；实际伤害确认单独跟踪，并允许延迟到后续 tick。
     if (context->replay_issued >= context->replay_target_count ||
         current_tick == 0 || current_tick == context->replay_last_tick) {
         return;
@@ -1069,8 +1065,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->status = "GameplayEffect 重放调用失败：ABI status=" +
                 std::to_string(replay_status.code);
         }
-        // Preserve the captured record after a Core refusal so the actual ABI/validation
-        // message remains visible and the user can retry without making another attack.
+        // Core 拒绝请求时保留已捕获记录，显示实际 ABI/校验错误，并允许用户重试而不必再次攻击。
         return;
     }
 
