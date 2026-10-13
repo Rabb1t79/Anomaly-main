@@ -512,12 +512,12 @@ std::string ReadDamageSourceName(
         return {};
     }
     if (size == 0) return {};
-    std::string result(size, '\\0');
+    std::string result(size, '\0');
     if (combat->source_name_utf8(
             combat->user, source_id, result.data(), &size).code != ANOMALY_STATUS_V1_OK) {
         return {};
     }
-    if (!result.empty() && result.back() == '\\0') result.pop_back();
+    if (!result.empty() && result.back() == '\0') result.pop_back();
     return result;
 }
 
@@ -1036,8 +1036,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     if (context->replay_done >= context->replay_target_count &&
         context->replay_issued >= context->replay_target_count) {
         context->replaying = false;
-        context->status = "重放完成，继续自动等待下一次攻击";
         ArmForNextAttack(*context);
+        context->status = "重放完成，继续自动等待下一次攻击";
         return;
     }
 
