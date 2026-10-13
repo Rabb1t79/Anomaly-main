@@ -34,6 +34,7 @@
 #include <atomic>
 #include <array>
 #include <cstddef>
+#include <cmath>
 #include <cstdint>
 #include <new>
 #include <mutex>
