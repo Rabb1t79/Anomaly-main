@@ -890,7 +890,11 @@ struct Ue5NteAdapter::State {
         std::uint16_t outside_window_count{};
         std::array<std::uint16_t, 4> captured_by_kind{};
         std::array<std::uint16_t, 4> in_window_by_kind{};
+        std::array<std::uint16_t, 8> rejected_by_reason{};
         std::uint32_t binding_mask{};
+        std::uint64_t exec_callbacks{};
+        std::uint64_t exec_locals_reads{};
+        std::uint64_t exec_enqueues{};
     };
     struct DamageRecord {
         AnomalyNteDamageEventV1 event{};
@@ -900,6 +904,9 @@ struct Ue5NteAdapter::State {
     };
     static constexpr std::size_t kReplayEffectCallCapacity = 32;
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
+    std::atomic<std::uint64_t> replay_exec_callback_count{};
+    std::atomic<std::uint64_t> replay_exec_locals_read_count{};
+    std::atomic<std::uint64_t> replay_exec_enqueue_count{};
     std::size_t replay_effect_call_start{};
     std::size_t replay_effect_call_count{};
     std::array<DamageRecord, kDamageEventCapacity> damage_events{};
@@ -6134,7 +6141,13 @@ struct Ue5NteAdapter::State {
     [[nodiscard]] bool ReplayContextMatchesDamageLocked(
         const ReplayEffectContext& context, const std::uintptr_t attacker,
         const std::uintptr_t victim, const std::uint64_t source_id,
-        const bool allow_effect_identity_fallback = false) const noexcept {
+        const bool allow_effect_identity_fallback = false,
+        std::uint8_t* const rejection_reason = nullptr) const noexcept {
+        if (rejection_reason != nullptr) *rejection_reason = 0;
+        const auto reject = [rejection_reason](const std::uint8_t reason) noexcept {
+            if (rejection_reason != nullptr) *rejection_reason = reason;
+            return false;
+        };
         try {
             const std::size_t expected_parameter_size = context.kind == 3U
                 ? kGameplayEffectReplayMaxParameterBytes
@@ -6147,10 +6160,10 @@ struct Ue5NteAdapter::State {
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
                 context.receiver == 0 || context.function == 0 ||
                 !ReadableRange(*memory, context.receiver, 0x20U) ||
-                !ReadableRange(*memory, context.function, 0x20U)) return false;
+                !ReadableRange(*memory, context.function, 0x20U)) return reject(1);
             const auto* const bindings =
                 combat_capture_bindings.load(std::memory_order_acquire);
-            if (bindings == nullptr) return false;
+            if (bindings == nullptr) return reject(2);
             std::uintptr_t damage_source_object{};
             if (source_id != 0) {
                 const auto source_it = damage_source_objects.find(source_id);
@@ -6168,10 +6181,10 @@ struct Ue5NteAdapter::State {
                 context.parameters.data() + effect_class_offset,
                 sizeof(gameplay_effect_class));
             if (gameplay_effect_class == 0 ||
-                !ReadableRange(*memory, gameplay_effect_class, 0x20U)) return false;
+                !ReadableRange(*memory, gameplay_effect_class, 0x20U)) return reject(3);
             std::uintptr_t class_default_object{};
             if (!ReadPointerAt(*memory, gameplay_effect_class,
-                    Layout(profile, "uclass.classDefaultObject"), class_default_object)) return false;
+                    Layout(profile, "uclass.classDefaultObject"), class_default_object)) return reject(3);
             bool source_matches_effect = damage_source_object != 0 &&
                 class_default_object != 0 && damage_source_object == class_default_object;
             if (!source_matches_effect && damage_source_object != 0) {
@@ -6188,11 +6201,11 @@ struct Ue5NteAdapter::State {
             // target character, SourceObj and exact trigger ASC. If the weak DamageGEDef
             // does not resolve to the same class/CDO, permit this wrapper-only fallback;
             // FindReplayContextForDamageLocked chooses it only after exact matches fail.
-            if (!source_matches_effect && !allow_effect_identity_fallback) return false;
+            if (!source_matches_effect && !allow_effect_identity_fallback) return reject(4);
 
             std::uintptr_t attacker_ability_system{}, victim_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
-                !CurrentAbilitySystemLocked(victim, victim_ability_system)) return false;
+                !CurrentAbilitySystemLocked(victim, victim_ability_system)) return reject(5);
             if (context.kind == 1U) {
                 std::uintptr_t source_actor{}, trigger_ability_system{};
                 std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
@@ -6201,18 +6214,20 @@ struct Ue5NteAdapter::State {
                 // SourceObj 在 Dump 中是任意 AActor 指针，可能是持有者的武器/伤害载体；
                 // 玩家归属由 pTriggerAbilityComp 的 AbilitySystemComponent 与玩家 ASC 精确绑定，
                 // 不能强制 SourceObj 必须等于玩家角色本体。
-                return context.function == bindings->replay_apply_by_actor &&
+                const bool matched = context.function == bindings->replay_apply_by_actor &&
                     context.receiver == victim_ability_system &&
                     source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U) &&
                     trigger_ability_system == attacker_ability_system;
+                return matched ? true : reject(6);
             }
             if (context.kind == 2U) {
                 std::uintptr_t target_ability_system{};
                 std::memcpy(&target_ability_system,
                     context.parameters.data() + 0x08U, sizeof(target_ability_system));
-                return context.function == bindings->replay_apply_to_target &&
+                const bool matched = context.function == bindings->replay_apply_to_target &&
                     context.receiver == attacker_ability_system &&
                     target_ability_system == victim_ability_system;
+                return matched ? true : reject(6);
             }
             if (context.kind == 3U) {
                 std::uintptr_t world_context{}, source_actor{}, trigger_ability_system{};
@@ -6222,21 +6237,23 @@ struct Ue5NteAdapter::State {
                     context.parameters.data() + 0x70U, sizeof(trigger_ability_system));
                 // This wrapper may execute on either hit participant, but its trigger ASC
                 // must resolve exactly to the live player's ASC and SourceObj must be valid.
-                return context.function == bindings->replay_activate_by_actor &&
+                const bool matched = context.function == bindings->replay_activate_by_actor &&
                     (context.receiver == attacker || context.receiver == victim) &&
                     world_context != 0 && ReadableRange(*memory, world_context, 0x20U) &&
                     source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U) &&
                     trigger_ability_system == attacker_ability_system;
+                return matched ? true : reject(6);
             }
             if (context.kind == 4U) {
                 // The simple wrapper has no SourceObj/trigger ASC; only its exact
                 // DamageGEDef-to-effect-class identity can safely associate it with a hit.
-                return context.function == bindings->replay_activate_simple &&
+                const bool matched = context.function == bindings->replay_activate_simple &&
                     (context.receiver == attacker || context.receiver == victim);
+                return matched ? true : reject(6);
             }
-            return false;
+            return reject(7);
         } catch (...) {
-            return false;
+            return reject(8);
         }
     }
 
@@ -6255,6 +6272,9 @@ struct Ue5NteAdapter::State {
                 if (bindings->replay_activate_simple != 0) diagnostics->binding_mask |= 1U << 3U;
             }
             diagnostics->captured_count = static_cast<std::uint16_t>(replay_effect_call_count);
+            diagnostics->exec_callbacks = replay_exec_callback_count.load(std::memory_order_relaxed);
+            diagnostics->exec_locals_reads = replay_exec_locals_read_count.load(std::memory_order_relaxed);
+            diagnostics->exec_enqueues = replay_exec_enqueue_count.load(std::memory_order_relaxed);
             for (std::size_t i{}; i < replay_effect_call_count; ++i) {
                 const auto index = (replay_effect_call_start + i) % kReplayEffectCallCapacity;
                 const auto& candidate = replay_effect_calls[index];
@@ -6283,11 +6303,17 @@ struct Ue5NteAdapter::State {
             // Calls are queued before the resulting CharacterOnDamaged callback; tolerate
             // only the adjacent Host tick to cover a tick-boundary handoff.
             if (!candidate.valid || delta > 1U) continue;
+            std::uint8_t reason{};
             if (ReplayContextMatchesDamageLocked(
-                    candidate, attacker, victim, source_id)) {
+                    candidate, attacker, victim, source_id, false, &reason)) {
                 result = candidate;
                 result.effect_identity_fallback = false;
                 return true;
+            }
+            if (reason >= 1U && reason <= 8U &&
+                diagnostics != nullptr &&
+                diagnostics->rejected_by_reason[reason - 1U] != UINT16_MAX) {
+                ++diagnostics->rejected_by_reason[reason - 1U];
             }
         }
         // Pass 2: DamageGEDef is a weak UObject and can be null/stale or point at a
@@ -6304,11 +6330,17 @@ struct Ue5NteAdapter::State {
                 ? candidate.tick_sequence - capture_tick_sequence
                 : capture_tick_sequence - candidate.tick_sequence;
             if (!candidate.valid || delta > 1U || candidate.kind == 4U) continue;
+            std::uint8_t reason{};
             if (ReplayContextMatchesDamageLocked(
-                    candidate, attacker, victim, source_id, true)) {
+                    candidate, attacker, victim, source_id, true, &reason)) {
                 result = candidate;
                 result.effect_identity_fallback = true;
                 return true;
+            }
+            if (reason >= 1U && reason <= 8U &&
+                diagnostics != nullptr &&
+                diagnostics->rejected_by_reason[reason - 1U] != UINT16_MAX) {
+                ++diagnostics->rejected_by_reason[reason - 1U];
             }
         }
         return false;
@@ -6346,7 +6378,9 @@ struct Ue5NteAdapter::State {
                 replay_context_diagnostic_message.size(),
                 "original hit has no matching validated native GameplayEffect call "
                 "[bindings=0x%X; calls=%u; near=%u; outside=%u; "
-                "kinds(total=%u/%u/%u/%u,near=%u/%u/%u/%u); hit_tick=%llu]",
+                "kinds(total=%u/%u/%u/%u,near=%u/%u/%u/%u); "
+                "exec(callbacks=%llu,locals=%llu,enqueued=%llu); "
+                "rejects(abi=%u,binding=%u,class=%u,identity=%u,asc=%u,participants=%u,other=%u,exception=%u); hit_tick=%llu]",
                 static_cast<unsigned int>(d.binding_mask),
                 static_cast<unsigned int>(d.captured_count),
                 static_cast<unsigned int>(d.in_window_count),
@@ -6359,6 +6393,17 @@ struct Ue5NteAdapter::State {
                 static_cast<unsigned int>(d.in_window_by_kind[1]),
                 static_cast<unsigned int>(d.in_window_by_kind[2]),
                 static_cast<unsigned int>(d.in_window_by_kind[3]),
+                static_cast<unsigned long long>(d.exec_callbacks),
+                static_cast<unsigned long long>(d.exec_locals_reads),
+                static_cast<unsigned long long>(d.exec_enqueues),
+                static_cast<unsigned int>(d.rejected_by_reason[0]),
+                static_cast<unsigned int>(d.rejected_by_reason[1]),
+                static_cast<unsigned int>(d.rejected_by_reason[2]),
+                static_cast<unsigned int>(d.rejected_by_reason[3]),
+                static_cast<unsigned int>(d.rejected_by_reason[4]),
+                static_cast<unsigned int>(d.rejected_by_reason[5]),
+                static_cast<unsigned int>(d.rejected_by_reason[6]),
+                static_cast<unsigned int>(d.rejected_by_reason[7]),
                 static_cast<unsigned long long>(record->event.tick_sequence));
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 replay_context_diagnostic_message.data());
@@ -18434,6 +18479,16 @@ void Ue5NteAdapter::OnCombatExecFunction(
     if (function == 0 || stack == 0) {
         return;
     }
+    const auto* const bindings = state->combat_capture_bindings.load(
+        std::memory_order_acquire);
+    const bool is_replay_function = bindings != nullptr &&
+        (function == bindings->replay_apply_by_actor ||
+         function == bindings->replay_apply_to_target ||
+         function == bindings->replay_activate_by_actor ||
+         function == bindings->replay_activate_simple);
+    if (is_replay_function) {
+        state->replay_exec_callback_count.fetch_add(1, std::memory_order_relaxed);
+    }
     const auto locals_offset = Layout(state->profile, "fstack.locals", -1);
     std::uintptr_t parameters{};
     if (locals_offset < 0 ||
@@ -18442,8 +18497,9 @@ void Ue5NteAdapter::OnCombatExecFunction(
         parameters == 0) {
         return;
     }
-    const auto* const bindings = state->combat_capture_bindings.load(
-        std::memory_order_acquire);
+    if (is_replay_function) {
+        state->replay_exec_locals_read_count.fetch_add(1, std::memory_order_relaxed);
+    }
     if (bindings == nullptr) return;
     const bool is_buff_function = std::ranges::any_of(
         bindings->buffs, [function](const auto& buff) {
@@ -18459,6 +18515,9 @@ void Ue5NteAdapter::OnCombatExecFunction(
         function != bindings->replay_activate_simple &&
         !is_buff_function) {
         return;
+    }
+    if (is_replay_function) {
+        state->replay_exec_enqueue_count.fetch_add(1, std::memory_order_relaxed);
     }
     state->EnqueueCombatProcessEvent(
         *bindings, receiver, function, reinterpret_cast<void*>(parameters));
