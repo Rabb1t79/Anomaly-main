@@ -15881,8 +15881,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk,
             VehicleSetEngineTorqueRatioThunk, VehicleCatalogRefreshThunk,
             VehicleCatalogLabelAtThunk, VehicleSetOtherVehiclesTopSpeedRatioThunk,
-            VehicleSetOtherVehiclesMinSpeedRatioThunk,
-            VehicleSetOtherVehiclesEngineTorqueRatioThunk};
+            VehicleSetOtherVehiclesEngineTorqueRatioThunk,
+            VehicleSetOtherVehiclesMinSpeedRatioThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
