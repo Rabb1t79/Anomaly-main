@@ -6168,13 +6168,19 @@ struct Ue5NteAdapter::State {
                 std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
                 std::memcpy(&trigger_ability_system,
                     context.parameters.data() + 0x68U, sizeof(trigger_ability_system));
-                // SourceObj 在 Dump 中是任意 AActor 指针，可能是持有者的武器/伤害载体；
-                // 玩家归属由 pTriggerAbilityComp 的 AbilitySystemComponent 与玩家 ASC 精确绑定，
-                // 不能强制 SourceObj 必须等于玩家角色本体。
+                // The dump defines SourceObj as AActor* and pTriggerAbilityComp as ASC*.
+                // Normally the ASC proves the player source. Some native attack paths set
+                // pTriggerAbilityComp to a non-player/empty component while SourceObj is the
+                // exact attacking player. Accept that *only* as an alternate exact identity;
+                // still require exact DamageGEDef/class identity, target ASC and adjacent tick.
+                const bool trigger_is_attacker =
+                    trigger_ability_system != 0 &&
+                    trigger_ability_system == attacker_ability_system;
+                const bool source_actor_is_attacker = source_actor == attacker;
                 return context.function == bindings->replay_apply_by_actor &&
                     context.receiver == victim_ability_system &&
                     source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U) &&
-                    trigger_ability_system == attacker_ability_system;
+                    (trigger_is_attacker || source_actor_is_attacker);
             }
             if (context.kind == 2U) {
                 std::uintptr_t target_ability_system{};
@@ -6303,6 +6309,17 @@ struct Ue5NteAdapter::State {
         // Clear only dump-verified out/return fields. The target-apply signature also
         // exposes bUsePredictionKey@0x69; an old one-shot prediction key must not be reused.
         if (record->replay.kind == 1U) {
+            // Rebind the trigger ASC to the already-validated live player ASC. This is
+            // unchanged for the normal path, and preserves player attribution when the
+            // original call was validated by exact SourceObj==attacker instead.
+            std::uintptr_t replay_attacker_ability_system{};
+            if (!CurrentAbilitySystemLocked(attacker, replay_attacker_ability_system) ||
+                replay_attacker_ability_system == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "current player AbilitySystemComponent is unavailable for actor-effect replay");
+            }
+            std::memcpy(parameters.data() + 0x68U, &replay_attacker_ability_system,
+                sizeof(replay_attacker_ability_system));
             parameters[0x70U] = 0;
         } else if (record->replay.kind == 2U) {
             parameters[0x69U] = 0;
