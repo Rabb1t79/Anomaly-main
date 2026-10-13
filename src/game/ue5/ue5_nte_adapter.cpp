@@ -6420,11 +6420,8 @@ struct Ue5NteAdapter::State {
             std::snprintf(
                 replay_context_diagnostic_message.data(),
                 replay_context_diagnostic_message.size(),
-                "original hit has no matching validated native GameplayEffect call "
-                "[bindings=0x%X; calls=%u; near=%u; outside=%u; "
-                "kinds(total=%u/%u/%u/%u,near=%u/%u/%u/%u); "
-                "exec(callbacks=%llu,locals=%llu,enqueued=%llu); "
-                "rejects(abi=%u,binding=%u,class=%u,identity=%u,asc=%u,participants=%u,other=%u,exception=%u); hit_tick=%llu]",
+                "capture[bindings=0x%X calls=%u near=%u outside=%u; kinds=%u/%u/%u/%u near=%u/%u/%u/%u; exec=%llu/%llu/%llu; reject=%u/%u/%u/%u/%u/%u/%u/%u; tick=%llu]: "
+                "original hit has no matching validated native GameplayEffect call",
                 static_cast<unsigned int>(d.binding_mask),
                 static_cast<unsigned int>(d.captured_count),
                 static_cast<unsigned int>(d.in_window_count),
