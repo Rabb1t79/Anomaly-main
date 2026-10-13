@@ -101,7 +101,7 @@ struct Context final {
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
     std::atomic_bool stop_requested{false};
-    // X represents the selected chain parameter; X+1 extra effect applications are issued one per tick.
+    // replay_count is the desired total hit count, including the original hit. Additional effects are applied one per Game tick.
     uint32_t replay_count{10};
     uint32_t replay_done{};
     uint64_t replay_last_tick{};
@@ -967,9 +967,10 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            // The user-set chain rate X requests X+1 additional legal hits after
-            // the captured original event. Only one input is sent per Game tick.
-            context->replay_target_count = context->replay_count + 1U;
+            // The captured hit already counts as hit 1. Replay only the remaining
+            // total-1 hits, with no more than one GameplayEffect call per Game tick.
+            context->replay_target_count = context->replay_count > 0U
+                ? context->replay_count - 1U : 0U;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = "已提交重放，等待原始伤害后的下一游戏帧";
         } else {
@@ -1111,9 +1112,9 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("连锁参数 X（每帧一次；本次追加 X+1 次伤害）"),
-            &context->replay_count, 1, 10);
-        context->replay_count = std::clamp(context->replay_count, 1u, 10u);
+            ui->user, anomaly::sdk::StringView("目标总伤害次数（含原始命中；每个游戏帧追加一次）"),
+            &context->replay_count, 1, 9999);
+        context->replay_count = std::clamp(context->replay_count, 1u, 9999u);
     }
 
     if (context->captured) {
@@ -1129,13 +1130,14 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             ui->text(ui->user, anomaly::sdk::StringView(
                 "目标：" + context->captured_target_path));
         }
-        const uint32_t desired_rehits = context->replay_count + 1U;
+        const uint32_t desired_rehits = context->replay_count > 0U
+            ? context->replay_count - 1U : 0U;
         const std::string progress =
-            "已确认的额外伤害事件：" + std::to_string(context->replay_done) + "/" +
+            "已确认的追加伤害事件：" + std::to_string(context->replay_done) + "/" +
             std::to_string(context->replay_target_count != 0
                 ? context->replay_target_count : desired_rehits);
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("每个 Game/动画帧最多重用一次原始 GameplayEffect 调用；只有 Core 捕获到同一玩家、同一目标、同一 DamageSource 的新 DamageEvent 才计数。X 对当前命中追加 X+1 次伤害，不会重放按键、动画或技能激活。"));
+        ui->text(ui->user, anomaly::sdk::StringView("总伤害次数包含已经发生的原始命中；剩余次数逐游戏帧重用原始 GameplayEffect 调用。只有 Core 捕获到同一玩家、同一目标、同一 DamageSource 的新 DamageEvent 才计数；不会重放按键、动画或技能激活。"));
     } else {
         ui->text(ui->user, anomaly::sdk::StringView(
             "无需手动录制：插件自动等待下一次玩家攻击"));
