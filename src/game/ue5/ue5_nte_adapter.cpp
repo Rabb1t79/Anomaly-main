@@ -762,7 +762,7 @@ struct Ue5NteAdapter::State {
         std::uint64_t object_generation{};
         bool attempted{};
     } vehicle_bindings;
-    // Dump-verified mutable fields used by Tokky's vehicle-speed path.
+    // Dump-verified mutable fields used by Anomaly's vehicle-speed path.
     // Offsets live in the active NTE profile and are required by the vehicle layout validator.
     struct VehicleSpeedFieldBaseline {
         float max_linear_velocity{};
@@ -786,7 +786,7 @@ struct Ue5NteAdapter::State {
         // One record per DT row, not duplicate entries for the row key and VehicleID alias.
         std::string id;             // Canonical RowName where readable
         std::string vehicle_id;     // Row's independent VehicleID FName
-        std::string display_label;  // Tokky-style "Name (VehicleID)"
+        std::string display_label;  // Anomaly-style "Name (VehicleID)"
         std::uint32_t name_comparison_index{}; // DataTable RowName used as canonical selection key
         std::uint32_t name_number{};
         std::uint32_t vehicle_id_comparison_index{}; // Independent FVehicleData.VehicleID field
@@ -843,6 +843,8 @@ struct Ue5NteAdapter::State {
     std::unordered_map<std::uintptr_t, float> other_vehicle_requested_torque_ratios;
     std::unordered_map<std::uintptr_t, VehicleSpeedFieldBaseline> other_vehicle_speed_field_baselines;
     std::unordered_map<std::uintptr_t, float> other_vehicle_speed_field_ratios;
+    // Independent lower bound for non-player vehicle speed factors; player vehicle tuning remains unchanged.
+    float vehicle_other_speed_multiplier_floor{0.6024F};
     std::string vehicle_other_speed_status;
     std::string vehicle_other_torque_status;
     float vehicle_speed_kmh{};
@@ -8259,7 +8261,7 @@ struct Ue5NteAdapter::State {
                     vehicle_id.size() < ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES;
                 if (!row_name_valid && !vehicle_id_valid) continue;
 
-                // Tokky displays one DataTable row as "RowName (VehicleID)".
+                // Anomaly displays one DataTable row as "RowName (VehicleID)".
                 // Use the row key for selection, but keep VehicleID as a legacy alias.
                 VehicleCatalogEntry entry{};
                 entry.id = row_name_valid ? row_name : vehicle_id;
@@ -8526,7 +8528,7 @@ struct Ue5NteAdapter::State {
             ? "game input activation dispatched" : "game input release dispatched");
     }
 
-    // Tokky's readable .text locates and calls this dump-defined native function
+    // Anomaly's readable .text locates and calls this dump-defined native function
     // through ProcessEvent. Validate its exact HTGame signature before using it to
     // preserve the requested linear velocity after Chaos updates the vehicle body.
     [[nodiscard]] bool ValidateDelayedVelocityRestoreLocked(
@@ -8699,7 +8701,7 @@ struct Ue5NteAdapter::State {
                 vehicle_bindings.current_vehicle_receiver, vehicle);
 
             // Dump confirms both current-vehicle functions. If the Controller variant exists
-            // but returns null for this live state, still try the Character-owned Tokky fallback.
+            // but returns null for this live state, still try the Character-owned Anomaly fallback.
             if (!vehicle_return_valid && player_pawn != 0 &&
                 vehicle_bindings.current_vehicle_receiver != player_pawn) {
                 VehicleFunctionBinding character_binding{};
@@ -8893,7 +8895,7 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
-    // Dump-backed fields written by Tokky's readable speed path. The binary uses
+    // Dump-backed fields written by Anomaly's readable speed path. The binary uses
     // the input speed factor to derive an absolute km/h target, then computes the
     // actual TopSpeedRatio relative to the vehicle's original TopSpeedInKmH.
     [[nodiscard]] bool ReadVehicleSpeedFieldSnapshotLocked(
@@ -8994,7 +8996,7 @@ struct Ue5NteAdapter::State {
             }
             return true;
         } catch (...) {
-            try { failure_reason = "写入 Tokky 风格载具速度字段时发生异常"; } catch (...) {}
+            try { failure_reason = "写入 Anomaly 风格载具速度字段时发生异常"; } catch (...) {}
             return false;
         }
     }
@@ -9002,41 +9004,42 @@ struct Ue5NteAdapter::State {
     [[nodiscard]] bool MakeVehicleSpeedFieldTargets(
         const VehicleSpeedFieldBaseline& baseline,
         const float configured_multiplier,
-        VehicleSpeedFieldBaseline& targets) const noexcept {
-        // Static .text evidence in Tokky-NTE.dll:
+        VehicleSpeedFieldBaseline& targets,
+        const float minimum_multiplier = 0.6024F) const noexcept {
+        // Static .text evidence in Anomaly-NTE.dll:
         // targetSpeedKmH = clamp(multiplier, 0.6024, 10.0) * 70;
         // speedRatio = targetSpeedKmH / captured TopSpeedInKmH (or 70 if unset);
         // torque scale = max(speedRatio * 2, 2), RPM scale = speedRatio.
-        constexpr float kTokkyMultiplierFloor = 0.6024F;
-        constexpr float kTokkyMultiplierCeiling = 10.0F;
-        constexpr float kTokkyBaseSpeedKmh = 70.0F;
-        constexpr float kTokkyMinValidField = 0.6024F;
-        constexpr float kTokkyDefaultTorque = 1000.0F;
-        constexpr float kTokkyDefaultRpm = 6000.0F;
-        // The user-facing Tokky factor is clamped to 0.6024..10.0. The derived
+        constexpr float kAnomalyMultiplierCeiling = 10.0F;
+        const float multiplier_floor = std::clamp(minimum_multiplier, 0.05F, kAnomalyMultiplierCeiling);
+        constexpr float kAnomalyBaseSpeedKmh = 70.0F;
+        constexpr float kAnomalyMinValidField = 0.6024F;
+        constexpr float kAnomalyDefaultTorque = 1000.0F;
+        constexpr float kAnomalyDefaultRpm = 6000.0F;
+        // The user-facing Anomaly factor is clamped to 0.6024..10.0. The derived
         // effective TopSpeedRatio is targetKmH / originalTopSpeed and is not clamped
-        // by Tokky; allow its full finite positive result.
+        // by Anomaly; allow its full finite positive result.
         constexpr float kMinimumEffectiveRatio = 0.0000001F;
         constexpr float kMaximumEffectiveRatio = 2000.0F;
         if (!baseline.valid || !std::isfinite(configured_multiplier) ||
             configured_multiplier < 0.05F || configured_multiplier > 20.0F) return false;
 
-        const float multiplier = (std::min)(kTokkyMultiplierCeiling,
-            (std::max)(kTokkyMultiplierFloor, configured_multiplier));
-        const float target_speed_kmh = multiplier * kTokkyBaseSpeedKmh;
-        const float baseline_speed_kmh = baseline.top_speed_kmh > kTokkyMinValidField
-            ? baseline.top_speed_kmh : kTokkyBaseSpeedKmh;
+        const float multiplier = (std::min)(kAnomalyMultiplierCeiling,
+            (std::max)(multiplier_floor, configured_multiplier));
+        const float target_speed_kmh = multiplier * kAnomalyBaseSpeedKmh;
+        const float baseline_speed_kmh = baseline.top_speed_kmh > kAnomalyMinValidField
+            ? baseline.top_speed_kmh : kAnomalyBaseSpeedKmh;
         const float speed_ratio = target_speed_kmh / baseline_speed_kmh;
         if (!std::isfinite(target_speed_kmh) || !std::isfinite(speed_ratio) ||
             speed_ratio < kMinimumEffectiveRatio || speed_ratio > kMaximumEffectiveRatio) return false;
 
-        const float base_engine_torque = baseline.engine_max_torque > kTokkyMinValidField
-            ? baseline.engine_max_torque : kTokkyDefaultTorque;
-        const float base_engine_rpm = baseline.engine_max_rpm > kTokkyMinValidField
-            ? baseline.engine_max_rpm : kTokkyDefaultRpm;
-        const float base_comfort_torque = baseline.comfort_max_engine_torque > kTokkyMinValidField
+        const float base_engine_torque = baseline.engine_max_torque > kAnomalyMinValidField
+            ? baseline.engine_max_torque : kAnomalyDefaultTorque;
+        const float base_engine_rpm = baseline.engine_max_rpm > kAnomalyMinValidField
+            ? baseline.engine_max_rpm : kAnomalyDefaultRpm;
+        const float base_comfort_torque = baseline.comfort_max_engine_torque > kAnomalyMinValidField
             ? baseline.comfort_max_engine_torque : base_engine_torque;
-        const float base_comfort_rpm = baseline.comfort_max_engine_rpm > kTokkyMinValidField
+        const float base_comfort_rpm = baseline.comfort_max_engine_rpm > kAnomalyMinValidField
             ? baseline.comfort_max_engine_rpm : base_engine_rpm;
         const float torque_scale = (std::max)(speed_ratio * 2.0F, 2.0F);
 
@@ -9117,13 +9120,13 @@ struct Ue5NteAdapter::State {
         // Always apply the known-native limit first. Failure to read movement velocity
         // must not disable the separate SetTopSpeedRatio cap that can work on its own.
         std::array<std::uint8_t, 8> top_speed_parameters{};
-        // Compute Tokky's absolute target speed and effective native TopSpeedRatio from the
+        // Compute Anomaly's absolute target speed and effective native TopSpeedRatio from the
         // captured stock limits. SetTopSpeedRatio receives the effective ratio, not the UI factor.
         VehicleSpeedFieldBaseline field_targets{};
         std::string field_failure;
         if (!MakeVehicleSpeedFieldTargets(vehicle_speed_field_baseline, ratio, field_targets)) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
-                "Tokky speed factor produces an invalid effective TopSpeedRatio for this vehicle");
+                "Anomaly speed factor produces an invalid effective TopSpeedRatio for this vehicle");
         }
         std::memcpy(top_speed_parameters.data() +
                 vehicle_bindings.set_top_speed_ratio.parameter_offset,
@@ -9137,7 +9140,7 @@ struct Ue5NteAdapter::State {
             field_targets.engine_max_torque *= vehicle_engine_torque_fallback_ratio;
             if (!std::isfinite(field_targets.engine_max_torque)) {
                 return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
-                    "Tokky engine torque target overflow after applying the preserved fallback multiplier");
+                    "Anomaly engine torque target overflow after applying the preserved fallback multiplier");
             }
         }
         vehicle_top_speed_ratio = field_targets.top_speed_ratio;
@@ -9156,7 +9159,7 @@ struct Ue5NteAdapter::State {
             vehicle_top_speed_ratio = previous_top_speed_ratio;
             vehicle_speed_fields_applied = rollback_ok ? previous_fields_applied : false;
             vehicle_speed_restore_status =
-                std::string("SetTopSpeedRatio 已调用，但 Tokky 风格速度字段写入失败：") +
+                std::string("SetTopSpeedRatio 已调用，但 Anomaly 风格速度字段写入失败：") +
                 (field_failure.empty() ? "目标字段计算无效" : field_failure) +
                 (rollback_ok ? "；已回滚字段" : "；字段回滚不完整：" + rollback_failure);
             return Status(ANOMALY_STATUS_V1_FAILED, vehicle_speed_restore_status.c_str());
@@ -9179,7 +9182,7 @@ struct Ue5NteAdapter::State {
         } else {
             engine_torque_refresh_failure = "SetMaxEngineTorque 参数布局不可用";
         }
-        // Tokky calls SetMaxEngineTorque after changing the engine setup. Retain the alternate
+        // Anomaly calls SetMaxEngineTorque after changing the engine setup. Retain the alternate
         // native ratio path if that call fails, combining it with the user's independent torque
         // factor rather than multiplying a previous effective speed ratio a second time.
         vehicle_speed_fields_applied = true;
@@ -9211,7 +9214,7 @@ struct Ue5NteAdapter::State {
 
         if (vehicle_bindings.set_delayed_velocity_restore == 0) {
             vehicle_speed_restore_status =
-                "Tokky 风格最高车速/发动机字段已应用；当前车速恢复失败：" +
+                "Anomaly 风格最高车速/发动机字段已应用；当前车速恢复失败：" +
                 (vehicle_delayed_velocity_restore_failure_reason.empty()
                     ? std::string("反射验证失败，但未返回具体阶段")
                     : vehicle_delayed_velocity_restore_failure_reason);
@@ -9219,7 +9222,7 @@ struct Ue5NteAdapter::State {
         }
 
         // Read the current native Velocity FVector. The write is submitted through
-        // SetDelayedVelocityRestore (the Tokky path), not a raw property write that Chaos
+        // SetDelayedVelocityRestore (the Anomaly path), not a raw property write that Chaos
         // can immediately overwrite. Velocity is 3 doubles (0x18) in the supplied dump.
         std::uintptr_t movement_class{};
         ReflectedPropertyInfo velocity_property;
@@ -9257,7 +9260,7 @@ struct Ue5NteAdapter::State {
         }
 
         // The Dump's GetForwardSpeedKmH is km/h; SetDelayedVelocityRestore's
-        // InForwardSpeed is the native linear-speed unit used by Tokky (km/h * 100 / 3.6).
+        // InForwardSpeed is the native linear-speed unit used by Anomaly (km/h * 100 / 3.6).
         // Preserve reverse sign if the game getter exposes it. A failed optional getter
         // falls back to the signed speed magnitude inferred from the current Velocity.
         double forward_speed_cm_s{};
@@ -9289,7 +9292,7 @@ struct Ue5NteAdapter::State {
             forward_speed_cm_s = magnitude;
         }
 
-        // Tokky passes zero angular velocity and the desired forward speed in cm/s.
+        // Anomaly passes zero angular velocity and the desired forward speed in cm/s.
         // This function is dump-defined as three parameters, size 0x34 (52 bytes), offsets 0/0x18/0x30.
         alignas(16) std::array<std::uint8_t, 0x34> delayed_parameters{};
         std::memcpy(delayed_parameters.data(), velocity.data(), sizeof(velocity));
@@ -9310,12 +9313,12 @@ struct Ue5NteAdapter::State {
         }
         vehicle_current_velocity_ratio = field_targets.top_speed_ratio;
         if (!engine_torque_refreshed) {
-            vehicle_speed_restore_status = "Tokky 速度字段与当前速度已应用，但两种发动机扭矩更新调用均失败：" +
+            vehicle_speed_restore_status = "Anomaly 速度字段与当前速度已应用，但两种发动机扭矩更新调用均失败：" +
                 engine_torque_refresh_failure;
             return Status(ANOMALY_STATUS_V1_FAILED, vehicle_speed_restore_status.c_str());
         }
         return Status(ANOMALY_STATUS_V1_OK,
-            "Tokky 速度上限、发动机参数、SetMaxEngineTorque 与当前速度均已应用");
+            "Anomaly 速度上限、发动机参数、SetMaxEngineTorque 与当前速度均已应用");
     }
 
     AnomalyStatusV1 VehicleSetEngineTorqueRatio(float ratio) noexcept {
@@ -9369,10 +9372,10 @@ struct Ue5NteAdapter::State {
                 }
             }
             if (vehicle_base_engine_torque_valid) {
-                const bool tokky_speed_fields_active = vehicle_speed_fields_applied &&
+                const bool anomaly_speed_fields_active = vehicle_speed_fields_applied &&
                     vehicle_speed_field_baseline_component == vehicle_movement_component &&
                     vehicle_speed_field_baseline.valid;
-                const float speed_torque_scale = tokky_speed_fields_active
+                const float speed_torque_scale = anomaly_speed_fields_active
                     ? (std::max)(2.0F * vehicle_top_speed_ratio, 2.0F) : 1.0F;
                 const float torque = vehicle_base_engine_torque * ratio * speed_torque_scale;
                 if (std::isfinite(torque)) {
@@ -9572,6 +9575,20 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    AnomalyStatusV1 VehicleSetOtherVehiclesMinSpeedRatio(float ratio) noexcept {
+        if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 10.0F)
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "non-player vehicle minimum speed factor must be 0.05..10.0");
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "non-player vehicle speed floor mutation requires Game thread");
+        std::scoped_lock lock(mutex);
+        vehicle_other_speed_multiplier_floor = ratio;
+        vehicle_other_speed_status = "非玩家车辆最低车速倍率已设为 " +
+            std::to_string(ratio) + "x；请应用其他车辆速度倍率以更新已加载实例";
+        return Status(ANOMALY_STATUS_V1_OK, vehicle_other_speed_status.c_str());
+    }
+
     AnomalyStatusV1 VehicleSetOtherVehiclesTopSpeedRatio(float ratio) noexcept {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
@@ -9636,9 +9653,10 @@ struct Ue5NteAdapter::State {
             }
             VehicleSpeedFieldBaseline field_targets{};
             std::string field_failure;
-            if (!MakeVehicleSpeedFieldTargets(baseline_it->second, ratio, field_targets)) {
+            if (!MakeVehicleSpeedFieldTargets(baseline_it->second, ratio, field_targets,
+                    vehicle_other_speed_multiplier_floor)) {
                 ++failed;
-                record_failure("Tokky speed factor produces an invalid effective TopSpeedRatio for this vehicle");
+                record_failure("Anomaly speed factor produces an invalid effective TopSpeedRatio for this vehicle");
                 continue;
             }
             const auto torque_fallback_it = other_vehicle_torque_fallback_ratios.find(movement);
@@ -9646,7 +9664,7 @@ struct Ue5NteAdapter::State {
                 field_targets.engine_max_torque *= torque_fallback_it->second;
                 if (!std::isfinite(field_targets.engine_max_torque)) {
                     ++failed;
-                    record_failure("Tokky engine torque target overflow after applying preserved fallback multiplier");
+                    record_failure("Anomaly engine torque target overflow after applying preserved fallback multiplier");
                     continue;
                 }
             }
@@ -9684,8 +9702,8 @@ struct Ue5NteAdapter::State {
                     movement, fields_before, rollback_failure));
                 ++partial;
                 record_failure(field_failure.empty()
-                    ? "Tokky 风格速度字段目标计算失败"
-                    : "Tokky 风格速度字段写入失败：" + field_failure);
+                    ? "Anomaly 风格速度字段目标计算失败"
+                    : "Anomaly 风格速度字段写入失败：" + field_failure);
             } else {
                 other_vehicle_speed_field_ratios[movement] = field_targets.top_speed_ratio;
                 ++speed_fields_applied;
@@ -9738,7 +9756,7 @@ struct Ue5NteAdapter::State {
                 }
                 if (!engine_torque_refreshed) {
                     ++partial;
-                    record_failure("Tokky 速度字段已写入但两种发动机扭矩更新调用均失败：" +
+                    record_failure("Anomaly 速度字段已写入但两种发动机扭矩更新调用均失败：" +
                         engine_torque_refresh_failure);
                 }
             }
@@ -9851,7 +9869,7 @@ struct Ue5NteAdapter::State {
 
         vehicle_other_speed_status = "非玩家车辆速率倍率 " + std::to_string(ratio) +
             "x：扫描到 " + std::to_string(actors.size()) + " 辆；最高车速上限已应用 " +
-            std::to_string(cap_applied) + " 辆，Tokky 风格速度/发动机字段应用成功 " +
+            std::to_string(cap_applied) + " 辆，Anomaly 风格速度/发动机字段应用成功 " +
             std::to_string(speed_fields_applied) + " 辆，当前速度恢复成功 " +
             std::to_string(velocity_applied) + " 辆，部分成功 " +
             std::to_string(partial) + " 辆，失败 " + std::to_string(failed) + " 辆";
@@ -10080,7 +10098,7 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
-    // Tokky's summon path uses GameplayStatics deferred spawning and finishes the actor
+    // Anomaly's summon path uses GameplayStatics deferred spawning and finishes the actor
     // directly; CheatManager is retained only as a fallback when the row's soft class is not
     // already resolved by the game. All reflected signatures below are checked against the dump.
     [[nodiscard]] bool ResolveVehicleTemplateClassLocked(
@@ -10220,7 +10238,7 @@ struct Ue5NteAdapter::State {
                 return RelocateSpawnedVehicleLocked(actor, destination);
             }
 
-            // Tokky's wheeled vehicle route calls SafeSetVehicleTransform so the
+            // Anomaly's wheeled vehicle route calls SafeSetVehicleTransform so the
             // transform reaches the vehicle-specific movement state, not just Actor.Location.
             std::uintptr_t function{};
             std::uintptr_t outer{};
@@ -10494,7 +10512,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "selected VehicleID is no longer in the current data table");
         }
 
-        // Prefer the Tokky-style direct route: resolve the VehicleData row's InVehicleTemple
+        // Prefer the Anomaly-style direct route: resolve the VehicleData row's InVehicleTemple
         // soft class and use GameplayStatics deferred spawn. This path does not require a CheatManager.
         const std::array<double, 3> direct_destination{
             request->world_position[0], request->world_position[1], request->world_position[2]};
@@ -15863,6 +15881,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk,
             VehicleSetEngineTorqueRatioThunk, VehicleCatalogRefreshThunk,
             VehicleCatalogLabelAtThunk, VehicleSetOtherVehiclesTopSpeedRatioThunk,
+            VehicleSetOtherVehiclesMinSpeedRatioThunk,
             VehicleSetOtherVehiclesEngineTorqueRatioThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
@@ -16218,6 +16237,14 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesTopSpeedRatio(ratio)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetOtherVehiclesMinSpeedRatioThunk(
+        void* user, float ratio) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesMinSpeedRatio(ratio)
             : StoppedStatus();
     }
 
