@@ -5521,7 +5521,7 @@ struct Ue5NteAdapter::State {
         } else if (function == bindings.replay_apply_by_actor ||
                    function == bindings.replay_apply_to_target ||
                    function == bindings.replay_activate_by_actor) {
-            // Capture the bounded 0x78-byte Dump-validated HTAbilitySystemComponent call.
+            // Capture only bounded, reflection-validated native GameplayEffect calls.
         } else if (std::ranges::any_of(
                        bindings.buffs, [function](const auto& buff) {
                            return buff.function != 0 && buff.function == function;
@@ -5667,7 +5667,8 @@ struct Ue5NteAdapter::State {
         const auto* const source = static_cast<const std::uint8_t*>(parameters);
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
         if (kind == CombatCaptureKind::GameplayEffectByActor ||
-            kind == CombatCaptureKind::GameplayEffectToTarget) {
+            kind == CombatCaptureKind::GameplayEffectToTarget ||
+            kind == CombatCaptureKind::GameplayEffectActivationByActor) {
             const std::uintptr_t tag_arrays_offset =
                 kind == CombatCaptureKind::GameplayEffectActivationByActor ? 0x20U : 0x18U;
             capture.replay_tag_arrays_valid = CaptureReplayGameplayTagsLocked(
