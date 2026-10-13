@@ -6110,10 +6110,16 @@ struct Ue5NteAdapter::State {
                 damage_source_object == class_default_object;
             if (!source_matches_effect) {
                 std::uintptr_t source_class{};
-                source_matches_effect =
-                    ReadPointerAt(*memory, damage_source_object,
-                        Layout(profile, "object.class"), source_class) &&
-                    source_class == gameplay_effect_class;
+                if (ReadPointerAt(*memory, damage_source_object,
+                        Layout(profile, "object.class"), source_class)) {
+                    // Dump 说明 DamageGEDef 是 UHTGamePlayEffect UObject 弱引用，
+                    // GameplayEffect 参数则是 TSubclassOf<UGameplayEffect> 的 UClass。
+                    // 该对象可能属于传入效果类的具体子类；按原生 UClass.SuperStruct
+                    // 链验证兼容关系，而不是把 UObject 指针与 UClass 指针直接比较。
+                    source_matches_effect =
+                        source_class == gameplay_effect_class ||
+                        IsClassDerivedFromLocked(source_class, gameplay_effect_class);
+                }
             }
             if (!source_matches_effect) return false;
 
