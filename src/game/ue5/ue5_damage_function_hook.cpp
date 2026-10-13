@@ -34,8 +34,13 @@ public:
 
     bool Start(const Ue5DamageFunctionTargets targets) {
         std::scoped_lock stop_lock(stop_mutex_);
-        if (attempted_.exchange(true, std::memory_order_acq_rel) ||
+        // Failed discovery or hook installation must remain retryable. The caller
+        // may initially see no dump-validated native Exec targets while reflection
+        // bindings are still resolving; latching attempted_ before success would
+        // permanently disable GameplayEffect capture for the rest of the session.
+        if (attempted_.load(std::memory_order_acquire) ||
             targets.character_on_damaged == nullptr ||
+            targets.combat_exec_function_count == 0 ||
             targets.combat_exec_function_count > kUe5CombatExecFunctionCapacity ||
             started_.load(std::memory_order_acquire) || owner_registered_) {
             return false;
@@ -90,6 +95,7 @@ public:
             return false;
         }
         started_.store(true, std::memory_order_release);
+        attempted_.store(true, std::memory_order_release);
         return true;
     }
 
