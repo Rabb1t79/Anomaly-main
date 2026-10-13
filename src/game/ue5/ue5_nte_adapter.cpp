@@ -834,6 +834,7 @@ struct Ue5NteAdapter::State {
     bool vehicle_base_engine_torque_valid{};
     VehicleSpeedFieldBaseline vehicle_speed_field_baseline{};
     std::uintptr_t vehicle_speed_field_baseline_component{};
+    bool vehicle_speed_fields_applied{};
     bool vehicle_wheel_friction_enabled{true};
     // 按非玩家载具的 MovementComponent 分别保存速率倍率和原始扭矩基准，绝不与玩家载具共用状态。
     std::unordered_map<std::uintptr_t, float> other_vehicle_velocity_ratios;
@@ -8747,6 +8748,7 @@ struct Ue5NteAdapter::State {
                 vehicle_speed_kmh = 0.0F;
                 vehicle_speed_field_baseline = {};
                 vehicle_speed_field_baseline_component = 0;
+                vehicle_speed_fields_applied = false;
                 // Revalidate this dump-defined UFunction for each movement component.
                 vehicle_bindings.set_delayed_velocity_restore = 0;
                 vehicle_delayed_velocity_restore_failure_reason.clear();
@@ -9074,6 +9076,7 @@ struct Ue5NteAdapter::State {
                 "HTGame.HTWheeledVehicleBase.SetTopSpeedRatio(float) failed dump ABI validation");
         float previous_ratio = vehicle_current_velocity_ratio;
         float previous_top_speed_ratio = vehicle_top_speed_ratio;
+        const bool previous_fields_applied = vehicle_speed_fields_applied;
         VehicleSpeedFieldBaseline current_fields_before{};
         if (!ReadVehicleSpeedFieldSnapshotLocked(vehicle_movement_component, current_fields_before)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -9151,6 +9154,7 @@ struct Ue5NteAdapter::State {
             const bool rollback_ok = WriteVehicleSpeedFieldSnapshotLocked(
                 vehicle_movement_component, current_fields_before, rollback_failure);
             vehicle_top_speed_ratio = previous_top_speed_ratio;
+            vehicle_speed_fields_applied = rollback_ok ? previous_fields_applied : false;
             vehicle_speed_restore_status =
                 std::string("SetTopSpeedRatio 已调用，但 Tokky 风格速度字段写入失败：") +
                 (field_failure.empty() ? "目标字段计算无效" : field_failure) +
@@ -9178,6 +9182,7 @@ struct Ue5NteAdapter::State {
         // Tokky calls SetMaxEngineTorque after changing the engine setup. Retain the alternate
         // native ratio path if that call fails, combining it with the user's independent torque
         // factor rather than multiplying a previous effective speed ratio a second time.
+        vehicle_speed_fields_applied = true;
         if (!engine_torque_refreshed) {
             const auto& external_binding = vehicle_bindings.set_external_torque_ratio;
             const float speed_torque_scale = (std::max)(2.0F * field_targets.top_speed_ratio, 2.0F);
@@ -9364,7 +9369,7 @@ struct Ue5NteAdapter::State {
                 }
             }
             if (vehicle_base_engine_torque_valid) {
-                const bool tokky_speed_fields_active =
+                const bool tokky_speed_fields_active = vehicle_speed_fields_applied &&
                     vehicle_speed_field_baseline_component == vehicle_movement_component &&
                     vehicle_speed_field_baseline.valid;
                 const float speed_torque_scale = tokky_speed_fields_active
