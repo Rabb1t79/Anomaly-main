@@ -868,6 +868,9 @@ struct Ue5NteAdapter::State {
     struct ReplayEffectContext {
         bool valid{};
         bool tag_arrays_valid{};
+        // True only when the event could be tied to the exact target/instigator wrapper
+        // but DamageGEDef identity itself was unavailable or represented differently.
+        bool effect_identity_fallback{};
         std::uint8_t kind{}; // 1 = ByActor, 2 = ToTarget；均来自已验证的 HTGame UFunction。
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
@@ -6100,7 +6103,8 @@ struct Ue5NteAdapter::State {
 
     [[nodiscard]] bool ReplayContextMatchesDamageLocked(
         const ReplayEffectContext& context, const std::uintptr_t attacker,
-        const std::uintptr_t victim, const std::uint64_t source_id) const noexcept {
+        const std::uintptr_t victim, const std::uint64_t source_id,
+        const bool allow_effect_identity_fallback = false) const noexcept {
         try {
             const std::size_t expected_parameter_size = context.kind == 3U
                 ? kGameplayEffectReplayMaxParameterBytes : kGameplayEffectReplayParameterBytes;
@@ -6108,15 +6112,19 @@ struct Ue5NteAdapter::State {
                 (context.kind != 1U && context.kind != 2U && context.kind != 3U) ||
                 context.parameter_size != expected_parameter_size ||
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
-                source_id == 0 || context.receiver == 0 || context.function == 0 ||
+                context.receiver == 0 || context.function == 0 ||
                 !ReadableRange(*memory, context.receiver, 0x20U) ||
                 !ReadableRange(*memory, context.function, 0x20U)) return false;
             const auto* const bindings =
                 combat_capture_bindings.load(std::memory_order_acquire);
             if (bindings == nullptr) return false;
-            const auto source_it = damage_source_objects.find(source_id);
-            if (source_it == damage_source_objects.end() || source_it->second == 0) return false;
-            const std::uintptr_t damage_source_object = source_it->second;
+            std::uintptr_t damage_source_object{};
+            if (source_id != 0) {
+                const auto source_it = damage_source_objects.find(source_id);
+                if (source_it != damage_source_objects.end()) {
+                    damage_source_object = source_it->second;
+                }
+            }
 
             // DamageGEDef 在 HTDamageEvent 中是弱 UObject；只有它能和此次调用的
             // GameplayEffect 类/CDO 对上时，才把这条调用作为该伤害的重放模板。
@@ -6131,22 +6139,24 @@ struct Ue5NteAdapter::State {
             std::uintptr_t class_default_object{};
             if (!ReadPointerAt(*memory, gameplay_effect_class,
                     Layout(profile, "uclass.classDefaultObject"), class_default_object)) return false;
-            bool source_matches_effect = class_default_object != 0 &&
-                damage_source_object == class_default_object;
-            if (!source_matches_effect) {
+            bool source_matches_effect = damage_source_object != 0 &&
+                class_default_object != 0 && damage_source_object == class_default_object;
+            if (!source_matches_effect && damage_source_object != 0) {
                 std::uintptr_t source_class{};
                 if (ReadPointerAt(*memory, damage_source_object,
                         Layout(profile, "object.class"), source_class)) {
-                    // Dump 说明 DamageGEDef 是 UHTGamePlayEffect UObject 弱引用，
-                    // GameplayEffect 参数则是 TSubclassOf<UGameplayEffect> 的 UClass。
-                    // 该对象可能属于传入效果类的具体子类；按原生 UClass.SuperStruct
-                    // 链验证兼容关系，而不是把 UObject 指针与 UClass 指针直接比较。
+                    // Compare the captured DamageGEDef UObject against the passed UClass/CDO.
                     source_matches_effect =
                         source_class == gameplay_effect_class ||
                         IsClassDerivedFromLocked(source_class, gameplay_effect_class);
                 }
             }
-            if (!source_matches_effect) return false;
+            // A wrapper call still carries a fully reflected-validated effect class,
+            // target character, SourceObj and exact trigger ASC. If the weak DamageGEDef
+            // does not resolve to the same class/CDO, permit this wrapper-only fallback;
+            // FindReplayContextForDamageLocked chooses it only after exact matches fail.
+            if (!source_matches_effect &&
+                !(allow_effect_identity_fallback && context.kind == 3U)) return false;
 
             std::uintptr_t attacker_ability_system{}, victim_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
@@ -6197,6 +6207,7 @@ struct Ue5NteAdapter::State {
         const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
         ReplayEffectContext& result) const noexcept {
         if (replay_effect_call_count == 0) return false;
+        // Pass 1: prefer exact DamageGEDef-to-class/CDO identity matches.
         for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
             const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
                 reverse) % kReplayEffectCallCapacity;
@@ -6210,6 +6221,27 @@ struct Ue5NteAdapter::State {
             if (ReplayContextMatchesDamageLocked(
                     candidate, attacker, victim, source_id)) {
                 result = candidate;
+                result.effect_identity_fallback = false;
+                return true;
+            }
+        }
+        // Pass 2: DamageGEDef is a weak UObject and can be null/stale or point at a
+        // distinct HTGamePlayEffect definition object. Only the character-level native
+        // wrapper is eligible here because it explicitly binds the damaged character and
+        // the player's ASC; never relax identity for a bare ASC call. Search newest-first
+        // because each native wrapper call is queued immediately before its hit callback.
+        for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+            const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                reverse) % kReplayEffectCallCapacity;
+            const auto& candidate = replay_effect_calls[index];
+            const auto delta = candidate.tick_sequence >= capture_tick_sequence
+                ? candidate.tick_sequence - capture_tick_sequence
+                : capture_tick_sequence - candidate.tick_sequence;
+            if (!candidate.valid || delta > 1U || candidate.kind != 3U) continue;
+            if (ReplayContextMatchesDamageLocked(
+                    candidate, attacker, victim, source_id, true)) {
+                result = candidate;
+                result.effect_identity_fallback = true;
                 return true;
             }
         }
@@ -6270,7 +6302,8 @@ struct Ue5NteAdapter::State {
             !ResolveObjectHandleLocked(record->event.victim, victim) ||
             attacker != player_pawn || victim == 0 || attacker == victim ||
             !ReplayContextMatchesDamageLocked(
-                record->replay, attacker, victim, record->event.source_id)) {
+                record->replay, attacker, victim, record->event.source_id,
+                record->replay.effect_identity_fallback)) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "captured GameplayEffect receiver/source/target no longer matches live player and victim");
         }
