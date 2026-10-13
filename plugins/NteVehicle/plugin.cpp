@@ -925,7 +925,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     }
 
     if (!status.empty()) DrawText(ui, "运行状态  /  " + status);
-    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.5 / 2026-10-13-responsive-ui");
+    DrawText(ui, "插件构建标记  /  NTE Vehicle 0.9.6 / 2026-10-13-other-speed-floor");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0) {
         DrawText(ui, "当前驾驶载具  /  " +
             (snap.vehicle_class_name.empty() ? std::string("未知类名") : snap.vehicle_class_name) +
