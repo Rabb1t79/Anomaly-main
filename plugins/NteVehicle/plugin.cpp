@@ -54,6 +54,7 @@ struct Context {
     float speed_ratio{1.0F};
     float engine_torque_ratio{1.0F};
     float other_speed_ratio{1.0F};
+    float other_speed_floor_ratio{0.6024F};
     float other_torque_ratio{1.0F};
     bool friction_enabled{true};
 } g_context;
@@ -368,24 +369,42 @@ void Update() {
 
     if (g_context.apply_other_speed.exchange(false, std::memory_order_acq_rel)) {
         float ratio;
+        float floor_ratio;
         {
             std::scoped_lock lock(g_context.mutex);
             ratio = g_context.other_speed_ratio;
+            floor_ratio = g_context.other_speed_floor_ratio;
         }
-        const bool available =
+        const bool floor_available =
             HasField<AnomalyNteVehicleServiceV1,
-                decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_top_speed_ratio)>(
+                decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_min_speed_ratio)>(
                     g_context.vehicle,
-                    offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)) &&
-            g_context.vehicle->set_other_vehicles_top_speed_ratio != nullptr;
-        if (!available) {
-            SetStatus("非玩家车辆速率倍率不可用：Host Runtime 未发布 Vehicle V4 接口");
+                    offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_min_speed_ratio)) &&
+            g_context.vehicle->set_other_vehicles_min_speed_ratio != nullptr;
+        if (!floor_available) {
+            SetStatus("非玩家车辆最低车速倍率不可用：Host Runtime 未发布扩展接口");
         } else {
-            const auto status = g_context.vehicle->set_other_vehicles_top_speed_ratio(
-                g_context.vehicle->user, ratio);
-            SetStatus(status.code == ANOMALY_STATUS_V1_OK
-                ? StatusDescription("非玩家车辆速率修改完成", status)
-                : StatusDescription("非玩家车辆速率修改未完全成功", status));
+            const auto floor_status = g_context.vehicle->set_other_vehicles_min_speed_ratio(
+                g_context.vehicle->user, floor_ratio);
+            if (floor_status.code != ANOMALY_STATUS_V1_OK) {
+                SetStatus(StatusDescription("非玩家车辆最低车速倍率设置失败", floor_status));
+            } else {
+                const bool available =
+                    HasField<AnomalyNteVehicleServiceV1,
+                        decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_top_speed_ratio)>(
+                            g_context.vehicle,
+                            offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)) &&
+                    g_context.vehicle->set_other_vehicles_top_speed_ratio != nullptr;
+                if (!available) {
+                    SetStatus("非玩家车辆速率倍率不可用：Host Runtime 未发布 Vehicle V4 接口");
+                } else {
+                    const auto status = g_context.vehicle->set_other_vehicles_top_speed_ratio(
+                        g_context.vehicle->user, ratio);
+                    SetStatus(status.code == ANOMALY_STATUS_V1_OK
+                        ? StatusDescription("非玩家车辆速率与下限修改完成", status)
+                        : StatusDescription("非玩家车辆速率修改未完全成功", status));
+                }
+            }
         }
     }
 
@@ -764,7 +783,7 @@ void DrawSummonTab(
 
 void DrawPerformanceTab(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
-    float ratio, float torque_ratio, float other_speed_ratio, float other_torque_ratio) {
+    float ratio, float torque_ratio, float other_speed_ratio, float other_speed_floor_ratio, float other_torque_ratio) {
     DrawSectionTitle(ui, "02  /  PERFORMANCE TUNING", "速度与发动机");
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
         DrawText(ui, "驾驶状态：未检测到当前驾驶载具");
@@ -782,7 +801,7 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
-    DrawText(ui, "Tokky 目标最高速 = 70 km/h x 因子；因子范围 0.6024x 到 10x");
+    DrawText(ui, "目标最高速 = 70 km/h × 速度因子");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("速度倍率"),
                          &ratio, 0.6024F, 10.0F)) {
         std::scoped_lock lock(g_context.mutex);
@@ -807,13 +826,19 @@ void DrawPerformanceTab(
     DrawDivider(ui);
     DrawSectionTitle(ui, "02B  /  OTHER VEHICLE INSTANCES", "其他载具实例");
     DrawText(ui, "应用范围：当前已加载关卡中的 HTWheeledVehicleBase 实例；排除玩家当前驾驶载具");
-    DrawText(ui, "Tokky 目标最高速 = 70 km/h x 因子；因子范围 0.6024x 到 10x");
+    DrawText(ui, "目标最高速 = 70 km/h x 因子；因子范围 0.6024x 到 10x");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("其他车辆速度倍率"),
-                         &other_speed_ratio, 0.6024F, 10.0F)) {
+                         &other_speed_ratio, 0.05F, 10.0F)) {
         std::scoped_lock lock(g_context.mutex);
         g_context.other_speed_ratio = other_speed_ratio;
     }
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用其他车辆速率倍率"), 0.0F, 0.0F)) {
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("其他车辆最低车速倍率"),
+                         &other_speed_floor_ratio, 0.05F, 10.0F)) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.other_speed_floor_ratio = other_speed_floor_ratio;
+    }
+    DrawText(ui, "应用倍率低于此值时按下限执行；仅影响非玩家载具实例");
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用其他车辆倍率与下限"), 0.0F, 0.0F)) {
         g_context.apply_other_speed.store(true, std::memory_order_release);
     }
 
@@ -850,13 +875,13 @@ void DrawLegacyLayout(
     const std::string& selected, const std::vector<std::string>& ids,
     const std::vector<std::string>& labels, const std::string& last_summon,
     float ratio, float torque_ratio,
-    float other_speed_ratio, float other_torque_ratio, bool friction, bool player_position_valid) {
+    float other_speed_ratio, float other_speed_floor_ratio, float other_torque_ratio, bool friction, bool player_position_valid) {
     DrawSectionTitle(ui, "NTE  /  VEHICLE CONTROL", "载具控制");
     if (!status.empty()) DrawText(ui, "状态  /  " + status);
     DrawDivider(ui);
     DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
     DrawDivider(ui);
-    DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio, other_torque_ratio);
+    DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio, other_speed_floor_ratio, other_torque_ratio);
     DrawDivider(ui);
     DrawChassisTab(ui, friction);
 }
@@ -878,6 +903,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     float ratio;
     float torque_ratio;
     float other_speed_ratio;
+    float other_speed_floor_ratio;
     float other_torque_ratio;
     bool friction;
     bool player_position_valid{};
@@ -892,6 +918,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         ratio = g_context.speed_ratio;
         torque_ratio = g_context.engine_torque_ratio;
         other_speed_ratio = g_context.other_speed_ratio;
+        other_speed_floor_ratio = g_context.other_speed_floor_ratio;
         other_torque_ratio = g_context.other_torque_ratio;
         friction = g_context.friction_enabled;
         player_position_valid = g_context.player_position_valid;
@@ -939,7 +966,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         ui->end_tab_bar(ui->user);
     } else {
         DrawLegacyLayout(ui, snap, status, selected, ids, labels, last_summon,
-            ratio, torque_ratio, other_speed_ratio, other_torque_ratio, friction, player_position_valid);
+            ratio, torque_ratio, other_speed_ratio, other_speed_floor_ratio, other_torque_ratio, friction, player_position_valid);
     }
 }
 
@@ -968,6 +995,10 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)) ||
         !vehicle->set_other_vehicles_top_speed_ratio ||
         !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_min_speed_ratio)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_min_speed_ratio)) ||
+        !vehicle->set_other_vehicles_min_speed_ratio ||
+        !HasField<AnomalyNteVehicleServiceV1,
             decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_engine_torque_ratio)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)) ||
         !vehicle->set_other_vehicles_engine_torque_ratio || !player->snapshot) {
@@ -988,6 +1019,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.speed_ratio = 1.0F;
     g_context.engine_torque_ratio = 1.0F;
     g_context.other_speed_ratio = 1.0F;
+    g_context.other_speed_floor_ratio = 0.6024F;
     g_context.other_torque_ratio = 1.0F;
     g_context.friction_enabled = true;
     g_context.snapshot = {};
