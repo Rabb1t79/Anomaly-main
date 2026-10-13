@@ -853,8 +853,11 @@ struct Ue5NteAdapter::State {
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
     static constexpr std::size_t kGameplayEffectReplayParameterBytes = 0x78;
-    // HTGame dump: ModifyData@0x10 contains FBufferData, whose FGameplayTagContainer
-    // contains two TArray<FGameplayTag> objects at parameter offsets 0x18 and 0x28.
+    static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
+    static constexpr std::size_t kGameplayEffectReplayMaxParameterBytes =
+        kGameplayEffectReplayWrapperParameterBytes;
+    // HTGame dump: for ASC methods ModifyData@0x10 places its two tag arrays at 0x18/0x28;
+    // the HTAbilityCharacter wrapper adds WorldContextObject@0x00, shifting them to 0x20/0x30.
     // Own the tag values because the original ProcessEvent parameter buffer and its
     // temporary TArray allocations may be destroyed after the call returns.
     static constexpr std::size_t kReplayGameplayTagCapacity = 64;
@@ -866,15 +869,13 @@ struct Ue5NteAdapter::State {
     struct ReplayEffectContext {
         bool valid{};
         bool tag_arrays_valid{};
-        std::uint8_t kind{}; // 1 = ByActor, 2 = ToTarget；均来自已验证的 HTGame UFunction。
+        std::uint8_t kind{}; // 1 = ASC ByActor, 2 = ASC ToTarget, 3 = Character ByActor wrapper.
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
-        // Character wrapper captures retain the wrapper receiver until DamageEvent correlation.
-        bool receiver_is_character_wrapper{};
-        std::array<std::uint8_t, kGameplayEffectReplayParameterBytes> parameters{};
+        std::array<std::uint8_t, kGameplayEffectReplayMaxParameterBytes> parameters{};
         CapturedGameplayTagArrays gameplay_tags{};
     };
     struct DamageRecord {
@@ -1045,7 +1046,7 @@ struct Ue5NteAdapter::State {
     // queue payload bounded to the largest useful value avoids copying the
     // 0x298-byte FGameplayEffectSpec for every buff notification.
     static constexpr std::size_t kCombatCapturePayloadBytes =
-        (std::max)((std::max)(std::size_t{0x78}, std::size_t{96}),
+        (std::max)((std::max)(std::size_t{kGameplayEffectReplayWrapperParameterBytes}, std::size_t{96}),
             sizeof(NteCharacterDamageCapture));
     enum class CombatCaptureKind : std::uint8_t {
         CharacterDamage,
@@ -5369,41 +5370,28 @@ struct Ue5NteAdapter::State {
         const bool tag_arrays_valid) noexcept {
         const bool character_by_actor_wrapper =
             kind == CombatCaptureKind::GameplayEffectByActorFromCharacter;
-        const bool by_actor =
-            kind == CombatCaptureKind::GameplayEffectByActor || character_by_actor_wrapper;
+        const bool by_actor = kind == CombatCaptureKind::GameplayEffectByActor ||
+            character_by_actor_wrapper;
+        const std::size_t expected_parameter_size = character_by_actor_wrapper
+            ? kGameplayEffectReplayWrapperParameterBytes
+            : kGameplayEffectReplayParameterBytes;
         if ((!by_actor && kind != CombatCaptureKind::GameplayEffectToTarget) ||
             receiver == 0 || function == 0 ||
-            parameters.size() != kGameplayEffectReplayParameterBytes) return;
+            parameters.size() != expected_parameter_size) return;
 
-        // HTGame dump: HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor has
-        // WorldContextObject@0x00, followed by the same SourceObj/GameplayEffect/
-        // ModifyData/pTriggerAbilityComp fields as the validated ASC API starting at 0x08.
-        // Normalize that bounded 0x78-byte slice. Correlation must still prove that this
-        // character's live ASC is the actual victim's ASC.
-        std::uintptr_t replay_receiver = receiver;
-        std::uintptr_t replay_function = function;
-        if (character_by_actor_wrapper) {
-            const auto* const bindings =
-                combat_capture_bindings.load(std::memory_order_acquire);
-            if (bindings == nullptr || bindings->replay_apply_by_actor == 0) {
-                return;
-            }
-            // Do not discard a real wrapper call because ASC lookup is transiently unavailable
-            // while the event queue drains. Preserve the actor and validate it against the
-            // exact DamageEvent target before resolving the live ASC for the replay call.
-            replay_function = bindings->replay_apply_by_actor;
-        }
-
+        // Store the exact dump-validated entry point that was observed. In particular,
+        // do not discard the HTAbilityCharacter wrapper when a separate ASC binding is
+        // unavailable, and do not assume that its parameters are interchangeable with
+        // the ASC UFunction. The wrapper's 0x80-byte parameter block is preserved intact.
         ReplayEffectContext captured{};
         captured.valid = true;
         captured.tag_arrays_valid = tag_arrays_valid;
-        captured.kind = by_actor ? 1U : 2U;
+        captured.kind = character_by_actor_wrapper ? 3U : (by_actor ? 1U : 2U);
         captured.parameter_size = static_cast<std::uint16_t>(parameters.size());
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
-        captured.receiver = replay_receiver;
-        captured.function = replay_function;
-        captured.receiver_is_character_wrapper = character_by_actor_wrapper;
+        captured.receiver = receiver;
+        captured.function = function;
         captured.gameplay_tags = gameplay_tags;
         std::memcpy(captured.parameters.data(), parameters.data(), parameters.size());
         std::size_t slot{};
@@ -5585,11 +5573,10 @@ struct Ue5NteAdapter::State {
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
         if (function == bindings.replay_activate_by_actor) {
-            // Wrapper layout is 0x80 bytes; dropping WorldContextObject@0x00 gives
-            // the dump-validated 0x78-byte ASC ByActor parameter layout.
+            // Preserve the dump-defined HTAbilityCharacter wrapper exactly (0x80 bytes).
             kind = CombatCaptureKind::GameplayEffectByActorFromCharacter;
-            info_offset = 0x08U;
-            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayParameterBytes);
+            info_offset = 0;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParameterBytes);
         } else if (function == bindings.replay_apply_by_actor) {
             kind = CombatCaptureKind::GameplayEffectByActor;
             payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayParameterBytes);
@@ -5690,9 +5677,12 @@ struct Ue5NteAdapter::State {
         if (kind == CombatCaptureKind::GameplayEffectByActor ||
             kind == CombatCaptureKind::GameplayEffectToTarget ||
             kind == CombatCaptureKind::GameplayEffectByActorFromCharacter) {
-            // Read arrays at canonical offsets after removing the wrapper's first pointer.
+            // The wrapper adds WorldContextObject@0x00; pass SourceObj@0x08 as the
+            // canonical parameter base so the dump-validated tag array offsets remain 0x18/0x28.
+            const std::size_t tag_parameter_base =
+                kind == CombatCaptureKind::GameplayEffectByActorFromCharacter ? 0x08U : info_offset;
             capture.replay_tag_arrays_valid =
-                CaptureReplayGameplayTagsLocked(source + info_offset, capture.replay_gameplay_tags);
+                CaptureReplayGameplayTagsLocked(source + tag_parameter_base, capture.replay_gameplay_tags);
         }
         combat_capture_write.store(write + 1U, std::memory_order_release);
     }
@@ -6122,7 +6112,12 @@ struct Ue5NteAdapter::State {
         const ReplayEffectContext& context, const std::uintptr_t attacker,
         const std::uintptr_t victim, const std::uint64_t source_id) const noexcept {
         try {
-            if (!context.valid || context.parameter_size != kGameplayEffectReplayParameterBytes ||
+            const bool character_wrapper = context.kind == 3U;
+            const bool by_actor = context.kind == 1U || character_wrapper;
+            const std::size_t expected_parameter_size = character_wrapper
+                ? kGameplayEffectReplayWrapperParameterBytes
+                : kGameplayEffectReplayParameterBytes;
+            if (!context.valid || context.parameter_size != expected_parameter_size ||
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
                 source_id == 0 || context.receiver == 0 || context.function == 0 ||
                 !ReadableRange(*memory, context.receiver, 0x20U) ||
@@ -6134,23 +6129,19 @@ struct Ue5NteAdapter::State {
             if (source_it == damage_source_objects.end() || source_it->second == 0) return false;
             const std::uintptr_t damage_source_object = source_it->second;
 
-            // DamageGEDef 在 HTDamageEvent 中是弱 UObject；只有它能和此次调用的
-            // GameplayEffect 类/CDO 对上时，才把这条调用作为该伤害的重放模板。
+            // HTDamageEvent::DamageGEDef is a weak UHTGamePlayEffect object. Compare it
+            // only to the effect class/CDO identity represented in the observed call.
+            const std::size_t effect_offset = character_wrapper ? 0x10U
+                : (context.kind == 1U ? 0x08U : 0x00U);
             std::uintptr_t gameplay_effect_class{};
             std::memcpy(&gameplay_effect_class,
-                context.parameters.data() + (context.kind == 1U ? 0x08U : 0x00U),
-                sizeof(gameplay_effect_class));
+                context.parameters.data() + effect_offset, sizeof(gameplay_effect_class));
             if (gameplay_effect_class == 0 ||
                 !ReadableRange(*memory, gameplay_effect_class, 0x20U)) return false;
             std::uintptr_t class_default_object{};
-            // CDO lookup adds one valid identity route; it must not gate the independent
-            // exact UClass/object-class checks below.
             const bool class_default_object_available = ReadPointerAt(
                 *memory, gameplay_effect_class,
                 Layout(profile, "uclass.classDefaultObject"), class_default_object);
-            // HTDamageEvent::DamageGEDef is TWeakObjectPtr<UHTGamePlayEffect>; the apply
-            // argument is TSubclassOf<UGameplayEffect> in the supplied HTGame dump.
-            // Accept only pointer/CDO/exact-class identity; keep source correlation strict.
             bool source_matches_effect =
                 damage_source_object == gameplay_effect_class ||
                 (class_default_object_available &&
@@ -6167,27 +6158,26 @@ struct Ue5NteAdapter::State {
             std::uintptr_t attacker_ability_system{}, victim_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
                 !CurrentAbilitySystemLocked(victim, victim_ability_system)) return false;
-            if (context.kind == 1U) {
+            if (by_actor) {
                 std::uintptr_t source_actor{}, trigger_ability_system{};
-                std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
+                const std::size_t source_actor_offset = character_wrapper ? 0x08U : 0x00U;
+                const std::size_t trigger_ability_system_offset = character_wrapper ? 0x70U : 0x68U;
+                std::memcpy(&source_actor,
+                    context.parameters.data() + source_actor_offset, sizeof(source_actor));
                 std::memcpy(&trigger_ability_system,
-                    context.parameters.data() + 0x68U, sizeof(trigger_ability_system));
-                // The dump defines SourceObj as AActor* and pTriggerAbilityComp as ASC*.
-                // Normally the ASC proves the player source. Some native attack paths set
-                // pTriggerAbilityComp to a non-player/empty component while SourceObj is the
-                // exact attacking player. Accept that *only* as an alternate exact identity;
-                // still require exact DamageGEDef/class identity, target ASC and adjacent tick.
+                    context.parameters.data() + trigger_ability_system_offset,
+                    sizeof(trigger_ability_system));
                 const bool trigger_is_attacker =
                     trigger_ability_system != 0 &&
                     trigger_ability_system == attacker_ability_system;
                 const bool source_actor_is_attacker = source_actor == attacker;
-                // WorldContextObject is only a reflected context parameter in the dump;
-                // it is not defined as the hit target. Only use the actual wrapper receiver
-                // as actor identity, or the validated ASC receiver for direct ASC calls.
-                const bool receiver_matches_target = context.receiver_is_character_wrapper
+                const bool receiver_matches_target = character_wrapper
                     ? (context.receiver == victim)
                     : (context.receiver == victim_ability_system);
-                return context.function == bindings->replay_apply_by_actor &&
+                const std::uintptr_t expected_function = character_wrapper
+                    ? bindings->replay_activate_by_actor
+                    : bindings->replay_apply_by_actor;
+                return expected_function != 0 && context.function == expected_function &&
                     receiver_matches_target &&
                     source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U) &&
                     (trigger_is_attacker || source_actor_is_attacker);
@@ -6196,7 +6186,8 @@ struct Ue5NteAdapter::State {
                 std::uintptr_t target_ability_system{};
                 std::memcpy(&target_ability_system,
                     context.parameters.data() + 0x08U, sizeof(target_ability_system));
-                return context.function == bindings->replay_apply_to_target &&
+                return bindings->replay_apply_to_target != 0 &&
+                    context.function == bindings->replay_apply_to_target &&
                     context.receiver == attacker_ability_system &&
                     target_ability_system == victim_ability_system;
             }
@@ -6291,15 +6282,9 @@ struct Ue5NteAdapter::State {
                 "captured GameplayEffect receiver/source/target no longer matches live player and victim");
         }
 
-        std::uintptr_t replay_receiver = record->replay.receiver;
-        if (record->replay.receiver_is_character_wrapper) {
-            // The original wrapper receiver is an actor, not the ASC UFunction receiver.
-            // Resolve the already-correlated victim's live ASC only after identity checks.
-            if (!CurrentAbilitySystemLocked(victim, replay_receiver) || replay_receiver == 0) {
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    "current victim AbilitySystemComponent is unavailable for actor-effect replay");
-            }
-        }
+        // The recorded receiver/function pair is kept from the exact validated native
+        // entry point: ASC methods receive an ASC, the character wrapper receives its actor.
+        const std::uintptr_t replay_receiver = record->replay.receiver;
         auto parameters = record->replay.parameters;
         // Rebuild the dump-declared FGameplayTagContainer TArrays with call-scoped,
         // owned storage. Never pass the original invocation's potentially freed pointers.
@@ -6317,7 +6302,9 @@ struct Ue5NteAdapter::State {
             const std::uintptr_t array_data = source.count != 0
                 ? reinterpret_cast<std::uintptr_t>(replay_tag_storage[index].data()) : 0;
             const std::int32_t array_count = static_cast<std::int32_t>(source.count);
-            const std::uintptr_t array_offset = 0x18U + static_cast<std::uintptr_t>(index) * 0x10U;
+            const std::uintptr_t array_offset =
+                (record->replay.kind == 3U ? 0x20U : 0x18U) +
+                static_cast<std::uintptr_t>(index) * 0x10U;
             std::memcpy(parameters.data() + array_offset, &array_data, sizeof(array_data));
             std::memcpy(parameters.data() + array_offset + 8U,
                 &array_count, sizeof(array_count));
@@ -6325,21 +6312,20 @@ struct Ue5NteAdapter::State {
                 &array_count, sizeof(array_count));
         }
 
-        // Clear only dump-verified out/return fields. The target-apply signature also
-        // exposes bUsePredictionKey@0x69; an old one-shot prediction key must not be reused.
-        if (record->replay.kind == 1U) {
-            // Rebind the trigger ASC to the already-validated live player ASC. This is
-            // unchanged for the normal path, and preserves player attribution when the
-            // original call was validated by exact SourceObj==attacker instead.
+        // Clear only dump-verified out/return fields, and rebind only the dump-defined
+        // triggering ASC to the current player. The character wrapper uses its original 0x80 ABI.
+        if (record->replay.kind == 1U || record->replay.kind == 3U) {
             std::uintptr_t replay_attacker_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, replay_attacker_ability_system) ||
                 replay_attacker_ability_system == 0) {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                     "current player AbilitySystemComponent is unavailable for actor-effect replay");
             }
-            std::memcpy(parameters.data() + 0x68U, &replay_attacker_ability_system,
+            const std::size_t trigger_offset = record->replay.kind == 3U ? 0x70U : 0x68U;
+            const std::size_t return_offset = record->replay.kind == 3U ? 0x78U : 0x70U;
+            std::memcpy(parameters.data() + trigger_offset, &replay_attacker_ability_system,
                 sizeof(replay_attacker_ability_system));
-            parameters[0x70U] = 0;
+            parameters[return_offset] = 0;
         } else if (record->replay.kind == 2U) {
             parameters[0x69U] = 0;
             std::memset(parameters.data() + 0x6CU, 0, sizeof(std::uint64_t));
