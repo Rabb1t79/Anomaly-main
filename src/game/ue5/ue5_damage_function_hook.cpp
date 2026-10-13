@@ -34,14 +34,23 @@ public:
 
     bool Start(const Ue5DamageFunctionTargets targets) {
         std::scoped_lock stop_lock(stop_mutex_);
-        if (attempted_.exchange(true, std::memory_order_acq_rel) ||
-            targets.character_on_damaged == nullptr ||
+        if (targets.character_on_damaged == nullptr ||
+            targets.combat_exec_function_count == 0 ||
             targets.combat_exec_function_count > kUe5CombatExecFunctionCapacity ||
             started_.load(std::memory_order_acquire) || owner_registered_) {
             return false;
         }
+        bool expected_attempted = false;
+        if (!attempted_.compare_exchange_strong(
+                expected_attempted, true, std::memory_order_acq_rel)) {
+            return false;
+        }
+
         std::scoped_lock process_lock(process_mutex_);
-        if (active_.load(std::memory_order_acquire) != nullptr) return false;
+        if (active_.load(std::memory_order_acquire) != nullptr) {
+            attempted_.store(false, std::memory_order_release);
+            return false;
+        }
 
         target_ = targets.character_on_damaged;
         original_ = nullptr;
@@ -50,6 +59,7 @@ public:
                 target_, reinterpret_cast<void*>(&Thunk),
                 reinterpret_cast<void**>(&original_))) {
             target_ = nullptr;
+            attempted_.store(false, std::memory_order_release);
             return false;
         }
         owner_registered_ = true;
@@ -63,9 +73,11 @@ public:
                     entry.target,
                     reinterpret_cast<void*>(ThunkForSlot(index)),
                     reinterpret_cast<void**>(&exec_originals_[index]))) {
-                static_cast<void>(hooks_.RemoveOwner(kOwner, kGeneration));
-                owner_registered_ = false;
-                ClearTarget();
+                if (hooks_.RemoveOwner(kOwner, kGeneration)) {
+                    owner_registered_ = false;
+                    ClearTarget();
+                    attempted_.store(false, std::memory_order_release);
+                }
                 return false;
             }
             exec_functions_[index] = entry.function;
@@ -86,6 +98,7 @@ public:
                 static_cast<void>(active_.compare_exchange_strong(
                     expected, nullptr, std::memory_order_acq_rel));
                 ClearTarget();
+                attempted_.store(false, std::memory_order_release);
             }
             return false;
         }

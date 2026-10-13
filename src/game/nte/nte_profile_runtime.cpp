@@ -1362,7 +1362,10 @@ public:
                         if (damage_hook != nullptr && !damage_hook->Attempted() &&
                             event_target != nullptr && adapter->CombatFeatureAvailable()) {
                             const auto exec_targets = adapter->CombatExecFunctionTargets();
-                            if (exec_targets.discovery_complete) {
+                            // "discovery_complete" only means the first reflection pass ran; it does not
+                            // guarantee a native GameplayEffect target was found. Do not consume
+                            // the one-shot hook attempt until at least one validated target exists.
+                            if (exec_targets.discovery_complete && exec_targets.count > 0) {
                                 Ue5DamageFunctionTargets targets;
                                 targets.character_on_damaged = const_cast<void*>(event_target);
                                 targets.combat_exec_function_count = exec_targets.count;
