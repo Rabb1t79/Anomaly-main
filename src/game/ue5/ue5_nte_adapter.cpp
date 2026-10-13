@@ -826,6 +826,7 @@ struct Ue5NteAdapter::State {
     std::string vehicle_speed_restore_status;
     std::string vehicle_summon_status_message;
     float vehicle_engine_torque_ratio{1.0F};
+    float vehicle_requested_engine_torque_ratio{1.0F};
     bool vehicle_engine_torque_fallback_active{};
     float vehicle_engine_torque_fallback_ratio{1.0F};
     float vehicle_base_engine_torque{};
@@ -838,6 +839,7 @@ struct Ue5NteAdapter::State {
     std::unordered_map<std::uintptr_t, float> other_vehicle_velocity_ratios;
     std::unordered_map<std::uintptr_t, float> other_vehicle_base_torques;
     std::unordered_map<std::uintptr_t, float> other_vehicle_torque_fallback_ratios;
+    std::unordered_map<std::uintptr_t, float> other_vehicle_requested_torque_ratios;
     std::unordered_map<std::uintptr_t, VehicleSpeedFieldBaseline> other_vehicle_speed_field_baselines;
     std::unordered_map<std::uintptr_t, float> other_vehicle_speed_field_ratios;
     std::string vehicle_other_speed_status;
@@ -8628,6 +8630,7 @@ struct Ue5NteAdapter::State {
                 other_vehicle_speed_field_baselines.clear();
                 other_vehicle_speed_field_ratios.clear();
                 other_vehicle_torque_fallback_ratios.clear();
+                other_vehicle_requested_torque_ratios.clear();
             }
 
             static constexpr std::array<std::string_view, 1> controller_outer{"HTPlayerController"};
@@ -8736,6 +8739,7 @@ struct Ue5NteAdapter::State {
                 vehicle_base_torque_component = 0;
                 vehicle_base_engine_torque_valid = false;
                 vehicle_engine_torque_ratio = 1.0F;
+                vehicle_requested_engine_torque_ratio = 1.0F;
                 vehicle_engine_torque_fallback_active = false;
                 vehicle_engine_torque_fallback_ratio = 1.0F;
                 vehicle_top_speed_ratio = 1.0F;
@@ -9151,6 +9155,48 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED, vehicle_speed_restore_status.c_str());
         }
 
+        bool engine_torque_refreshed = false;
+        std::string engine_torque_refresh_failure;
+        const auto& max_torque_binding = vehicle_bindings.set_max_engine_torque;
+        if (max_torque_binding.function != 0 && max_torque_binding.parms_size != 0 &&
+            max_torque_binding.parms_size <= 0x1000U &&
+            max_torque_binding.parameter_offset + sizeof(float) <= max_torque_binding.parms_size) {
+            std::vector<std::uint8_t> torque_parameters(max_torque_binding.parms_size);
+            std::memcpy(torque_parameters.data() + max_torque_binding.parameter_offset,
+                &field_targets.engine_max_torque, sizeof(field_targets.engine_max_torque));
+            engine_torque_refreshed = InvokeProcessEventGuarded(process_event_invoker,
+                vehicle_movement_component, max_torque_binding.function,
+                torque_parameters.data(), torque_parameters.size());
+            if (!engine_torque_refreshed)
+                engine_torque_refresh_failure = "SetMaxEngineTorque ProcessEvent 失败";
+        } else {
+            engine_torque_refresh_failure = "SetMaxEngineTorque 参数布局不可用";
+        }
+        // Tokky calls SetMaxEngineTorque after changing the engine setup. Retain the alternate
+        // native ratio path if that call fails, combining it with the user's independent torque
+        // factor rather than multiplying a previous effective speed ratio a second time.
+        if (!engine_torque_refreshed) {
+            const auto& external_binding = vehicle_bindings.set_external_torque_ratio;
+            const float speed_torque_scale = (std::max)(2.0F * field_targets.top_speed_ratio, 2.0F);
+            const float requested_external_ratio =
+                speed_torque_scale * vehicle_requested_engine_torque_ratio;
+            if (external_binding.function != 0 && external_binding.parms_size != 0 &&
+                external_binding.parms_size <= 0x1000U &&
+                external_binding.parameter_offset + sizeof(float) <= external_binding.parms_size &&
+                std::isfinite(requested_external_ratio) && requested_external_ratio > 0.0F) {
+                std::vector<std::uint8_t> torque_parameters(external_binding.parms_size);
+                std::memcpy(torque_parameters.data() + external_binding.parameter_offset,
+                    &requested_external_ratio, sizeof(requested_external_ratio));
+                engine_torque_refreshed = InvokeProcessEventGuarded(process_event_invoker,
+                    vehicle_movement_component, external_binding.function,
+                    torque_parameters.data(), torque_parameters.size());
+                if (!engine_torque_refreshed)
+                    engine_torque_refresh_failure += "; SetExternalTorqueRatio ProcessEvent 失败";
+            } else {
+                engine_torque_refresh_failure += "; SetExternalTorqueRatio 参数布局不可用";
+            }
+        }
+
         if (vehicle_bindings.set_delayed_velocity_restore == 0) {
             vehicle_speed_restore_status =
                 "Tokky 风格最高车速/发动机字段已应用；当前车速恢复失败：" +
@@ -9251,8 +9297,13 @@ struct Ue5NteAdapter::State {
                 "最高车速上限已应用；当前车速恢复失败：SetDelayedVelocityRestore ProcessEvent 调用失败");
         }
         vehicle_current_velocity_ratio = field_targets.top_speed_ratio;
+        if (!engine_torque_refreshed) {
+            vehicle_speed_restore_status = "Tokky 速度字段与当前速度已应用，但两种发动机扭矩更新调用均失败：" +
+                engine_torque_refresh_failure;
+            return Status(ANOMALY_STATUS_V1_FAILED, vehicle_speed_restore_status.c_str());
+        }
         return Status(ANOMALY_STATUS_V1_OK,
-            "Tokky 风格速度上限、发动机参数与当前速度均已应用倍率");
+            "Tokky 速度上限、发动机参数、SetMaxEngineTorque 与当前速度均已应用");
     }
 
     AnomalyStatusV1 VehicleSetEngineTorqueRatio(float ratio) noexcept {
@@ -9277,6 +9328,7 @@ struct Ue5NteAdapter::State {
             if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
                     external.function, parameters.data(), external.parms_size)) {
                 vehicle_engine_torque_ratio = ratio;
+                vehicle_requested_engine_torque_ratio = ratio;
                 vehicle_engine_torque_fallback_active = false;
                 vehicle_engine_torque_fallback_ratio = 1.0F;
                 return Status(ANOMALY_STATUS_V1_OK, "SetExternalTorqueRatio applied");
@@ -9317,6 +9369,7 @@ struct Ue5NteAdapter::State {
                     if (InvokeProcessEventGuarded(process_event_invoker, vehicle_movement_component,
                             fallback.function, parameters.data(), fallback.parms_size)) {
                         vehicle_engine_torque_ratio = ratio;
+                        vehicle_requested_engine_torque_ratio = ratio;
                         vehicle_engine_torque_fallback_active = true;
                         vehicle_engine_torque_fallback_ratio = ratio;
                         return Status(ANOMALY_STATUS_V1_OK,
@@ -9446,6 +9499,7 @@ struct Ue5NteAdapter::State {
                 other_vehicle_speed_field_baselines.clear();
                 other_vehicle_speed_field_ratios.clear();
                 other_vehicle_torque_fallback_ratios.clear();
+                other_vehicle_requested_torque_ratios.clear();
             }
             // 刷新当前玩家载具，以便批量枚举时排除它；玩家未驾驶时此调用可以返回 false，
             // 后续仍会独立解析批量修改所需的函数绑定。
