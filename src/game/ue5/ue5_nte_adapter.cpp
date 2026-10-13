@@ -18418,6 +18418,55 @@ Ue5NteAdapter::CombatExecFunctionTargets() const noexcept {
     NteCombatExecFunctionTargetsSnapshot snapshot;
     snapshot.discovery_complete =
         state->combat_skill_discovery.combat_event_bindings_attempted;
+
+    // 只对经过 dump 反射布局验证的 GameplayEffect UFunction 读取 Native Exec
+    // 入口。ProcessEvent 不一定覆盖蓝图 VM 直接调用的 exec thunk。
+    if (!snapshot.discovery_complete || !state->memory) return snapshot;
+    const auto* const bindings = state->combat_capture_bindings.load(
+        std::memory_order_acquire);
+    const auto exec_offset = Layout(state->profile, "ufunction.execFunction", -1);
+    if (bindings == nullptr || exec_offset < 0) return snapshot;
+
+    const auto append_target = [&](const std::uintptr_t function) {
+        if (function == 0 || snapshot.count >= snapshot.entries.size()) return;
+
+        std::uintptr_t target{};
+        if (!ReadPointerAt(
+                *state->memory,
+                function + static_cast<std::uintptr_t>(exec_offset), target) ||
+            target == 0) {
+            return;
+        }
+
+        // 仅 hook 已提交且带有可执行保护属性的内存页，拒绝空指针、
+        // 不可执行区域及保护页，避免把错误反射数据交给 MinHook。
+        const auto region = state->memory->Query(target);
+        if (!region || region->state != MEM_COMMIT ||
+            (region->protection & PAGE_GUARD) != 0 ||
+            (region->protection & 0xFFU) == PAGE_NOACCESS ||
+            target < region->base || target - region->base >= region->size) {
+            return;
+        }
+        const DWORD protection = region->protection & 0xFFU;
+        const bool executable =
+            protection == PAGE_EXECUTE ||
+            protection == PAGE_EXECUTE_READ ||
+            protection == PAGE_EXECUTE_READWRITE ||
+            protection == PAGE_EXECUTE_WRITECOPY;
+        if (!executable) return;
+
+        // 同一 Native Exec 入口只安装一次 detour；重复地址会导致 hook 注册冲突。
+        for (std::size_t index{}; index < snapshot.count; ++index) {
+            if (snapshot.entries[index].target == target) return;
+        }
+        snapshot.entries[snapshot.count++] = {function, target};
+    };
+
+    // 这些 UFunction 只有在精确类路径、参数尺寸、字段类型和偏移均通过
+    // ValidateReplay* 校验后才会进入 bindings；其 execFunction 指针再单独校验。
+    append_target(bindings->replay_apply_by_actor);
+    append_target(bindings->replay_apply_to_target);
+    append_target(bindings->replay_activate_by_actor);
     return snapshot;
 }
 
