@@ -5481,6 +5481,9 @@ struct Ue5NteAdapter::State {
             ++drained;
         }
         combat_capture_read.store(read, std::memory_order_release);
+        // A hit hook and its GameplayEffect call can be queued in either order.
+        // Reconcile unresolved recent hits only after the whole queue batch has drained.
+        ResolvePendingReplayContextsLocked();
     }
 
     [[nodiscard]] bool EnqueueDamageTextPayload(
@@ -6344,6 +6347,47 @@ struct Ue5NteAdapter::State {
             }
         }
         return false;
+    }
+
+    // Re-check only recent unresolved hit records after new native-call captures
+    // have been drained. This preserves the same strict matcher; it only removes the
+    // ordering dependency between the hit event and the queued effect-call observation.
+    void ResolvePendingReplayContextsLocked() noexcept {
+        try {
+            const std::uint64_t current_tick_sequence =
+                tick_sequence.load(std::memory_order_acquire);
+            for (std::size_t reverse{}; reverse < damage_event_count; ++reverse) {
+                const auto index = (damage_event_start + damage_event_count - 1U -
+                    reverse) % kDamageEventCapacity;
+                auto& record = damage_events[index];
+                if (current_tick_sequence >= record.event.tick_sequence &&
+                    current_tick_sequence - record.event.tick_sequence > 2U) {
+                    // Damage records are appended in queue/tick order; older entries cannot
+                    // match a later capture because the matcher only permits a one-tick delta.
+                    break;
+                }
+                if (record.replay.valid ||
+                    record.event.world.generation != world_generation ||
+                    record.event.attacker.id == 0 || record.event.victim.id == 0) {
+                    continue;
+                }
+                std::uintptr_t attacker{}, victim{};
+                if (!ResolveObjectHandleLocked(record.event.attacker, attacker) ||
+                    !ResolveObjectHandleLocked(record.event.victim, victim) ||
+                    attacker == 0 || victim == 0 || attacker == victim) {
+                    continue;
+                }
+                ReplayEffectContext replay_context{};
+                ReplayCaptureDiagnostics replay_diagnostics{};
+                if (FindReplayContextForDamageLocked(
+                        attacker, victim, record.event.source_id,
+                        record.event.tick_sequence, replay_context, &replay_diagnostics)) {
+                    record.replay = replay_context;
+                }
+                record.replay_diagnostics = replay_diagnostics;
+            }
+        } catch (...) {
+        }
     }
 
     AnomalyStatusV1 ReplayDamage(
