@@ -18396,6 +18396,39 @@ Ue5NteAdapter::CombatExecFunctionTargets() const noexcept {
     NteCombatExecFunctionTargetsSnapshot snapshot;
     snapshot.discovery_complete =
         state->combat_skill_discovery.combat_event_bindings_attempted;
+    if (!snapshot.discovery_complete) return snapshot;
+
+    // Native ProcessEvent interception alone misses direct native-to-native calls.
+    // Hook the UFunction::ExecFunction entries for the exact dump-validated GE
+    // application paths so their FFrame::Locals are captured before execution.
+    const auto* const bindings =
+        state->combat_capture_bindings.load(std::memory_order_acquire);
+    const auto exec_offset = Layout(state->profile, "ufunction.execFunction", -1);
+    if (bindings == nullptr || exec_offset < 0) return snapshot;
+
+    const std::array<std::uintptr_t, 3> functions{
+        bindings->replay_apply_by_actor,
+        bindings->replay_apply_to_target,
+        bindings->replay_activate_by_actor,
+    };
+    for (const auto function : functions) {
+        if (function == 0 || snapshot.count >= snapshot.entries.size()) continue;
+        std::uintptr_t target{};
+        if (!ReadPointerAt(*state->memory, function, exec_offset, target) ||
+            target == 0 || !ReadableRange(*state->memory, target, 16U)) {
+            continue;
+        }
+        // A shared ExecFunction address cannot be attributed to a single reflected
+        // function safely by this detour, so leave ambiguous duplicates to the
+        // generic ProcessEvent capture path.
+        bool duplicate_target{};
+        for (std::size_t i{}; i < snapshot.count; ++i) {
+            duplicate_target = duplicate_target ||
+                snapshot.entries[i].target == target;
+        }
+        if (duplicate_target) continue;
+        snapshot.entries[snapshot.count++] = {function, target};
+    }
     return snapshot;
 }
 
