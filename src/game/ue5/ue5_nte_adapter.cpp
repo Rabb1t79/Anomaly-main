@@ -6337,7 +6337,7 @@ struct Ue5NteAdapter::State {
                 replay_receiver, record->replay.function,
                 parameters.data(), record->replay.parameter_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED,
-                "validated HTAbilitySystemComponent GameplayEffect call failed");
+                "validated native GameplayEffect call failed");
         }
         return Status(ANOMALY_STATUS_V1_OK);
     }
@@ -8093,8 +8093,8 @@ struct Ue5NteAdapter::State {
     }
 
     // Validate the dump-declared character-level actor-effect wrapper independently.
-    // Normalize it to the known HTAbilitySystemComponent ABI before it can become a
-    // replay template; an approximate signature must not be accepted.
+    // Its exact 0x80-byte ABI is retained as a separate replay path; do not substitute
+    // the HTAbilitySystemComponent signature or require that separate binding to succeed.
     [[nodiscard]] bool ValidateReplayActivateByActorFunctionLocked(
         const std::uintptr_t function) const {
         if (function == 0) return false;
