@@ -872,6 +872,9 @@ struct Ue5NteAdapter::State {
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
+        // Character wrapper captures retain the wrapper target until DamageEvent correlation.
+        bool receiver_is_character_wrapper{};
+        std::uintptr_t wrapper_world_context{};
         std::array<std::uint8_t, kGameplayEffectReplayParameterBytes> parameters{};
         CapturedGameplayTagArrays gameplay_tags{};
     };
@@ -1062,6 +1065,7 @@ struct Ue5NteAdapter::State {
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
+        std::uintptr_t wrapper_world_context{};
         bool replay_tag_arrays_valid{};
         CapturedGameplayTagArrays replay_gameplay_tags{};
         std::array<std::uint8_t, kCombatCapturePayloadBytes> payload{};
@@ -5364,7 +5368,8 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t function, const std::span<const std::uint8_t> parameters,
         const std::uint64_t capture_tick_sequence,
         const CapturedGameplayTagArrays& gameplay_tags,
-        const bool tag_arrays_valid) noexcept {
+        const bool tag_arrays_valid,
+        const std::uintptr_t wrapper_world_context) noexcept {
         const bool character_by_actor_wrapper =
             kind == CombatCaptureKind::GameplayEffectByActorFromCharacter;
         const bool by_actor =
@@ -5383,11 +5388,12 @@ struct Ue5NteAdapter::State {
         if (character_by_actor_wrapper) {
             const auto* const bindings =
                 combat_capture_bindings.load(std::memory_order_acquire);
-            if (bindings == nullptr || bindings->replay_apply_by_actor == 0 ||
-                !CurrentAbilitySystemLocked(receiver, replay_receiver) ||
-                replay_receiver == 0) {
+            if (bindings == nullptr || bindings->replay_apply_by_actor == 0) {
                 return;
             }
+            // Do not discard a real wrapper call because ASC lookup is transiently unavailable
+            // while the event queue drains. Preserve the actor and validate it against the
+            // exact DamageEvent target before resolving the live ASC for the replay call.
             replay_function = bindings->replay_apply_by_actor;
         }
 
@@ -5400,6 +5406,8 @@ struct Ue5NteAdapter::State {
         captured.tick_sequence = capture_tick_sequence;
         captured.receiver = replay_receiver;
         captured.function = replay_function;
+        captured.receiver_is_character_wrapper = character_by_actor_wrapper;
+        captured.wrapper_world_context = character_by_actor_wrapper ? wrapper_world_context : 0;
         captured.gameplay_tags = gameplay_tags;
         std::memcpy(captured.parameters.data(), parameters.data(), parameters.size());
         std::size_t slot{};
@@ -5422,6 +5430,7 @@ struct Ue5NteAdapter::State {
         const std::uint64_t capture_tick_sequence,
         const std::uintptr_t receiver,
         const std::uintptr_t function,
+        const std::uintptr_t wrapper_world_context,
         const CapturedGameplayTagArrays& gameplay_tags,
         const bool tag_arrays_valid) noexcept {
         switch (kind) {
@@ -5440,7 +5449,7 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::GameplayEffectByActorFromCharacter:
             CaptureReplayEffectInvocationLocked(
                 kind, receiver, function, parameters, capture_tick_sequence,
-                gameplay_tags, tag_arrays_valid);
+                gameplay_tags, tag_arrays_valid, wrapper_world_context);
             break;
         }
     }
@@ -5457,6 +5466,7 @@ struct Ue5NteAdapter::State {
                 capture.kind,
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
                 capture.info_offset, capture.tick_sequence, capture.receiver, capture.function,
+                capture.wrapper_world_context,
                 capture.replay_gameplay_tags, capture.replay_tag_arrays_valid);
             ++read;
             ++drained;
@@ -5679,9 +5689,13 @@ struct Ue5NteAdapter::State {
         capture.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
         capture.receiver = receiver;
         capture.function = function;
+        capture.wrapper_world_context = 0;
         capture.replay_gameplay_tags = {};
         capture.replay_tag_arrays_valid = true;
         const auto* const source = static_cast<const std::uint8_t*>(parameters);
+        if (kind == CombatCaptureKind::GameplayEffectByActorFromCharacter) {
+            std::memcpy(&capture.wrapper_world_context, source, sizeof(capture.wrapper_world_context));
+        }
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
         if (kind == CombatCaptureKind::GameplayEffectByActor ||
             kind == CombatCaptureKind::GameplayEffectToTarget ||
@@ -6177,8 +6191,11 @@ struct Ue5NteAdapter::State {
                     trigger_ability_system != 0 &&
                     trigger_ability_system == attacker_ability_system;
                 const bool source_actor_is_attacker = source_actor == attacker;
+                const bool receiver_matches_target = context.receiver_is_character_wrapper
+                    ? (context.receiver == victim || context.wrapper_world_context == victim)
+                    : (context.receiver == victim_ability_system);
                 return context.function == bindings->replay_apply_by_actor &&
-                    context.receiver == victim_ability_system &&
+                    receiver_matches_target &&
                     source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U) &&
                     (trigger_is_attacker || source_actor_is_attacker);
             }
@@ -6281,6 +6298,15 @@ struct Ue5NteAdapter::State {
                 "captured GameplayEffect receiver/source/target no longer matches live player and victim");
         }
 
+        std::uintptr_t replay_receiver = record->replay.receiver;
+        if (record->replay.receiver_is_character_wrapper) {
+            // The original wrapper receiver is an actor, not the ASC UFunction receiver.
+            // Resolve the already-correlated victim's live ASC only after identity checks.
+            if (!CurrentAbilitySystemLocked(victim, replay_receiver) || replay_receiver == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "current victim AbilitySystemComponent is unavailable for actor-effect replay");
+            }
+        }
         auto parameters = record->replay.parameters;
         // Rebuild the dump-declared FGameplayTagContainer TArrays with call-scoped,
         // owned storage. Never pass the original invocation's potentially freed pointers.
@@ -6329,7 +6355,7 @@ struct Ue5NteAdapter::State {
                 "unsupported captured GameplayEffect call kind");
         }
         if (!InvokeNativeProcessEventLocked(
-                record->replay.receiver, record->replay.function,
+                replay_receiver, record->replay.function,
                 parameters.data(), record->replay.parameter_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "validated HTAbilitySystemComponent GameplayEffect call failed");
