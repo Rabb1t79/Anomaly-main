@@ -688,24 +688,20 @@ void DrawSummonTab(
             filtered.begin() + static_cast<std::ptrdiff_t>(page_end));
     }
 
-    // The list stays in a dedicated bordered child with its own vertical scrollbar.
+    // 按当前页实际条目数设置列表高度，避免 auto-fit child 在不同 UI Host 中保留多余空白。
     const bool has_catalog_child =
         UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, begin_child),
             sizeof(decltype(AnomalyUiServiceV1::begin_child))) &&
         UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_child),
             sizeof(decltype(AnomalyUiServiceV1::end_child))) &&
         ui->begin_child != nullptr && ui->end_child != nullptr;
-    const bool has_auto_fit_child =
-        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y),
-            sizeof(decltype(AnomalyUiServiceV1::begin_child_auto_fit_y))) &&
-        ui->begin_child_auto_fit_y != nullptr;
-    const bool catalog_child_visible = has_auto_fit_child
-        ? ui->begin_child_auto_fit_y(ui->user,
-            anomaly::sdk::StringView("##vehicle-catalog-scroll"), 0.0F, 0.0F) != 0
-        : has_catalog_child
-            ? ui->begin_child(ui->user, anomaly::sdk::StringView("##vehicle-catalog-scroll"),
-                0.0F, 285.0F, 1U) != 0
-            : true;
+    const float catalog_height = static_cast<float>(
+        38U + visible_indices.size() * 34U + 8U);
+    const bool catalog_child_visible = has_catalog_child
+        ? ui->begin_child(ui->user,
+            anomaly::sdk::StringView("##vehicle-catalog-scroll"),
+            0.0F, catalog_height, 1U) != 0
+        : true;
 
     if (catalog_child_visible) {
         if (ids.empty()) {
