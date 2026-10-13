@@ -872,9 +872,8 @@ struct Ue5NteAdapter::State {
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
-        // Character wrapper captures retain the wrapper target until DamageEvent correlation.
+        // Character wrapper captures retain the wrapper receiver until DamageEvent correlation.
         bool receiver_is_character_wrapper{};
-        std::uintptr_t wrapper_world_context{};
         std::array<std::uint8_t, kGameplayEffectReplayParameterBytes> parameters{};
         CapturedGameplayTagArrays gameplay_tags{};
     };
@@ -1065,7 +1064,6 @@ struct Ue5NteAdapter::State {
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
-        std::uintptr_t wrapper_world_context{};
         bool replay_tag_arrays_valid{};
         CapturedGameplayTagArrays replay_gameplay_tags{};
         std::array<std::uint8_t, kCombatCapturePayloadBytes> payload{};
@@ -5368,8 +5366,7 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t function, const std::span<const std::uint8_t> parameters,
         const std::uint64_t capture_tick_sequence,
         const CapturedGameplayTagArrays& gameplay_tags,
-        const bool tag_arrays_valid,
-        const std::uintptr_t wrapper_world_context) noexcept {
+        const bool tag_arrays_valid) noexcept {
         const bool character_by_actor_wrapper =
             kind == CombatCaptureKind::GameplayEffectByActorFromCharacter;
         const bool by_actor =
@@ -5407,7 +5404,6 @@ struct Ue5NteAdapter::State {
         captured.receiver = replay_receiver;
         captured.function = replay_function;
         captured.receiver_is_character_wrapper = character_by_actor_wrapper;
-        captured.wrapper_world_context = character_by_actor_wrapper ? wrapper_world_context : 0;
         captured.gameplay_tags = gameplay_tags;
         std::memcpy(captured.parameters.data(), parameters.data(), parameters.size());
         std::size_t slot{};
@@ -5430,7 +5426,6 @@ struct Ue5NteAdapter::State {
         const std::uint64_t capture_tick_sequence,
         const std::uintptr_t receiver,
         const std::uintptr_t function,
-        const std::uintptr_t wrapper_world_context,
         const CapturedGameplayTagArrays& gameplay_tags,
         const bool tag_arrays_valid) noexcept {
         switch (kind) {
@@ -5449,7 +5444,7 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::GameplayEffectByActorFromCharacter:
             CaptureReplayEffectInvocationLocked(
                 kind, receiver, function, parameters, capture_tick_sequence,
-                gameplay_tags, tag_arrays_valid, wrapper_world_context);
+                gameplay_tags, tag_arrays_valid);
             break;
         }
     }
@@ -5466,7 +5461,6 @@ struct Ue5NteAdapter::State {
                 capture.kind,
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
                 capture.info_offset, capture.tick_sequence, capture.receiver, capture.function,
-                capture.wrapper_world_context,
                 capture.replay_gameplay_tags, capture.replay_tag_arrays_valid);
             ++read;
             ++drained;
@@ -5689,13 +5683,9 @@ struct Ue5NteAdapter::State {
         capture.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
         capture.receiver = receiver;
         capture.function = function;
-        capture.wrapper_world_context = 0;
         capture.replay_gameplay_tags = {};
         capture.replay_tag_arrays_valid = true;
         const auto* const source = static_cast<const std::uint8_t*>(parameters);
-        if (kind == CombatCaptureKind::GameplayEffectByActorFromCharacter) {
-            std::memcpy(&capture.wrapper_world_context, source, sizeof(capture.wrapper_world_context));
-        }
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
         if (kind == CombatCaptureKind::GameplayEffectByActor ||
             kind == CombatCaptureKind::GameplayEffectToTarget ||
@@ -6191,8 +6181,11 @@ struct Ue5NteAdapter::State {
                     trigger_ability_system != 0 &&
                     trigger_ability_system == attacker_ability_system;
                 const bool source_actor_is_attacker = source_actor == attacker;
+                // WorldContextObject is only a reflected context parameter in the dump;
+                // it is not defined as the hit target. Only use the actual wrapper receiver
+                // as actor identity, or the validated ASC receiver for direct ASC calls.
                 const bool receiver_matches_target = context.receiver_is_character_wrapper
-                    ? (context.receiver == victim || context.wrapper_world_context == victim)
+                    ? (context.receiver == victim)
                     : (context.receiver == victim_ability_system);
                 return context.function == bindings->replay_apply_by_actor &&
                     receiver_matches_target &&
