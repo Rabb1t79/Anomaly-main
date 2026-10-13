@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/nte-vehicle-tokky-direct-spawn-clean-20261011
+      - fix/other-vehicle-speed-floor-anomaly-20261013
   pull_request:
     branches:
       - main
@@ -45,7 +46,7 @@ jobs:
       - name: Upload Core build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Anomaly-Core-Tokky-DirectSpawn-MSVC
+          name: Anomaly-Core-DirectSpawn-MSVC
           path: build/bin/Release/Anomaly/Anomaly.Core.dll
           if-no-files-found: error
           retention-days: 14
