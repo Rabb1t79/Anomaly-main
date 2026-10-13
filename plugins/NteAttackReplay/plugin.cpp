@@ -954,23 +954,25 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     // 启用复选框是唯一的开关。停用时清除旧捕获，重新启用只处理之后的新攻击。
     if (context->stop_requested.exchange(false, std::memory_order_acq_rel)) {
+        // Disable stops the chain but intentionally preserves the current capture.
+        // The recorder remains armed at all times, even while replay is disabled.
         context->replaying = false;
         context->waiting_for_damage = false;
         context->replay_requested.store(false, std::memory_order_release);
-        ArmForNextAttack(*context);
         context->status = context->enabled
-            ? "已重新启用：自动等待下一次攻击"
-            : "已停用：不会继续触发额外伤害";
+            ? "已启用：自动等待下一次攻击"
+            : (context->captured
+                ? "自动记录中：重放未启用（已保留当前捕获）"
+                : "自动记录中：重放功能未启用");
     }
-    if (!context->enabled) {
-        // 停用期间只推进游标，避免重新启用后重放停用期间的旧攻击。
-        context->combat_cursor = context->combat->latest_damage_sequence(
-            context->combat->user);
-        return;
-    }
+    // Recording is always on. While disabled, a captured event is kept ready but never
+    // replayed until the checkbox is enabled; only newly captured events auto-start.
     if (!context->captured && !context->replaying && CaptureNextAttack(*context)) {
-        context->replay_requested.store(true, std::memory_order_release);
+        if (context->enabled) {
+            context->replay_requested.store(true, std::memory_order_release);
+        }
     }
+    if (!context->enabled) return;
     if (context->replay_requested.exchange(false, std::memory_order_acq_rel)) {
         if (context->enabled && context->captured && !context->replaying) {
             context->replay_done = 0;
@@ -1160,7 +1162,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.9.1"),
+        anomaly::sdk::StringView("1.9.2"),
         Load,
         Start,
         Stop,
