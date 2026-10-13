@@ -915,7 +915,6 @@
     "vehicle.maxEngineRPM": 2620,
     "vehicle.maxLinearVelocity": 4580,
     "vehicle.topSpeedInKmH": 4588,
-    "vehicle.mobileTopSpeedInKmH": 4592,
     "vehicle.reverseTopSpeedInKmH": 4596,
     "vehicle.enableTopSpeedLimit": 4600,
     "vehicle.topSpeedRatio": 4640,
