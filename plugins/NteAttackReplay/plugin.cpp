@@ -102,6 +102,7 @@ struct Context final {
     // replay_count is the desired total hit count, including the original hit. Additional effects are applied one per Game tick.
     uint32_t replay_count{10};
     uint32_t replay_done{};
+    uint32_t replay_issued{};
     uint64_t replay_last_tick{};
     uint64_t replay_target_count{};
     std::string status{"自动等待玩家下一次攻击"};
@@ -663,6 +664,7 @@ void ArmForNextAttack(Context& context) {
     context.captured = false;
     context.replaying = false;
     context.replay_done = 0;
+    context.replay_issued = 0;
     context.captured_skill = {};
     context.captured_ability = {};
     context.captured_target = {};
@@ -920,6 +922,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     context->enabled = false;
     context->replay_count = 10;
     context->replay_done = 0;
+    context->replay_issued = 0;
     context->replay_target_count = 0;
     context->replay_last_tick = 0;
     context->replaying = false;
@@ -958,19 +961,26 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     if (context->stop_requested.exchange(false, std::memory_order_acq_rel)) {
         context->replaying = false;
+        context->waiting_for_damage = false;
         context->status = "已停止重放，继续自动记录";
     }
     if (context->replay_requested.exchange(false, std::memory_order_acq_rel)) {
         if (context->enabled && context->captured && !context->replaying) {
             context->replay_done = 0;
+            context->replay_issued = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            // The captured hit already counts as hit 1. Replay only the remaining
-            // total-1 hits, with no more than one GameplayEffect call per Game tick.
+            // The original hit is already counted. Issue exactly total-1 replays.
             context->replay_target_count = context->replay_count > 0U
                 ? context->replay_count - 1U : 0U;
             context->replay_last_tick = context->captured_tick_sequence;
-            context->status = "已提交重放，等待原始伤害后的下一游戏帧";
+            // Set the event cursor once, before the first replay. Re-basing it before
+            // every call would discard a prior frame's delayed damage confirmation.
+            context->replay_damage_cursor = context->combat->latest_damage_sequence(
+                context->combat->user);
+            context->replay_damage_deadline =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+            context->status = "已启动逐帧伤害追加";
         } else {
             context->status = context->captured
                 ? "无法开始重放：请先启用重放功能"
@@ -984,69 +994,69 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     const auto now = std::chrono::steady_clock::now();
 
-    // accepted=1 only means the call reached the game. A replay is counted
-    // only after a fresh player->target DamageEvent is observed.
-    if (context->waiting_for_damage) {
+    // Consume the event stream independently of replay submission. GameplayEffect
+    // callbacks may be surfaced on a later tick, while the next replay must still
+    // be submitted once per new Game tick rather than waiting an extra frame.
+    for (uint32_t scanned = 0; scanned < 64U; ++scanned) {
         AnomalyNteDamageEventV1 event{};
         event.struct_size = sizeof(event);
         const auto damage_status = context->combat->next_damage_event(
             context->combat->user, context->replay_damage_cursor, &event);
-        if (damage_status.code == ANOMALY_STATUS_V1_OK) {
-            context->replay_damage_cursor = event.sequence;
-            if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) != 0 &&
-                SameHandle(event.world, context->world) &&
-                SameHandle(event.attacker, context->character) &&
-                SameHandle(event.victim, context->captured_target) &&
-                event.sequence > context->captured_damage_sequence &&
-                (event.source_id == context->captured_damage_source_id ||
-                 (!context->captured_damage_source_name.empty() &&
-                  !ReadDamageSourceName(context->combat, event.source_id).empty() &&
-                  ReadDamageSourceName(context->combat, event.source_id) ==
-                    context->captured_damage_source_name))) {
-                context->waiting_for_damage = false;
-                ++context->replay_done;
-                // Rate limiting is based on the actual Game tick observed here,
-                // not the event's potentially earlier capture tick.
-                context->replay_last_tick = current_tick;
-                context->status = "已确认新的 DamageEvent，下一游戏帧继续";
-            }
-        } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
+        if (damage_status.code == ANOMALY_STATUS_V1_NOT_FOUND) break;
+        if (damage_status.code != ANOMALY_STATUS_V1_OK) {
             context->replaying = false;
             context->waiting_for_damage = false;
-            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误；原始命中已保留，可查看错误并重试";
+            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误；已停止继续提交";
             return;
         }
 
-        if (context->replaying && context->replay_done >= context->replay_target_count) {
-            context->replaying = false;
-            context->status = "重放完成，继续自动等待下一次攻击";
-            ArmForNextAttack(*context);
-            return;
+        context->replay_damage_cursor = event.sequence;
+        const bool source_matches =
+            event.source_id == context->captured_damage_source_id ||
+            (!context->captured_damage_source_name.empty() &&
+             !ReadDamageSourceName(context->combat, event.source_id).empty() &&
+             ReadDamageSourceName(context->combat, event.source_id) ==
+                context->captured_damage_source_name);
+        if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) != 0 &&
+            SameHandle(event.world, context->world) &&
+            SameHandle(event.attacker, context->character) &&
+            SameHandle(event.victim, context->captured_target) &&
+            event.sequence > context->captured_damage_sequence &&
+            source_matches && context->replay_done < context->replay_issued) {
+            ++context->replay_done;
+            context->replay_damage_deadline =
+                now + std::chrono::milliseconds(2000);
+            context->status = "已确认追加伤害事件";
         }
-        if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
-            context->replaying = false;
-            context->waiting_for_damage = false;
-            context->status = "重放超时：未确认同一玩家对同一目标的新伤害事件；原始命中已保留，可重试";
-            return;
-        }
-        if (context->waiting_for_damage) return;
     }
 
-    if (context->replay_done >= context->replay_target_count) {
+    context->waiting_for_damage = context->replay_done < context->replay_issued;
+
+    // A setting of one means the captured original hit already satisfies the target.
+    if (context->replay_done >= context->replay_target_count &&
+        context->replay_issued >= context->replay_target_count) {
         context->replaying = false;
         context->status = "重放完成，继续自动等待下一次攻击";
         ArmForNextAttack(*context);
         return;
     }
 
-    // on_update() runs once per Game tick. Do not issue a second replay invocation
-    // inside the same tick; one accepted attack is allowed to mature into one damage
-    // event before the next frame is permitted to submit another attack.
-    if (current_tick == 0 || current_tick == context->replay_last_tick) return;
-    // Snapshot the raw DamageEvent tail immediately before invoking the replay.
-    context->replay_damage_cursor = context->combat->latest_damage_sequence(
-        context->combat->user);
-    context->replay_damage_deadline = now + std::chrono::milliseconds(2000);
+    // If no matching damage event arrives for two seconds, stop submitting rather
+    // than producing an unbounded stream of unconfirmed GameplayEffect calls.
+    if (context->replay_done < context->replay_issued &&
+        now >= context->replay_damage_deadline) {
+        context->replaying = false;
+        context->waiting_for_damage = false;
+        context->status = "重放超时：未确认新的匹配伤害事件；已停止继续提交，原始命中保留";
+        return;
+    }
+
+    // Submit at most one exact GameplayEffect replay on each distinct Game tick.
+    // Damage confirmation is tracked separately and can arrive on a later tick.
+    if (context->replay_issued >= context->replay_target_count ||
+        current_tick == 0 || current_tick == context->replay_last_tick) {
+        return;
+    }
 
     AnomalyStatusV1 replay_status{};
     const ReplayCallResult replay_result = ReplayOnce(*context, &replay_status);
@@ -1063,8 +1073,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         // message remains visible and the user can retry without making another attack.
         return;
     }
-    context->waiting_for_damage = true;
-    context->status = "已复用原始 GameplayEffect 调用，等待真实新伤害事件";
+
+    ++context->replay_issued;
+    context->replay_last_tick = current_tick;
+    context->waiting_for_damage = context->replay_done < context->replay_issued;
+    context->status = "已提交本帧 GameplayEffect 调用，继续等待真实伤害确认";
 }
 
 // Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -1131,11 +1144,14 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         const uint32_t desired_rehits = context->replay_count > 0U
             ? context->replay_count - 1U : 0U;
         const std::string progress =
-            "已确认的追加伤害事件：" + std::to_string(context->replay_done) + "/" +
+            "已提交调用：" + std::to_string(context->replay_issued) + "/" +
+            std::to_string(context->replay_target_count != 0
+                ? context->replay_target_count : desired_rehits) +
+            "；已确认追加伤害：" + std::to_string(context->replay_done) + "/" +
             std::to_string(context->replay_target_count != 0
                 ? context->replay_target_count : desired_rehits);
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("总伤害次数包含已经发生的原始命中；剩余次数逐游戏帧重用原始 GameplayEffect 调用。只有 Core 捕获到同一玩家、同一目标、同一 DamageSource 的新 DamageEvent 才计数；不会重放按键、动画或技能激活。"));
+        ui->text(ui->user, anomaly::sdk::StringView("总伤害次数包含已经发生的原始命中；剩余调用每个新 Game tick 最多提交一次，不等待前一条事件确认才提交下一帧。确认数只统计同一玩家、同一目标、同一 DamageSource 的新 DamageEvent；不会重放按键、动画或技能激活。"));
     } else {
         ui->text(ui->user, anomaly::sdk::StringView(
             "无需手动录制：插件自动等待下一次玩家攻击"));
