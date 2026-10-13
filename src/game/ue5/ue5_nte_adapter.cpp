@@ -6155,8 +6155,7 @@ struct Ue5NteAdapter::State {
             // target character, SourceObj and exact trigger ASC. If the weak DamageGEDef
             // does not resolve to the same class/CDO, permit this wrapper-only fallback;
             // FindReplayContextForDamageLocked chooses it only after exact matches fail.
-            if (!source_matches_effect &&
-                !(allow_effect_identity_fallback && context.kind == 3U)) return false;
+            if (!source_matches_effect && !allow_effect_identity_fallback) return false;
 
             std::uintptr_t attacker_ability_system{}, victim_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
@@ -6226,10 +6225,11 @@ struct Ue5NteAdapter::State {
             }
         }
         // Pass 2: DamageGEDef is a weak UObject and can be null/stale or point at a
-        // distinct HTGamePlayEffect definition object. Only the character-level native
-        // wrapper is eligible here because it explicitly binds the damaged character and
-        // the player's ASC; never relax identity for a bare ASC call. Search newest-first
-        // because each native wrapper call is queued immediately before its hit callback.
+        // distinct HTGamePlayEffect definition object. The three eligible calls are all
+        // reflection-validated and bind the player/victim through exact ASC/actor parameters:
+        // ByActor uses target ASC + trigger ASC, ToTarget uses source ASC + target ASC, and
+        // the character wrapper binds the receiver + trigger ASC. Only these three native
+        // entry points can use the fallback, searched newest-first near the hit callback.
         for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
             const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
                 reverse) % kReplayEffectCallCapacity;
@@ -6237,7 +6237,7 @@ struct Ue5NteAdapter::State {
             const auto delta = candidate.tick_sequence >= capture_tick_sequence
                 ? candidate.tick_sequence - capture_tick_sequence
                 : capture_tick_sequence - candidate.tick_sequence;
-            if (!candidate.valid || delta > 1U || candidate.kind != 3U) continue;
+            if (!candidate.valid || delta > 1U) continue;
             if (ReplayContextMatchesDamageLocked(
                     candidate, attacker, victim, source_id, true)) {
                 result = candidate;
