@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE Vehicle 0.9.5: responsive wrapped UI, compact catalog, validated summon and vehicle tuning.",
+  "description": "NTE Vehicle 0.9.6: responsive UI, validated summon, vehicle tuning, and non-player speed floor.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
