@@ -87,6 +87,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NteAttackReplay-1.9.1-SDK-windows-x64
-          path: dist/NteAttackReplay-1.9.0-windows-x64.zip
+          path: dist/NteAttackReplay-1.9.1-windows-x64.zip
           if-no-files-found: error
           retention-days: 14
