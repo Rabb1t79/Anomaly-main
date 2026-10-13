@@ -9190,8 +9190,12 @@ struct Ue5NteAdapter::State {
                 engine_torque_refreshed = InvokeProcessEventGuarded(process_event_invoker,
                     vehicle_movement_component, external_binding.function,
                     torque_parameters.data(), torque_parameters.size());
-                if (!engine_torque_refreshed)
+                if (engine_torque_refreshed) {
+                    vehicle_engine_torque_fallback_active = true;
+                    vehicle_engine_torque_fallback_ratio = vehicle_requested_engine_torque_ratio;
+                } else {
                     engine_torque_refresh_failure += "; SetExternalTorqueRatio ProcessEvent 失败";
+                }
             } else {
                 engine_torque_refresh_failure += "; SetExternalTorqueRatio 参数布局不可用";
             }
@@ -9513,15 +9517,25 @@ struct Ue5NteAdapter::State {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", movement_outer,
                     "FloatReturn", vehicle_bindings.speed_kmh));
             }
-            if (need_torque && vehicle_bindings.set_external_torque_ratio.function == 0) {
+            if ((need_speed || need_torque) && vehicle_bindings.set_external_torque_ratio.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("SetExternalTorqueRatio", movement_outer,
                     "FloatInput", vehicle_bindings.set_external_torque_ratio));
             }
-            if (need_torque && vehicle_bindings.set_max_engine_torque.function == 0) {
+            if ((need_speed || need_torque) && vehicle_bindings.set_max_engine_torque.function == 0) {
                 static constexpr std::array<std::string_view, 1> chaos_movement_outer{
                     "ChaosWheeledVehicleMovementComponent"};
                 static_cast<void>(FindVehicleFunctionLocked("SetMaxEngineTorque", chaos_movement_outer,
                     "FloatInput", vehicle_bindings.set_max_engine_torque, "ChaosVehicles"));
+            }
+            if (need_speed && vehicle_bindings.set_max_engine_torque.function == 0) {
+                static constexpr std::array<std::string_view, 1> chaos_movement_outer{
+                    "ChaosWheeledVehicleMovementComponent"};
+                static_cast<void>(FindVehicleFunctionLocked("SetMaxEngineTorque", chaos_movement_outer,
+                    "FloatInput", vehicle_bindings.set_max_engine_torque, "ChaosVehicles"));
+            }
+            if (need_speed && vehicle_bindings.set_external_torque_ratio.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("SetExternalTorqueRatio", movement_outer,
+                    "FloatInput", vehicle_bindings.set_external_torque_ratio));
             }
             if (need_speed && vehicle_bindings.set_delayed_velocity_restore == 0) {
                 std::uintptr_t delayed_restore{};
@@ -9667,6 +9681,58 @@ struct Ue5NteAdapter::State {
             } else {
                 other_vehicle_speed_field_ratios[movement] = field_targets.top_speed_ratio;
                 ++speed_fields_applied;
+
+                bool engine_torque_refreshed = false;
+                std::string engine_torque_refresh_failure;
+                const auto& max_torque_binding = vehicle_bindings.set_max_engine_torque;
+                if (max_torque_binding.function != 0 && max_torque_binding.parms_size != 0 &&
+                    max_torque_binding.parms_size <= 0x1000U &&
+                    max_torque_binding.parameter_offset + sizeof(float) <= max_torque_binding.parms_size) {
+                    std::vector<std::uint8_t> torque_parameters(max_torque_binding.parms_size);
+                    std::memcpy(torque_parameters.data() + max_torque_binding.parameter_offset,
+                        &field_targets.engine_max_torque, sizeof(field_targets.engine_max_torque));
+                    engine_torque_refreshed = InvokeProcessEventGuarded(process_event_invoker,
+                        movement, max_torque_binding.function, torque_parameters.data(),
+                        torque_parameters.size());
+                    if (!engine_torque_refreshed)
+                        engine_torque_refresh_failure = "SetMaxEngineTorque ProcessEvent 失败";
+                } else {
+                    engine_torque_refresh_failure = "SetMaxEngineTorque 参数布局不可用";
+                }
+
+                if (!engine_torque_refreshed) {
+                    const auto torque_ratio_it = other_vehicle_requested_torque_ratios.find(movement);
+                    const float requested_torque_ratio =
+                        torque_ratio_it == other_vehicle_requested_torque_ratios.end()
+                            ? 1.0F : torque_ratio_it->second;
+                    const auto& external_binding = vehicle_bindings.set_external_torque_ratio;
+                    const float speed_torque_scale =
+                        (std::max)(2.0F * field_targets.top_speed_ratio, 2.0F);
+                    const float requested_external_ratio = speed_torque_scale * requested_torque_ratio;
+                    if (external_binding.function != 0 && external_binding.parms_size != 0 &&
+                        external_binding.parms_size <= 0x1000U &&
+                        external_binding.parameter_offset + sizeof(float) <= external_binding.parms_size &&
+                        std::isfinite(requested_external_ratio) && requested_external_ratio > 0.0F) {
+                        std::vector<std::uint8_t> torque_parameters(external_binding.parms_size);
+                        std::memcpy(torque_parameters.data() + external_binding.parameter_offset,
+                            &requested_external_ratio, sizeof(requested_external_ratio));
+                        engine_torque_refreshed = InvokeProcessEventGuarded(process_event_invoker,
+                            movement, external_binding.function, torque_parameters.data(),
+                            torque_parameters.size());
+                        if (engine_torque_refreshed) {
+                            other_vehicle_torque_fallback_ratios[movement] = requested_torque_ratio;
+                        } else {
+                            engine_torque_refresh_failure += "; SetExternalTorqueRatio ProcessEvent 失败";
+                        }
+                    } else {
+                        engine_torque_refresh_failure += "; SetExternalTorqueRatio 参数布局不可用";
+                    }
+                }
+                if (!engine_torque_refreshed) {
+                    ++partial;
+                    record_failure("Tokky 速度字段已写入但两种发动机扭矩更新调用均失败：" +
+                        engine_torque_refresh_failure);
+                }
             }
 
             if (delayed_function == 0) {
@@ -9890,6 +9956,7 @@ struct Ue5NteAdapter::State {
             }
             if (invoked) {
                 ++applied;
+                other_vehicle_requested_torque_ratios[movement] = ratio;
                 if (used_fallback) {
                     ++fallback_applied;
                     other_vehicle_torque_fallback_ratios[movement] = ratio;
