@@ -99,12 +99,11 @@ struct Context final {
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
     std::atomic_bool stop_requested{false};
-    // replay_count 表示包含原始命中的目标总伤害次数；追加效果每个 Game tick 最多提交一次。
-    uint32_t replay_count{10};
+    // 速率是相邻追加调用之间的 Game tick 间隔；1 表示每个新 tick 最多一次。
+    uint32_t replay_rate_ticks{1};
     uint32_t replay_done{};
     uint32_t replay_issued{};
     uint64_t replay_last_tick{};
-    uint64_t replay_target_count{};
     std::string status{"自动等待玩家下一次攻击"};
 
     uint64_t last_skill_generation{};
@@ -113,7 +112,6 @@ struct Context final {
     // A replay is not successful when the bridge merely returns accepted=1.
     // Wait for a newer player->target DamageEvent before counting the replay.
     uint64_t replay_damage_cursor{};
-    std::chrono::steady_clock::time_point replay_damage_deadline{};
     bool waiting_for_damage{};
     NormalAttackBinding normal_attack{};
 };
@@ -688,9 +686,7 @@ void ArmForNextAttack(Context& context) {
     context.captured_target_path.clear();
     context.captured_damage_source_name.clear();
     context.replay_damage_cursor = 0;
-    context.replay_damage_deadline = {};
     context.replay_last_tick = 0;
-    context.replay_target_count = 0;
     context.waiting_for_damage = false;
     context.status = context.enabled ? "自动等待玩家下一次攻击" : "自动记录中：重放功能未启用";
 
@@ -920,10 +916,9 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
-    context->replay_count = 10;
+    context->replay_rate_ticks = 1;
     context->replay_done = 0;
     context->replay_issued = 0;
-    context->replay_target_count = 0;
     context->replay_last_tick = 0;
     context->replaying = false;
     context->replay_requested.store(false, std::memory_order_release);
@@ -954,7 +949,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     if (context == nullptr) return;
     std::scoped_lock state_lock(context->state_mutex);
 
-    // Recording is always active. The enable switch only gates replay actions.
+    // 启用时自动捕获并启动持续连锁；关闭时仅保留被动记录。
     if (!context->captured && !context->replaying) {
         CaptureNextAttack(*context);
     }
@@ -962,7 +957,16 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     if (context->stop_requested.exchange(false, std::memory_order_acq_rel)) {
         context->replaying = false;
         context->waiting_for_damage = false;
-        context->status = "已停止重放，继续自动记录";
+        context->status = "已停用连锁，继续自动记录";
+    }
+    if (context->enabled && context->captured && !context->replaying) {
+        context->replaying = true;
+        context->replay_done = 0;
+        context->replay_issued = 0;
+        context->replay_last_tick = context->captured_tick_sequence;
+        context->replay_damage_cursor = context->combat->latest_damage_sequence(context->combat->user);
+        context->waiting_for_damage = false;
+        context->status = "已启动持续连锁，直至目标死亡或上下文失效";
     }
     if (context->replay_requested.exchange(false, std::memory_order_acq_rel)) {
         if (context->enabled && context->captured && !context->replaying) {
@@ -970,15 +974,10 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_issued = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            // 原始命中已经计为第 1 次；只提交目标总次数减 1 的追加调用。
-            context->replay_target_count = context->replay_count > 0U
-                ? context->replay_count - 1U : 0U;
             context->replay_last_tick = context->captured_tick_sequence;
             // 在首次追加前只设置一次事件游标；每次调用前重新定位会漏掉前一帧延迟到达的伤害确认。
             context->replay_damage_cursor = context->combat->latest_damage_sequence(
                 context->combat->user);
-            context->replay_damage_deadline =
-                std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
             context->status = "已启动逐帧伤害追加";
         } else {
             context->status = context->captured
@@ -1022,35 +1021,14 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             event.sequence > context->captured_damage_sequence &&
             source_matches && context->replay_done < context->replay_issued) {
             ++context->replay_done;
-            context->replay_damage_deadline =
-                now + std::chrono::milliseconds(2000);
             context->status = "已确认追加伤害事件";
         }
     }
 
     context->waiting_for_damage = context->replay_done < context->replay_issued;
 
-    // 设定总次数为 1 时，已捕获的原始命中已经满足目标次数。
-    if (context->replay_done >= context->replay_target_count &&
-        context->replay_issued >= context->replay_target_count) {
-        context->replaying = false;
-        ArmForNextAttack(*context);
-        context->status = "重放完成，继续自动等待下一次攻击";
-        return;
-    }
-
-    // 两秒内没有匹配的伤害事件时停止提交，避免在未确认伤害的情况下持续调用 GameplayEffect。
-    if (context->replay_done < context->replay_issued &&
-        now >= context->replay_damage_deadline) {
-        context->replaying = false;
-        context->waiting_for_damage = false;
-        context->status = "重放超时：未确认新的匹配伤害事件；已停止继续提交，原始命中保留";
-        return;
-    }
-
     // 每个不同的 Game tick 最多重放一次原始 GameplayEffect；实际伤害确认单独跟踪，并允许延迟到后续 tick。
-    if (context->replay_issued >= context->replay_target_count ||
-        current_tick == 0 || current_tick == context->replay_last_tick) {
+    if (current_tick == 0 || current_tick < context->replay_last_tick + context->replay_rate_ticks) {
         return;
     }
 
@@ -1118,9 +1096,9 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("目标总伤害次数（含原始命中；每个游戏帧追加一次）"),
-            &context->replay_count, 1, 9999);
-        context->replay_count = std::clamp(context->replay_count, 1u, 9999u);
+            ui->user, anomaly::sdk::StringView("连锁速率（每隔多少个游戏帧追加一次；1=每帧）"),
+            &context->replay_rate_ticks, 1, 120);
+        context->replay_rate_ticks = std::clamp(context->replay_rate_ticks, 1u, 120u);
     }
 
     if (context->captured) {
@@ -1136,15 +1114,9 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             ui->text(ui->user, anomaly::sdk::StringView(
                 "目标：" + context->captured_target_path));
         }
-        const uint32_t desired_rehits = context->replay_count > 0U
-            ? context->replay_count - 1U : 0U;
         const std::string progress =
-            "已提交调用：" + std::to_string(context->replay_issued) + "/" +
-            std::to_string(context->replay_target_count != 0
-                ? context->replay_target_count : desired_rehits) +
-            "；已确认追加伤害：" + std::to_string(context->replay_done) + "/" +
-            std::to_string(context->replay_target_count != 0
-                ? context->replay_target_count : desired_rehits);
+            "持续连锁：已提交 " + std::to_string(context->replay_issued) +
+            " 次；已确认伤害 " + std::to_string(context->replay_done) + " 次";
         ui->text(ui->user, anomaly::sdk::StringView(progress));
         ui->text(ui->user, anomaly::sdk::StringView("总伤害次数包含已经发生的原始命中；剩余调用每个新 Game tick 最多提交一次，不等待前一条事件确认才提交下一帧。确认数只统计同一玩家、同一目标、同一 DamageSource 的新 DamageEvent；不会重放按键、动画或技能激活。"));
     } else {
