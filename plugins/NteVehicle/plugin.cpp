@@ -997,7 +997,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         if (has_input_text) {
             DrawText(ui, "DEBUG 未解锁");
             ui->input_text(ui->user, anomaly::sdk::StringView("输入 DEBUG 密钥"),
-                debug_key_buffer.data(), debug_key_buffer.size(), 1U << 15U);
+                debug_key_buffer.data(), debug_key_buffer.size(), ANOMALY_UI_TEXT_INPUT_V1_PASSWORD);
             DrawInlineGap(ui);
             if (ui->button(ui->user, anomaly::sdk::StringView("解锁 DEBUG"), 0.0F, 0.0F)) {
                 const std::string_view candidate(debug_key_buffer.data());
