@@ -6233,12 +6233,22 @@ struct Ue5NteAdapter::State {
                 "damage replay must run on the Game thread");
         }
         std::scoped_lock lock(mutex);
-        const DamageRecord* record = nullptr;
+
+        // GameplayEffect ProcessEvent/Native-Exec callbacks enqueue their immutable
+        // parameter snapshots before the resulting CharacterOnDamaged callback.
+        // That damage callback can publish the damage event before the next tick drains
+        // the queue, so flush pending captures here before deciding replay is unavailable.
+        const std::uint32_t pending_capture_count_before_drain =
+            combat_capture_write.load(std::memory_order_acquire) -
+            combat_capture_read.load(std::memory_order_acquire);
+        DrainCombatCaptureQueueLocked();
+
+        DamageRecord* record = nullptr;
         for (std::size_t index{}; index < damage_event_count; ++index) {
             const auto& candidate = damage_events[
                 (damage_event_start + index) % kDamageEventCapacity];
             if (candidate.event.sequence == request->damage_sequence) {
-                record = &candidate;
+                record = const_cast<DamageRecord*>(&candidate);
                 break;
             }
         }
@@ -6247,10 +6257,41 @@ struct Ue5NteAdapter::State {
                 "original damage sequence expired or was not found");
         }
         if (!record->replay.valid) {
+            // If the native effect invocation was drained after the damage notification,
+            // associate it lazily now. DamageRecord keeps generation-checked handles, so
+            // resolve them again rather than retaining raw UObject pointers across ticks.
+            std::uintptr_t delayed_attacker{};
+            std::uintptr_t delayed_victim{};
+            ReplayEffectContext delayed_replay{};
+            if (ResolveObjectHandleLocked(record->event.attacker, delayed_attacker) &&
+                ResolveObjectHandleLocked(record->event.victim, delayed_victim) &&
+                FindReplayContextForDamageLocked(
+                    delayed_attacker, delayed_victim, record->event.source_id,
+                    record->event.tick_sequence, delayed_replay)) {
+                record->replay = delayed_replay;
+            }
+        }
+        if (!record->replay.valid) {
+            const auto* const bindings = combat_capture_bindings.load(
+                std::memory_order_acquire);
+            const bool has_validated_gameplay_effect_entry = bindings != nullptr &&
+                (bindings->replay_apply_by_actor != 0 ||
+                 bindings->replay_apply_to_target != 0 ||
+                 bindings->replay_activate_by_actor != 0);
+            if (replay_effect_call_count != 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick");
+            }
+            if (!has_validated_gameplay_effect_entry) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Core has not validated any dump-defined GameplayEffect entry point; check native dump signature/layout validation (ASC ByActor, ASC ToTarget, and Character wrapper are all unavailable)");
+            }
+            if (pending_capture_count_before_drain != 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Core had pending combat-capture records before replay, but draining them produced no validated GameplayEffect invocation; the entry calls may not match the dump-validated parameter ABI");
+            }
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                replay_effect_call_count == 0
-                    ? "no validated HTAbilitySystemComponent/HTAbilityCharacter GameplayEffect call was captured by Core"
-                    : "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick");
+                "dump-validated GameplayEffect entry points exist, but neither ProcessEvent nor Native Exec capture observed a call for this hit");
         }
         if (!record->replay.tag_arrays_valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
