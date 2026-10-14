@@ -1806,6 +1806,21 @@ public:
             damage_function_hook_ && damage_function_hook_->Started()
                 ? "true"
                 : "false");
+        json += ",\"nativeDamageEventHookReady\":" + std::string(
+            damage_function_hook_ && damage_function_hook_->Started()
+                ? "true"
+                : "false");
+        json += ",\"nativeGameplayEffectExecHookReady\":" + std::string(
+            damage_function_hook_ && damage_function_hook_->Attempted()
+                ? "true"
+                : "false");
+        const NteCombatExecFunctionTargetsSnapshot native_exec_targets = adapter_
+            ? adapter_->CombatExecFunctionTargets()
+            : NteCombatExecFunctionTargetsSnapshot{};
+        json += ",\"nativeGameplayEffectExecDiscoveryComplete\":" +
+            std::string(native_exec_targets.discovery_complete ? "true" : "false");
+        json += ",\"nativeGameplayEffectExecTargetCount\":" +
+            std::to_string(native_exec_targets.count);
         json += ",\"processEventBindingMask\":" +
             std::to_string(combat_diagnostics.process_event_binding_mask);
         json += ",\"damageFloatiesCalls\":" +
