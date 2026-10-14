@@ -16,6 +16,11 @@
 
 namespace {
 
+// 非 DEBUG 状态下的倍率策略：固定 10x；所有精细倍率路径均在调用 Host 前再次校验。
+constexpr float kLockedSpeedRatio = 10.0F;
+constexpr float kFineSpeedRatioMin = 0.50F;
+constexpr float kFineSpeedRatioMax = 10.0F;
+
 struct Snapshot {
     std::uint32_t flags{};
     double speed_kmh{};
@@ -58,6 +63,7 @@ struct Context {
     float other_torque_ratio{1.0F};
     bool friction_enabled{true};
     bool debug_unlocked{};
+    bool fine_speed_tuning_enabled{};
 } g_context;
 
 template <typename Struct, typename Field>
@@ -385,14 +391,30 @@ void Update() {
 
     if (g_context.reset.exchange(false, std::memory_order_acq_rel)) {
         const auto status = g_context.vehicle->reset(g_context.vehicle->user);
-        SetStatus(status.code == ANOMALY_STATUS_V1_OK ? "已恢复默认载具设置" : "恢复失败");
+        {
+            std::scoped_lock lock(g_context.mutex);
+            // Reset 不能成为绕过锁定倍率的后门；重置后关闭精细模式并恢复固定 10x。
+            g_context.fine_speed_tuning_enabled = false;
+            g_context.speed_ratio = kLockedSpeedRatio;
+        }
+        g_context.apply_speed.store(true, std::memory_order_release);
+        SetStatus(status.code == ANOMALY_STATUS_V1_OK
+            ? "已恢复默认载具设置；车速倍率策略恢复为固定 10.0x"
+            : "恢复失败；仍将重新应用固定车速倍率");
     }
 
     if (g_context.apply_speed.exchange(false, std::memory_order_acq_rel)) {
-        float ratio;
+        float ratio = kLockedSpeedRatio;
         {
             std::scoped_lock lock(g_context.mutex);
-            ratio = g_context.speed_ratio;
+            // Fail closed: UI 状态、DEBUG 解锁状态和精细调整开关必须同时满足。
+            if (g_context.debug_unlocked && g_context.fine_speed_tuning_enabled) {
+                ratio = std::clamp(g_context.speed_ratio,
+                    kFineSpeedRatioMin, kFineSpeedRatioMax);
+                g_context.speed_ratio = ratio;
+            } else {
+                g_context.speed_ratio = kLockedSpeedRatio;
+            }
         }
         const auto status = g_context.vehicle->set_top_speed_ratio(
             g_context.vehicle->user, ratio);
@@ -815,7 +837,8 @@ void DrawSummonTab(
 
 void DrawPerformanceTab(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
-    float ratio, float torque_ratio, float other_speed_ratio, float other_speed_floor_ratio, float other_torque_ratio) {
+    float ratio, bool debug_unlocked, bool fine_speed_tuning_enabled,
+    float torque_ratio, float other_speed_ratio, float other_speed_floor_ratio, float other_torque_ratio) {
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
         DrawText(ui, "当前驾驶载具：未识别");
     } else {
@@ -831,14 +854,11 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
-    DrawText(ui, "目标最高速 = 70 km/h × 速度因子");
-    if (ui->slider_float(ui->user, anomaly::sdk::StringView("速度倍率"),
-                         &ratio, 0.6024F, 10.0F)) {
-        std::scoped_lock lock(g_context.mutex);
-        g_context.speed_ratio = ratio;
-    }
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F)) {
-        g_context.apply_speed.store(true, std::memory_order_release);
+    if (debug_unlocked && fine_speed_tuning_enabled) {
+        DrawText(ui, "车速精细调整已在 [DEBUG] 中启用；当前设定 " +
+            std::to_string(std::clamp(ratio, kFineSpeedRatioMin, kFineSpeedRatioMax)) + "x");
+    } else {
+        DrawText(ui, "车速倍率固定：10.0x（精细调整需解锁 [DEBUG] 并开启开关）");
     }
 
     DrawDivider(ui);
@@ -897,8 +917,9 @@ void DrawChassisTab(const AnomalyUiServiceV1* ui, bool friction) {
 void DrawDebugPanel(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
     const std::string& status, const std::string& selected,
-    std::size_t catalog_size, bool player_position_valid) {
-    DrawText(ui, "构建标记：NTE Vehicle 0.9.7 / 2026-10-14-ui-refactor-debug-gate");
+    std::size_t catalog_size, bool player_position_valid,
+    float speed_ratio, bool fine_speed_tuning_enabled) {
+    DrawText(ui, "构建标记：NTE Vehicle 0.9.8 / 2026-10-14-debug-speed-gate");
     DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v4");
     DrawText(ui, "创建日期：2026-10-14");
     DrawText(ui, "修改状态：已包含界面精简、五项分页及 DEBUG 密钥门控；游戏内结果待实测");
@@ -914,6 +935,54 @@ void DrawDebugPanel(
     DrawText(ui, "玩家位置快照：" + std::string(player_position_valid ? "VALID" : "INVALID"));
     DrawText(ui, "载具目录：" + std::to_string(catalog_size) + " 项；当前选项：" +
         (selected.empty() ? std::string("无") : selected));
+
+    DrawDivider(ui);
+    DrawText(ui, "车速精细调整（0.50x–10.0x）");
+    const bool has_checkbox =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, checkbox),
+            sizeof(decltype(AnomalyUiServiceV1::checkbox))) && ui->checkbox;
+    int fine_enabled = fine_speed_tuning_enabled ? 1 : 0;
+    if (has_checkbox) {
+        if (ui->checkbox(ui->user,
+                anomaly::sdk::StringView("启用车速精细倍率调整"), &fine_enabled) != 0) {
+            const bool enable = fine_enabled != 0;
+            {
+                std::scoped_lock lock(g_context.mutex);
+                g_context.fine_speed_tuning_enabled = enable;
+                g_context.speed_ratio = enable
+                    ? std::clamp(speed_ratio, kFineSpeedRatioMin, kFineSpeedRatioMax)
+                    : kLockedSpeedRatio;
+                speed_ratio = g_context.speed_ratio;
+            }
+            fine_speed_tuning_enabled = enable;
+            if (enable) {
+                SetStatus("DEBUG 车速精细调整已启用；倍率可在 0.50x–10.0x 内调整");
+            } else {
+                // 关闭开关后立即安排将实际 Host 倍率恢复到固定 10x。
+                g_context.apply_speed.store(true, std::memory_order_release);
+                SetStatus("DEBUG 车速精细调整已关闭；正在恢复固定 10.0x");
+            }
+        }
+        if (fine_speed_tuning_enabled) {
+            if (ui->slider_float(ui->user,
+                    anomaly::sdk::StringView("车速倍率（DEBUG）"),
+                    &speed_ratio, kFineSpeedRatioMin, kFineSpeedRatioMax)) {
+                speed_ratio = std::clamp(speed_ratio,
+                    kFineSpeedRatioMin, kFineSpeedRatioMax);
+                std::scoped_lock lock(g_context.mutex);
+                if (g_context.debug_unlocked && g_context.fine_speed_tuning_enabled)
+                    g_context.speed_ratio = speed_ratio;
+            }
+            if (ui->button(ui->user,
+                    anomaly::sdk::StringView("应用精细车速倍率"), 0.0F, 0.0F)) {
+                g_context.apply_speed.store(true, std::memory_order_release);
+            }
+        } else {
+            DrawText(ui, "精细调整关闭：车速倍率固定为 10.0x。");
+        }
+    } else {
+        DrawText(ui, "当前 UI Host 不支持开关控件；精细调整保持关闭，倍率固定为 10.0x。");
+    }
 }
 
 void Draw(const AnomalyUiServiceV1* ui) {
@@ -938,6 +1007,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
     bool friction;
     bool player_position_valid{};
     bool debug_unlocked{};
+    bool fine_speed_tuning_enabled{};
     {
         std::scoped_lock lock(g_context.mutex);
         snap = g_context.snapshot;
@@ -954,6 +1024,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         friction = g_context.friction_enabled;
         player_position_valid = g_context.player_position_valid;
         debug_unlocked = g_context.debug_unlocked;
+        fine_speed_tuning_enabled = g_context.fine_speed_tuning_enabled;
     }
 
     static int active_tab = 0;
@@ -1007,9 +1078,14 @@ void Draw(const AnomalyUiServiceV1* ui) {
                     {
                         std::scoped_lock lock(g_context.mutex);
                         g_context.debug_unlocked = true;
+                        // 解锁 DEBUG 不会自动放开倍率；还必须显式启用精细调整开关。
+                        g_context.fine_speed_tuning_enabled = false;
+                        g_context.speed_ratio = kLockedSpeedRatio;
                     }
                     debug_unlocked = true;
-                    debug_unlock_feedback = "密钥验证通过；现在可以选择 [DEBUG]";
+                    fine_speed_tuning_enabled = false;
+                    ratio = kLockedSpeedRatio;
+                    debug_unlock_feedback = "密钥验证通过；精细车速调整仍默认关闭，可在 [DEBUG] 中单独启用";
                 } else {
                     debug_unlock_feedback = "密钥无效";
                 }
@@ -1024,12 +1100,13 @@ void Draw(const AnomalyUiServiceV1* ui) {
     if (active_tab == 0) {
         DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
     } else if (active_tab == 1) {
-        DrawPerformanceTab(ui, snap, ratio, torque_ratio, other_speed_ratio,
-            other_speed_floor_ratio, other_torque_ratio);
+        DrawPerformanceTab(ui, snap, ratio, debug_unlocked, fine_speed_tuning_enabled,
+            torque_ratio, other_speed_ratio, other_speed_floor_ratio, other_torque_ratio);
     } else if (active_tab == 2) {
         DrawChassisTab(ui, friction);
     } else if (active_tab == 3 && debug_unlocked) {
-        DrawDebugPanel(ui, snap, status, selected, ids.size(), player_position_valid);
+        DrawDebugPanel(ui, snap, status, selected, ids.size(), player_position_valid,
+            ratio, fine_speed_tuning_enabled);
     }
 }
 
@@ -1079,13 +1156,14 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.summon.store(false, std::memory_order_release);
     g_context.friction_toggle.store(false, std::memory_order_release);
     g_context.refresh_catalog_requested.store(false, std::memory_order_release);
-    g_context.speed_ratio = 1.0F;
+    g_context.speed_ratio = kLockedSpeedRatio;
     g_context.engine_torque_ratio = 1.0F;
     g_context.other_speed_ratio = 1.0F;
     g_context.other_speed_floor_ratio = 0.6024F;
     g_context.other_torque_ratio = 1.0F;
     g_context.friction_enabled = true;
     g_context.debug_unlocked = false;
+    g_context.fine_speed_tuning_enabled = false;
     g_context.snapshot = {};
     g_context.selected_vehicle_id = "Vehicle007";
     g_context.pending_vehicle_id.clear();
@@ -1104,6 +1182,8 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (plugin_context != &g_context) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     g_context.refresh_catalog_requested.store(true, std::memory_order_release);
+    // Each plugin start re-applies the locked 10x policy until DEBUG + fine-tune switch are both enabled.
+    g_context.apply_speed.store(true, std::memory_order_release);
     g_context.started.store(true, std::memory_order_release);
     return anomaly::sdk::Ok();
 }
@@ -1139,6 +1219,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.7"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.9.8"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
