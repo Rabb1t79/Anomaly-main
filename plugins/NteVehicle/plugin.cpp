@@ -1118,7 +1118,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
             if (ui->button(ui->user, anomaly::sdk::StringView("解锁 Debug"), 0.0F, 0.0F)) {
                 const std::string_view candidate(debug_key_buffer.data());
                 const bool valid = IsDebugKeyValid(candidate);
-                std::fill(debug_key_buffer.begin(), debug_key_buffer.end(), '\0');
+                // Keep the backing buffer intact until Core validates the same candidate.
                 bool core_key_accepted = false;
                 const bool has_core_authorizer =
                     HasField<AnomalyNteVehicleServiceV1,
