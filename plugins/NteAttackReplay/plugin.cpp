@@ -67,6 +67,7 @@ struct Context final {
     uint64_t combat_cursor{};
     // Game-thread snapshot shown in the UI to distinguish "no Core events" from
     // events received by Core but filtered as non-player/non-target damage.
+    uint64_t latest_damage_sequence_snapshot{};
 
     AnomalyGenerationHandleV1 world{};
     AnomalyGenerationHandleV1 character{};
