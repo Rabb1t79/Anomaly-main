@@ -59,8 +59,10 @@ public:
                 return false;
             }
             owner_registered_ = true;
+            // If a callback lease is unavailable while detours are draining, call
+            // MinHook's trampoline rather than re-entering the detoured target.
             passthrough_.store(
-                reinterpret_cast<NativeFunction>(target_), std::memory_order_release);
+                reinterpret_cast<NativeFunction>(original_), std::memory_order_release);
             active_.store(this, std::memory_order_release);
             if (!hooks_.EnableOwner(kOwner, kGeneration)) {
                 if (hooks_.RemoveOwner(kOwner, kGeneration)) {
@@ -110,8 +112,9 @@ public:
             exec_count_ = index + 1;
         }
         for (std::size_t index{}; index < exec_count_; ++index) {
+            // The passthrough must be the original trampoline, not the hooked entry.
             exec_passthroughs_[index].store(
-                reinterpret_cast<ExecFunction>(exec_targets_[index]),
+                reinterpret_cast<ExecFunction>(exec_originals_[index]),
                 std::memory_order_release);
         }
         if (!hooks_.EnableOwner(kExecOwner, kGeneration)) {
