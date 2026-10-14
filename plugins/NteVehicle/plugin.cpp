@@ -81,7 +81,7 @@ const Service* QueryService(const AnomalyHostApiV1* host,
     return static_cast<const Service*>(table);
 }
 
-// Portable SHA-256 for validating the DEBUG unlock token without embedding the token.
+// 使用可移植 SHA-256 校验 DEBUG 解锁密钥；插件二进制只保存摘要，不保存密钥明文。
 std::array<std::uint8_t, 32> Sha256(std::string_view input) {
     constexpr std::array<std::uint32_t, 64> k{
         0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
@@ -709,8 +709,7 @@ void DrawSummonTab(
         return matches_out;
     };
 
-    // The list itself is not a child scroll region. Pagination limits the
-    // rendered rows to five, so no legacy list scrollbar is created.
+    // 列表不创建可滚动子窗口；分页在渲染阶段限制为最多五行，因此不会显示旧版滚动条。
     constexpr std::size_t kVehiclesPerPage = 5U;
     static std::size_t current_page = 0U;
     auto filtered = filter_ids(current_filter);
@@ -773,8 +772,7 @@ void DrawSummonTab(
         }
     }
 
-    // Keep both the filter caption and search field below the choice list,
-    // before the pagination controls, without adding a scrolling container.
+    // 筛选标签与搜索框放在载具选项列表下方、分页控件上方；这里不创建滚动容器。
     DrawDivider(ui);
     const bool has_input_text =
         UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, input_text),
@@ -796,7 +794,7 @@ void DrawSummonTab(
         }
     }
 
-    // Recalculate counts after input changes; the visible list refreshes on the next draw.
+    // 输入变化后立即重算匹配数量和分页；列表行在下一次绘制时同步更新。
     filtered = filter_ids(current_filter);
     page_count = filtered.empty()
         ? 1U : (filtered.size() + kVehiclesPerPage - 1U) / kVehiclesPerPage;
