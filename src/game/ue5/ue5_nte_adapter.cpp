@@ -9242,11 +9242,11 @@ struct Ue5NteAdapter::State {
         const VehicleSpeedFieldBaseline& baseline,
         const float configured_multiplier,
         VehicleSpeedFieldBaseline& targets,
-        const float minimum_multiplier = 0.6024F) const noexcept {
-        // Static .text evidence in Anomaly-NTE.dll:
-        // targetSpeedKmH = clamp(multiplier, 0.6024, 10.0) * 70;
-        // speedRatio = targetSpeedKmH / captured TopSpeedInKmH (or 70 if unset);
-        // torque scale = max(speedRatio * 2, 2), RPM scale = speedRatio.
+        const float minimum_multiplier = 0.50F) const noexcept {
+        // Original Anomaly code used a 0.6024x lower floor. The authorized current-vehicle
+        // fine-tuning policy explicitly supports 0.50x; other-vehicle callers pass their own floor.
+        // Effective TopSpeedRatio still derives from the captured baseline TopSpeedInKmH (or 70 if unset).
+        // Torque scale remains max(speedRatio * 2, 2), and RPM scale remains speedRatio.
         constexpr float kAnomalyMultiplierCeiling = 10.0F;
         const float multiplier_floor = std::clamp(minimum_multiplier, 0.05F, kAnomalyMultiplierCeiling);
         constexpr float kAnomalyBaseSpeedKmh = 70.0F;
