@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
-  "name": "NTE Vehicle",
-  "description": "NTE Vehicle 0.9.9: Core-authorized DEBUG speed tuning and a disabled performance slider when locked.",
+  "name": "载具控制",
+  "description": "载具控制插件：提供载具召唤、性能调校、车轮摩擦控制及 Debug 诊断。",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
