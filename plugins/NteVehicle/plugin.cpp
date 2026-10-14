@@ -942,7 +942,7 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
-    if (ui->button(ui->user, anomaly::sdk::StringView("恢复默认倍率  /  1.0x"), 0.0F, 0.0F)) {
+    if (ui->button(ui->user, anomaly::sdk::StringView("恢复默认设置  /  固定车速倍率 10.0x"), 0.0F, 0.0F)) {
         g_context.reset.store(true, std::memory_order_release);
     }
 }
