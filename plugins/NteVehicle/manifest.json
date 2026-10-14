@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE Vehicle 0.9.7: compact five-item vehicle selector, streamlined controls, and SHA-256-gated debug diagnostics.",
+  "description": "NTE Vehicle 0.9.8: streamlined vehicle UI and DEBUG-gated vehicle speed tuning.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
