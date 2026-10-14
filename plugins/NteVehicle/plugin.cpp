@@ -959,6 +959,7 @@ void DrawDebugPanel(
     bool fine_speed_tuning_enabled) {
     DrawText(ui, "构建标记：NTE Vehicle 0.9.9 / 2026-10-14-debug-speed-gate-slider-restored");
     DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v5");
+    DrawText(ui, "Plugin ID：anomaly.local." + std::string("nte-vehicle"));
     DrawText(ui, "创建日期：2026-10-14");
     DrawText(ui, "修改状态：已包含界面精简、五项分页及 DEBUG 密钥门控；游戏内结果待实测");
     DrawText(ui, "Host 状态：" + (status.empty() ? std::string("暂无状态消息") : status));
