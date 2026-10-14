@@ -815,7 +815,7 @@ void DrawSummonTab(
     std::copy_n(current_filter.data(), filter_length, filter_buffer.data());
     if (has_input_text) {
         DrawText(ui, "筛选");
-        if (ui->input_text(ui->user, anomaly::sdk::StringView("搜索名称或 VehicleID"),
+        if (ui->input_text(ui->user, anomaly::sdk::StringView("搜索载具名称或编号"),
                 filter_buffer.data(), filter_buffer.size(), 0U)) {
             std::string updated_filter(filter_buffer.data());
             if (updated_filter != current_filter) {
@@ -860,7 +860,7 @@ void DrawPerformanceTab(
         const double display_speed = std::isfinite(snap.speed_kmh)
             ? std::floor(std::fabs(snap.speed_kmh)) : 0.0;
         DrawText(ui, "当前速度  /  " + std::to_string(static_cast<std::uint64_t>(display_speed)) + " km/h");
-        DrawText(ui, "实际 TopSpeedRatio（相对载具原始最高速）/ " +
+        DrawText(ui, "当前最高速倍率 / " +
         std::to_string(snap.top_speed_ratio) + "x");
     }
 
@@ -893,9 +893,6 @@ void DrawPerformanceTab(
     } else if (!fine_tuning_active) {
         std::scoped_lock lock(g_context.mutex);
         g_context.speed_ratio = kLockedSpeedRatio;
-    }
-    if (!fine_tuning_active) {
-        DrawText(ui, "已锁定 10.0x；请解锁 [DEBUG] 并启用精细调整后才能拖动。");
     }
     if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F)) {
         // Actual application path independently enforces the same policy in Update().
@@ -973,6 +970,10 @@ void DrawDebugPanel(
             : std::string("未识别")));
     DrawText(ui, "驾驶载具 Entity ID：" + (snap.vehicle_entity_id != 0
         ? std::to_string(snap.vehicle_entity_id) : std::string("不可用")));
+    DrawText(ui, "VehicleID：" + (selected.empty() ? std::string("不可用") : selected));
+    DrawText(ui, "TopSpeedRatio：" +
+        (((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0)
+            ? std::to_string(snap.top_speed_ratio) : std::string("不可用")));
     DrawText(ui, "玩家位置快照：" + std::string(player_position_valid ? "VALID" : "INVALID"));
     DrawText(ui, "载具目录：" + std::to_string(catalog_size) + " 项；当前选项：" +
         (selected.empty() ? std::string("无") : selected));
@@ -1019,11 +1020,7 @@ void DrawDebugPanel(
                 fine_enabled = 0;
             }
         }
-        if (fine_speed_tuning_enabled) {
-            DrawText(ui, "已启用：请到「性能调校」页使用原有速度倍率滑块。");
-        } else {
-            DrawText(ui, "未启用：性能调校页的速度倍率滑块已禁用，固定为 10.0x。");
-        }
+        // 精简界面：移除重复的启用/锁定说明；锁定策略仍由控件及 Core 授权逻辑执行。
     } else {
         DrawText(ui, "当前 UI Host 不支持开关控件；精细调整保持关闭，倍率固定为 10.0x。");
     }
@@ -1034,7 +1031,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         !ui->button || !ui->slider_float) return;
 
     int open = 1;
-    anomaly::sdk::UiWindow window(ui, "NTE Vehicle  /  载具控制", &open, 0);
+    anomaly::sdk::UiWindow window(ui, "载具控制", &open, 0);
     if (!window) return;
 
     Snapshot snap;
@@ -1083,23 +1080,23 @@ void Draw(const AnomalyUiServiceV1* ui) {
             active_tab = tab;
         DrawInlineGap(ui);
     };
-    nav_button("载具召唤", 0);
+    nav_button("召唤载具", 0);
     nav_button("性能调校", 1);
     nav_button("车轮摩擦", 2);
 
     if (UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, button_enabled),
             sizeof(decltype(AnomalyUiServiceV1::button_enabled))) && ui->button_enabled) {
-        if (ui->button_enabled(ui->user, anomaly::sdk::StringView("[DEBUG]"),
+        if (ui->button_enabled(ui->user, anomaly::sdk::StringView("Debug"),
                 0.0F, 0.0F, debug_unlocked ? 1 : 0) != 0 && debug_unlocked) {
             active_tab = 3;
         }
     } else {
-        const std::string debug_label = debug_unlocked ? "[DEBUG]" : "[DEBUG] (锁定)";
+        const std::string debug_label = debug_unlocked ? "Debug" : "Debug（锁定）";
         if (ui->button(ui->user, anomaly::sdk::StringView(debug_label), 0.0F, 0.0F) && debug_unlocked)
             active_tab = 3;
     }
     DrawInlineGap(ui);
-    if (ui->button(ui->user, anomaly::sdk::StringView("重新整理"), 0.0F, 0.0F)) {
+    if (ui->button(ui->user, anomaly::sdk::StringView("刷新载具列表"), 0.0F, 0.0F)) {
         g_context.refresh_catalog_requested.store(true, std::memory_order_release);
         SetStatus("已请求重新整理载具目录");
     }
@@ -1110,11 +1107,11 @@ void Draw(const AnomalyUiServiceV1* ui) {
             UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, input_text),
                 sizeof(decltype(AnomalyUiServiceV1::input_text))) && ui->input_text;
         if (has_input_text) {
-            DrawText(ui, "DEBUG 未解锁");
-            ui->input_text(ui->user, anomaly::sdk::StringView("输入 DEBUG 密钥"),
+            DrawText(ui, "Debug 未解锁");
+            ui->input_text(ui->user, anomaly::sdk::StringView("输入 Debug 密钥"),
                 debug_key_buffer.data(), debug_key_buffer.size(), ANOMALY_UI_TEXT_INPUT_V1_PASSWORD);
             DrawInlineGap(ui);
-            if (ui->button(ui->user, anomaly::sdk::StringView("解锁 DEBUG"), 0.0F, 0.0F)) {
+            if (ui->button(ui->user, anomaly::sdk::StringView("解锁 Debug"), 0.0F, 0.0F)) {
                 const std::string_view candidate(debug_key_buffer.data());
                 const bool valid = IsDebugKeyValid(candidate);
                 std::fill(debug_key_buffer.begin(), debug_key_buffer.end(), '\0');
@@ -1142,7 +1139,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
                     debug_unlocked = true;
                     fine_speed_tuning_enabled = false;
                     ratio = kLockedSpeedRatio;
-                    debug_unlock_feedback = "Core 密钥验证通过；精细车速调整仍默认关闭，可在 [DEBUG] 中单独启用";
+                    debug_unlock_feedback = "Core 密钥验证通过；精细车速调整仍默认关闭，可在 Debug 中单独启用";
                 } else if (valid && !has_core_authorizer) {
                     debug_unlock_feedback = "当前 Core 缺少 V5 授权接口；精细倍率保持锁定，请更新 Runtime";
                 } else if (valid) {
@@ -1313,7 +1310,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
-        anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
+        anomaly::sdk::StringView("载具控制"), anomaly::sdk::StringView("Anomaly"),
         anomaly::sdk::StringView("0.9.9"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
