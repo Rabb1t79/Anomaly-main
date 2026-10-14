@@ -9344,7 +9344,7 @@ struct Ue5NteAdapter::State {
         // Security is enforced here, not only by the UI slider. Without both Core authorization
         // and the explicit fine-tuning switch, callers can request only the fixed 10.0x ratio.
         if (!vehicle_fine_speed_authorized || !vehicle_fine_speed_tuning_enabled) {
-            if (std::fabs(ratio - 10.0F) > 0.0001F)
+            if (ratio != 10.0F)
                 return Status(ANOMALY_STATUS_V1_FAILED,
                     "Core locked vehicle speed ratio to 10.0x; authorize DEBUG and enable fine tuning first");
         } else if (ratio < 0.50F || ratio > 10.0F) {
