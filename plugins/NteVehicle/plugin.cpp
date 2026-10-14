@@ -1116,10 +1116,14 @@ void Draw(const AnomalyUiServiceV1* ui) {
                 debug_key_buffer.data(), debug_key_buffer.size(), ANOMALY_UI_TEXT_INPUT_V1_PASSWORD);
             DrawInlineGap(ui);
             if (ui->button(ui->user, anomaly::sdk::StringView("解锁 Debug"), 0.0F, 0.0F)) {
-                const std::string_view candidate(debug_key_buffer.data());
-                const bool valid = IsDebugKeyValid(candidate);
-                // Keep the backing buffer intact until Core validates the same candidate.
+                // Own the entered text for the complete local/Core validation call. The UI
+                // buffer is cleared only after the Core callback returns, and the same
+                // byte range is passed to both checks.
+                const std::string candidate_owned(debug_key_buffer.data());
+                const bool valid = IsDebugKeyValid(candidate_owned);
                 bool core_key_accepted = false;
+                std::uint32_t core_status_code = ANOMALY_STATUS_V1_FAILED;
+                std::string core_rejection_message;
                 const bool has_core_authorizer =
                     HasField<AnomalyNteVehicleServiceV1,
                         decltype(AnomalyNteVehicleServiceV1::authorize_fine_speed_tuning)>(
@@ -1128,8 +1132,16 @@ void Draw(const AnomalyUiServiceV1* ui) {
                     g_context.vehicle->authorize_fine_speed_tuning != nullptr;
                 if (valid && has_core_authorizer) {
                     const auto core_status = g_context.vehicle->authorize_fine_speed_tuning(
-                        g_context.vehicle->user, anomaly::sdk::StringView(candidate));
+                        g_context.vehicle->user,
+                        anomaly::sdk::StringView(std::string_view(
+                            candidate_owned.data(), candidate_owned.size())));
+                    core_status_code = core_status.code;
                     core_key_accepted = core_status.code == ANOMALY_STATUS_V1_OK;
+                    if (!core_key_accepted && core_status.message.data != nullptr &&
+                        core_status.message.size != 0) {
+                        core_rejection_message.assign(
+                            core_status.message.data, core_status.message.size);
+                    }
                 }
                 std::fill(debug_key_buffer.begin(), debug_key_buffer.end(), '\0');
                 if (valid && core_key_accepted) {
@@ -1147,7 +1159,11 @@ void Draw(const AnomalyUiServiceV1* ui) {
                 } else if (valid && !has_core_authorizer) {
                     debug_unlock_feedback = "当前 Core 缺少 V5 授权接口；精细倍率保持锁定，请更新 Runtime";
                 } else if (valid) {
-                    debug_unlock_feedback = "Core 拒绝密钥；精细倍率保持锁定";
+                    debug_unlock_feedback = core_rejection_message.empty()
+                        ? ("Core 拒绝密钥（状态码 " + std::to_string(core_status_code) +
+                            "）；精细倍率保持锁定")
+                        : ("Core 拒绝密钥：" + core_rejection_message +
+                            "；精细倍率保持锁定");
                 } else {
                     debug_unlock_feedback = "密钥无效";
                 }
