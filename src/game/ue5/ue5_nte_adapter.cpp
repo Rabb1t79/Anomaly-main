@@ -37,6 +37,93 @@ ThreadLocalScalar<const void*> g_active_tick_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_subscription_state;
 
+// The fixed DEBUG key is checked in Core as well as in the UI plugin. Keep this digest
+// stable across maintenance updates; changing it requires the user's explicit request.
+std::array<std::uint8_t, 32> Sha256(std::string_view input) {
+    constexpr std::array<std::uint32_t, 64> k{
+        0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+        0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+        0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+        0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+        0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+        0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+        0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+        0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
+    };
+    const auto rotr = [](std::uint32_t v, unsigned n) noexcept {
+        return (v >> n) | (v << (32U - n));
+    };
+    std::vector<std::uint8_t> data;
+    data.reserve(input.size() + 72U);
+    for (const unsigned char c : input) data.push_back(c);
+    const std::uint64_t bit_length = static_cast<std::uint64_t>(data.size()) * 8U;
+    data.push_back(0x80U);
+    while ((data.size() % 64U) != 56U) data.push_back(0U);
+    for (int shift = 56; shift >= 0; shift -= 8)
+        data.push_back(static_cast<std::uint8_t>((bit_length >> shift) & 0xffU));
+
+    std::array<std::uint32_t, 8> h{
+        0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
+        0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U
+    };
+    for (std::size_t block = 0; block < data.size(); block += 64U) {
+        std::array<std::uint32_t, 64> w{};
+        for (std::size_t i = 0; i < 16U; ++i) {
+            const std::size_t p = block + i * 4U;
+            w[i] = (static_cast<std::uint32_t>(data[p]) << 24U) |
+                   (static_cast<std::uint32_t>(data[p + 1U]) << 16U) |
+                   (static_cast<std::uint32_t>(data[p + 2U]) << 8U) |
+                   static_cast<std::uint32_t>(data[p + 3U]);
+        }
+        for (std::size_t i = 16U; i < 64U; ++i) {
+            const std::uint32_t s0 = rotr(w[i - 15U], 7U) ^ rotr(w[i - 15U], 18U) ^ (w[i - 15U] >> 3U);
+            const std::uint32_t s1 = rotr(w[i - 2U], 17U) ^ rotr(w[i - 2U], 19U) ^ (w[i - 2U] >> 10U);
+            w[i] = w[i - 16U] + s0 + w[i - 7U] + s1;
+        }
+        auto a = h[0]; auto b = h[1]; auto c = h[2]; auto d = h[3];
+        auto e = h[4]; auto f = h[5]; auto g = h[6]; auto hh = h[7];
+        for (std::size_t i = 0; i < 64U; ++i) {
+            const std::uint32_t s1 = rotr(e, 6U) ^ rotr(e, 11U) ^ rotr(e, 25U);
+            const std::uint32_t ch = (e & f) ^ (~e & g);
+            const std::uint32_t temp1 = hh + s1 + ch + k[i] + w[i];
+            const std::uint32_t s0 = rotr(a, 2U) ^ rotr(a, 13U) ^ rotr(a, 22U);
+            const std::uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            const std::uint32_t temp2 = s0 + maj;
+            hh = g; g = f; f = e; e = d + temp1;
+            d = c; c = b; b = a; a = temp1 + temp2;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+        h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+    }
+    std::array<std::uint8_t, 32> digest{};
+    for (std::size_t i = 0; i < digest.size(); ++i)
+        digest[i] = static_cast<std::uint8_t>((h[i / 4U] >> (24U - (i % 4U) * 8U)) & 0xffU);
+    return digest;
+}
+
+bool IsCoreDebugKeyValid(std::string_view candidate) noexcept {
+    if (candidate.size() != 64U) return false;
+    // Stable DEBUG key digest. Preserve unchanged across maintenance releases unless the user explicitly requests rotation.
+    constexpr std::array<std::uint8_t, 32> expected{
+        0xe7U, 0x1aU, 0xdeU, 0x1aU, 0xcfU, 0xf9U, 0xc7U, 0x39U,
+        0xccU, 0x17U, 0x59U, 0x72U, 0xfaU, 0xf6U, 0x0eU, 0x2bU,
+        0xbaU, 0x75U, 0xa7U, 0xdaU, 0x04U, 0xfaU, 0xbaU, 0xfdU,
+        0x2bU, 0xafU, 0x8cU, 0x94U, 0x23U, 0xb7U, 0x6fU, 0x85U
+    };
+    try {
+        const auto actual = Sha256(candidate);
+        std::uint8_t difference = 0U;
+        for (std::size_t i = 0; i < actual.size(); ++i)
+            difference = static_cast<std::uint8_t>(difference | (actual[i] ^ expected[i]));
+        return difference == 0U;
+    } catch (...) {
+        // Allocation/validation errors fail closed: they never authorize fine speed tuning.
+        return false;
+    }
+}
+
+
+
 class ActiveTickCallbackScope final {
 public:
     explicit ActiveTickCallbackScope(const void* state) noexcept
@@ -819,6 +906,10 @@ struct Ue5NteAdapter::State {
     std::uintptr_t current_vehicle_object{};
     std::uintptr_t vehicle_movement_component{};
     float vehicle_top_speed_ratio{1.0F};
+    // Authorization is process-local. Tuning remains disabled even after the key validates
+    // until the explicit DEBUG checkbox enables it; both flags are guarded by mutex.
+    bool vehicle_fine_speed_authorized{};
+    bool vehicle_fine_speed_tuning_enabled{};
     // Track current-velocity scaling separately from the top-speed limiter. A failed
     // velocity restore must not advance this baseline or a retry would scale by 1.0.
     float vehicle_current_velocity_ratio{1.0F};
@@ -9212,12 +9303,54 @@ struct Ue5NteAdapter::State {
         return targets.valid;
     }
 
+    AnomalyStatusV1 VehicleAuthorizeFineSpeed(AnomalyStringViewV1 key) noexcept {
+        if (key.data == nullptr || key.size != 64U ||
+            !IsCoreDebugKeyValid(std::string_view(key.data, key.size))) {
+            std::scoped_lock lock(mutex);
+            vehicle_fine_speed_authorized = false;
+            vehicle_fine_speed_tuning_enabled = false;
+            return Status(ANOMALY_STATUS_V1_FAILED, "Core rejected the DEBUG key");
+        }
+        std::scoped_lock lock(mutex);
+        vehicle_fine_speed_authorized = true;
+        // A valid key never auto-enables the fine slider; a separate explicit toggle is required.
+        vehicle_fine_speed_tuning_enabled = false;
+        return Status(ANOMALY_STATUS_V1_OK, "Core accepted the fixed DEBUG key; fine tuning remains disabled");
+    }
+
+    AnomalyStatusV1 VehicleSetFineSpeedTuningEnabled(std::uint32_t enabled) noexcept {
+        std::scoped_lock lock(mutex);
+        if (enabled != 0U && !vehicle_fine_speed_authorized) {
+            vehicle_fine_speed_tuning_enabled = false;
+            return Status(ANOMALY_STATUS_V1_FAILED, "Core requires DEBUG-key authorization before fine tuning");
+        }
+        vehicle_fine_speed_tuning_enabled = enabled != 0U;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 VehicleRevokeFineSpeedAuthorization() noexcept {
+        std::scoped_lock lock(mutex);
+        vehicle_fine_speed_authorized = false;
+        vehicle_fine_speed_tuning_enabled = false;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     AnomalyStatusV1 VehicleSetTopSpeedRatio(float ratio) noexcept {
         if (!std::isfinite(ratio) || ratio < 0.05F || ratio > 20.0F)
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "top speed ratio must be 0.05..20.0");
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
             return Status(ANOMALY_STATUS_V1_FAILED, "vehicle mutation must run on Game thread");
         std::scoped_lock lock(mutex);
+        // Security is enforced here, not only by the UI slider. Without both Core authorization
+        // and the explicit fine-tuning switch, callers can request only the fixed 10.0x ratio.
+        if (!vehicle_fine_speed_authorized || !vehicle_fine_speed_tuning_enabled) {
+            if (std::fabs(ratio - 10.0F) > 0.0001F)
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "Core locked vehicle speed ratio to 10.0x; authorize DEBUG and enable fine tuning first");
+        } else if (ratio < 0.50F || ratio > 10.0F) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "authorized fine speed ratio must be 0.50..10.0");
+        }
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
         if (vehicle_bindings.set_top_speed_ratio.function == 0)
@@ -10831,7 +10964,14 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleReset() noexcept {
-        const auto speed = VehicleSetTopSpeedRatio(1.0F);
+        float reset_speed_ratio = 10.0F;
+        {
+            std::scoped_lock lock(mutex);
+            // Preserve the fixed 10x default unless the same session is authorized and explicitly enabled.
+            if (vehicle_fine_speed_authorized && vehicle_fine_speed_tuning_enabled)
+                reset_speed_ratio = 1.0F;
+        }
+        const auto speed = VehicleSetTopSpeedRatio(reset_speed_ratio);
         if (speed.code != ANOMALY_STATUS_V1_OK) return speed;
         const auto torque = VehicleSetEngineTorqueRatio(1.0F);
         if (torque.code != ANOMALY_STATUS_V1_OK) return torque;
@@ -16038,7 +16178,9 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetEngineTorqueRatioThunk, VehicleCatalogRefreshThunk,
             VehicleCatalogLabelAtThunk, VehicleSetOtherVehiclesTopSpeedRatioThunk,
             VehicleSetOtherVehiclesEngineTorqueRatioThunk,
-            VehicleSetOtherVehiclesMinSpeedRatioThunk};
+            VehicleSetOtherVehiclesMinSpeedRatioThunk,
+            VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
+            VehicleRevokeFineSpeedAuthorizationThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -16380,6 +16522,23 @@ private:
         void* user, float ratio) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSetTopSpeedRatio(ratio) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleAuthorizeFineSpeedThunk(
+        void* user, AnomalyStringViewV1 key) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleAuthorizeFineSpeed(key) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSetFineSpeedTuningEnabledThunk(
+        void* user, std::uint32_t enabled) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleSetFineSpeedTuningEnabled(enabled) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleRevokeFineSpeedAuthorizationThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleRevokeFineSpeedAuthorization() : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetEngineTorqueRatioThunk(

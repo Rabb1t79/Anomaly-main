@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 4u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 5u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -368,6 +368,12 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(void* user, float ratio);
     // V4 tail extension: minimum speed factor for non-player vehicle instances only.
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_min_speed_ratio)(void* user, float ratio);
+    // V5: Core-validated fixed-key authorization and independent enforcement for fine current-vehicle speed tuning.
+    AnomalyStatusV1 (ANOMALY_CALL *authorize_fine_speed_tuning)(
+        void* user, AnomalyStringViewV1 key);
+    AnomalyStatusV1 (ANOMALY_CALL *set_fine_speed_tuning_enabled)(
+        void* user, uint32_t enabled);
+    AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept

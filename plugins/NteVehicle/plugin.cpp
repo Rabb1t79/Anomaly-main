@@ -391,6 +391,16 @@ void Update() {
     }
 
     if (g_context.reset.exchange(false, std::memory_order_acq_rel)) {
+        const bool has_core_switch =
+            HasField<AnomalyNteVehicleServiceV1,
+                decltype(AnomalyNteVehicleServiceV1::set_fine_speed_tuning_enabled)>(
+                    g_context.vehicle,
+                    offsetof(AnomalyNteVehicleServiceV1, set_fine_speed_tuning_enabled)) &&
+            g_context.vehicle->set_fine_speed_tuning_enabled != nullptr;
+        if (has_core_switch) {
+            static_cast<void>(g_context.vehicle->set_fine_speed_tuning_enabled(
+                g_context.vehicle->user, 0U));
+        }
         const auto status = g_context.vehicle->reset(g_context.vehicle->user);
         {
             std::scoped_lock lock(g_context.mutex);
@@ -976,7 +986,20 @@ void DrawDebugPanel(
     if (has_checkbox) {
         if (ui->checkbox(ui->user,
                 anomaly::sdk::StringView("启用车速精细倍率调整"), &fine_enabled) != 0) {
-            const bool enable = fine_enabled != 0;
+            const bool enable_requested = fine_enabled != 0;
+            const bool has_core_switch =
+                HasField<AnomalyNteVehicleServiceV1,
+                    decltype(AnomalyNteVehicleServiceV1::set_fine_speed_tuning_enabled)>(
+                        g_context.vehicle,
+                        offsetof(AnomalyNteVehicleServiceV1, set_fine_speed_tuning_enabled)) &&
+                g_context.vehicle->set_fine_speed_tuning_enabled != nullptr;
+            AnomalyStatusV1 core_status = Status(ANOMALY_STATUS_V1_UNAVAILABLE);
+            if (has_core_switch) {
+                core_status = g_context.vehicle->set_fine_speed_tuning_enabled(
+                    g_context.vehicle->user, enable_requested ? 1U : 0U);
+            }
+            const bool enable = enable_requested &&
+                has_core_switch && core_status.code == ANOMALY_STATUS_V1_OK;
             {
                 std::scoped_lock lock(g_context.mutex);
                 g_context.fine_speed_tuning_enabled = enable;
@@ -987,11 +1010,14 @@ void DrawDebugPanel(
             }
             fine_speed_tuning_enabled = enable;
             if (enable) {
-                SetStatus("DEBUG 车速精细调整已启用；倍率可在 0.50x–10.0x 内调整");
+                SetStatus("Core 已启用 DEBUG 车速精细调整；倍率可在 0.50x–10.0x 内调整");
             } else {
-                // 关闭开关后立即安排将实际 Host 倍率恢复到固定 10x。
+                // 关闭开关后 Core 和插件均恢复锁定策略，随后实际应用固定 10x。
                 g_context.apply_speed.store(true, std::memory_order_release);
-                SetStatus("DEBUG 车速精细调整已关闭；正在恢复固定 10.0x");
+                SetStatus(enable_requested
+                    ? "Core 未授权精细调整；倍率保持固定 10.0x"
+                    : "DEBUG 车速精细调整已关闭；正在恢复固定 10.0x");
+                fine_enabled = 0;
             }
         }
         if (fine_speed_tuning_enabled) {
@@ -1093,18 +1119,35 @@ void Draw(const AnomalyUiServiceV1* ui) {
                 const std::string_view candidate(debug_key_buffer.data());
                 const bool valid = IsDebugKeyValid(candidate);
                 std::fill(debug_key_buffer.begin(), debug_key_buffer.end(), '\0');
-                if (valid) {
+                bool core_key_accepted = false;
+                const bool has_core_authorizer =
+                    HasField<AnomalyNteVehicleServiceV1,
+                        decltype(AnomalyNteVehicleServiceV1::authorize_fine_speed_tuning)>(
+                            g_context.vehicle,
+                            offsetof(AnomalyNteVehicleServiceV1, authorize_fine_speed_tuning)) &&
+                    g_context.vehicle->authorize_fine_speed_tuning != nullptr;
+                if (valid && has_core_authorizer) {
+                    const auto core_status = g_context.vehicle->authorize_fine_speed_tuning(
+                        g_context.vehicle->user, anomaly::sdk::StringView(candidate));
+                    core_key_accepted = core_status.code == ANOMALY_STATUS_V1_OK;
+                }
+                std::fill(debug_key_buffer.begin(), debug_key_buffer.end(), '\0');
+                if (valid && core_key_accepted) {
                     {
                         std::scoped_lock lock(g_context.mutex);
                         g_context.debug_unlocked = true;
-                        // 解锁 DEBUG 不会自动放开倍率；还必须显式启用精细调整开关。
+                        // Both local and Core fine-tuning switches remain off until the checkbox is enabled.
                         g_context.fine_speed_tuning_enabled = false;
                         g_context.speed_ratio = kLockedSpeedRatio;
                     }
                     debug_unlocked = true;
                     fine_speed_tuning_enabled = false;
                     ratio = kLockedSpeedRatio;
-                    debug_unlock_feedback = "密钥验证通过；精细车速调整仍默认关闭，可在 [DEBUG] 中单独启用";
+                    debug_unlock_feedback = "Core 密钥验证通过；精细车速调整仍默认关闭，可在 [DEBUG] 中单独启用";
+                } else if (valid && !has_core_authorizer) {
+                    debug_unlock_feedback = "当前 Core 缺少 V5 授权接口；精细倍率保持锁定，请更新 Runtime";
+                } else if (valid) {
+                    debug_unlock_feedback = "Core 拒绝密钥；精细倍率保持锁定";
                 } else {
                     debug_unlock_feedback = "密钥无效";
                 }
@@ -1149,6 +1192,18 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
             decltype(AnomalyNteVehicleServiceV1::catalog_label_at)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, catalog_label_at)) ||
         !vehicle->catalog_label_at ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::authorize_fine_speed_tuning)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, authorize_fine_speed_tuning)) ||
+        !vehicle->authorize_fine_speed_tuning ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::set_fine_speed_tuning_enabled)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, set_fine_speed_tuning_enabled)) ||
+        !vehicle->set_fine_speed_tuning_enabled ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::revoke_fine_speed_authorization)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, revoke_fine_speed_authorization)) ||
+        !vehicle->revoke_fine_speed_authorization ||
         !HasField<AnomalyNteVehicleServiceV1,
             decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_top_speed_ratio)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)) ||
@@ -1210,12 +1265,34 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
 AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     if (plugin_context != &g_context) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     g_context.started.store(false, std::memory_order_release);
+    if (g_context.vehicle) {
+        if (g_context.vehicle->set_fine_speed_tuning_enabled)
+            static_cast<void>(g_context.vehicle->set_fine_speed_tuning_enabled(
+                g_context.vehicle->user, 0U));
+        if (g_context.vehicle->revoke_fine_speed_authorization)
+            static_cast<void>(g_context.vehicle->revoke_fine_speed_authorization(
+                g_context.vehicle->user));
+    }
+    {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.debug_unlocked = false;
+        g_context.fine_speed_tuning_enabled = false;
+        g_context.speed_ratio = kLockedSpeedRatio;
+    }
     return anomaly::sdk::Ok();
 }
 
 void ANOMALY_CALL Unload(void* plugin_context) {
     if (plugin_context != &g_context) return;
     g_context.started.store(false, std::memory_order_release);
+    if (g_context.vehicle) {
+        if (g_context.vehicle->set_fine_speed_tuning_enabled)
+            static_cast<void>(g_context.vehicle->set_fine_speed_tuning_enabled(
+                g_context.vehicle->user, 0U));
+        if (g_context.vehicle->revoke_fine_speed_authorization)
+            static_cast<void>(g_context.vehicle->revoke_fine_speed_authorization(
+                g_context.vehicle->user));
+    }
     g_context.vehicle = nullptr;
     g_context.player = nullptr;
 }

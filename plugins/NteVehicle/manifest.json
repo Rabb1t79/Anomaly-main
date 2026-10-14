@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE Vehicle 0.9.9: restored performance-tab speed slider with DEBUG-gated interaction.",
+  "description": "NTE Vehicle 0.9.9: Core-authorized DEBUG speed tuning and a disabled performance slider when locked.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
@@ -27,7 +27,7 @@
     },
     {
       "id": "anomaly.nte.vehicle",
-      "minVersion": 4
+      "minVersion": 5
     },
     {
       "id": "anomaly.nte.player",
