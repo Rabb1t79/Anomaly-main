@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "NTE Vehicle",
-  "description": "NTE Vehicle 0.9.8: streamlined vehicle UI and DEBUG-gated vehicle speed tuning.",
+  "description": "NTE Vehicle 0.9.9: restored performance-tab speed slider with DEBUG-gated interaction.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "entry": "plugin.dll",
   "api": {
     "major": 1,

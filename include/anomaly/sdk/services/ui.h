@@ -177,6 +177,10 @@ typedef struct AnomalyUiServiceV1 {
     // A max_height of zero uses the parent's available content height.
     int (ANOMALY_CALL *begin_child_auto_fit_y)(
         void* user, AnomalyStringViewV1 id, float width, float max_height);
+    // Optional append-only API: renders the same slider but disables interaction when enabled == 0.
+    int (ANOMALY_CALL *slider_float_enabled)(
+        void* user, AnomalyStringViewV1 label, float* value,
+        float minimum, float maximum, int enabled);
 } AnomalyUiServiceV1;
 
 #ifdef __cplusplus

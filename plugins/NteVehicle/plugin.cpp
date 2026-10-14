@@ -152,6 +152,7 @@ std::array<std::uint8_t, 32> Sha256(std::string_view input) {
 
 bool IsDebugKeyValid(std::string_view candidate) {
     if (candidate.size() != 64U) return false;
+    // Stable DEBUG key digest. Preserve unchanged across maintenance releases unless the user explicitly requests rotation.
     constexpr std::array<std::uint8_t, 32> expected{
         0xe7U, 0x1aU, 0xdeU, 0x1aU, 0xcfU, 0xf9U, 0xc7U, 0x39U,
         0xccU, 0x17U, 0x59U, 0x72U, 0xfaU, 0xf6U, 0x0eU, 0x2bU,
@@ -854,11 +855,41 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
-    if (debug_unlocked && fine_speed_tuning_enabled) {
-        DrawText(ui, "车速精细调整已在 [DEBUG] 中启用；当前设定 " +
-            std::to_string(std::clamp(ratio, kFineSpeedRatioMin, kFineSpeedRatioMax)) + "x");
+    const bool fine_tuning_active = debug_unlocked && fine_speed_tuning_enabled;
+    float slider_ratio = fine_tuning_active
+        ? std::clamp(ratio, kFineSpeedRatioMin, kFineSpeedRatioMax)
+        : kLockedSpeedRatio;
+    bool slider_changed = false;
+    const bool has_disabled_slider =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, slider_float_enabled),
+            sizeof(decltype(AnomalyUiServiceV1::slider_float_enabled))) &&
+        ui->slider_float_enabled != nullptr;
+    if (has_disabled_slider) {
+        slider_changed = ui->slider_float_enabled(ui->user,
+            anomaly::sdk::StringView("速度倍率"), &slider_ratio,
+            kFineSpeedRatioMin, kFineSpeedRatioMax,
+            fine_tuning_active ? 1 : 0) != 0;
     } else {
-        DrawText(ui, "车速倍率固定：10.0x（精细调整需解锁 [DEBUG] 并开启开关）");
+        // Older hosts lack a disabled-slider primitive; use a temporary value and never persist edits while locked.
+        slider_changed = ui->slider_float(ui->user,
+            anomaly::sdk::StringView("速度倍率"), &slider_ratio,
+            kFineSpeedRatioMin, kFineSpeedRatioMax) != 0;
+    }
+    if (fine_tuning_active && slider_changed) {
+        slider_ratio = std::clamp(slider_ratio, kFineSpeedRatioMin, kFineSpeedRatioMax);
+        std::scoped_lock lock(g_context.mutex);
+        if (g_context.debug_unlocked && g_context.fine_speed_tuning_enabled)
+            g_context.speed_ratio = slider_ratio;
+    } else if (!fine_tuning_active) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.speed_ratio = kLockedSpeedRatio;
+    }
+    if (!fine_tuning_active) {
+        DrawText(ui, "已锁定 10.0x；请解锁 [DEBUG] 并启用精细调整后才能拖动。");
+    }
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F)) {
+        // Actual application path independently enforces the same policy in Update().
+        g_context.apply_speed.store(true, std::memory_order_release);
     }
 
     DrawDivider(ui);
@@ -918,8 +949,8 @@ void DrawDebugPanel(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
     const std::string& status, const std::string& selected,
     std::size_t catalog_size, bool player_position_valid,
-    float speed_ratio, bool fine_speed_tuning_enabled) {
-    DrawText(ui, "构建标记：NTE Vehicle 0.9.8 / 2026-10-14-debug-speed-gate");
+    bool fine_speed_tuning_enabled) {
+    DrawText(ui, "构建标记：NTE Vehicle 0.9.9 / 2026-10-14-debug-speed-gate-slider-restored");
     DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v4");
     DrawText(ui, "创建日期：2026-10-14");
     DrawText(ui, "修改状态：已包含界面精简、五项分页及 DEBUG 密钥门控；游戏内结果待实测");
@@ -964,21 +995,9 @@ void DrawDebugPanel(
             }
         }
         if (fine_speed_tuning_enabled) {
-            if (ui->slider_float(ui->user,
-                    anomaly::sdk::StringView("车速倍率（DEBUG）"),
-                    &speed_ratio, kFineSpeedRatioMin, kFineSpeedRatioMax)) {
-                speed_ratio = std::clamp(speed_ratio,
-                    kFineSpeedRatioMin, kFineSpeedRatioMax);
-                std::scoped_lock lock(g_context.mutex);
-                if (g_context.debug_unlocked && g_context.fine_speed_tuning_enabled)
-                    g_context.speed_ratio = speed_ratio;
-            }
-            if (ui->button(ui->user,
-                    anomaly::sdk::StringView("应用精细车速倍率"), 0.0F, 0.0F)) {
-                g_context.apply_speed.store(true, std::memory_order_release);
-            }
+            DrawText(ui, "已启用：请到「性能调校」页使用原有速度倍率滑块。");
         } else {
-            DrawText(ui, "精细调整关闭：车速倍率固定为 10.0x。");
+            DrawText(ui, "未启用：性能调校页的速度倍率滑块已禁用，固定为 10.0x。");
         }
     } else {
         DrawText(ui, "当前 UI Host 不支持开关控件；精细调整保持关闭，倍率固定为 10.0x。");
@@ -1106,7 +1125,7 @@ void Draw(const AnomalyUiServiceV1* ui) {
         DrawChassisTab(ui, friction);
     } else if (active_tab == 3 && debug_unlocked) {
         DrawDebugPanel(ui, snap, status, selected, ids.size(), player_position_valid,
-            ratio, fine_speed_tuning_enabled);
+            fine_speed_tuning_enabled);
     }
 }
 
@@ -1219,6 +1238,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("NTE Vehicle"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.8"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.9.9"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }

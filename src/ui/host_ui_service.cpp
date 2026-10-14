@@ -672,6 +672,18 @@ int ANOMALY_CALL SliderFloat(
     return ImGui::SliderFloat(text.c_str(), value, minimum, maximum) ? 1 : 0;
 }
 
+int ANOMALY_CALL SliderFloatEnabled(
+    void*, AnomalyStringViewV1 label, float* value,
+    float minimum, float maximum, int enabled) {
+    if (value == nullptr || !std::isfinite(minimum) || !std::isfinite(maximum) ||
+        minimum >= maximum) return 0;
+    const std::string text = Copy(label);
+    ImGui::BeginDisabled(enabled == 0);
+    const bool changed = ImGui::SliderFloat(text.c_str(), value, minimum, maximum);
+    ImGui::EndDisabled();
+    return enabled != 0 && changed ? 1 : 0;
+}
+
 int ANOMALY_CALL InputUInt32(
     void*, AnomalyStringViewV1 label, std::uint32_t* value,
     std::uint32_t step, std::uint32_t step_fast) {
@@ -1145,7 +1157,7 @@ const AnomalyUiServiceV1 kUiService{
     SetNextWindowSizeConstraints, GetWindowSize, InputUInt32, InputDouble,
     DeveloperModeEnabled, InputText, ButtonEnabled, SameLine, SetCursorPosX, TextLink,
     BeginTabBar, BeginTabItem, EndTabItem, EndTabBar,
-    TextWrapped, BeginChildAutoFitY};
+    TextWrapped, BeginChildAutoFitY, SliderFloatEnabled};
 
 }  // namespace
 
