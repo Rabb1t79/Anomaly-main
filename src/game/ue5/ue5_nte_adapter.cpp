@@ -9304,12 +9304,28 @@ struct Ue5NteAdapter::State {
     }
 
     AnomalyStatusV1 VehicleAuthorizeFineSpeed(AnomalyStringViewV1 key) noexcept {
-        if (key.data == nullptr || key.size != 64U ||
-            !IsCoreDebugKeyValid(std::string_view(key.data, key.size))) {
+        // Report the failed validation stage without ever logging or echoing the key itself.
+        // This separates an ABI/string-view size problem from an actual digest mismatch.
+        if (key.data == nullptr) {
             std::scoped_lock lock(mutex);
             vehicle_fine_speed_authorized = false;
             vehicle_fine_speed_tuning_enabled = false;
-            return Status(ANOMALY_STATUS_V1_FAILED, "Core rejected the DEBUG key");
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "Core rejected DEBUG key: key data pointer is null");
+        }
+        if (key.size != 64U) {
+            std::scoped_lock lock(mutex);
+            vehicle_fine_speed_authorized = false;
+            vehicle_fine_speed_tuning_enabled = false;
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "Core rejected DEBUG key: expected exactly 64 bytes");
+        }
+        if (!IsCoreDebugKeyValid(std::string_view(key.data, key.size))) {
+            std::scoped_lock lock(mutex);
+            vehicle_fine_speed_authorized = false;
+            vehicle_fine_speed_tuning_enabled = false;
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "Core rejected DEBUG key: SHA-256 mismatch");
         }
         std::scoped_lock lock(mutex);
         vehicle_fine_speed_authorized = true;
