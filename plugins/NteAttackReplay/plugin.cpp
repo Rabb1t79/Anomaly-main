@@ -65,6 +65,8 @@ struct Context final {
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
     uint64_t combat_cursor{};
+    // Game-thread snapshot shown in the UI to distinguish "no Core events" from
+    // events received by Core but filtered as non-player/non-target damage.
 
     AnomalyGenerationHandleV1 world{};
     AnomalyGenerationHandleV1 character{};
@@ -699,6 +701,7 @@ void ArmForNextAttack(Context& context) {
     if (context.combat != nullptr) {
         context.combat_cursor = context.combat->latest_damage_sequence(
             context.combat->user);
+        context.latest_damage_sequence_snapshot = context.combat_cursor;
     }
 }
 
@@ -951,6 +954,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
     std::scoped_lock state_lock(context->state_mutex);
+    // Sample the host sequence on the Game callback, never from Draw's Render domain.
+    if (context->combat != nullptr && context->combat->latest_damage_sequence != nullptr) {
+        context->latest_damage_sequence_snapshot =
+            context->combat->latest_damage_sequence(context->combat->user);
+    }
 
     // 启用复选框是唯一的开关。停用时清除旧捕获，重新启用只处理之后的新攻击。
     if (context->stop_requested.exchange(false, std::memory_order_acq_rel)) {
@@ -1135,8 +1143,11 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         ui->text(ui->user, anomaly::sdk::StringView(progress));
         ui->text(ui->user, anomaly::sdk::StringView("启用后自动持续重放原始 GameplayEffect，不重放按键、动画或技能激活；间隔设为 1 即每个 Game 帧最多一次，直到目标不再产生新伤害或关闭本功能。"));
     } else {
-        ui->text(ui->user, anomaly::sdk::StringView(
-            "无需手动录制：插件自动等待下一次玩家攻击"));
+        const std::string capture_monitor =
+            "Core 伤害事件序列：" +
+            std::to_string(context->latest_damage_sequence_snapshot) +
+            "；插件已扫描至：" + std::to_string(context->combat_cursor);
+        ui->text(ui->user, anomaly::sdk::StringView(capture_monitor));
     }
 
     // 没有手动开始/停止按钮；上方启用复选框是唯一的链式重放开关。
