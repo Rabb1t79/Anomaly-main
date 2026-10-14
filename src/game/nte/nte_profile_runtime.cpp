@@ -1362,22 +1362,22 @@ public:
                         if (damage_hook != nullptr && !damage_hook->Attempted() &&
                             event_target != nullptr && adapter->CombatFeatureAvailable()) {
                             const auto exec_targets = adapter->CombatExecFunctionTargets();
-                            // Do not latch a one-shot hook attempt until Core has at least
-                            // one validated native Exec target. Reflection can finish after
-                            // the first Game tick; zero targets is "not ready", not "done".
-                            if (exec_targets.discovery_complete && exec_targets.count != 0) {
-                                Ue5DamageFunctionTargets targets;
-                                targets.character_on_damaged = const_cast<void*>(event_target);
-                                targets.combat_exec_function_count = exec_targets.count;
-                                for (std::size_t index{}; index < exec_targets.count; ++index) {
-                                    targets.combat_exec_functions[index] = {
-                                        reinterpret_cast<void*>(
-                                            exec_targets.entries[index].function),
-                                        reinterpret_cast<void*>(
-                                            exec_targets.entries[index].target)};
-                                }
-                                static_cast<void>(damage_hook->Start(targets));
+                            // Install the actual damage-event hook before any optional native
+                            // GameplayEffect Exec target is ready. Start is incremental: it keeps
+                            // the event stream live, then adds dump-validated Exec hooks as soon
+                            // as reflection discovers them. Without this split, a missing Exec
+                            // target silently prevents all damage events from reaching Attack Replay.
+                            Ue5DamageFunctionTargets targets;
+                            targets.character_on_damaged = const_cast<void*>(event_target);
+                            targets.combat_exec_function_count = exec_targets.count;
+                            for (std::size_t index{}; index < exec_targets.count; ++index) {
+                                targets.combat_exec_functions[index] = {
+                                    reinterpret_cast<void*>(
+                                        exec_targets.entries[index].function),
+                                    reinterpret_cast<void*>(
+                                        exec_targets.entries[index].target)};
                             }
+                            static_cast<void>(damage_hook->Start(targets));
                         }
                     }
                     if (evidence) {
