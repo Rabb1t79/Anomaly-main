@@ -65,66 +65,31 @@ jobs:
             $packagedHash = (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash
             if ($sourceHash -ne $packagedHash) { throw "SDK header drift: $relative" }
           }
-      - name: Build NTE Vehicle and Attack Replay plugins
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $root = $env:GITHUB_WORKSPACE -replace '\\', '/'
-          $sourceDir = Join-Path $env:GITHUB_WORKSPACE '.build/nte-runtime-plugins-src'
-          $buildDir = Join-Path $env:GITHUB_WORKSPACE '.build/nte-runtime-plugins'
-          New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
-          $cmakeLists = @'
-          cmake_minimum_required(VERSION 3.22)
-          project(AnomalyNteRuntimePlugins LANGUAGES CXX)
-          set(CMAKE_CXX_STANDARD 20)
-          set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          set(CMAKE_CXX_EXTENSIONS OFF)
-          set(ANOMALY_SOURCE_ROOT "@ROOT@")
-          add_library(nte_vehicle SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteVehicle/plugin.cpp")
-          add_library(nte_attack_replay SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteAttackReplay/plugin.cpp")
-          foreach(target IN ITEMS nte_vehicle nte_attack_replay)
-            target_include_directories(${target} PRIVATE "${ANOMALY_SOURCE_ROOT}/include")
-            target_compile_definitions(${target} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-            set_target_properties(${target} PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
-          endforeach()
-          set_target_properties(nte_vehicle PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle"
-            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle")
-          set_target_properties(nte_attack_replay PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay"
-            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay")
-          '@
-          $cmakeLists = $cmakeLists.Replace('@ROOT@', $root)
-          Set-Content -LiteralPath (Join-Path $sourceDir 'CMakeLists.txt') -Value $cmakeLists -Encoding UTF8
-          cmake -S $sourceDir -B $buildDir -G "Visual Studio 17 2022" -A x64
-          cmake --build $buildDir --config Release --parallel
-          $vehicleDll = Join-Path $buildDir 'out/NteVehicle/plugin.dll'
-          $attackDll = Join-Path $buildDir 'out/NteAttackReplay/plugin.dll'
-          if (!(Test-Path $vehicleDll)) { throw "NteVehicle plugin.dll was not produced: $vehicleDll" }
-          if (!(Test-Path $attackDll)) { throw "NteAttackReplay plugin.dll was not produced: $attackDll" }
       - name: Stage CI runtime and tools
         if: github.ref_type != 'tag'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component GameRuntime
-          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/tools --component Tools
-          $pluginsRoot = Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly/plugins'
-          if (!(Test-Path (Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly'))) {
-            throw 'Runtime staging root did not contain the expected Anomaly directory.'
-          }
-          $buildRoot = Join-Path $env:GITHUB_WORKSPACE '.build/nte-runtime-plugins/out'
-          $packages = @(
-            @{ Name = 'NteVehicle'; Source = (Join-Path $buildRoot 'NteVehicle/plugin.dll'); Manifest = (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/manifest.json') },
-            @{ Name = 'NteAttackReplay'; Source = (Join-Path $buildRoot 'NteAttackReplay/plugin.dll'); Manifest = (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/manifest.json') }
+          $runtimePrefix = '.build/ci-artifacts/runtime'
+          $toolsPrefix = '.build/ci-artifacts/tools'
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $runtimePrefix --component GameRuntime
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $toolsPrefix --component Tools
+          $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly'
+          if (!(Test-Path $runtimeRoot)) { throw 'Runtime staging root did not contain the expected Anomaly directory.' }
+          if (!(Test-Path (Join-Path $runtimeRoot 'Anomaly.Core.dll'))) { throw 'Runtime staging is missing the Core built from this commit.' }
+          $expectedPlugins = @(
+            @{ Name = 'AutoFish'; Id = 'b1ank.autofish'; Version = '0.1.15' },
+            @{ Name = 'NteVehicle'; Id = 'anomaly.local.nte-vehicle'; Version = '0.9.9' },
+            @{ Name = 'NteAttackReplay'; Id = 'anomaly.builtin.nte-attack-replay'; Version = '1.9.5' }
           )
-          foreach ($package in $packages) {
-            $destination = Join-Path $pluginsRoot $package.Name
-            New-Item -ItemType Directory -Path $destination -Force | Out-Null
-            Copy-Item -LiteralPath $package.Source -Destination (Join-Path $destination 'plugin.dll') -Force
-            Copy-Item -LiteralPath $package.Manifest -Destination (Join-Path $destination 'manifest.json') -Force
-            if (!(Test-Path (Join-Path $destination 'plugin.dll')) -or !(Test-Path (Join-Path $destination 'manifest.json'))) {
-              throw "Incomplete staged plugin package: $($package.Name)"
+          foreach ($plugin in $expectedPlugins) {
+            $pluginRoot = Join-Path $runtimeRoot ("plugins/" + $plugin.Name)
+            $dll = Join-Path $pluginRoot 'plugin.dll'
+            $manifestPath = Join-Path $pluginRoot 'manifest.json'
+            if (!(Test-Path $dll) -or !(Test-Path $manifestPath)) { throw "Incomplete current-build plugin package: $($plugin.Name)" }
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            if ($manifest.id -ne $plugin.Id -or $manifest.version -ne $plugin.Version -or $manifest.entry -ne 'plugin.dll') {
+              throw "Manifest mismatch in current-build plugin package: $($plugin.Name)"
             }
           }
       - name: Stage CI test plugins
