@@ -139,6 +139,17 @@ foreach ($package in $packages) {
         --component $package.InstallComponent
     if ($LASTEXITCODE -ne 0) { throw "install failed for $($package.InstallComponent)" }
 
+    # The 5.6.1/CppSDK dump is validation evidence only, never a framework payload.
+    # Fail closed if dump directories are accidentally included in an installed component.
+    $dumpPayload = @(Get-ChildItem -LiteralPath $stage -Force -Recurse | Where-Object {
+        $relative = [IO.Path]::GetRelativePath($stage, $_.FullName)
+        $relative -match '(?i)(^|[\\/])(5\.6\.1|CppSDK|dumps?)([\\/]|$)'
+    })
+    if ($dumpPayload.Count -gt 0) {
+        $paths = $dumpPayload | ForEach-Object { [IO.Path]::GetRelativePath($stage, $_.FullName) }
+        throw "Game dump content is forbidden in the " + $package.Component + " package: " + ($paths -join ", ")
+    }
+
     $stages[$package.Component] = $stage
 }
 
