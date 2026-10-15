@@ -5655,7 +5655,7 @@ struct Ue5NteAdapter::State {
         if (parameters == nullptr) return false;
         const auto base = reinterpret_cast<std::uintptr_t>(parameters);
         // FGameplayTagContainer TArray headers end at offset 0x38. Validate only the bytes
-        // actually needed here; live ParmsSize may be smaller than the padded C++ struct.
+        // required for the two TArray headers, independent of the block's tail padding.
         if (!ReadableRange(*memory, base, kGameplayEffectReplayTagArraysEnd)) return false;
         struct TArrayView {
             std::uintptr_t data{};
@@ -5745,7 +5745,7 @@ struct Ue5NteAdapter::State {
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
         if (function == bindings.replay_activate_by_actor) {
-            // Copy only the live reflected payload (0x79); backing storage remains 0x80.
+            // Capture the full dump-declared wrapper parameter block (0x80), including padding.
             kind = CombatCaptureKind::GameplayEffectByActorFromCharacter;
             info_offset = 0;
             payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
@@ -8386,8 +8386,8 @@ struct Ue5NteAdapter::State {
     }
 
     // Validate the dump-declared character-level actor-effect wrapper independently.
-    // The captured C++ parameter block is 0x80 bytes, while ParmsSize ends at the last
-    // reflected property (ReturnValue@0x78 + 1 = 0x79).
+    // HTGame_parameters.hpp declares this full parameter block as 0x80 bytes. Its last
+    // reflected field ends at 0x79, followed by the seven bytes of dump-declared padding.
     [[nodiscard]] bool ValidateReplayActivateByActorFunctionLocked(
         const std::uintptr_t function, std::string& failure_reason) const {
         constexpr std::string_view entry_name =
