@@ -520,6 +520,16 @@
         "ANOMALY_IPC_ERROR_V1_STALE_GENERATION": 8,
         "ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED": 9
       }
+    },
+    "AnomalyNteCombatEventKindV1": {
+      "size": 4,
+      "alignment": 4,
+      "values": {
+        "ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE": 1,
+        "ANOMALY_NTE_COMBAT_EVENT_V1_HEAL": 2,
+        "ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD": 3,
+        "ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE": 4
+      }
     }
   },
   "structs": {
@@ -668,16 +678,6 @@
         "read": 16,
         "write_atomic": 24,
         "remove": 32
-      }
-    },
-    "AnomalyNteCombatEventKindV1": {
-      "size": 4,
-      "alignment": 4,
-      "values": {
-        "ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE": 1,
-        "ANOMALY_NTE_COMBAT_EVENT_V1_HEAL": 2,
-        "ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD": 3,
-        "ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE": 4
       }
     },
     "AnomalyJsonServiceV1": {
