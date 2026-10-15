@@ -37,6 +37,61 @@ ThreadLocalScalar<const void*> g_active_tick_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_subscription_state;
 
+// AActor::ProcessEvent can delegate the same invocation through UObject::ProcessEvent.
+// Record the active replay capture on this thread so the shared pre-hook can avoid
+// enqueuing the identical parameter buffer twice. Only the exact object/function/buffer
+// tuple is suppressed; nested calls for other reflected functions remain observable.
+struct ActorReplayCaptureFrame {
+    const Ue5NteAdapter* adapter{};
+    std::uintptr_t object{};
+    std::uintptr_t function{};
+    void* parameters{};
+};
+constexpr std::size_t kActorReplayCaptureStackCapacity = 16U;
+thread_local std::array<ActorReplayCaptureFrame, kActorReplayCaptureStackCapacity>
+    g_actor_replay_capture_stack{};
+thread_local std::size_t g_actor_replay_capture_depth{};
+
+bool PushActorReplayCaptureFrame(
+    const Ue5NteAdapter* adapter, const std::uintptr_t object,
+    const std::uintptr_t function, void* parameters) noexcept {
+    if (adapter == nullptr || object == 0 || function == 0 || parameters == nullptr ||
+        g_actor_replay_capture_depth >= g_actor_replay_capture_stack.size()) {
+        return false;
+    }
+    g_actor_replay_capture_stack[g_actor_replay_capture_depth++] =
+        {adapter, object, function, parameters};
+    return true;
+}
+
+bool IsTopActorReplayCaptureFrame(
+    const Ue5NteAdapter* adapter, const std::uintptr_t object,
+    const std::uintptr_t function, void* parameters) noexcept {
+    if (g_actor_replay_capture_depth == 0) return false;
+    const auto& frame = g_actor_replay_capture_stack[g_actor_replay_capture_depth - 1U];
+    return frame.adapter == adapter && frame.object == object &&
+        frame.function == function && frame.parameters == parameters;
+}
+
+void PopActorReplayCaptureFrame(
+    const Ue5NteAdapter* adapter, const std::uintptr_t object,
+    const std::uintptr_t function, void* parameters) noexcept {
+    for (std::size_t index = g_actor_replay_capture_depth; index != 0; --index) {
+        const auto slot = index - 1U;
+        const auto& frame = g_actor_replay_capture_stack[slot];
+        if (frame.adapter != adapter || frame.object != object ||
+            frame.function != function || frame.parameters != parameters) {
+            continue;
+        }
+        for (std::size_t move = slot + 1U; move < g_actor_replay_capture_depth; ++move) {
+            g_actor_replay_capture_stack[move - 1U] = g_actor_replay_capture_stack[move];
+        }
+        --g_actor_replay_capture_depth;
+        g_actor_replay_capture_stack[g_actor_replay_capture_depth] = {};
+        return;
+    }
+}
+
 // The fixed DEBUG key is checked in Core as well as in the UI plugin. Keep this digest
 // stable across maintenance updates; changing it requires the user's explicit request.
 std::array<std::uint8_t, 32> Sha256(std::string_view input) {
@@ -18833,6 +18888,44 @@ void Ue5NteAdapter::OnCombatExecFunction(
     static_cast<void>(receiver);
 }
 
+void Ue5NteAdapter::OnActorProcessEventPre(
+    const std::uintptr_t object,
+    const std::uintptr_t function,
+    void* const parameters) noexcept {
+    const auto state = state_;
+    if (GetCurrentThreadId() != state->game_thread_id.load(std::memory_order_acquire) ||
+        parameters == nullptr) {
+        return;
+    }
+    const auto* const bindings = state->combat_capture_bindings.load(std::memory_order_acquire);
+    if (bindings == nullptr ||
+        (function != bindings->replay_apply_by_actor &&
+         function != bindings->replay_apply_to_target &&
+         function != bindings->replay_activate_by_actor)) {
+        return;
+    }
+
+    // AActor::ProcessEvent's parameter block is about to enter native dispatch.
+    // Capture the reflected fields and FGameplayTag TArrays before that stack is modified.
+    // The marker is popped by OnActorProcessEventPost after the original invocation returns.
+    if (!PushActorReplayCaptureFrame(this, object, function, parameters)) {
+        // A full nesting stack is an exceptional condition; preserve the capture even
+        // though duplicate suppression for this invocation cannot be guaranteed.
+    }
+    state->EnqueueCombatProcessEvent(*bindings, object, function, parameters);
+}
+
+void Ue5NteAdapter::OnActorProcessEventPost(
+    const std::uintptr_t object,
+    const std::uintptr_t function,
+    void* const parameters,
+    const ProcessEventInvoker& process_event) noexcept {
+    // The native AActor::ProcessEvent call has returned, so any nested UObject
+    // ProcessEvent capture window is closed. Remove its suppression marker first.
+    PopActorReplayCaptureFrame(this, object, function, parameters);
+    OnProcessEvent(object, function, parameters, process_event);
+}
+
 void Ue5NteAdapter::OnProcessEvent(
     const std::uintptr_t object,
     const std::uintptr_t function,
@@ -18872,7 +18965,8 @@ void Ue5NteAdapter::OnProcessEventPre(
     }
     const auto* const combat_bindings =
         state->combat_capture_bindings.load(std::memory_order_acquire);
-    if (combat_bindings != nullptr) {
+    if (combat_bindings != nullptr &&
+        !IsTopActorReplayCaptureFrame(this, object, function, parameters)) {
         state->EnqueueCombatProcessEvent(
             *combat_bindings, object, function, parameters);
     }
