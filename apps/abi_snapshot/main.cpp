@@ -798,7 +798,17 @@ std::string BuildSnapshot() {
          {"ANOMALY_IPC_ERROR_V1_QUEUE_FULL", ANOMALY_IPC_ERROR_V1_QUEUE_FULL},
          {"ANOMALY_IPC_ERROR_V1_STALE_GENERATION", ANOMALY_IPC_ERROR_V1_STALE_GENERATION},
          {"ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED", ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED}},
-        true);
+        false);
+    AppendEnum(
+        output,
+        "AnomalyNteCombatEventKindV1",
+        sizeof(AnomalyNteCombatEventKindV1),
+        alignof(AnomalyNteCombatEventKindV1),
+        {{"ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE", ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE},
+         {"ANOMALY_NTE_COMBAT_EVENT_V1_HEAL", ANOMALY_NTE_COMBAT_EVENT_V1_HEAL},
+         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD},
+         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE}},
+        false);
     output.append("  },\n");
 
     output.append("  \"structs\": {\n");
@@ -946,16 +956,6 @@ std::string BuildSnapshot() {
          {"read", offsetof(AnomalyStorageServiceV1, read)},
          {"write_atomic", offsetof(AnomalyStorageServiceV1, write_atomic)},
          {"remove", offsetof(AnomalyStorageServiceV1, remove)}},
-        false);
-    AppendEnum(
-        output,
-        "AnomalyNteCombatEventKindV1",
-        sizeof(AnomalyNteCombatEventKindV1),
-        alignof(AnomalyNteCombatEventKindV1),
-        {{"ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE", ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE},
-         {"ANOMALY_NTE_COMBAT_EVENT_V1_HEAL", ANOMALY_NTE_COMBAT_EVENT_V1_HEAL},
-         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD},
-         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE}},
         false);
     AppendStruct(
         output,
