@@ -36,6 +36,7 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <new>
@@ -120,6 +121,82 @@ struct Context final {
     bool waiting_for_damage{};
     NormalAttackBinding normal_attack{};
 };
+
+// Write full failure diagnostics beside plugin.dll rather than putting a long native
+// validation message into the compact in-game status line.
+void AppendReplayDiagnosticLog(
+    const Context& context, const uint32_t status_code,
+    const std::string_view detail) noexcept {
+    try {
+        HMODULE module{};
+        if (!GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(&AppendReplayDiagnosticLog), &module)) {
+            return;
+        }
+
+        std::array<wchar_t, 32768> module_path{};
+        const DWORD path_length = GetModuleFileNameW(
+            module, module_path.data(), static_cast<DWORD>(module_path.size()));
+        if (path_length == 0 || path_length >= module_path.size()) return;
+
+        std::wstring log_path(module_path.data(), path_length);
+        const auto separator = log_path.find_last_of(L"\\/");
+        if (separator == std::wstring::npos) return;
+        log_path.resize(separator + 1U);
+        log_path += L"attack-replay.log";
+
+        HANDLE file = CreateFileW(
+            log_path.c_str(), FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return;
+
+        SYSTEMTIME now{};
+        GetSystemTime(&now);
+        char timestamp[40]{};
+        std::snprintf(
+            timestamp, sizeof(timestamp),
+            "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+            static_cast<unsigned>(now.wYear), static_cast<unsigned>(now.wMonth),
+            static_cast<unsigned>(now.wDay), static_cast<unsigned>(now.wHour),
+            static_cast<unsigned>(now.wMinute), static_cast<unsigned>(now.wSecond),
+            static_cast<unsigned>(now.wMilliseconds));
+
+        std::string line;
+        line.reserve(detail.size() + context.captured_target_path.size() +
+            context.captured_damage_source_name.size() + 256U);
+        line += "[";
+        line += timestamp;
+        line += "] replay=failed status_code=";
+        line += std::to_string(status_code);
+        line += " damage_sequence=";
+        line += std::to_string(context.captured_damage_sequence);
+        line += " interval_frames=";
+        line += std::to_string(context.replay_interval_frames);
+        line += " target=";
+        line += context.captured_target_path.empty()
+            ? "(unknown)" : context.captured_target_path;
+        line += " damage_source=";
+        line += context.captured_damage_source_name.empty()
+            ? "(unknown)" : context.captured_damage_source_name;
+        line += "\r\nreason=";
+        line.append(detail.data(), detail.size());
+        line += "\r\n\r\n";
+
+        DWORD written{};
+        const auto bytes_to_write = static_cast<DWORD>(
+            (std::min)(line.size(), static_cast<std::size_t>(0xFFFFFFFFU)));
+        if (bytes_to_write != 0) {
+            WriteFile(file, line.data(), bytes_to_write, &written, nullptr);
+            FlushFileBuffers(file);
+        }
+        CloseHandle(file);
+    } catch (...) {
+        // Logging is best-effort: it must not interrupt automatic capture or replay state.
+    }
+}
 
 template <typename Struct, typename Field>
 // HasField 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -1065,11 +1142,13 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             failure = "GameplayEffect 重放调用失败：ABI status=" +
                 std::to_string(replay_status.code);
         }
+        // The UI remains short; the complete Core message and call context go to
+        // attack-replay.log in this plugin's own directory.
+        AppendReplayDiagnosticLog(*context, replay_status.code, failure);
         context->replaying = false;
         context->waiting_for_damage = false;
-        // 不提供手动重试按钮；保留本次诊断，并自动等到下一次真实攻击。
         ArmForNextAttack(*context);
-        context->status = failure + "；已恢复自动捕获，等待下一次攻击";
+        context->status = "重放失败；已恢复捕获。详见 attack-replay.log";
         return;
     }
     context->waiting_for_damage = true;
