@@ -366,7 +366,8 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // 两个回调只能在 Game 线程运行，且会在修改前校验实时 Actor 与运动组件实例。
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_top_speed_ratio)(void* user, float ratio);
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(void* user, float ratio);
-    // V4 tail extension: minimum speed factor for non-player vehicle instances only.
+    // V4 tail extension: configure the minimum user-facing speed factor for non-player instances only.
+    // Kept after the original V4 fields so existing service-table offsets remain stable.
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_min_speed_ratio)(void* user, float ratio);
     // V5: Core-validated fixed-key authorization and independent enforcement for fine current-vehicle speed tuning.
     AnomalyStatusV1 (ANOMALY_CALL *authorize_fine_speed_tuning)(

@@ -44,6 +44,26 @@ jobs:
           cmake @arguments
       - name: Build
         run: cmake --build --preset windows-relwithdebinfo --parallel
+      - name: Validate ABI snapshot and packaged SDK interfaces
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $snapshot = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe'
+          if (!(Test-Path $snapshot)) { throw "ABI snapshot tool was not built: $snapshot" }
+          foreach ($relative in @(
+            'abi/anomaly-sdk-v1-windows-x64.json',
+            'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json'
+          )) {
+            & $snapshot --check (Join-Path $env:GITHUB_WORKSPACE $relative)
+            if ($LASTEXITCODE -ne 0) { throw "ABI snapshot mismatch: $relative" }
+          }
+          foreach ($relative in @('services/nte.h', 'services/ui.h')) {
+            $source = Join-Path $env:GITHUB_WORKSPACE ("include/anomaly/sdk/" + $relative)
+            $packaged = Join-Path $env:GITHUB_WORKSPACE ("Anomaly-2.0.0-sdk/include/anomaly/sdk/" + $relative)
+            $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+            $packagedHash = (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash
+            if ($sourceHash -ne $packagedHash) { throw "SDK header drift: $relative" }
+          }
       - name: Build NTE Vehicle and Attack Replay plugins
         shell: pwsh
         run: |

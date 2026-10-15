@@ -618,7 +618,17 @@ std::string BuildSnapshot() {
         sizeof(AnomalyUiTextInputFlagsV1),
         alignof(AnomalyUiTextInputFlagsV1),
         {{"ANOMALY_UI_TEXT_INPUT_V1_NONE", ANOMALY_UI_TEXT_INPUT_V1_NONE},
-         {"ANOMALY_UI_TEXT_INPUT_V1_DIGITS", ANOMALY_UI_TEXT_INPUT_V1_DIGITS}},
+         {"ANOMALY_UI_TEXT_INPUT_V1_DIGITS", ANOMALY_UI_TEXT_INPUT_V1_DIGITS},
+         {"ANOMALY_UI_TEXT_INPUT_V1_PASSWORD", ANOMALY_UI_TEXT_INPUT_V1_PASSWORD}},
+        false);
+    AppendEnum(
+        output,
+        "AnomalyUiTableFlagsV1",
+        sizeof(AnomalyUiTableFlagsV1),
+        alignof(AnomalyUiTableFlagsV1),
+        {{"ANOMALY_UI_TABLE_V1_NONE", ANOMALY_UI_TABLE_V1_NONE},
+         {"ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT", ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT},
+         {"ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP", ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP}},
         false);
     AppendEnum(
         output,
