@@ -1464,8 +1464,18 @@ public:
                                 void* const parameters) {
                                 const auto adapter = weak.lock();
                                 if (adapter) {
-                                    adapter->OnProcessEvent(
+                                    adapter->OnActorProcessEventPost(
                                         object, function, parameters, invoker);
+                                }
+                            },
+                            [weak = std::weak_ptr<Ue5NteAdapter>(adapter_)](
+                                const std::uintptr_t object,
+                                const std::uintptr_t function,
+                                void* const parameters) {
+                                const auto adapter = weak.lock();
+                                if (adapter) {
+                                    adapter->OnActorProcessEventPre(
+                                        object, function, parameters);
                                 }
                             });
                     ahud_hook_ready = actor_process_event_hook_->Start(
