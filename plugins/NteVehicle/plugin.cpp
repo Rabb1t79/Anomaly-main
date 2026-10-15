@@ -966,8 +966,15 @@ void DrawDebugPanel(
     DrawText(ui, "创建日期：2026-10-14");
     DrawText(ui, "修改状态：已包含界面精简、五项分页及 DEBUG 密钥门控；游戏内结果待实测");
     DrawText(ui, "Host 状态：" + (status.empty() ? std::string("暂无状态消息") : status));
-    DrawText(ui, "载具快照状态：" + (snap.vehicle_snapshot_status.empty()
-        ? std::string("Host 未提供快照状态") : snap.vehicle_snapshot_status));
+    // An empty diagnostic string means the Host snapshot callback returned OK.
+    // Do not label this success path as "Host 未提供快照状态"; use the validity flag
+    // to distinguish a valid current vehicle from a successful-but-empty snapshot.
+    const std::string snapshot_status = !snap.vehicle_snapshot_status.empty()
+        ? snap.vehicle_snapshot_status
+        : (((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0)
+            ? std::string("Host 快照正常：已识别当前驾驶载具")
+            : std::string("Host 快照调用成功，但当前未识别驾驶载具"));
+    DrawText(ui, "载具快照状态：" + snapshot_status);
     DrawText(ui, "驾驶载具对象：" +
         (((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) != 0)
             ? (snap.vehicle_class_name.empty() ? std::string("已识别，类名未知") : snap.vehicle_class_name)
