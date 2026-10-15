@@ -837,6 +837,10 @@ struct Ue5NteAdapter::State {
     };
     struct VehicleBindings {
         VehicleFunctionBinding current_vehicle{};
+        // Water vehicles have a separate player-character getter and absolute-speed API.
+        VehicleFunctionBinding current_water_vehicle{};
+        VehicleFunctionBinding water_speed_kmh{};
+        VehicleFunctionBinding set_water_top_speed_limit{};
         VehicleFunctionBinding speed_kmh{};
         VehicleFunctionBinding set_top_speed_ratio{};
         VehicleFunctionBinding get_external_torque_ratio{};
@@ -905,6 +909,7 @@ struct Ue5NteAdapter::State {
     } attack_input_bindings;
     std::uintptr_t current_vehicle_object{};
     std::uintptr_t vehicle_movement_component{};
+    bool vehicle_is_water{};
     float vehicle_top_speed_ratio{1.0F};
     // Authorization is process-local. Tuning remains disabled even after the key validates
     // until the explicit DEBUG checkbox enables it; both flags are guarded by mutex.
@@ -9068,16 +9073,85 @@ struct Ue5NteAdapter::State {
                     }
                 }
             }
+            // The wheeled getter does not cover HTWaterVehicleBasePawn. Detect the actual
+            // board-water vehicle through the dump-defined HTPlayerCharacter getter instead.
+            bool water_vehicle = false;
+            if (vehicle_return_valid &&
+                !ObjectClassChainContainsLocked(vehicle, "HTWheeledVehicleBase")) {
+                vehicle_return_valid = false;
+            }
+            if (!vehicle_return_valid && player_pawn != 0) {
+                static constexpr std::array<std::string_view, 1> water_character_outer{
+                    "HTPlayerCharacter"};
+                if (vehicle_bindings.current_water_vehicle.function == 0) {
+                    static_cast<void>(FindVehicleFunctionLocked("GetBoardWaterVehicle",
+                        water_character_outer, "ObjectReturn",
+                        vehicle_bindings.current_water_vehicle));
+                }
+                std::uintptr_t water_vehicle_object{};
+                if (invoke_current_vehicle(vehicle_bindings.current_water_vehicle,
+                        player_pawn, water_vehicle_object) &&
+                    ObjectClassChainContainsLocked(water_vehicle_object, "HTWaterVehicleBasePawn")) {
+                    vehicle = water_vehicle_object;
+                    vehicle_return_valid = true;
+                    water_vehicle = true;
+                }
+            }
             if (!vehicle_return_valid) {
                 vehicle_valid = false;
                 current_vehicle_object = 0;
                 vehicle_movement_component = 0;
+                vehicle_is_water = false;
                 return false;
             }
 
-            const bool vehicle_changed = vehicle != current_vehicle_object;
+            const bool vehicle_changed = vehicle != current_vehicle_object ||
+                water_vehicle != vehicle_is_water;
             current_vehicle_object = vehicle;
+            vehicle_is_water = water_vehicle;
             vehicle_valid = true;
+
+            if (water_vehicle) {
+                vehicle_movement_component = 0;
+                if (vehicle_changed) {
+                    vehicle_base_torque_component = 0;
+                    vehicle_base_engine_torque_valid = false;
+                    vehicle_engine_torque_ratio = 1.0F;
+                    vehicle_requested_engine_torque_ratio = 1.0F;
+                    vehicle_engine_torque_fallback_active = false;
+                    vehicle_engine_torque_fallback_ratio = 1.0F;
+                    vehicle_top_speed_ratio = 1.0F;
+                    vehicle_current_velocity_ratio = 1.0F;
+                    vehicle_speed_kmh = 0.0F;
+                    vehicle_speed_field_baseline = {};
+                    vehicle_speed_field_baseline_component = 0;
+                    vehicle_speed_fields_applied = false;
+                }
+                static constexpr std::array<std::string_view, 1> water_vehicle_outer{
+                    "HTWaterVehicleBasePawn"};
+                if (vehicle_bindings.water_speed_kmh.function == 0) {
+                    static_cast<void>(FindVehicleFunctionLocked("GetVelocityInKm",
+                        water_vehicle_outer, "FloatReturn", vehicle_bindings.water_speed_kmh));
+                }
+                if (vehicle_bindings.set_water_top_speed_limit.function == 0) {
+                    static_cast<void>(FindVehicleFunctionLocked("SetDynamicTopSpeedLimit",
+                        water_vehicle_outer, "FloatInput",
+                        vehicle_bindings.set_water_top_speed_limit));
+                }
+                if (vehicle_bindings.water_speed_kmh.function != 0) {
+                    alignas(8) std::array<std::uint8_t, 8> water_speed_bytes{};
+                    if (InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+                            vehicle_bindings.water_speed_kmh.function, water_speed_bytes.data(),
+                            vehicle_bindings.water_speed_kmh.parms_size)) {
+                        float speed{};
+                        std::memcpy(&speed, water_speed_bytes.data() +
+                            vehicle_bindings.water_speed_kmh.return_offset, sizeof(speed));
+                        if (std::isfinite(speed)) vehicle_speed_kmh = speed;
+                    }
+                }
+                return true;
+            }
+
             std::uintptr_t movement_component{};
             const auto movement_offset = Layout(profile, "vehicle.movementComponent", -1);
             if (movement_offset < 0 ||
@@ -9210,6 +9284,40 @@ struct Ue5NteAdapter::State {
         AnomalyGenerationHandleV1 handle{};
         static_cast<void>(ObjectHandleLocked(current_vehicle_object, handle));
         snapshot->flags = ANOMALY_NTE_VEHICLE_V1_VALID;
+        if (vehicle_is_water) {
+            if (vehicle_bindings.water_speed_kmh.function != 0)
+                snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
+            if (vehicle_bindings.set_water_top_speed_limit.function != 0)
+                snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO;
+            if (EnsureVehicleCatalogLocked())
+                snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON;
+            snapshot->vehicle = handle;
+            snapshot->speed_kmh = vehicle_speed_kmh;
+            snapshot->top_speed_ratio = vehicle_top_speed_ratio;
+            snapshot->wheel_friction_enabled = vehicle_wheel_friction_enabled ? 1u : 0u;
+            if (has_torque_tail) snapshot->engine_torque_ratio = vehicle_engine_torque_ratio;
+            if (has_vehicle_id_tail) {
+                std::uintptr_t index_address{};
+                std::int32_t internal_index{-1};
+                if (AddAddress(current_vehicle_object, Layout(profile, "object.internalIndex"), index_address) &&
+                    ReadValue(*memory, index_address, internal_index) && internal_index >= 0) {
+                    snapshot->vehicle_entity_id =
+                        static_cast<std::uint64_t>(static_cast<std::uint32_t>(internal_index)) + 1U;
+                }
+            }
+            if (has_vehicle_class_tail) {
+                std::uintptr_t class_object{};
+                std::string class_name;
+                if (ReadPointerAt(*memory, current_vehicle_object, Layout(profile, "object.class"), class_object) &&
+                    ReadReflectedObjectNameLocked(class_object, class_name)) {
+                    const std::size_t copy_size = (std::min)(class_name.size(),
+                        static_cast<std::size_t>(ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES));
+                    std::copy_n(class_name.data(), copy_size, snapshot->vehicle_class_name);
+                    snapshot->vehicle_class_name[copy_size] = '\0';
+                }
+            }
+            return Status(ANOMALY_STATUS_V1_OK);
+        }
         if (vehicle_bindings.speed_kmh.function != 0) snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_SPEED;
         if (vehicle_bindings.set_top_speed_ratio.function != 0)
             snapshot->flags |= ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO;
@@ -9484,6 +9592,34 @@ struct Ue5NteAdapter::State {
         }
         if (!RefreshVehicleLocked())
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "current driving vehicle is unavailable");
+        if (vehicle_is_water) {
+            const auto& water_limit = vehicle_bindings.set_water_top_speed_limit;
+            if (water_limit.function == 0 || water_limit.parms_size == 0 ||
+                water_limit.parms_size > 8U ||
+                water_limit.parameter_offset + sizeof(float) > water_limit.parms_size) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "HTGame.HTWaterVehicleBasePawn.SetDynamicTopSpeedLimit(float) failed dump ABI validation");
+            }
+            // The water API accepts an absolute km/h cap; keep the same Anomaly factor
+            // policy by converting the configured multiplier to the 70 km/h reference.
+            const float target_speed_kmh = 70.0F * ratio;
+            if (!std::isfinite(target_speed_kmh) || target_speed_kmh <= 0.0F) {
+                return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                    "water-vehicle absolute speed limit is invalid");
+            }
+            alignas(8) std::array<std::uint8_t, 8> parameters{};
+            std::memcpy(parameters.data() + water_limit.parameter_offset,
+                &target_speed_kmh, sizeof(target_speed_kmh));
+            if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+                    water_limit.function, parameters.data(), water_limit.parms_size)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "HTWaterVehicleBasePawn.SetDynamicTopSpeedLimit ProcessEvent failed");
+            }
+            vehicle_current_velocity_ratio = ratio;
+            vehicle_top_speed_ratio = ratio;
+            return Status(ANOMALY_STATUS_V1_OK,
+                "HTWaterVehicleBasePawn.SetDynamicTopSpeedLimit applied absolute limit in km/h");
+        }
         if (vehicle_bindings.set_top_speed_ratio.function == 0)
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "HTGame.HTWheeledVehicleBase.SetTopSpeedRatio(float) failed dump ABI validation");
