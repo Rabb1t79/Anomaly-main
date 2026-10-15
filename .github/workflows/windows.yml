@@ -45,6 +45,45 @@ jobs:
           cmake @arguments
       - name: Build
         run: cmake --build --preset windows-relwithdebinfo --parallel 4
+      - name: Capture generated ABI snapshot for diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $snapshot = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe'
+          if (!(Test-Path $snapshot)) { throw "ABI snapshot tool was not built: $snapshot" }
+          $capture = Join-Path $env:GITHUB_WORKSPACE '.build/abi-snapshot-capture'
+          New-Item -ItemType Directory -Path $capture -Force | Out-Null
+          $generated = Join-Path $capture 'generated-abi.json'
+          & $snapshot --write $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Could not capture generated ABI snapshot' }
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'abi/anomaly-sdk-v1-windows-x64.json') (Join-Path $capture 'checked-in-root-abi.json')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json') (Join-Path $capture 'checked-in-sdk-abi.json')
+          $expected = [IO.File]::ReadAllText((Join-Path $capture 'checked-in-root-abi.json'))
+          $actual = [IO.File]::ReadAllText($generated)
+          $offset = 0
+          $limit = [Math]::Min($expected.Length, $actual.Length)
+          while ($offset -lt $limit -and $expected[$offset] -eq $actual[$offset]) { $offset++ }
+          $start = [Math]::Max(0, $offset - 160)
+          $expectedEnd = [Math]::Min($expected.Length, $offset + 320)
+          $actualEnd = [Math]::Min($actual.Length, $offset + 320)
+          @(
+            "Expected length: $($expected.Length)"
+            "Generated length: $($actual.Length)"
+            "First differing character: $offset"
+            '--- checked-in ABI context ---'
+            $expected.Substring($start, $expectedEnd - $start)
+            '--- generated ABI context ---'
+            $actual.Substring($start, $actualEnd - $start)
+          ) | Set-Content -LiteralPath (Join-Path $capture 'diagnostic.txt') -Encoding utf8
+      - name: Upload generated ABI snapshot diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-snapshot-diagnostic
+          path: .build/abi-snapshot-capture/
+          if-no-files-found: warn
+          retention-days: 3
       - name: Validate ABI snapshot and packaged SDK interfaces
         shell: pwsh
         run: |
