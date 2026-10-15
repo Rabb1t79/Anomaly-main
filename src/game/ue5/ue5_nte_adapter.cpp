@@ -9007,8 +9007,6 @@ struct Ue5NteAdapter::State {
                         vehicle_bindings.current_vehicle)) {
                     // The dump's fallback is owned by HTPlayerCharacter (not Controller).
                     vehicle_bindings.current_vehicle_receiver = player_pawn;
-                } else {
-                    return false;
                 }
             }
             if (vehicle_bindings.set_top_speed_ratio.function == 0) {
