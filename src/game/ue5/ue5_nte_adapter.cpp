@@ -8327,10 +8327,9 @@ struct Ue5NteAdapter::State {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
         const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
-        // The last reflected fields end at 0x71 / 0x74; the dump's aligned
-        // parameter structs (0x78 each) define the expected UFunction.ParmsSize.
-        // The 5.6.1 dump declares 0x78-byte parameter structs for both ASC wrappers.
-        // Capture payload lengths remain the last reflected field end (0x71 / 0x74).
+        // The 5.6.1 dump declares full 0x78-byte parameter blocks for both ASC methods.
+        // Keep ReturnValue offsets at 0x70 / 0x6C, but validate and capture the full
+        // aligned ParmsSize rather than truncating the parameter buffer at each field's end.
         const std::uint16_t expected_parms_size = by_actor
             ? kGameplayEffectReplayByActorFunctionParmsSize
             : kGameplayEffectReplayToTargetFunctionParmsSize;
@@ -8393,8 +8392,7 @@ struct Ue5NteAdapter::State {
     }
 
     // Validate the dump-declared character-level actor-effect wrapper independently.
-    // The captured C++ parameter block is 0x80 bytes, while ParmsSize ends at the last
-    // reflected property (ReturnValue@0x78 + 1 = 0x79).
+    // Its full 5.6.1 parameter block is 0x80 bytes; ReturnValue remains at offset 0x78.
     [[nodiscard]] bool ValidateReplayActivateByActorFunctionLocked(
         const std::uintptr_t function, std::string& failure_reason) const {
         constexpr std::string_view entry_name =
