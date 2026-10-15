@@ -1006,9 +1006,14 @@ struct Ue5NteAdapter::State {
     // Dumper-7 parameter structs include trailing alignment padding (0x78 / 0x80).
     // Live UFunction.ParmsSize ends at the last reflected property instead.
     static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
-    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71;
-    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74;
-    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x79;
+    // 5.6.1 Dumper-7 parameter structs include tail padding; UFunction.ParmsSize
+    // follows the full reflected parameter struct size, not the last field's end.
+    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71; // captured field end
+    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74; // captured field end
+    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x79; // captured field end
+    static constexpr std::uint16_t kGameplayEffectReplayByActorFunctionParmsSize = 0x78;
+    static constexpr std::uint16_t kGameplayEffectReplayToTargetFunctionParmsSize = 0x78;
+    static constexpr std::uint16_t kGameplayEffectReplayWrapperFunctionParmsSize = 0x80;
     static constexpr std::size_t kGameplayEffectReplayTagArraysEnd = 0x38;
     static_assert(kGameplayEffectReplayByActorParmsSize == 0x70U + sizeof(std::uint8_t));
     static_assert(kGameplayEffectReplayToTargetParmsSize == 0x6CU + sizeof(std::uint64_t));
@@ -8321,9 +8326,11 @@ struct Ue5NteAdapter::State {
         const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
         // 最后一个反射属性分别为 ReturnValue@0x70 + 1 字节、ReturnValue@0x6C + 8 字节。
         // Dumper-7 C++ struct 的 0x78 包含尾部 Pad，不应当用作运行时 ParmsSize。
-        const std::uint16_t expected_parms_size = static_cast<std::uint16_t>(
-            by_actor ? kGameplayEffectReplayByActorParmsSize
-                     : kGameplayEffectReplayToTargetParmsSize);
+        // The 5.6.1 dump declares 0x78-byte parameter structs for both ASC wrappers.
+        // Capture payload lengths remain the last reflected field end (0x71 / 0x74).
+        const std::uint16_t expected_parms_size = by_actor
+            ? kGameplayEffectReplayByActorFunctionParmsSize
+            : kGameplayEffectReplayToTargetFunctionParmsSize;
         const std::uint16_t expected_return_offset = by_actor ? 0x70U : 0x6CU;
         if (parms_size != expected_parms_size || num_parms != expected_num_parms ||
             return_offset != expected_return_offset) {
@@ -8424,8 +8431,10 @@ struct Ue5NteAdapter::State {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
         // C++ sizeof is 0x80 because Dumper-7 pads after the one-byte return property.
+        // The 5.6.1 dump declares an 0x80-byte wrapper struct; 0x79 is only
+        // the end of its final reflected property, not the function parameter size.
         constexpr std::uint16_t kExpectedWrapperParmsSize =
-            static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
+            kGameplayEffectReplayWrapperFunctionParmsSize;
         if (parms_size != kExpectedWrapperParmsSize || num_parms != 6U || return_offset != 0x78U) {
             return fail("UFunction header mismatch: expected NumParms=6, ParmsSize=" +
                 std::to_string(kExpectedWrapperParmsSize) +
