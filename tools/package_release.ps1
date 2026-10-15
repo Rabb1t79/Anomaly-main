@@ -143,7 +143,7 @@ foreach ($package in $packages) {
     # Fail closed if dump directories are accidentally included in an installed component.
     $dumpPayload = @(Get-ChildItem -LiteralPath $stage -Force -Recurse | Where-Object {
         $relative = [IO.Path]::GetRelativePath($stage, $_.FullName)
-        $relative -match '(?i)(^|[\\/])(5\.6\.1|CppSDK|dumps?)([\\/]|$)'
+        $relative -match '(?i)(5\.6\.1|CppSDK|(^|[\\/])dumps?([\\/]|$))'
     })
     if ($dumpPayload.Count -gt 0) {
         $paths = $dumpPayload | ForEach-Object { [IO.Path]::GetRelativePath($stage, $_.FullName) }
