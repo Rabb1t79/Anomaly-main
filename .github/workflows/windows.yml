@@ -74,6 +74,18 @@ jobs:
           $toolsPrefix = '.build/ci-artifacts/tools'
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $runtimePrefix --component GameRuntime
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $toolsPrefix --component Tools
+          # The 5.6.1/CppSDK dump is external validation evidence, never a Runtime/Tools payload.
+          foreach ($prefix in @($runtimePrefix, $toolsPrefix)) {
+            $stageRoot = Join-Path $env:GITHUB_WORKSPACE $prefix
+            $dumpPayload = @(Get-ChildItem -LiteralPath $stageRoot -Force -Recurse | Where-Object {
+              $relative = [IO.Path]::GetRelativePath($stageRoot, $_.FullName)
+              $relative -match '(?i)(^|[\\/])(5\.6\.1|CppSDK|dumps?)([\\/]|$)'
+            })
+            if ($dumpPayload.Count -gt 0) {
+              $paths = $dumpPayload | ForEach-Object { [IO.Path]::GetRelativePath($stageRoot, $_.FullName) }
+              throw 'Game dump content is forbidden in CI package: ' + ($paths -join ', ')
+            }
+          }
           $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly'
           if (!(Test-Path $runtimeRoot)) { throw 'Runtime staging root did not contain the expected Anomaly directory.' }
           if (!(Test-Path (Join-Path $runtimeRoot 'Anomaly.Core.dll'))) { throw 'Runtime staging is missing the Core built from this commit.' }
