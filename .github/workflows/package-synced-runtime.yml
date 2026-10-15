@@ -1,0 +1,154 @@
+name: package-synced-runtime
+
+on:
+  push:
+    branches:
+      - fix/restore-attack-work-and-repair-20261016
+    paths:
+      - '.github/workflows/package-synced-runtime.yml'
+      - 'Anomaly-2.0.0-sdk/**'
+      - 'abi/anomaly-sdk-v1-windows-x64.json'
+      - 'plugins/AutoFish/**'
+      - 'plugins/NteAttackReplay/**'
+      - 'plugins/NteVehicle/**'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download verified Runtime base
+        uses: actions/download-artifact@v4
+        with:
+          name: anomaly-runtime-windows-x64
+          path: staging/base
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 38786579780
+
+      - name: Download successfully built Attack Replay plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: NteAttackReplay-windows-x64
+          path: staging/attack-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 38813464224
+
+      - name: Download successfully built Vehicle plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: NteVehicle-0.8.1-windows-x64
+          path: staging/vehicle-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 38813464237
+
+      - name: Assemble and validate Runtime plus current SDK/ABI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE
+          $base = Join-Path $root 'staging/base/Anomaly'
+          $attackArtifact = Get-ChildItem (Join-Path $root 'staging/attack-artifact') -Filter '*.zip' -File -Recurse | Select-Object -First 1
+          $vehicleArtifact = Get-ChildItem (Join-Path $root 'staging/vehicle-artifact') -Filter '*.zip' -File -Recurse | Select-Object -First 1
+          if (!(Test-Path (Join-Path $base 'Anomaly.Core.dll'))) { throw 'Verified Runtime base is missing Anomaly/Anomaly.Core.dll' }
+          if (!(Test-Path (Join-Path $base 'plugins/AutoFish/plugin.dll'))) { throw 'Runtime base is missing the integrated AutoFish plugin.dll' }
+          if (!(Test-Path (Join-Path $base 'plugins/AutoFish/manifest.json'))) { throw 'Runtime base is missing the integrated AutoFish manifest.json' }
+          if ($null -eq $attackArtifact) { throw 'Attack Replay artifact archive was not downloaded' }
+          if ($null -eq $vehicleArtifact) { throw 'Vehicle artifact archive was not downloaded' }
+
+          $unpack = Join-Path $root 'staging/unpacked'
+          $attackOut = Join-Path $unpack 'NteAttackReplay'
+          $vehicleOut = Join-Path $unpack 'NteVehicle'
+          Expand-Archive -LiteralPath $attackArtifact.FullName -DestinationPath $attackOut -Force
+          Expand-Archive -LiteralPath $vehicleArtifact.FullName -DestinationPath $vehicleOut -Force
+
+          foreach ($spec in @(
+            @{ Name='NteAttackReplay'; Root=$attackOut; Id='anomaly.builtin.nte-attack-replay'; Version='1.9.5' },
+            @{ Name='NteVehicle'; Root=$vehicleOut; Id='anomaly.local.nte-vehicle'; Version='0.9.9' }
+          )) {
+            $dll = Join-Path $spec.Root 'plugin.dll'
+            $manifestPath = Join-Path $spec.Root 'manifest.json'
+            if (!(Test-Path $dll) -or !(Test-Path $manifestPath)) { throw "$($spec.Name) package is missing plugin.dll or manifest.json" }
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            if ($manifest.id -ne $spec.Id -or $manifest.version -ne $spec.Version -or $manifest.entry -ne 'plugin.dll') {
+              throw "$($spec.Name) manifest does not match the expected built plugin identity/version"
+            }
+            Copy-Item -LiteralPath $dll -Destination (Join-Path $base "plugins/$($spec.Name)/plugin.dll") -Force
+            Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $base "plugins/$($spec.Name)/manifest.json") -Force
+          }
+
+          $autofish = Get-Content -LiteralPath (Join-Path $base 'plugins/AutoFish/manifest.json') -Raw | ConvertFrom-Json
+          if ($autofish.id -ne 'b1ank.autofish' -or $autofish.version -ne '0.1.15') { throw 'Unexpected AutoFish manifest in Runtime base' }
+
+          $abiPath = Join-Path $root 'abi/anomaly-sdk-v1-windows-x64.json'
+          $packagedAbiPath = Join-Path $root 'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json'
+          if ((Get-FileHash $abiPath -Algorithm SHA256).Hash -ne (Get-FileHash $packagedAbiPath -Algorithm SHA256).Hash) { throw 'Packaged SDK ABI JSON differs from repository ABI JSON' }
+          foreach ($relative in @('services/nte.h','services/ui.h','services/ue5.h')) {
+            $source = Join-Path $root ("include/anomaly/sdk/" + $relative)
+            $packaged = Join-Path $root ("Anomaly-2.0.0-sdk/include/anomaly/sdk/" + $relative)
+            if ((Get-FileHash $source -Algorithm SHA256).Hash -ne (Get-FileHash $packaged -Algorithm SHA256).Hash) { throw "SDK header drift: $relative" }
+          }
+
+          $abi = Get-Content -LiteralPath $abiPath -Raw | ConvertFrom-Json
+          if ($abi.structs.AnomalyNteVehicleServiceV1.size -ne 152) { throw 'Vehicle V5 ABI struct size is not 152 bytes' }
+          if ($abi.structs.AnomalyUiServiceV1.size -ne 360) { throw 'UI ABI struct size is not 360 bytes' }
+          if ($abi.structs.AnomalyUe5NamesServiceV1.offsets.find_utf8 -ne 32) { throw 'UE5 Names find_utf8 ABI offset is not 32 bytes' }
+          if (!$abi.enums.AnomalyNteCombatEventKindV1 -or $abi.structs.AnomalyNteCombatEventKindV1) { throw 'Combat event kind is not classified as an ABI enum' }
+          if (($abi.services | Where-Object { $_.id -eq 'anomaly.nte.vehicle' }).version -ne 5) { throw 'ABI does not declare Vehicle service V5' }
+          if (!(($abi.services | Where-Object { $_.id -eq 'anomaly.nte.damage-replay' }).version -eq 1)) { throw 'ABI is missing Damage Replay service V1' }
+
+          $package = Join-Path $root 'package'
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          Copy-Item -LiteralPath $base -Destination (Join-Path $package 'Anomaly') -Recurse -Force
+          Copy-Item -LiteralPath (Join-Path $root 'Anomaly-2.0.0-sdk') -Destination (Join-Path $package 'Anomaly-2.0.0-sdk') -Recurse -Force
+          New-Item -ItemType Directory -Path (Join-Path $package 'abi') -Force | Out-Null
+          Copy-Item -LiteralPath $abiPath -Destination (Join-Path $package 'abi/anomaly-sdk-v1-windows-x64.json') -Force
+
+          @"
+          Package source:
+            Runtime/Core base: Actions run 38786579780, built from d320b3ef13b954347dfc8e21c86cfdeba0842c9d.
+            Attack Replay plugin: Actions run 38813464224, built from cd13a12c4b0d7cb8f9f5854704e480ca1f79430d.
+            Vehicle plugin: Actions run 38813464237, built from cd13a12c4b0d7cb8f9f5854704e480ca1f79430d.
+          The source comparison from the Runtime/Core base commit to package commit contains only the Windows workflow, packaged SDK headers, ABI JSON snapshots, and the ABI snapshot generator; no Core, AutoFish, Attack Replay, or Vehicle C++ source files changed in that range.
+          This package includes the current Anomaly-2.0.0-sdk and matching ABI JSON for interface traceability. It is assembled from successful existing builds; it is not being represented as a newly completed full Runtime/Core compile.
+          "@ | Set-Content -LiteralPath (Join-Path $package 'BUILD-AND-ABI-NOTES.txt') -Encoding UTF8
+
+          $runtimeZip = Join-Path $root 'anomaly-runtime-synced-windows-x64.zip'
+          if (Test-Path $runtimeZip) { Remove-Item $runtimeZip -Force }
+          Compress-Archive -Path (Join-Path $package '*') -DestinationPath $runtimeZip -CompressionLevel Optimal
+
+          # Verify final archive entries and embedded metadata before it is uploaded.
+          $check = Join-Path $root 'staging/archive-check'
+          Expand-Archive -LiteralPath $runtimeZip -DestinationPath $check -Force
+          foreach ($relative in @(
+            'Anomaly/Anomaly.Core.dll',
+            'Anomaly/plugins/AutoFish/plugin.dll',
+            'Anomaly/plugins/NteAttackReplay/plugin.dll',
+            'Anomaly/plugins/NteVehicle/plugin.dll',
+            'Anomaly-2.0.0-sdk/include/anomaly/sdk/services/nte.h',
+            'Anomaly-2.0.0-sdk/include/anomaly/sdk/services/ui.h',
+            'abi/anomaly-sdk-v1-windows-x64.json'
+          )) {
+            if (!(Test-Path (Join-Path $check $relative))) { throw "Final archive is missing $relative" }
+          }
+          $finalVehicle = Get-Content (Join-Path $check 'Anomaly/plugins/NteVehicle/manifest.json') -Raw | ConvertFrom-Json
+          if ($finalVehicle.services[1].minVersion -ne 5) { throw 'Final Vehicle manifest is not aligned to service V5' }
+          $finalAbi = Get-Content (Join-Path $check 'abi/anomaly-sdk-v1-windows-x64.json') -Raw | ConvertFrom-Json
+          if ($finalAbi.structs.AnomalyNteVehicleServiceV1.size -ne 152 -or $finalAbi.structs.AnomalyUiServiceV1.size -ne 360) { throw 'Final ABI archive verification failed' }
+          if ((Get-FileHash (Join-Path $check 'abi/anomaly-sdk-v1-windows-x64.json') -Algorithm SHA256).Hash -ne (Get-FileHash (Join-Path $check 'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json') -Algorithm SHA256).Hash) { throw 'Archive ABI JSON mismatch' }
+
+      - name: Upload verified Runtime plus SDK bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: anomaly-runtime-synced-windows-x64
+          path: anomaly-runtime-synced-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
