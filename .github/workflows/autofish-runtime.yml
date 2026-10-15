@@ -31,9 +31,13 @@ jobs:
       - name: Prepare optional asset folders
         shell: pwsh
         run: |
-          $optionalImages = Join-Path $env:GITHUB_WORKSPACE 'assets/images'
-          if (!(Test-Path $optionalImages)) {
-            New-Item -ItemType Directory -Path $optionalImages -Force | Out-Null
+          # Several optional resource directories are intentionally empty in source control.
+          # Ensure CMake's post-build copy steps have valid source directories.
+          foreach ($relative in @('assets/images', 'assets/fonts', 'config/themes')) {
+            $optionalPath = Join-Path $env:GITHUB_WORKSPACE $relative
+            if (!(Test-Path $optionalPath)) {
+              New-Item -ItemType Directory -Path $optionalPath -Force | Out-Null
+            }
           }
 
       - name: Configure
