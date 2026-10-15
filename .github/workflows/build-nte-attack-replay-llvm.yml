@@ -34,9 +34,10 @@ jobs:
           project(NteAttackReplayStandalone LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          add_library(nte_attack_replay SHARED "$root/plugins/NteAttackReplay/plugin.cpp")
+          add_library(nte_attack_replay SHARED "$root/plugins/NteAttackReplay/plugin.cpp" "$root/sdk/cpp/plugin_cxx_throw_bridge.cpp")
           target_include_directories(nte_attack_replay PRIVATE "$root/include")
           target_compile_definitions(nte_attack_replay PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          target_compile_options(nte_attack_replay PRIVATE /W4 /permissive- /EHsc /Zc:threadSafeInit- /utf-8)
           set_target_properties(nte_attack_replay PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
           "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
           cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
