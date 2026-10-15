@@ -1003,10 +1003,10 @@ struct Ue5NteAdapter::State {
 
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
-    // The 5.6.1 dump declares full ProcessEvent sizes of 0x78 / 0x78 / 0x80.
-    // Capture only meaningful reflected bytes (0x71 / 0x74 / 0x79), then replay
-    // from a zero-initialized 0x80-byte backing buffer using the full native size.
-    // This avoids preserving uninitialized stack padding while still honoring UFunction.ParmsSize.
+    // The dump-generated parameter structs use aligned storage sizes 0x78 / 0x78 / 0x80.
+    // On the live HTGame UFunctions, ParmsSize ends at the final reflected property:
+    // 0x71 / 0x74 / 0x79. Keep these separate: capture only reflected bytes, then replay
+    // from a zero-initialized backing buffer with the full dump-defined aligned size.
     static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
     static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71;
     static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74;
@@ -8391,12 +8391,12 @@ struct Ue5NteAdapter::State {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
         const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
-        // The 5.6.1 dump declares full 0x78-byte parameter blocks for both ASC methods.
-        // Keep ReturnValue offsets at 0x70 / 0x6C and validate ParmsSize against the full
-        // aligned size. Capturing only the reflected field range is safe because replay zero-pads.
-        const std::uint16_t expected_parms_size = by_actor
-            ? kGameplayEffectReplayByActorFunctionParmsSize
-            : kGameplayEffectReplayToTargetFunctionParmsSize;
+        // UFunction::ParmsSize is the end of the final reflected property in the live
+        // HTGame reflection metadata (0x71 / 0x74), not sizeof the aligned dump C++ struct
+        // (0x78). Validate those reflected boundaries separately from replay buffer storage.
+        const std::uint16_t expected_parms_size = static_cast<std::uint16_t>(by_actor
+            ? kGameplayEffectReplayByActorParmsSize
+            : kGameplayEffectReplayToTargetParmsSize);
         const std::uint16_t expected_return_offset = by_actor ? 0x70U : 0x6CU;
         if (parms_size != expected_parms_size || num_parms != expected_num_parms ||
             return_offset != expected_return_offset) {
@@ -8495,10 +8495,11 @@ struct Ue5NteAdapter::State {
             !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
-        // The 5.6.1 dump declares an 0x80-byte wrapper struct; 0x79 is only
-        // the end of its final reflected property, not the function parameter size.
+        // The dump-generated wrapper struct uses 0x80-byte aligned storage, while the
+        // live UFunction::ParmsSize is the final reflected property boundary (0x79).
+        // Capture/replay still uses the separate 0x80-byte zero-initialized buffer.
         constexpr std::uint16_t kExpectedWrapperParmsSize =
-            kGameplayEffectReplayWrapperFunctionParmsSize;
+            static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
         if (parms_size != kExpectedWrapperParmsSize || num_parms != 6U || return_offset != 0x78U) {
             return fail("UFunction header mismatch: expected NumParms=6, ParmsSize=" +
                 std::to_string(kExpectedWrapperParmsSize) +
