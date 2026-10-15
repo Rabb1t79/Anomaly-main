@@ -28,6 +28,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare optional asset folders
+        shell: pwsh
+        run: |
+          $optionalImages = Join-Path $env:GITHUB_WORKSPACE 'assets/images'
+          if (!(Test-Path $optionalImages)) {
+            New-Item -ItemType Directory -Path $optionalImages -Force | Out-Null
+          }
+
       - name: Configure
         shell: pwsh
         run: cmake --preset windows-vs2022
