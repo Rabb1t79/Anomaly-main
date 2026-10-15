@@ -948,8 +948,14 @@ struct Ue5NteAdapter::State {
 
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
+    // Dumper-7 parameter structs include trailing alignment padding (0x78 / 0x80).
+    // Live UFunction.ParmsSize ends at the last reflected property instead.
     static constexpr std::size_t kGameplayEffectReplayParameterBytes = 0x78;
     static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
+    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71;
+    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74;
+    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x79;
+    static constexpr std::size_t kGameplayEffectReplayTagArraysEnd = 0x38;
     static constexpr std::size_t kGameplayEffectReplayMaxParameterBytes =
         kGameplayEffectReplayWrapperParameterBytes;
     // HTGame dump: for ASC methods ModifyData@0x10 places its two tag arrays at 0x18/0x28;
@@ -5476,16 +5482,17 @@ struct Ue5NteAdapter::State {
         const bool by_actor = kind == CombatCaptureKind::GameplayEffectByActor ||
             character_by_actor_wrapper;
         const std::size_t expected_parameter_size = character_by_actor_wrapper
-            ? kGameplayEffectReplayWrapperParameterBytes
-            : kGameplayEffectReplayParameterBytes;
+            ? kGameplayEffectReplayWrapperParmsSize
+            : (kind == CombatCaptureKind::GameplayEffectByActor
+                ? kGameplayEffectReplayByActorParmsSize
+                : kGameplayEffectReplayToTargetParmsSize);
         if ((!by_actor && kind != CombatCaptureKind::GameplayEffectToTarget) ||
             receiver == 0 || function == 0 ||
             parameters.size() != expected_parameter_size) return;
 
-        // Store the exact dump-validated entry point that was observed. In particular,
-        // do not discard the HTAbilityCharacter wrapper when a separate ASC binding is
-        // unavailable, and do not assume that its parameters are interchangeable with
-        // the ASC UFunction. The wrapper's 0x80-byte parameter block is preserved intact.
+        // Store the exact dump-validated entry point that was observed. Keep the wrapper
+        // distinct from the ASC UFunctions and copy only its reflected ParmsSize bytes;
+        // the ReplayEffectContext backing buffer still has space for the padded 0x80 struct.
         ReplayEffectContext captured{};
         captured.valid = true;
         captured.tag_arrays_valid = tag_arrays_valid;
@@ -5587,7 +5594,9 @@ struct Ue5NteAdapter::State {
         CapturedGameplayTagArrays& captured) const noexcept {
         if (parameters == nullptr) return false;
         const auto base = reinterpret_cast<std::uintptr_t>(parameters);
-        if (!ReadableRange(*memory, base, kGameplayEffectReplayParameterBytes)) return false;
+        // FGameplayTagContainer TArray headers end at offset 0x38. Validate only the bytes
+        // actually needed here; live ParmsSize may be smaller than the padded C++ struct.
+        if (!ReadableRange(*memory, base, kGameplayEffectReplayTagArraysEnd)) return false;
         struct TArrayView {
             std::uintptr_t data{};
             std::int32_t num{};
@@ -5676,16 +5685,16 @@ struct Ue5NteAdapter::State {
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
         if (function == bindings.replay_activate_by_actor) {
-            // Preserve the dump-defined HTAbilityCharacter wrapper exactly (0x80 bytes).
+            // Copy only the live reflected payload (0x79); backing storage remains 0x80.
             kind = CombatCaptureKind::GameplayEffectByActorFromCharacter;
             info_offset = 0;
-            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParameterBytes);
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
         } else if (function == bindings.replay_apply_by_actor) {
             kind = CombatCaptureKind::GameplayEffectByActor;
-            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayParameterBytes);
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayByActorParmsSize);
         } else if (function == bindings.replay_apply_to_target) {
             kind = CombatCaptureKind::GameplayEffectToTarget;
-            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayParameterBytes);
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayToTargetParmsSize);
         } else if (function == bindings.damage || function == bindings.monster_damage) {
             kind = CombatCaptureKind::Damage;
             info_offset = bindings.damage_info_offset;
@@ -6218,8 +6227,10 @@ struct Ue5NteAdapter::State {
             const bool character_wrapper = context.kind == 3U;
             const bool by_actor = context.kind == 1U || character_wrapper;
             const std::size_t expected_parameter_size = character_wrapper
-                ? kGameplayEffectReplayWrapperParameterBytes
-                : kGameplayEffectReplayParameterBytes;
+                ? kGameplayEffectReplayWrapperParmsSize
+                : (context.kind == 1U
+                    ? kGameplayEffectReplayByActorParmsSize
+                    : kGameplayEffectReplayToTargetParmsSize);
             if (!context.valid || context.parameter_size != expected_parameter_size ||
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
                 source_id == 0 || context.receiver == 0 || context.function == 0 ||
@@ -8251,12 +8262,17 @@ struct Ue5NteAdapter::State {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
         const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
-        const std::uint16_t expected_parms_size = 0x78U;
+        // 最后一个反射属性分别为 ReturnValue@0x70 + 1 字节、ReturnValue@0x6C + 8 字节。
+        // Dumper-7 C++ struct 的 0x78 包含尾部 Pad，不应当用作运行时 ParmsSize。
+        const std::uint16_t expected_parms_size = static_cast<std::uint16_t>(
+            by_actor ? kGameplayEffectReplayByActorParmsSize
+                     : kGameplayEffectReplayToTargetParmsSize);
         const std::uint16_t expected_return_offset = by_actor ? 0x70U : 0x6CU;
         if (parms_size != expected_parms_size || num_parms != expected_num_parms ||
             return_offset != expected_return_offset) {
             return fail("UFunction header mismatch: expected NumParms=" +
-                std::to_string(expected_num_parms) + ", ParmsSize=120, ReturnValueOffset=" +
+                std::to_string(expected_num_parms) + ", ParmsSize=" +
+                std::to_string(expected_parms_size) + ", ReturnValueOffset=" +
                 std::to_string(expected_return_offset) + "; observed NumParms=" +
                 std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
                 ", ReturnValueOffset=" + std::to_string(return_offset));
@@ -8310,8 +8326,8 @@ struct Ue5NteAdapter::State {
     }
 
     // Validate the dump-declared character-level actor-effect wrapper independently.
-    // Its exact 0x80-byte ABI is retained as a separate replay path; do not substitute
-    // the HTAbilitySystemComponent signature or require that separate binding to succeed.
+    // The captured C++ parameter block is 0x80 bytes, while ParmsSize ends at the last
+    // reflected property (ReturnValue@0x78 + 1 = 0x79).
     [[nodiscard]] bool ValidateReplayActivateByActorFunctionLocked(
         const std::uintptr_t function, std::string& failure_reason) const {
         constexpr std::string_view entry_name =
@@ -8350,8 +8366,13 @@ struct Ue5NteAdapter::State {
             !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
-        if (parms_size != 0x80U || num_parms != 6U || return_offset != 0x78U) {
-            return fail("UFunction header mismatch: expected NumParms=6, ParmsSize=128, ReturnValueOffset=120; observed NumParms=" +
+        // C++ sizeof is 0x80 because Dumper-7 pads after the one-byte return property.
+        constexpr std::uint16_t kExpectedWrapperParmsSize =
+            static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
+        if (parms_size != kExpectedWrapperParmsSize || num_parms != 6U || return_offset != 0x78U) {
+            return fail("UFunction header mismatch: expected NumParms=6, ParmsSize=" +
+                std::to_string(kExpectedWrapperParmsSize) +
+                ", ReturnValueOffset=120; observed NumParms=" +
                 std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
                 ", ReturnValueOffset=" + std::to_string(return_offset));
         }
