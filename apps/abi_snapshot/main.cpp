@@ -1263,7 +1263,8 @@ std::string BuildSnapshot() {
          {"end_tab_item", offsetof(AnomalyUiServiceV1, end_tab_item)},
          {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)},
          {"text_wrapped", offsetof(AnomalyUiServiceV1, text_wrapped)},
-         {"begin_child_auto_fit_y", offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y)}},
+         {"begin_child_auto_fit_y", offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y)},
+         {"slider_float_enabled", offsetof(AnomalyUiServiceV1, slider_float_enabled)}},
         false);
     AppendStruct(
         output,
