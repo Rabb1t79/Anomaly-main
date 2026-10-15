@@ -1362,19 +1362,22 @@ public:
                         if (damage_hook != nullptr && !damage_hook->Attempted() &&
                             event_target != nullptr && adapter->CombatFeatureAvailable()) {
                             const auto exec_targets = adapter->CombatExecFunctionTargets();
-                            if (exec_targets.discovery_complete) {
-                                Ue5DamageFunctionTargets targets;
-                                targets.character_on_damaged = const_cast<void*>(event_target);
-                                targets.combat_exec_function_count = exec_targets.count;
-                                for (std::size_t index{}; index < exec_targets.count; ++index) {
-                                    targets.combat_exec_functions[index] = {
-                                        reinterpret_cast<void*>(
-                                            exec_targets.entries[index].function),
-                                        reinterpret_cast<void*>(
-                                            exec_targets.entries[index].target)};
-                                }
-                                static_cast<void>(damage_hook->Start(targets));
+                            // Install the actual damage-event hook before any optional native
+                            // GameplayEffect Exec target is ready. Start is incremental: it keeps
+                            // the event stream live, then adds dump-validated Exec hooks as soon
+                            // as reflection discovers them. Without this split, a missing Exec
+                            // target silently prevents all damage events from reaching Attack Replay.
+                            Ue5DamageFunctionTargets targets;
+                            targets.character_on_damaged = const_cast<void*>(event_target);
+                            targets.combat_exec_function_count = exec_targets.count;
+                            for (std::size_t index{}; index < exec_targets.count; ++index) {
+                                targets.combat_exec_functions[index] = {
+                                    reinterpret_cast<void*>(
+                                        exec_targets.entries[index].function),
+                                    reinterpret_cast<void*>(
+                                        exec_targets.entries[index].target)};
                             }
+                            static_cast<void>(damage_hook->Start(targets));
                         }
                     }
                     if (evidence) {
@@ -1461,8 +1464,18 @@ public:
                                 void* const parameters) {
                                 const auto adapter = weak.lock();
                                 if (adapter) {
-                                    adapter->OnProcessEvent(
+                                    adapter->OnActorProcessEventPost(
                                         object, function, parameters, invoker);
+                                }
+                            },
+                            [weak = std::weak_ptr<Ue5NteAdapter>(adapter_)](
+                                const std::uintptr_t object,
+                                const std::uintptr_t function,
+                                void* const parameters) {
+                                const auto adapter = weak.lock();
+                                if (adapter) {
+                                    adapter->OnActorProcessEventPre(
+                                        object, function, parameters);
                                 }
                             });
                     ahud_hook_ready = actor_process_event_hook_->Start(
@@ -1803,6 +1816,21 @@ public:
             damage_function_hook_ && damage_function_hook_->Started()
                 ? "true"
                 : "false");
+        json += ",\"nativeDamageEventHookReady\":" + std::string(
+            damage_function_hook_ && damage_function_hook_->Started()
+                ? "true"
+                : "false");
+        json += ",\"nativeGameplayEffectExecHookReady\":" + std::string(
+            damage_function_hook_ && damage_function_hook_->Attempted()
+                ? "true"
+                : "false");
+        const NteCombatExecFunctionTargetsSnapshot native_exec_targets = adapter_
+            ? adapter_->CombatExecFunctionTargets()
+            : NteCombatExecFunctionTargetsSnapshot{};
+        json += ",\"nativeGameplayEffectExecDiscoveryComplete\":" +
+            std::string(native_exec_targets.discovery_complete ? "true" : "false");
+        json += ",\"nativeGameplayEffectExecTargetCount\":" +
+            std::to_string(native_exec_targets.count);
         json += ",\"processEventBindingMask\":" +
             std::to_string(combat_diagnostics.process_event_binding_mask);
         json += ",\"damageFloatiesCalls\":" +
