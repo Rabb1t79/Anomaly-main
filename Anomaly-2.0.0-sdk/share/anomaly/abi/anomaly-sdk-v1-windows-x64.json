@@ -931,7 +931,7 @@
       }
     },
     "AnomalyUiServiceV1": {
-      "size": 352,
+      "size": 360,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
@@ -978,7 +978,8 @@
         "end_tab_item": 320,
         "end_tab_bar": 328,
         "text_wrapped": 336,
-        "begin_child_auto_fit_y": 344
+        "begin_child_auto_fit_y": 344,
+        "slider_float_enabled": 352
       }
     },
     "AnomalyWindowSpecV1": {
