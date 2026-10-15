@@ -1057,6 +1057,13 @@ struct Ue5NteAdapter::State {
     std::array<DamageRecord, kDamageEventCapacity> damage_events{};
     std::size_t damage_event_start{};
     std::size_t damage_event_count{};
+    // Keep a bounded set of validated chain roots independently from the rolling
+    // diagnostic event ring. A long chain may generate more than 512 hits; its original
+    // replay request must not expire solely because newer DamageEvents rotate the ring.
+    static constexpr std::size_t kPinnedDamageReplayCapacity = 32;
+    std::array<DamageRecord, kPinnedDamageReplayCapacity> pinned_damage_replays{};
+    std::size_t pinned_damage_replay_start{};
+    std::size_t pinned_damage_replay_count{};
     std::uint64_t damage_event_sequence{};
     std::uint64_t damage_world_sequence_base{};
     std::uint64_t damage_dropped_count{};
@@ -2709,6 +2716,9 @@ struct Ue5NteAdapter::State {
         damage_event_start = 0;
         damage_event_count = 0;
         damage_events = {};
+        pinned_damage_replays = {};
+        pinned_damage_replay_start = 0;
+        pinned_damage_replay_count = 0;
         damage_dropped_count = 0;
         damage_next_source_id = kDamageSourceBase;
         damage_source_object_ids.clear();
@@ -4117,6 +4127,51 @@ struct Ue5NteAdapter::State {
             (damage_event_start + damage_event_count) % kDamageEventCapacity;
         damage_events[slot] = record;
         ++damage_event_count;
+    }
+
+    // A chain's original sequence is reused for every GameplayEffect replay. Keep its
+    // validated snapshot outside the bounded DamageEvent ring so the chain can continue
+    // past the ring's retention window. The cache is fixed-size and reset on world change.
+    void RetainPinnedDamageReplayLocked(const DamageRecord& record) noexcept {
+        if (record.event.sequence == 0 || !record.replay.valid ||
+            record.replay.object_generation != object_generation ||
+            record.event.world.generation != world_generation) {
+            return;
+        }
+        for (std::size_t index{}; index < pinned_damage_replay_count; ++index) {
+            const auto slot = (pinned_damage_replay_start + index) %
+                kPinnedDamageReplayCapacity;
+            if (pinned_damage_replays[slot].event.sequence == record.event.sequence) {
+                pinned_damage_replays[slot] = record;
+                return;
+            }
+        }
+        if (pinned_damage_replay_count == kPinnedDamageReplayCapacity) {
+            pinned_damage_replays[pinned_damage_replay_start] = record;
+            pinned_damage_replay_start =
+                (pinned_damage_replay_start + 1U) % kPinnedDamageReplayCapacity;
+            return;
+        }
+        const auto slot = (pinned_damage_replay_start + pinned_damage_replay_count) %
+            kPinnedDamageReplayCapacity;
+        pinned_damage_replays[slot] = record;
+        ++pinned_damage_replay_count;
+    }
+
+    DamageRecord* FindPinnedDamageReplayLocked(const std::uint64_t sequence) noexcept {
+        if (sequence == 0) return nullptr;
+        for (std::size_t index{}; index < pinned_damage_replay_count; ++index) {
+            const auto slot = (pinned_damage_replay_start + index) %
+                kPinnedDamageReplayCapacity;
+            auto& candidate = pinned_damage_replays[slot];
+            if (candidate.event.sequence == sequence &&
+                candidate.replay.valid &&
+                candidate.replay.object_generation == object_generation &&
+                candidate.event.world.generation == world_generation) {
+                return &candidate;
+            }
+        }
+        return nullptr;
     }
 
     void RecordCombatEventLocked(AnomalyNteCombatEventV1 event) noexcept {
@@ -6433,9 +6488,12 @@ struct Ue5NteAdapter::State {
                 break;
             }
         }
+        // Prefer the live ring, but continue from the pinned validated snapshot when a
+        // chain has itself pushed the original DamageEvent out of the 512-entry ring.
+        if (record == nullptr) record = FindPinnedDamageReplayLocked(request->damage_sequence);
         if (record == nullptr) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND,
-                "original damage sequence expired or was not found");
+                "original damage sequence expired or was not found in the live or pinned replay records");
         }
         if (!record->replay.valid) {
             // If the native effect invocation was drained after the damage notification,
@@ -6569,12 +6627,16 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "unsupported captured GameplayEffect call kind");
         }
+        // Native dispatch can enqueue a new hit that later rotates the rolling ring.
+        // Snapshot the root before dispatch, then pin only after the validated call succeeds.
+        const DamageRecord replay_root = *record;
         if (!InvokeNativeProcessEventLocked(
                 replay_receiver, record->replay.function,
                 parameters.data(), record->replay.parameter_size)) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "validated native GameplayEffect call failed");
         }
+        RetainPinnedDamageReplayLocked(replay_root);
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
