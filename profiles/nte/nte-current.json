@@ -720,7 +720,7 @@
     "damageEvent.damageTags": 328,
     "abilitySpawnActor.triggerAbilityHandle": 1160,
     "abilitySpawnActor.savedTriggerSkillCDO": 1168,
-    "abilitySystem.tryActivateAbilityStack": 8280,
+    "abilitySystem.tryActivateAbilityStack": 8320,
     "gameplayEffectSpec.size": 664,
     "gameplayEffectSpec.def": 0,
     "gameplayEffectSpec.duration": 80,
