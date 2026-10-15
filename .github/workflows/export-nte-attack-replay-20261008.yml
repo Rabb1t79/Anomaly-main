@@ -1,0 +1,32 @@
+name: Export NteAttackReplay 20261008 source
+on:
+  push:
+    branches:
+      - work/nte-attack-replay-plugin-20261008
+jobs:
+  export:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-work-20261008'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $files = @(
+            'plugins/NteAttackReplay/plugin.cpp',
+            'plugins/NteAttackReplay/manifest.json',
+            'src/game/ue5/ue5_nte_adapter.cpp',
+            'Anomaly-2.0.0-sdk/include/anomaly/sdk/services/nte.h'
+          )
+          foreach ($f in $files) {
+            $dst = Join-Path $root $f
+            New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+            Copy-Item (Join-Path $env:GITHUB_WORKSPACE $f) $dst
+          }
+          Compress-Archive -Path (Join-Path $root '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'NteAttackReplay-work-20261008-source.zip') -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NteAttackReplay-work-20261008-source
+          path: NteAttackReplay-work-20261008-source.zip

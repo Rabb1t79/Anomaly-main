@@ -226,6 +226,30 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_MAP_LANDMARK_V1_ID_MAX_BYTES);
     output.append(",\n    \"ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES\": ");
     AppendUnsigned(output, ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION);
+    output.append(",\n    \"ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_VALID\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_V1_VALID);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_HAS_SPEED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_V1_HAS_SPEED);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_V1_HAS_TOP_SPEED_RATIO);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_V1_HAS_WHEEL_FRICTION);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_V1_HAS_SUMMON);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_HAS_ENGINE_TORQUE_RATIO\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_V1_HAS_ENGINE_TORQUE_RATIO);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER);
     output.append(",\n    \"ANOMALY_NTE_NAVIGATION_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_NTE_NAVIGATION_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION\": ");
@@ -1746,6 +1770,78 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteVehicleSnapshotV1",
+        sizeof(AnomalyNteVehicleSnapshotV1),
+        alignof(AnomalyNteVehicleSnapshotV1),
+        {{"struct_size", offsetof(AnomalyNteVehicleSnapshotV1, struct_size)},
+         {"flags", offsetof(AnomalyNteVehicleSnapshotV1, flags)},
+         {"vehicle", offsetof(AnomalyNteVehicleSnapshotV1, vehicle)},
+         {"speed_kmh", offsetof(AnomalyNteVehicleSnapshotV1, speed_kmh)},
+         {"top_speed_ratio", offsetof(AnomalyNteVehicleSnapshotV1, top_speed_ratio)},
+         {"wheel_friction_enabled", offsetof(AnomalyNteVehicleSnapshotV1, wheel_friction_enabled)},
+         {"engine_torque_ratio", offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteVehicleCatalogSnapshotV1",
+        sizeof(AnomalyNteVehicleCatalogSnapshotV1),
+        alignof(AnomalyNteVehicleCatalogSnapshotV1),
+        {{"struct_size", offsetof(AnomalyNteVehicleCatalogSnapshotV1, struct_size)},
+         {"flags", offsetof(AnomalyNteVehicleCatalogSnapshotV1, flags)},
+         {"sequence", offsetof(AnomalyNteVehicleCatalogSnapshotV1, sequence)},
+         {"entry_count", offsetof(AnomalyNteVehicleCatalogSnapshotV1, entry_count)},
+         {"reserved", offsetof(AnomalyNteVehicleCatalogSnapshotV1, reserved)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteVehicleSummonRequestV1",
+        sizeof(AnomalyNteVehicleSummonRequestV1),
+        alignof(AnomalyNteVehicleSummonRequestV1),
+        {{"struct_size", offsetof(AnomalyNteVehicleSummonRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteVehicleSummonRequestV1, flags)},
+         {"world_position", offsetof(AnomalyNteVehicleSummonRequestV1, world_position)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteVehicleServiceV1",
+        sizeof(AnomalyNteVehicleServiceV1),
+        alignof(AnomalyNteVehicleServiceV1),
+        {{"struct_size", offsetof(AnomalyNteVehicleServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteVehicleServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteVehicleServiceV1, user)},
+         {"snapshot", offsetof(AnomalyNteVehicleServiceV1, snapshot)},
+         {"set_top_speed_ratio", offsetof(AnomalyNteVehicleServiceV1, set_top_speed_ratio)},
+         {"set_wheel_friction_enabled", offsetof(AnomalyNteVehicleServiceV1, set_wheel_friction_enabled)},
+         {"reset", offsetof(AnomalyNteVehicleServiceV1, reset)},
+         {"catalog_snapshot", offsetof(AnomalyNteVehicleServiceV1, catalog_snapshot)},
+         {"vehicle_id_at", offsetof(AnomalyNteVehicleServiceV1, vehicle_id_at)},
+         {"set_summon_vehicle_id", offsetof(AnomalyNteVehicleServiceV1, set_summon_vehicle_id)},
+         {"summon_vehicle", offsetof(AnomalyNteVehicleServiceV1, summon_vehicle)},
+         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteAttackInputRequestV1",
+        sizeof(AnomalyNteAttackInputRequestV1),
+        alignof(AnomalyNteAttackInputRequestV1),
+        {{"struct_size", offsetof(AnomalyNteAttackInputRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteAttackInputRequestV1, flags)},
+         {"input_id", offsetof(AnomalyNteAttackInputRequestV1, input_id)},
+         {"param", offsetof(AnomalyNteAttackInputRequestV1, param)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteAttackInputServiceV1",
+        sizeof(AnomalyNteAttackInputServiceV1),
+        alignof(AnomalyNteAttackInputServiceV1),
+        {{"struct_size", offsetof(AnomalyNteAttackInputServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteAttackInputServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteAttackInputServiceV1, user)},
+         {"press", offsetof(AnomalyNteAttackInputServiceV1, press)},
+         {"release", offsetof(AnomalyNteAttackInputServiceV1, release)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNtePickupRequestV1",
         sizeof(AnomalyNtePickupRequestV1),
         alignof(AnomalyNtePickupRequestV1),
@@ -2371,6 +2467,10 @@ std::string BuildSnapshot() {
         "AnomalyNteSkillInvocationServiceV1", false);
     AppendService(output, ANOMALY_NTE_METRICS_SERVICE_V1_ID,
         ANOMALY_NTE_METRICS_SERVICE_V1_VERSION, "AnomalyNteMetricsServiceV1", false);
+    AppendService(output, ANOMALY_NTE_VEHICLE_SERVICE_V1_ID,
+        ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION, "AnomalyNteVehicleServiceV1", false);
+    AppendService(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
+        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION, "AnomalyNteAttackInputServiceV1", false);
     AppendService(output, ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID,
         ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION,
         "AnomalyNteEscMenuButtonServiceV1", true);
