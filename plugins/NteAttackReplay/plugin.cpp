@@ -948,6 +948,7 @@ bool CaptureNextAttack(Context& context) {
         context.captured_damage_type = event.damage_type;
         context.captured_reaction_type = event.reaction_type;
         context.captured_target = event.victim;
+        context.captured_target_path.clear();
 
         // Cross-check the real DamageEvent source against the skill catalog.
         // Prefer an exact reflected ability display-name match over the skill that
@@ -1154,7 +1155,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->combat->latest_damage_sequence(context->combat->user);
     }
 
-    // 启用复选框是唯一的开关。停用时清除旧捕获，重新启用只处理之后的新攻击。
+    // 启用开关只控制重放。停止连锁时保留最新捕获，录制流继续消费后续真实伤害。
     if (context->stop_requested.exchange(false, std::memory_order_acq_rel)) {
         // Disable stops the chain but intentionally preserves the current capture.
         // The recorder remains armed at all times, even while replay is disabled.
@@ -1167,9 +1168,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                 ? "自动记录中：重放未启用（已保留当前捕获）"
                 : "自动记录中：重放功能未启用");
     }
-    // Recording is always on. While disabled, a captured event is kept ready but never
-    // replayed until the checkbox is enabled; only newly captured events auto-start.
-    if (!context->captured && !context->replaying && CaptureNextAttack(*context)) {
+    // Continuously record the newest real player hit whenever no replay chain is active.
+    // Freeze the selected hit during replay so the chain cannot replace its own source context.
+    if (!context->replaying && CaptureNextAttack(*context)) {
         if (context->enabled) {
             context->replay_requested.store(true, std::memory_order_release);
         }
