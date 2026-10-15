@@ -30,6 +30,7 @@
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
 #include "anomaly/sdk/services/interop.h"
+#include "anomaly/sdk/services/core.h"
 
 #include <Windows.h>
 #include <algorithm>
@@ -54,6 +55,10 @@ struct NormalAttackBinding { uintptr_t world{}; uintptr_t controller{}; uintptr_
 struct Context final {
     // Draw belongs to Render while Update belongs to Game; serialize their shared state.
     std::mutex state_mutex;
+    const AnomalyCoreServiceV1* core{};
+    std::wstring replay_log_path;
+    bool replay_log_ready{};
+    std::string replay_log_error;
     const AnomalyNteCombatServiceV1* combat{};
     const AnomalyNteDamageReplayServiceV1* damage_replay{};
     const AnomalyNteSkillsServiceV1* skills{};
@@ -122,53 +127,168 @@ struct Context final {
     NormalAttackBinding normal_attack{};
 };
 
-// Write full failure diagnostics beside plugin.dll rather than putting a long native
-// validation message into the compact in-game status line.
-void AppendReplayDiagnosticLog(
-    const Context& context, const uint32_t status_code,
-    const std::string_view detail) noexcept {
+// Resolve the package folder via Anomaly's Core service. The DLL can be staged in
+// a shadow/cache folder, so its module path is not the user's actual plugin directory.
+void ReportReplayLogError(Context& context, std::string_view message) noexcept {
+    const auto* core = context.core;
+    constexpr std::size_t log_field_end =
+        offsetof(AnomalyCoreServiceV1, log) + sizeof(AnomalyCoreServiceV1::log);
+    if (core == nullptr || core->struct_size < log_field_end || core->log == nullptr) return;
     try {
-        HMODULE module{};
-        if (!GetModuleHandleExW(
-                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCWSTR>(&AppendReplayDiagnosticLog), &module)) {
-            return;
+        core->log(core->user, ANOMALY_CORE_LOG_LEVEL_V1_ERROR,
+            anomaly::sdk::StringView(message));
+    } catch (...) {
+    }
+}
+
+bool WriteReplayLogBytes(Context& context, std::string_view line) noexcept {
+    if (context.replay_log_path.empty()) {
+        ReportReplayLogError(context, context.replay_log_error.empty()
+            ? "NTE Attack Replay: plugin log path is not initialized"
+            : context.replay_log_error);
+        return false;
+    }
+    HANDLE file = CreateFileW(
+        context.replay_log_path.c_str(), FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        context.replay_log_ready = false;
+        context.replay_log_error = "NTE Attack Replay: cannot open attack-replay.log; Win32 error=" +
+            std::to_string(error);
+        ReportReplayLogError(context, context.replay_log_error);
+        return false;
+    }
+
+    DWORD written{};
+    const auto bytes_to_write = static_cast<DWORD>(
+        (std::min)(line.size(), static_cast<std::size_t>(0xFFFFFFFFU)));
+    const BOOL okay = bytes_to_write == 0 ||
+        (WriteFile(file, line.data(), bytes_to_write, &written, nullptr) != 0 &&
+            written == bytes_to_write);
+    const DWORD error = okay ? ERROR_SUCCESS : GetLastError();
+    if (okay) {
+        FlushFileBuffers(file);
+    }
+    CloseHandle(file);
+    if (!okay) {
+        context.replay_log_ready = false;
+        context.replay_log_error = "NTE Attack Replay: cannot write attack-replay.log; Win32 error=" +
+            std::to_string(error);
+        ReportReplayLogError(context, context.replay_log_error);
+        return false;
+    }
+    context.replay_log_ready = true;
+    return true;
+}
+
+std::string ReplayLogTimestampUtc() {
+    SYSTEMTIME now{};
+    GetSystemTime(&now);
+    char timestamp[40]{};
+    std::snprintf(
+        timestamp, sizeof(timestamp),
+        "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+        static_cast<unsigned>(now.wYear), static_cast<unsigned>(now.wMonth),
+        static_cast<unsigned>(now.wDay), static_cast<unsigned>(now.wHour),
+        static_cast<unsigned>(now.wMinute), static_cast<unsigned>(now.wSecond),
+        static_cast<unsigned>(now.wMilliseconds));
+    return timestamp;
+}
+
+// Create the log during plugin load, so the file exists even before the first error.
+// The directory comes from the Core API and refers to the real plugin package folder.
+bool InitializeReplayDiagnosticLog(Context& context) noexcept {
+    try {
+        constexpr std::size_t directory_field_end =
+            offsetof(AnomalyCoreServiceV1, plugin_directory) +
+            sizeof(AnomalyCoreServiceV1::plugin_directory);
+        if (context.core == nullptr ||
+            context.core->struct_size < directory_field_end ||
+            context.core->plugin_directory == nullptr) {
+            context.replay_log_error =
+                "NTE Attack Replay: Core plugin_directory API is unavailable";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
         }
 
-        std::array<wchar_t, 32768> module_path{};
-        const DWORD path_length = GetModuleFileNameW(
-            module, module_path.data(), static_cast<DWORD>(module_path.size()));
-        if (path_length == 0 || path_length >= module_path.size()) return;
+        std::size_t required{};
+        const auto size_status = context.core->plugin_directory(
+            context.core->user, nullptr, &required);
+        if (size_status.code != ANOMALY_STATUS_V1_OK || required < 2 || required > 32768) {
+            context.replay_log_error =
+                "NTE Attack Replay: cannot query package directory; Core status=" +
+                std::to_string(size_status.code);
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+        std::vector<char> utf8_path(required, '\0');
+        std::size_t capacity = utf8_path.size();
+        const auto path_status = context.core->plugin_directory(
+            context.core->user, utf8_path.data(), &capacity);
+        if (path_status.code != ANOMALY_STATUS_V1_OK || capacity < 2 ||
+            capacity > utf8_path.size() || utf8_path[capacity - 1] != '\0') {
+            context.replay_log_error =
+                "NTE Attack Replay: Core package directory read failed; status=" +
+                std::to_string(path_status.code);
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
 
-        std::wstring log_path(module_path.data(), path_length);
-        const auto separator = log_path.find_last_of(L"\\/");
-        if (separator == std::wstring::npos) return;
-        log_path.resize(separator + 1U);
-        log_path += L"attack-replay.log";
+        const int wide_required = MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(), -1, nullptr, 0);
+        if (wide_required < 2 || wide_required > 32768) {
+            context.replay_log_error =
+                "NTE Attack Replay: Core package directory is not valid UTF-8";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+        std::wstring directory(static_cast<std::size_t>(wide_required), L'\0');
+        if (MultiByteToWideChar(
+                CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(), -1,
+                directory.data(), wide_required) != wide_required) {
+            context.replay_log_error =
+                "NTE Attack Replay: failed to convert Core package directory to UTF-16";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+        directory.resize(static_cast<std::size_t>(wide_required - 1));
+        while (!directory.empty() &&
+            (directory.back() == L'\\' || directory.back() == L'/')) {
+            directory.pop_back();
+        }
+        if (directory.empty()) {
+            context.replay_log_error = "NTE Attack Replay: Core returned an empty package directory";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
 
-        HANDLE file = CreateFileW(
-            log_path.c_str(), FILE_APPEND_DATA,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file == INVALID_HANDLE_VALUE) return;
+        context.replay_log_path = directory + L"\\attack-replay.log";
+        const std::string startup_line =
+            "[" + ReplayLogTimestampUtc() + "] plugin=anomaly.builtin.nte-attack-replay "
+            "version=1.9.4 log=initialized\r\n";
+        if (!WriteReplayLogBytes(context, startup_line)) return false;
+        return true;
+    } catch (...) {
+        context.replay_log_error =
+            "NTE Attack Replay: unexpected failure while initializing attack-replay.log";
+        ReportReplayLogError(context, context.replay_log_error);
+        return false;
+    }
+}
 
-        SYSTEMTIME now{};
-        GetSystemTime(&now);
-        char timestamp[40]{};
-        std::snprintf(
-            timestamp, sizeof(timestamp),
-            "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
-            static_cast<unsigned>(now.wYear), static_cast<unsigned>(now.wMonth),
-            static_cast<unsigned>(now.wDay), static_cast<unsigned>(now.wHour),
-            static_cast<unsigned>(now.wMinute), static_cast<unsigned>(now.wSecond),
-            static_cast<unsigned>(now.wMilliseconds));
-
+// Append every failed request's complete Core reason in the actual package folder;
+// the in-game UI only displays a short status.
+void AppendReplayDiagnosticLog(
+    Context& context, const uint32_t status_code,
+    const std::string_view detail) noexcept {
+    try {
         std::string line;
         line.reserve(detail.size() + context.captured_target_path.size() +
             context.captured_damage_source_name.size() + 256U);
         line += "[";
-        line += timestamp;
+        line += ReplayLogTimestampUtc();
         line += "] replay=failed status_code=";
         line += std::to_string(status_code);
         line += " damage_sequence=";
@@ -184,17 +304,10 @@ void AppendReplayDiagnosticLog(
         line += "\r\nreason=";
         line.append(detail.data(), detail.size());
         line += "\r\n\r\n";
-
-        DWORD written{};
-        const auto bytes_to_write = static_cast<DWORD>(
-            (std::min)(line.size(), static_cast<std::size_t>(0xFFFFFFFFU)));
-        if (bytes_to_write != 0) {
-            WriteFile(file, line.data(), bytes_to_write, &written, nullptr);
-            FlushFileBuffers(file);
-        }
-        CloseHandle(file);
+        WriteReplayLogBytes(context, line);
     } catch (...) {
-        // Logging is best-effort: it must not interrupt automatic capture or replay state.
+        ReportReplayLogError(context,
+            "NTE Attack Replay: exception while writing replay failure diagnostic");
     }
 }
 
@@ -958,6 +1071,9 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_FAILED);
 
     const anomaly::sdk::Host sdk_host(host);
+    context->core = sdk_host.Query<AnomalyCoreServiceV1>(
+        ANOMALY_CORE_SERVICE_V1_ID, ANOMALY_CORE_SERVICE_V1_VERSION).get();
+    InitializeReplayDiagnosticLog(*context);
     context->combat = sdk_host.Query<AnomalyNteCombatServiceV1>(
         ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION).get();
@@ -1253,7 +1369,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.9.3"),
+        anomaly::sdk::StringView("1.9.4"),
         Load,
         Start,
         Stop,
