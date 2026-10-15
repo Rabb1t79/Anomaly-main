@@ -8322,8 +8322,9 @@ struct Ue5NteAdapter::State {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
         const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
-        // 最后一个反射属性分别为 ReturnValue@0x70 + 1 字节、ReturnValue@0x6C + 8 字节。
-        // Dumper-7 C++ struct 的 0x78 包含尾部 Pad，不应当用作运行时 ParmsSize。
+        // The updated 5.6.1 generated parameter structs are both 0x78 bytes.
+        // The final reflected fields end at 0x71 and 0x74, but UFunction.ParmsSize
+        // includes the dump-declared trailing padding.
         const std::uint16_t expected_parms_size = static_cast<std::uint16_t>(
             by_actor ? kGameplayEffectReplayByActorParmsSize
                      : kGameplayEffectReplayToTargetParmsSize);
