@@ -2691,7 +2691,9 @@ struct Ue5NteAdapter::State {
 
     void InvalidateCombatSkillDiscoveryLocked() noexcept {
         combat_skill_discovery = {};
-        replay_entrypoint_diagnostics = "GameplayEffect entry-point discovery pending for current object generation";
+        // This method is noexcept; clearing is allocation-free. ReplayDamage supplies
+        // the static pending-discovery message when no validation attempt has run yet.
+        replay_entrypoint_diagnostics.clear();
         replay_status_message.clear();
         combat_skill_discovery.object_generation = object_generation;
         combat_capture_bindings.store(nullptr, std::memory_order_release);
@@ -6379,14 +6381,22 @@ struct Ue5NteAdapter::State {
                     "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick");
             }
             if (!has_validated_gameplay_effect_entry) {
-                replay_status_message =
-                    "Core has not validated any dump-defined GameplayEffect entry point";
-                if (!replay_entrypoint_diagnostics.empty()) {
-                    replay_status_message += "; live validation: ";
-                    replay_status_message += replay_entrypoint_diagnostics;
+                try {
+                    replay_status_message =
+                        "Core has not validated any dump-defined GameplayEffect entry point";
+                    if (!replay_entrypoint_diagnostics.empty()) {
+                        replay_status_message += "; live validation: ";
+                        replay_status_message += replay_entrypoint_diagnostics;
+                    } else {
+                        replay_status_message +=
+                            "; live validation has not run for the current object generation";
+                    }
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        replay_status_message.c_str());
+                } catch (...) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "Core has not validated any dump-defined GameplayEffect entry point; diagnostic allocation failed");
                 }
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    replay_status_message.c_str());
             }
             if (pending_capture_count_before_drain != 0) {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
