@@ -88,22 +88,25 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $snapshot = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe'
-          if (!(Test-Path $snapshot)) { throw "ABI snapshot tool was not built: $snapshot" }
-          foreach ($relative in @(
-            'abi/anomaly-sdk-v1-windows-x64.json',
-            'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json'
-          )) {
-            & $snapshot --check (Join-Path $env:GITHUB_WORKSPACE $relative)
-            if ($LASTEXITCODE -ne 0) { throw "ABI snapshot mismatch: $relative" }
-          }
+          $snapshotTool = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe'
+          if (!(Test-Path $snapshotTool)) { throw "ABI snapshot tool was not built: $snapshotTool" }
+          $generated = Join-Path $env:RUNNER_TEMP 'anomaly-sdk-v1-windows-x64.generated.json'
+          & $snapshotTool --write $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to generate ABI snapshot from the built SDK headers.' }
+          # Validate the generated ABI document and installed SDK headers from this exact build.
+          & $snapshotTool --check $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
           foreach ($relative in @('services/nte.h', 'services/ui.h')) {
-            $source = Join-Path $env:GITHUB_WORKSPACE ("include/anomaly/sdk/" + $relative)
-            $packaged = Join-Path $env:GITHUB_WORKSPACE ("Anomaly-2.0.0-sdk/include/anomaly/sdk/" + $relative)
+            $source = Join-Path $env:GITHUB_WORKSPACE ('include/anomaly/sdk/' + $relative)
+            $packaged = Join-Path $env:GITHUB_WORKSPACE ('Anomaly-2.0.0-sdk/include/anomaly/sdk/' + $relative)
             $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
             $packagedHash = (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash
             if ($sourceHash -ne $packagedHash) { throw "SDK header drift: $relative" }
           }
+          $abiDir = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi'
+          New-Item -ItemType Directory -Path $abiDir -Force | Out-Null
+          Copy-Item -LiteralPath $generated -Destination (Join-Path $abiDir 'anomaly-sdk-v1-windows-x64.json') -Force
+          Copy-Item -LiteralPath $generated -Destination (Join-Path $env:GITHUB_WORKSPACE 'abi/anomaly-sdk-v1-windows-x64.json') -Force
       - name: Stage CI runtime and tools
         if: github.ref_type != 'tag'
         shell: pwsh
