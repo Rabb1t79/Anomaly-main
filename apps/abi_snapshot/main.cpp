@@ -2561,6 +2561,36 @@ std::string NormalizeLineEndings(const std::string_view input) {
     return normalized;
 }
 
+// JSON whitespace outside string literals is insignificant. Keep every character
+// inside strings untouched so this remains a strict ABI-content comparison.
+std::string NormalizeJsonWhitespace(const std::string_view input) {
+    std::string normalized;
+    normalized.reserve(input.size());
+    bool in_string = false;
+    bool escaped = false;
+    for (const char character : input) {
+        if (in_string) {
+            normalized.push_back(character);
+            if (escaped) {
+                escaped = false;
+            } else if (character == '\\') {
+                escaped = true;
+            } else if (character == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (character == '"') {
+            in_string = true;
+            normalized.push_back(character);
+        } else if (character != ' ' && character != '\t' &&
+                   character != '\r' && character != '\n') {
+            normalized.push_back(character);
+        }
+    }
+    return normalized;
+}
+
 void PrintUsage(const char* executable) {
     std::cerr << "Usage: " << executable << " [--write PATH | --check PATH]\n";
 }
@@ -2596,9 +2626,11 @@ int main(const int argc, char* argv[]) {
             std::cerr << "Failed to read ABI snapshot: " << argv[2] << '\n';
             return 1;
         }
-        // Ignore platform-specific CRLF/LF conversion, but keep an exact content check.
-        expected = NormalizeLineEndings(expected);
-        const auto normalized_snapshot = NormalizeLineEndings(snapshot);
+        // Ignore platform EOL and JSON formatting differences, but compare all
+        // JSON tokens and string contents exactly.
+        expected = NormalizeJsonWhitespace(NormalizeLineEndings(expected));
+        const auto normalized_snapshot =
+            NormalizeJsonWhitespace(NormalizeLineEndings(snapshot));
         if (expected != normalized_snapshot) {
             std::size_t offset = 0u;
             while (offset < expected.size() && offset < normalized_snapshot.size() &&
