@@ -8324,8 +8324,8 @@ struct Ue5NteAdapter::State {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
         const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
-        // 最后一个反射属性分别为 ReturnValue@0x70 + 1 字节、ReturnValue@0x6C + 8 字节。
-        // Dumper-7 C++ struct 的 0x78 包含尾部 Pad，不应当用作运行时 ParmsSize。
+        // The last reflected fields end at 0x71 / 0x74; the dump's aligned
+        // parameter structs (0x78 each) define the expected UFunction.ParmsSize.
         // The 5.6.1 dump declares 0x78-byte parameter structs for both ASC wrappers.
         // Capture payload lengths remain the last reflected field end (0x71 / 0x74).
         const std::uint16_t expected_parms_size = by_actor
@@ -8430,7 +8430,6 @@ struct Ue5NteAdapter::State {
             !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
             return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
         }
-        // C++ sizeof is 0x80 because Dumper-7 pads after the one-byte return property.
         // The 5.6.1 dump declares an 0x80-byte wrapper struct; 0x79 is only
         // the end of its final reflected property, not the function parameter size.
         constexpr std::uint16_t kExpectedWrapperParmsSize =
