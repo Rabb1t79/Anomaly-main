@@ -1504,7 +1504,8 @@ std::string BuildSnapshot() {
          {"service_version", offsetof(AnomalyUe5NamesServiceV1, service_version)},
          {"user", offsetof(AnomalyUe5NamesServiceV1, user)},
          {"resolve_utf8", offsetof(AnomalyUe5NamesServiceV1, resolve_utf8)},
-         {"resolve_ftext_utf8", offsetof(AnomalyUe5NamesServiceV1, resolve_ftext_utf8)}},
+         {"resolve_ftext_utf8", offsetof(AnomalyUe5NamesServiceV1, resolve_ftext_utf8)},
+         {"find_utf8", offsetof(AnomalyUe5NamesServiceV1, find_utf8)}},
         false);
     AppendStruct(
         output,
