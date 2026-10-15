@@ -1003,24 +1003,21 @@ struct Ue5NteAdapter::State {
 
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
-    // 5.6.1 Dumper-7 parameter structs give the full ProcessEvent buffer sizes:
-    // ASC actor-effect 0x78, ASC target-effect 0x78, and character wrapper 0x80.
-    // Capture and replay must preserve those exact sizes, including tail padding;
-    // passing only the last property's end (0x71/0x74/0x79) truncates the native ABI.
+    // The 5.6.1 dump declares full ProcessEvent sizes of 0x78 / 0x78 / 0x80.
+    // Capture only meaningful reflected bytes (0x71 / 0x74 / 0x79), then replay
+    // from a zero-initialized 0x80-byte backing buffer using the full native size.
+    // This avoids preserving uninitialized stack padding while still honoring UFunction.ParmsSize.
     static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
-    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x78;
-    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x78;
-    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x80;
-    static constexpr std::uint16_t kGameplayEffectReplayByActorFunctionParmsSize =
-        static_cast<std::uint16_t>(kGameplayEffectReplayByActorParmsSize);
-    static constexpr std::uint16_t kGameplayEffectReplayToTargetFunctionParmsSize =
-        static_cast<std::uint16_t>(kGameplayEffectReplayToTargetParmsSize);
-    static constexpr std::uint16_t kGameplayEffectReplayWrapperFunctionParmsSize =
-        static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
+    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71;
+    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74;
+    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x79;
+    static constexpr std::uint16_t kGameplayEffectReplayByActorFunctionParmsSize = 0x78;
+    static constexpr std::uint16_t kGameplayEffectReplayToTargetFunctionParmsSize = 0x78;
+    static constexpr std::uint16_t kGameplayEffectReplayWrapperFunctionParmsSize = 0x80;
     static constexpr std::size_t kGameplayEffectReplayTagArraysEnd = 0x38;
-    static_assert(kGameplayEffectReplayByActorParmsSize == kGameplayEffectReplayByActorFunctionParmsSize);
-    static_assert(kGameplayEffectReplayToTargetParmsSize == kGameplayEffectReplayToTargetFunctionParmsSize);
-    static_assert(kGameplayEffectReplayWrapperParmsSize == kGameplayEffectReplayWrapperFunctionParmsSize);
+    static_assert(kGameplayEffectReplayByActorParmsSize == 0x70U + sizeof(std::uint8_t));
+    static_assert(kGameplayEffectReplayToTargetParmsSize == 0x6CU + sizeof(std::uint64_t));
+    static_assert(kGameplayEffectReplayWrapperParmsSize == 0x78U + sizeof(std::uint8_t));
     static constexpr std::size_t kGameplayEffectReplayMaxParameterBytes =
         kGameplayEffectReplayWrapperParameterBytes;
     // HTGame dump: for ASC methods ModifyData@0x10 places its two tag arrays at 0x18/0x28;
@@ -5555,14 +5552,19 @@ struct Ue5NteAdapter::State {
             receiver == 0 || function == 0 ||
             parameters.size() != expected_parameter_size) return;
 
-        // Store the exact dump-validated entry point that was observed. Keep the wrapper
-        // distinct from the ASC UFunctions and preserve the full Dump-declared ProcessEvent
-        // parameter block, including trailing alignment padding (0x78 / 0x80).
+        // Copy only meaningful reflected bytes from the original call. The remainder of
+        // ReplayEffectContext::parameters stays zero-initialized; parameter_size separately
+        // records the complete aligned UFunction buffer size required for native replay.
         ReplayEffectContext captured{};
         captured.valid = true;
         captured.tag_arrays_valid = tag_arrays_valid;
         captured.kind = character_by_actor_wrapper ? 3U : (by_actor ? 1U : 2U);
-        captured.parameter_size = static_cast<std::uint16_t>(parameters.size());
+        captured.parameter_size = static_cast<std::uint16_t>(
+            character_by_actor_wrapper
+                ? kGameplayEffectReplayWrapperFunctionParmsSize
+                : (kind == CombatCaptureKind::GameplayEffectByActor
+                    ? kGameplayEffectReplayByActorFunctionParmsSize
+                    : kGameplayEffectReplayToTargetFunctionParmsSize));
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
         captured.receiver = receiver;
@@ -5750,7 +5752,7 @@ struct Ue5NteAdapter::State {
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
         if (function == bindings.replay_activate_by_actor) {
-            // Preserve the full Dump-declared parameter block (0x80 for this wrapper).
+            // Capture only the wrapper's reflected fields; replay uses the separate full size.
             kind = CombatCaptureKind::GameplayEffectByActorFromCharacter;
             info_offset = 0;
             payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
@@ -6292,10 +6294,10 @@ struct Ue5NteAdapter::State {
             const bool character_wrapper = context.kind == 3U;
             const bool by_actor = context.kind == 1U || character_wrapper;
             const std::size_t expected_parameter_size = character_wrapper
-                ? kGameplayEffectReplayWrapperParmsSize
+                ? kGameplayEffectReplayWrapperFunctionParmsSize
                 : (context.kind == 1U
-                    ? kGameplayEffectReplayByActorParmsSize
-                    : kGameplayEffectReplayToTargetParmsSize);
+                    ? kGameplayEffectReplayByActorFunctionParmsSize
+                    : kGameplayEffectReplayToTargetFunctionParmsSize);
             if (!context.valid || context.parameter_size != expected_parameter_size ||
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
                 source_id == 0 || context.receiver == 0 || context.function == 0 ||
@@ -8328,8 +8330,8 @@ struct Ue5NteAdapter::State {
         }
         const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
         // The 5.6.1 dump declares full 0x78-byte parameter blocks for both ASC methods.
-        // Keep ReturnValue offsets at 0x70 / 0x6C, but validate and capture the full
-        // aligned ParmsSize rather than truncating the parameter buffer at each field's end.
+        // Keep ReturnValue offsets at 0x70 / 0x6C and validate ParmsSize against the full
+        // aligned size. Capturing only the reflected field range is safe because replay zero-pads.
         const std::uint16_t expected_parms_size = by_actor
             ? kGameplayEffectReplayByActorFunctionParmsSize
             : kGameplayEffectReplayToTargetFunctionParmsSize;
@@ -8392,7 +8394,7 @@ struct Ue5NteAdapter::State {
     }
 
     // Validate the dump-declared character-level actor-effect wrapper independently.
-    // Its full 5.6.1 parameter block is 0x80 bytes; ReturnValue remains at offset 0x78.
+    // Its full 5.6.1 parameter block is 0x80 bytes; capture stops at ReturnValue@0x78 + 1.
     [[nodiscard]] bool ValidateReplayActivateByActorFunctionLocked(
         const std::uintptr_t function, std::string& failure_reason) const {
         constexpr std::string_view entry_name =
