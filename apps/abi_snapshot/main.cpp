@@ -2535,6 +2535,22 @@ bool ReadFile(const char* path, std::string& contents) {
     return stream.good() || stream.eof();
 }
 
+// Windows checkout may use CRLF while BuildSnapshot emits LF. Normalize only the
+// line endings so the ABI comparison still verifies every JSON byte other than EOL style.
+std::string NormalizeLineEndings(const std::string_view input) {
+    std::string normalized;
+    normalized.reserve(input.size());
+    for (std::size_t index = 0; index < input.size(); ++index) {
+        if (input[index] == '\r') {
+            if (index + 1u < input.size() && input[index + 1u] == '\n') ++index;
+            normalized.push_back('\n');
+        } else {
+            normalized.push_back(input[index]);
+        }
+    }
+    return normalized;
+}
+
 void PrintUsage(const char* executable) {
     std::cerr << "Usage: " << executable << " [--write PATH | --check PATH]\n";
 }
@@ -2570,10 +2586,13 @@ int main(const int argc, char* argv[]) {
             std::cerr << "Failed to read ABI snapshot: " << argv[2] << '\n';
             return 1;
         }
-        if (expected != snapshot) {
+        // Ignore platform-specific CRLF/LF conversion, but keep an exact content check.
+        expected = NormalizeLineEndings(expected);
+        const auto normalized_snapshot = NormalizeLineEndings(snapshot);
+        if (expected != normalized_snapshot) {
             std::size_t offset = 0u;
-            while (offset < expected.size() && offset < snapshot.size() &&
-                   expected[offset] == snapshot[offset]) {
+            while (offset < expected.size() && offset < normalized_snapshot.size() &&
+                   expected[offset] == normalized_snapshot[offset]) {
                 ++offset;
             }
             std::cerr << "ABI snapshot mismatch at byte " << offset << ": " << argv[2] << '\n';
