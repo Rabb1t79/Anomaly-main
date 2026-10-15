@@ -12037,7 +12037,16 @@ struct Ue5NteAdapter::State {
             const bool skills_profile = NteSkillsProfileAvailable();
             if ((!combat_profile && !skills_profile) || object_registry.items == 0 ||
                 object_registry.count == 0) {
+                const bool missing_object_registry =
+                    object_registry.items == 0 || object_registry.count == 0;
                 InvalidateCombatSkillDiscoveryLocked();
+                if (missing_object_registry) {
+                    replay_entrypoint_diagnostics =
+                        "GameplayEffect entry-point discovery blocked: validated GObjects registry is unavailable";
+                } else {
+                    replay_entrypoint_diagnostics =
+                        "GameplayEffect entry-point discovery blocked: both NTE combat and skills reflection prerequisites are unavailable";
+                }
                 return;
             }
             if (combat_skill_discovery.object_generation != object_generation) {
@@ -12054,9 +12063,51 @@ struct Ue5NteAdapter::State {
             // binding builder still validates the live UObject metadata, so
             // this is a lookup optimization rather than a new ABI source.
             const auto current_sequence = tick_sequence.load(std::memory_order_relaxed);
+            const bool object_lookup_available = ObjectFindAvailable();
+            if (!object_lookup_available) {
+                // Do not leave the generic "discovery has not run" text when the
+                // only reflected lookup bridge is unavailable; preserve the reason
+                // so the ReplayDamage service can return an actionable Core message.
+                std::string diagnostic =
+                    "GameplayEffect entry-point discovery blocked: validated StaticFindObject lookup is unavailable";
+                const auto* const static_find = resolution.FindSymbol(kUe5StaticFindObjectSymbol);
+                if (static_find == nullptr || !static_find->Available()) {
+                    diagnostic += "; symbol ";
+                    diagnostic += kUe5StaticFindObjectSymbol;
+                    diagnostic += static_find == nullptr ? " is absent from the active Profile" :
+                        " did not resolve in the active Profile";
+                    if (static_find != nullptr) {
+                        for (const auto& detail : static_find->diagnostics) {
+                            diagnostic += "; ";
+                            diagnostic += detail;
+                        }
+                    }
+                }
+                const auto feature = resolution.features.find(kUe5ObjectFindFeature);
+                if (feature == resolution.features.end()) {
+                    diagnostic += "; ue5.object-find feature is missing from Profile";
+                } else {
+                    for (const auto& missing : feature->second.missing_symbols) {
+                        diagnostic += "; missing symbol: ";
+                        diagnostic += missing;
+                    }
+                    for (const auto& dependency : feature->second.unavailable_dependencies) {
+                        diagnostic += "; unavailable dependency: ";
+                        diagnostic += dependency;
+                    }
+                    for (const auto& detail : feature->second.validation_diagnostics) {
+                        diagnostic += "; ";
+                        diagnostic += detail;
+                    }
+                }
+                if (!object_lookup) {
+                    diagnostic += "; the ABI-validated object lookup callable was not created";
+                }
+                replay_entrypoint_diagnostics = std::move(diagnostic);
+            }
             if (!combat_skill_discovery.direct_lookup_succeeded &&
                 current_sequence >= combat_skill_discovery.direct_lookup_next_sequence &&
-                ObjectFindAvailable()) {
+                object_lookup_available) {
                 const auto retry_interval = combat_skill_discovery.direct_lookup_retry_interval;
                 combat_skill_discovery.direct_lookup_next_sequence =
                     current_sequence + retry_interval;
