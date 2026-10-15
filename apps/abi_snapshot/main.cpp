@@ -1838,7 +1838,15 @@ std::string BuildSnapshot() {
          {"set_other_vehicles_top_speed_ratio",
           offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)},
          {"set_other_vehicles_engine_torque_ratio",
-          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)}},
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)},
+         {"set_other_vehicles_min_speed_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_min_speed_ratio)},
+         {"authorize_fine_speed_tuning",
+          offsetof(AnomalyNteVehicleServiceV1, authorize_fine_speed_tuning)},
+         {"set_fine_speed_tuning_enabled",
+          offsetof(AnomalyNteVehicleServiceV1, set_fine_speed_tuning_enabled)},
+         {"revoke_fine_speed_authorization",
+          offsetof(AnomalyNteVehicleServiceV1, revoke_fine_speed_authorization)}},
         false);
     AppendStruct(
         output,
