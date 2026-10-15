@@ -1527,7 +1527,7 @@
       }
     },
     "AnomalyNteVehicleServiceV1": {
-      "size": 120,
+      "size": 152,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
@@ -1545,7 +1545,11 @@
         "refresh_catalog": 88,
         "catalog_label_at": 96,
         "set_other_vehicles_top_speed_ratio": 104,
-        "set_other_vehicles_engine_torque_ratio": 112
+        "set_other_vehicles_engine_torque_ratio": 112,
+        "set_other_vehicles_min_speed_ratio": 120,
+        "authorize_fine_speed_tuning": 128,
+        "set_fine_speed_tuning_enabled": 136,
+        "revoke_fine_speed_authorization": 144
       }
     },
     "AnomalyNteAttackInputRequestV1": {
