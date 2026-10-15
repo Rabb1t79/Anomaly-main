@@ -1003,16 +1003,19 @@ struct Ue5NteAdapter::State {
 
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
-    // Dumper-7 parameter structs include trailing alignment padding (0x78 / 0x80).
-    // Live UFunction.ParmsSize ends at the last reflected property instead.
+    // The updated 5.6.1/CppSDK dump records full UFunction parameter-block sizes,
+    // including Dumper-7's tail padding: 0x78 for both ASC entry points and 0x80
+    // for HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor. Keep the full
+    // block when capturing/replaying; only the reflected fields themselves end at
+    // 0x71, 0x74 and 0x79 respectively.
     static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
-    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71;
-    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74;
-    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x79;
+    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x78;
+    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x78;
+    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x80;
     static constexpr std::size_t kGameplayEffectReplayTagArraysEnd = 0x38;
-    static_assert(kGameplayEffectReplayByActorParmsSize == 0x70U + sizeof(std::uint8_t));
-    static_assert(kGameplayEffectReplayToTargetParmsSize == 0x6CU + sizeof(std::uint64_t));
-    static_assert(kGameplayEffectReplayWrapperParmsSize == 0x78U + sizeof(std::uint8_t));
+    static_assert(kGameplayEffectReplayByActorParmsSize == 0x71U + 0x7U);
+    static_assert(kGameplayEffectReplayToTargetParmsSize == 0x74U + 0x4U);
+    static_assert(kGameplayEffectReplayWrapperParmsSize == 0x79U + 0x7U);
     static constexpr std::size_t kGameplayEffectReplayMaxParameterBytes =
         kGameplayEffectReplayWrapperParameterBytes;
     // HTGame dump: for ASC methods ModifyData@0x10 places its two tag arrays at 0x18/0x28;
