@@ -20,6 +20,7 @@ on:
 
 jobs:
   build:
+    timeout-minutes: 45
     permissions:
       contents: read
     runs-on: windows-2022
@@ -43,7 +44,7 @@ jobs:
           }
           cmake @arguments
       - name: Build
-        run: cmake --build --preset windows-relwithdebinfo --parallel
+        run: cmake --build --preset windows-relwithdebinfo --parallel 4
       - name: Validate ABI snapshot and packaged SDK interfaces
         shell: pwsh
         run: |
