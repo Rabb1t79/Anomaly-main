@@ -1219,7 +1219,8 @@
         "service_version": 4,
         "user": 8,
         "resolve_utf8": 16,
-        "resolve_ftext_utf8": 24
+        "resolve_ftext_utf8": 24,
+        "find_utf8": 32
       }
     },
     "AnomalyUe5ObjectSnapshotV1": {
