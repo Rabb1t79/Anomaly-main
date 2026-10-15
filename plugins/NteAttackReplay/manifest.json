@@ -5,7 +5,7 @@
   "description": "Always captures player-to-target CharacterOnDamaged events; when enabled, continuously replays the exact validated HTAbilitySystemComponent GameplayEffect call at the configured Game-tick interval. It never replays player input or rewrites target HP.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
