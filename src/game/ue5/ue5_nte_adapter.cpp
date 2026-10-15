@@ -978,6 +978,9 @@ struct Ue5NteAdapter::State {
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
     std::size_t replay_effect_call_start{};
     std::size_t replay_effect_call_count{};
+    // Last exact-name lookup and native-dump ABI check result for each candidate.
+    std::string replay_entrypoint_diagnostics{"GameplayEffect entry-point discovery has not run"};
+    std::string replay_status_message;
     std::array<DamageRecord, kDamageEventCapacity> damage_events{};
     std::size_t damage_event_start{};
     std::size_t damage_event_count{};
@@ -2688,6 +2691,8 @@ struct Ue5NteAdapter::State {
 
     void InvalidateCombatSkillDiscoveryLocked() noexcept {
         combat_skill_discovery = {};
+        replay_entrypoint_diagnostics = "GameplayEffect entry-point discovery pending for current object generation";
+        replay_status_message.clear();
         combat_skill_discovery.object_generation = object_generation;
         combat_capture_bindings.store(nullptr, std::memory_order_release);
         InvalidateCombatSnapshot();
@@ -6374,8 +6379,14 @@ struct Ue5NteAdapter::State {
                     "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick");
             }
             if (!has_validated_gameplay_effect_entry) {
+                replay_status_message =
+                    "Core has not validated any dump-defined GameplayEffect entry point";
+                if (!replay_entrypoint_diagnostics.empty()) {
+                    replay_status_message += "; live validation: ";
+                    replay_status_message += replay_entrypoint_diagnostics;
+                }
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    "Core has not validated any dump-defined GameplayEffect entry point; check native dump signature/layout validation (ASC ByActor, ASC ToTarget, and Character wrapper are all unavailable)");
+                    replay_status_message.c_str());
             }
             if (pending_capture_count_before_drain != 0) {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -8177,9 +8188,24 @@ struct Ue5NteAdapter::State {
 
     // Only these exact Dump-defined GameplayEffect entry points are eligible for
     // replay. UFunction signature validation prevents invoking an approximate ABI.
+    // Replay entry points are accepted only when every dump-declared UFunction
+    // field matches. Keep the first concrete rejection reason so a missing binding
+    // can be diagnosed from the runtime status instead of appearing as a generic
+    // "all entry points unavailable" failure.
     [[nodiscard]] bool ValidateReplayEffectFunctionLocked(
-        const std::uintptr_t function, const bool by_actor) const {
-        if (function == 0) return false;
+        const std::uintptr_t function, const bool by_actor,
+        std::string& failure_reason) const {
+        const std::string_view entry_name = by_actor
+            ? "HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor"
+            : "HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass";
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(entry_name);
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (function == 0) return fail("function pointer is null");
+
         std::uintptr_t function_class{}, outer{};
         std::string function_class_name, outer_name, function_name;
         std::uint8_t num_parms{};
@@ -8188,23 +8214,56 @@ struct Ue5NteAdapter::State {
             !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
             !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
             !ReadReflectedObjectNameLocked(outer, outer_name) ||
-            !ReadReflectedObjectNameLocked(function, function_name) ||
-            function_class_name != "Function" || outer_name != "HTAbilitySystemComponent" ||
-            function_name != (by_actor ? "K2_ApplyGameEffectWithClassByActor"
-                                       : "K2_ApplyGameplayEffectToTargetWithClass") ||
-            !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
-            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
-            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-            parms_size != 0x78U || num_parms != (by_actor ? 5U : 6U) ||
-            return_offset != (by_actor ? 0x70U : 0x6CU)) {
-            return false;
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
         }
+        if (function_class_name != "Function") {
+            return fail("expected class Function, observed " + function_class_name);
+        }
+        if (outer_name != "HTAbilitySystemComponent") {
+            return fail("expected owner HTAbilitySystemComponent, observed " + outer_name);
+        }
+        const std::string_view expected_name = by_actor
+            ? "K2_ApplyGameEffectWithClassByActor"
+            : "K2_ApplyGameplayEffectToTargetWithClass";
+        if (function_name != expected_name) {
+            return fail("expected function " + std::string(expected_name) +
+                ", observed " + function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
+        const std::uint16_t expected_parms_size = 0x78U;
+        const std::uint16_t expected_return_offset = by_actor ? 0x70U : 0x6CU;
+        if (parms_size != expected_parms_size || num_parms != expected_num_parms ||
+            return_offset != expected_return_offset) {
+            return fail("UFunction header mismatch: expected NumParms=" +
+                std::to_string(expected_num_parms) + ", ParmsSize=120, ReturnValueOffset=" +
+                std::to_string(expected_return_offset) + "; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
         const auto field = [&](const std::string_view name, const std::string_view type,
                                const std::uint16_t size, const std::uint16_t offset) {
             ReflectedPropertyInfo property;
-            return FindReflectedPropertyLocked(function, name, property, false) &&
-                property.type == type && property.element_size == size &&
-                property.offset == offset && property.array_dim == 1;
+            if (!FindReflectedPropertyLocked(function, name, property, false)) {
+                return fail("could not find reflected field " + std::string(name) +
+                    " in the UFunction PropertyLink");
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
         };
         if (by_actor) {
             return field("SourceObj", "ObjectProperty", 8, 0x00) &&
@@ -8213,14 +8272,25 @@ struct Ue5NteAdapter::State {
                 field("pTriggerAbilityComp", "ObjectProperty", 8, 0x68) &&
                 field("ReturnValue", "BoolProperty", 1, 0x70);
         }
+
         ReflectedPropertyInfo buff_event_type;
-        return field("GameplayEffect", "ClassProperty", 8, 0x00) &&
-            field("TargetAbilityCmp", "ObjectProperty", 8, 0x08) &&
-            field("ModifyData", "StructProperty", 0x58, 0x10) &&
-            FindReflectedPropertyLocked(function, "BuffEventType", buff_event_type, false) &&
-            (buff_event_type.type == "ByteProperty" || buff_event_type.type == "EnumProperty") &&
-            buff_event_type.element_size == 1 && buff_event_type.offset == 0x68 &&
-            field("bUsePredictionKey", "BoolProperty", 1, 0x69) &&
+        if (!field("GameplayEffect", "ClassProperty", 8, 0x00) ||
+            !field("TargetAbilityCmp", "ObjectProperty", 8, 0x08) ||
+            !field("ModifyData", "StructProperty", 0x58, 0x10)) {
+            return false;
+        }
+        if (!FindReflectedPropertyLocked(function, "BuffEventType", buff_event_type, false)) {
+            return fail("could not find reflected field BuffEventType in the UFunction PropertyLink");
+        }
+        if ((buff_event_type.type != "ByteProperty" && buff_event_type.type != "EnumProperty") ||
+            buff_event_type.element_size != 1 || buff_event_type.offset != 0x68 ||
+            buff_event_type.array_dim != 1) {
+            return fail("field BuffEventType expected ByteProperty/EnumProperty, size=1, offset=104, arrayDim=1; observed type=" +
+                buff_event_type.type + ", size=" + std::to_string(buff_event_type.element_size) +
+                ", offset=" + std::to_string(buff_event_type.offset) +
+                ", arrayDim=" + std::to_string(buff_event_type.array_dim));
+        }
+        return field("bUsePredictionKey", "BoolProperty", 1, 0x69) &&
             field("ReturnValue", "StructProperty", 8, 0x6C);
     }
 
@@ -8228,8 +8298,17 @@ struct Ue5NteAdapter::State {
     // Its exact 0x80-byte ABI is retained as a separate replay path; do not substitute
     // the HTAbilitySystemComponent signature or require that separate binding to succeed.
     [[nodiscard]] bool ValidateReplayActivateByActorFunctionLocked(
-        const std::uintptr_t function) const {
-        if (function == 0) return false;
+        const std::uintptr_t function, std::string& failure_reason) const {
+        constexpr std::string_view entry_name =
+            "HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor";
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(entry_name);
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (function == 0) return fail("function pointer is null");
+
         std::uintptr_t function_class{}, outer{};
         std::string function_class_name, outer_name, function_name;
         std::uint8_t num_parms{};
@@ -8238,21 +8317,47 @@ struct Ue5NteAdapter::State {
             !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
             !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
             !ReadReflectedObjectNameLocked(outer, outer_name) ||
-            !ReadReflectedObjectNameLocked(function, function_name) ||
-            function_class_name != "Function" || outer_name != "HTAbilityCharacter" ||
-            function_name != "K2_ActivateGameEffectsWithClassByActor" ||
-            !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
-            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
-            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-            parms_size != 0x80U || num_parms != 6U || return_offset != 0x78U) {
-            return false;
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
         }
+        if (function_class_name != "Function") {
+            return fail("expected class Function, observed " + function_class_name);
+        }
+        if (outer_name != "HTAbilityCharacter") {
+            return fail("expected owner HTAbilityCharacter, observed " + outer_name);
+        }
+        if (function_name != "K2_ActivateGameEffectsWithClassByActor") {
+            return fail("expected function K2_ActivateGameEffectsWithClassByActor, observed " +
+                function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        if (parms_size != 0x80U || num_parms != 6U || return_offset != 0x78U) {
+            return fail("UFunction header mismatch: expected NumParms=6, ParmsSize=128, ReturnValueOffset=120; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
         const auto field = [&](const std::string_view name, const std::string_view type,
                                const std::uint16_t size, const std::uint16_t offset) {
             ReflectedPropertyInfo property;
-            return FindReflectedPropertyLocked(function, name, property, false) &&
-                property.type == type && property.element_size == size &&
-                property.offset == offset && property.array_dim == 1;
+            if (!FindReflectedPropertyLocked(function, name, property, false)) {
+                return fail("could not find reflected field " + std::string(name) +
+                    " in the UFunction PropertyLink");
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
         };
         return field("WorldContextObject", "ObjectProperty", 8, 0x00) &&
             field("SourceObj", "ObjectProperty", 8, 0x08) &&
@@ -11822,18 +11927,27 @@ struct Ue5NteAdapter::State {
 
                     // 仅当 Dump 中的函数路径、参数尺寸、字段偏移和返回值布局全匹配时，
                     // 才捕获可重放的调用；验证失败时仍保留只读战斗服务。
+                    std::string replay_by_actor_failure;
+                    std::string replay_to_target_failure;
+                    std::string replay_character_failure;
                     std::uintptr_t replay_apply_by_actor{};
-                    if (FindExactObjectLocked(
+                    if (!FindExactObjectLocked(
                             L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor",
-                            replay_apply_by_actor) &&
-                        ValidateReplayEffectFunctionLocked(replay_apply_by_actor, true)) {
+                            replay_apply_by_actor)) {
+                        replay_by_actor_failure =
+                            "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayEffectFunctionLocked(
+                                   replay_apply_by_actor, true, replay_by_actor_failure)) {
                         next_capture_bindings.replay_apply_by_actor = replay_apply_by_actor;
                     }
                     std::uintptr_t replay_apply_to_target{};
-                    if (FindExactObjectLocked(
+                    if (!FindExactObjectLocked(
                             L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass",
-                            replay_apply_to_target) &&
-                        ValidateReplayEffectFunctionLocked(replay_apply_to_target, false)) {
+                            replay_apply_to_target)) {
+                        replay_to_target_failure =
+                            "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayEffectFunctionLocked(
+                                   replay_apply_to_target, false, replay_to_target_failure)) {
                         next_capture_bindings.replay_apply_to_target = replay_apply_to_target;
                     }
                     if (next_capture_bindings.replay_apply_by_actor == 0 ||
@@ -11843,12 +11957,25 @@ struct Ue5NteAdapter::State {
                     // Optional actor-level entry from the native dump. This covers attack
                     // paths where the inner ASC Apply may bypass ProcessEvent capture.
                     std::uintptr_t replay_activate_by_actor{};
-                    if (FindExactObjectLocked(
+                    if (!FindExactObjectLocked(
                             L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor",
-                            replay_activate_by_actor) &&
-                        ValidateReplayActivateByActorFunctionLocked(replay_activate_by_actor)) {
+                            replay_activate_by_actor)) {
+                        replay_character_failure =
+                            "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayActivateByActorFunctionLocked(
+                                   replay_activate_by_actor, replay_character_failure)) {
                         next_capture_bindings.replay_activate_by_actor = replay_activate_by_actor;
                     }
+                    replay_entrypoint_diagnostics =
+                        "ASC ByActor: " +
+                        (next_capture_bindings.replay_apply_by_actor != 0
+                            ? std::string("validated") : replay_by_actor_failure) +
+                        "; ASC ToTarget: " +
+                        (next_capture_bindings.replay_apply_to_target != 0
+                            ? std::string("validated") : replay_to_target_failure) +
+                        "; Character wrapper: " +
+                        (next_capture_bindings.replay_activate_by_actor != 0
+                            ? std::string("validated") : replay_character_failure);
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
