@@ -31,6 +31,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: legacy-plugin-dll-triage
-          path: .build/legacy-dll-triage/report.json
+          path: .build/legacy-dll-triage/*
           if-no-files-found: error
           retention-days: 3
