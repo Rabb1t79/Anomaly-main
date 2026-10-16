@@ -5928,9 +5928,12 @@ struct Ue5NteAdapter::State {
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
         if (kind == CombatCaptureKind::GameplayEffectByActor ||
             kind == CombatCaptureKind::GameplayEffectToTarget ||
-            kind == CombatCaptureKind::GameplayEffectByActorFromCharacter) {
-            // The wrapper adds WorldContextObject@0x00; pass SourceObj@0x08 as the
-            // canonical parameter base so the dump-validated tag array offsets remain 0x18/0x28.
+            kind == CombatCaptureKind::GameplayEffectByActorFromCharacter ||
+            kind == CombatCaptureKind::GameplayEffectByActorFromServer) {
+            // The character wrapper adds WorldContextObject@0x00; pass SourceObj@0x08
+            // as the canonical base. The server RPC has the same ModifyData@0x10/tag
+            // array offsets as the ASC calls, so its owned arrays must also be captured
+            // before the original ProcessEvent parameter storage expires.
             const std::size_t tag_parameter_base =
                 kind == CombatCaptureKind::GameplayEffectByActorFromCharacter ? 0x08U : info_offset;
             capture.replay_tag_arrays_valid =
