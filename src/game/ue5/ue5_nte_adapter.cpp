@@ -6742,9 +6742,8 @@ struct Ue5NteAdapter::State {
                 static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())));
         if (replay_effect_call_count == 0) return false;
 
-        // CharacterOnDamaged may be delivered a few Game Ticks after the native
-        // GameplayEffect entry. Keep the grace period bounded, but validate the exact
-        // DamageGEDef/ASC/function/source relationship before applying the time filter.
+        // 中文说明：CharacterOnDamaged 通知可能比原生 GameplayEffect 入口晚数个 Game Tick 到达。
+        // 时间容差必须有上限；应用时间条件前，先完整校验 DamageGEDef、ASC、函数路由与来源关系。
         constexpr std::uint64_t kReplayCorrelationMaxTickAge = 8U;
         ReplayEffectContext closest_match{};
         std::uint64_t closest_tick_delta = (std::numeric_limits<std::uint64_t>::max)();
@@ -6765,8 +6764,8 @@ struct Ue5NteAdapter::State {
                 continue;
             }
 
-            // A call from a later tick cannot have caused an earlier CharacterOnDamaged
-            // event. Only correlate the closest exact match in the past (or same tick).
+            // 中文说明：后续 Tick 中的调用不可能导致更早发生的 CharacterOnDamaged 事件。
+            // 仅关联过去或同一 Tick 的精确匹配，并优先选择时间最近的一条。
             if (candidate.tick_sequence > capture_tick_sequence) {
                 if (diagnostics != nullptr) ++diagnostics->future_tick;
                 continue;
@@ -6781,8 +6780,7 @@ struct Ue5NteAdapter::State {
                 continue;
             }
 
-            // Prefer the temporally closest exact invocation. Reverse iteration provides
-            // a deterministic newest-first tie-break for calls captured on the same tick.
+            // 中文说明：优先选择时间差最小的精确调用；反向遍历保证同 Tick 多条调用时优先取最新捕获项。
             if (matching_candidates == 0 || delta < closest_tick_delta) {
                 closest_match = candidate;
                 closest_tick_delta = delta;
