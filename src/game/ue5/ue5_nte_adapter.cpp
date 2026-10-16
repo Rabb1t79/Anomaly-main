@@ -6899,9 +6899,22 @@ struct Ue5NteAdapter::State {
             ReplayEffectContext replay_context{};
             const bool has_replay_context = FindReplayContextForDamageLocked(
                 attacker, victim, event.source_id, capture_tick_sequence, replay_context);
+            bool attacker_was_local_player_character =
+                attacker != 0 && attacker == player_pawn;
+            if (attacker_was_local_player_character) {
+                // 中文说明：不仅核验玩家当前 Pawn，还核验其角色类继承自 dump 校验过的 GetHP 所属类；
+                // 这样即使载具临时成为 Controller.Pawn，也不能被登记为可重放的玩家角色伤害源。
+                const auto& get_hp = combat_skill_discovery.functions[
+                    NteIndex(NteFunctionKind::GetHp)];
+                std::uintptr_t attacker_class{};
+                attacker_was_local_player_character = get_hp &&
+                    ReadPointerAt(*memory, attacker,
+                        Layout(profile, "object.class"), attacker_class) &&
+                    IsClassDerivedFromLocked(attacker_class, get_hp->outer_class);
+            }
             RecordDamageEventLocked(event, damage,
                 has_replay_context ? &replay_context : nullptr,
-                attacker != 0 && attacker == player_pawn);
+                attacker_was_local_player_character);
             AnomalyNteCombatEventV1 combat_event{};
             combat_event.kind = ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE;
             combat_event.tick_sequence = event.tick_sequence;
