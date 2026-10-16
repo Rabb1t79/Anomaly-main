@@ -2,7 +2,7 @@
  * 中文维护说明：
  * 1. 本插件记录真实的 CharacterOnDamaged 事件，并把原始 DamageEvent 序列交给 Core 的 damage-replay 服务。
  * 2. 当前 ReplayOnce 的实际重放路径是 Core 重新调用捕获并验证过的原生 GameplayEffect 应用，不重放按键/动画，也不直接写目标 HP。
- * 3. 技能与输入映射数据仅用作 DamageSource 交叉核对和 UI 辅助，不是 ReplayOnce 的执行入口。
+ * 3. 技能目录仅用于 DamageSource 与技能显示名称的只读交叉核对。
  * 4. Draw 只修改 UI 状态/提交请求；真正的 Core 重放请求由 Update 在 Game 域执行。
  * 5. 重放成功的判据是之后观察到同一攻击者、目标和伤害来源的新 CharacterOnDamaged 事件，调用返回成功不等于实际命中。
  * 6. Dump 的函数签名与布局只能证明 ABI 形状；覆盖率、因果匹配和重复应用语义仍须由运行时诊断与受控实验验证。
@@ -33,8 +33,6 @@
 
 namespace {
 
-struct NormalAttackBinding { uintptr_t world{}; uintptr_t controller{}; uintptr_t triggered{}; uintptr_t completed{}; std::array<uint8_t,8> pressed{}; std::array<uint8_t,8> released{}; };
-
 struct Context final {
     // Draw belongs to Render while Update belongs to Game; serialize their shared state.
     std::mutex state_mutex;
@@ -45,10 +43,7 @@ struct Context final {
     const AnomalyNteCombatServiceV1* combat{};
     const AnomalyNteDamageReplayServiceV1* damage_replay{};
     const AnomalyNteSkillsServiceV1* skills{};
-    const AnomalyNteSkillInvocationServiceV1* invocation{};
     const AnomalyUiServiceV1* ui{};
-    const AnomalySignatureServiceV1* signature{};
-    const AnomalyUe5NamesServiceV1* names{};
     const AnomalyUe5FrameworkServiceV1* framework{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
@@ -61,26 +56,17 @@ struct Context final {
     AnomalyGenerationHandleV1 world{};
     AnomalyGenerationHandleV1 character{};
 
-    // These identify the skill that was active around the captured damage event.
-    AnomalyGenerationHandleV1 captured_skill{};
+    // Optional skill metadata is retained only for source-name/UI cross-checks.
     AnomalyGenerationHandleV1 captured_ability{};
     AnomalyGenerationHandleV1 captured_target{};
-    int32_t captured_input_id{-1};
     uint64_t captured_damage_sequence{};
     uint64_t captured_damage_source_id{};
-    int32_t captured_input_param{};
-    AnomalyNteAttackInputRequestV1 captured_input_request{};
-    bool captured_input_valid{};
-    AnomalyNteAttackInputRequestV1 active_input_request{};
-    bool release_input_pending{};
-    uint64_t input_press_tick{};
     uint64_t captured_tick_sequence{};
     int64_t captured_damage_value{};
     int64_t captured_basic_value{};
     int64_t captured_final_value{};
     uint32_t captured_damage_type{};
     uint32_t captured_reaction_type{};
-    bool captured_has_skill{};
     std::string captured_ability_path;
     std::string captured_target_path;
     // Keep the Host-resolved DamageSource for cross-checking against the reflected skill.
@@ -111,15 +97,12 @@ struct Context final {
     uint64_t replay_last_tick{};
     std::string status{"自动等待玩家下一次攻击"};
 
-    uint64_t last_skill_generation{};
-    uint64_t last_skill_sequence{};
 
     // A replay is not successful when the bridge merely returns accepted=1.
     // Wait for a newer player->target DamageEvent before counting the replay.
     uint64_t replay_damage_cursor{};
     std::chrono::steady_clock::time_point replay_damage_deadline{};
     bool waiting_for_damage{};
-    NormalAttackBinding normal_attack{};
 };
 
 // Resolve the package folder via Anomaly's Core service. The DLL can be staged in
@@ -262,7 +245,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
         context.replay_log_path = directory + L"\\attack-replay.log";
         const std::string startup_line =
             "[" + ReplayLogTimestampUtc() + "] plugin=anomaly.builtin.nte-attack-replay "
-            "version=1.9.6 log=initialized\r\n";
+            "version=1.9.7 log=initialized\r\n";
         if (!WriteReplayLogBytes(context, startup_line)) return false;
         return true;
     } catch (...) {
@@ -403,14 +386,6 @@ bool SkillsReady(const AnomalyNteSkillsServiceV1* service) noexcept {
            service->frame != nullptr && service->page != nullptr;
 }
 
-// InvocationReady 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool InvocationReady(const AnomalyNteSkillInvocationServiceV1* service) noexcept {
-    return HasField<AnomalyNteSkillInvocationServiceV1,
-                    decltype(AnomalyNteSkillInvocationServiceV1::activate)>(
-               service, offsetof(AnomalyNteSkillInvocationServiceV1, activate)) &&
-           service->activate != nullptr;
-}
-
 // UiReady 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool UiReady(const AnomalyUiServiceV1* service) noexcept {
     return HasField<AnomalyUiServiceV1,
@@ -430,314 +405,6 @@ bool SameHandle(AnomalyGenerationHandleV1 a, AnomalyGenerationHandleV1 b) noexce
     return a.id == b.id && a.generation == b.generation;
 }
 
-
-/* 中文说明：以下常量和函数实现已从当前 HTGame/Anomaly 证据中确定的普通攻击原生调用链。 */
-constexpr ptrdiff_t kWorldGameInstanceOffset = 560;
-constexpr ptrdiff_t kGameInstanceLocalPlayersOffset = 56;
-constexpr ptrdiff_t kLocalPlayerControllerOffset = 48;
-constexpr ptrdiff_t kObjectClassOffset = 16;
-constexpr ptrdiff_t kObjectNameOffset = 24;
-constexpr ptrdiff_t kUStructChildrenOffset = 72;
-constexpr ptrdiff_t kUStructSuperStructOffset = 64;
-constexpr ptrdiff_t kUFieldNextOffset = 40;
-constexpr ptrdiff_t kUFunctionNumParmsOffset = 180;
-constexpr ptrdiff_t kUFunctionParmsSizeOffset = 182;
-constexpr ptrdiff_t kUStructPropertyLinkOffset = 112;
-constexpr ptrdiff_t kFFieldNameOffset = 32;
-constexpr ptrdiff_t kFFieldClassOffset = 8;
-constexpr ptrdiff_t kFPropertyElementSizeOffset = 52;
-constexpr ptrdiff_t kFPropertyOffsetInternalOffset = 68;
-constexpr ptrdiff_t kFPropertyPropertyLinkNextOffset = 72;
-constexpr ptrdiff_t kDataTableRowMapOffset = 48;
-constexpr size_t kDataTableRowStride = 24;
-constexpr size_t kMaximumNameBytes = 1024;
-constexpr std::string_view kGWorldPattern =
-    "48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? 41 B0 01";
-
-// NativeRead 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool NativeRead(const void* address, void* destination, size_t size) noexcept {
-    if (!address || !destination || size == 0) return false;
-    SIZE_T copied{};
-    return ReadProcessMemory(GetCurrentProcess(), address, destination, size, &copied) != 0 &&
-        copied == size;
-}
-template <typename T>
-// NativeRead 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool NativeRead(const void* address, T& value) noexcept {
-    return NativeRead(address, &value, sizeof(value));
-}
-// NativePointer 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-void* NativePointer(const void* address) noexcept {
-    uintptr_t value{};
-    return NativeRead(address, value) ? reinterpret_cast<void*>(value) : nullptr;
-}
-
-// NativeName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-std::string NativeName(const Context& c, uint32_t id) {
-    if (!c.names || !c.names->resolve_utf8 || id == 0) return {};
-    size_t size{};
-    if (c.names->resolve_utf8(c.names->user, id, nullptr, &size).code != ANOMALY_STATUS_V1_OK ||
-        size <= 1 || size > kMaximumNameBytes) return {};
-    std::string value(size, '\0');
-    if (c.names->resolve_utf8(c.names->user, id, value.data(), &size).code != ANOMALY_STATUS_V1_OK)
-        return {};
-    value.resize(size - 1);
-    return value;
-}
-// NativeObjectName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-std::string NativeObjectName(const Context& c, uintptr_t object) {
-    uint32_t id{};
-    if (!NativeRead(reinterpret_cast<const void*>(object + kObjectNameOffset), id)) return {};
-    return NativeName(c, id);
-}
-// NativeFName 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-std::string NativeFName(const Context& c, uint32_t cmp, uint32_t number) {
-    auto value = NativeName(c, cmp);
-    if (number != 0) value += "_" + std::to_string(number - 1);
-    return value;
-}
-
-// ResolveNativeWorld 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool ResolveNativeWorld(const Context& c, uintptr_t& address) noexcept {
-    address = 0;
-    if (!c.signature || !c.signature->resolve) return false;
-    uintptr_t instruction{};
-    if (c.signature->resolve(
-            c.signature->user, anomaly::sdk::StringView("HTGame.exe"),
-            anomaly::sdk::StringView(".text"),
-            anomaly::sdk::StringView(kGWorldPattern), &instruction).code != ANOMALY_STATUS_V1_OK)
-        return false;
-    int32_t displacement{};
-    if (!NativeRead(reinterpret_cast<const void*>(instruction + 3), displacement)) return false;
-    address = static_cast<uintptr_t>(
-        static_cast<intptr_t>(instruction) + 7 + displacement);
-    return address != 0;
-}
-// GetNativeController 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool GetNativeController(const Context& c, uintptr_t& world, uintptr_t& controller) noexcept {
-    uintptr_t g_world{};
-    if (!ResolveNativeWorld(c, g_world)) return false;
-    if (!NativeRead(reinterpret_cast<const void*>(g_world), world) || !world) return false;
-    uintptr_t game_instance{}, locals{}, local_player{};
-    int32_t count{};
-    if (!NativeRead(reinterpret_cast<const void*>(world + kWorldGameInstanceOffset), game_instance) ||
-        !game_instance ||
-        !NativeRead(reinterpret_cast<const void*>(game_instance + kGameInstanceLocalPlayersOffset), locals) ||
-        !locals ||
-        !NativeRead(reinterpret_cast<const void*>(game_instance + kGameInstanceLocalPlayersOffset + 8), count) ||
-        count < 1 ||
-        !NativeRead(reinterpret_cast<const void*>(locals), local_player) ||
-        !local_player ||
-        !NativeRead(reinterpret_cast<const void*>(local_player + kLocalPlayerControllerOffset), controller) ||
-        !controller)
-        return false;
-    return true;
-}
-
-bool FindNativeFunction(const Context& c, uintptr_t cls, std::string_view target,
-                        uint8_t num_params, uint16_t params_size,
-                        uintptr_t& result) noexcept {
-    for (unsigned depth{}; cls && depth < 64; ++depth) {
-        uintptr_t field{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructChildrenOffset), field))
-            return false;
-        for (unsigned count{}; field && count < 4096; ++count) {
-            uintptr_t next{}, field_class{};
-            if (!NativeRead(reinterpret_cast<const void*>(field + kUFieldNextOffset), next) ||
-                !NativeRead(reinterpret_cast<const void*>(field + kObjectClassOffset), field_class))
-                break;
-            if (NativeObjectName(c, field_class) == "Function" &&
-                NativeObjectName(c, field) == target) {
-                uint8_t np{};
-                uint16_t ps{};
-                NativeRead(reinterpret_cast<const void*>(field + kUFunctionNumParmsOffset), np);
-                NativeRead(reinterpret_cast<const void*>(field + kUFunctionParmsSizeOffset), ps);
-                if (np == num_params && ps == params_size) {
-                    result = field;
-                    return true;
-                }
-            }
-            if (!next || next == field) break;
-            field = next;
-        }
-        uintptr_t super{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructSuperStructOffset), super) ||
-            !super || super == cls) break;
-        cls = super;
-    }
-    return false;
-}
-
-bool NativePropertyOffset(const Context& c, uintptr_t owner, std::string_view name,
-                          std::string_view type, int32_t expected_size,
-                          int32_t& offset, uint16_t buffer_size = 0) noexcept {
-    uintptr_t property{};
-    if (!NativeRead(reinterpret_cast<const void*>(owner + kUStructPropertyLinkOffset), property))
-        return false;
-    for (unsigned i{}; property && i < 64; ++i) {
-        uint32_t name_id{};
-        if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id))
-            break;
-        if (NativeName(c, name_id) == name) {
-            uintptr_t field_class{};
-            uint32_t type_id{};
-            int32_t actual_size{};
-            if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
-                !field_class ||
-                !NativeRead(reinterpret_cast<const void*>(field_class), type_id) ||
-                NativeName(c, type_id) != type ||
-                !NativeRead(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), actual_size) ||
-                actual_size != expected_size ||
-                !NativeRead(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
-                offset < 0 ||
-                (buffer_size != 0 &&
-                 (expected_size > buffer_size ||
-                  offset > static_cast<int32_t>(buffer_size - expected_size))))
-                return false;
-            return true;
-        }
-        uintptr_t next{};
-        if (!NativeRead(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) ||
-            next == property)
-            break;
-        property = next;
-    }
-    return false;
-}
-
-uintptr_t NativeObjectProperty(const Context& c, uintptr_t object,
-                               std::string_view property_name) noexcept {
-    if (!object) return 0;
-    uintptr_t cls{};
-    if (!NativeRead(reinterpret_cast<const void*>(object + kObjectClassOffset), cls))
-        return 0;
-    for (unsigned depth{}; cls && depth < 64; ++depth) {
-        uintptr_t property{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructPropertyLinkOffset), property))
-            return 0;
-        for (unsigned count{}; property && count < 4096; ++count) {
-            uint32_t name_id{};
-            if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldNameOffset), name_id))
-                return 0;
-            if (NativeName(c, name_id) == property_name) {
-                uintptr_t field_class{}, value{};
-                uint32_t type_id{};
-                int32_t size{}, offset{};
-                if (!NativeRead(reinterpret_cast<const void*>(property + kFFieldClassOffset), field_class) ||
-                    !field_class ||
-                    !NativeRead(reinterpret_cast<const void*>(field_class), type_id) ||
-                    NativeName(c, type_id) != "ObjectProperty" ||
-                    !NativeRead(reinterpret_cast<const void*>(property + kFPropertyElementSizeOffset), size) ||
-                    size != 8 ||
-                    !NativeRead(reinterpret_cast<const void*>(property + kFPropertyOffsetInternalOffset), offset) ||
-                    offset < 0 ||
-                    !NativeRead(reinterpret_cast<const void*>(object + offset), value))
-                    return 0;
-                return value;
-            }
-            uintptr_t next{};
-            if (!NativeRead(reinterpret_cast<const void*>(property + kFPropertyPropertyLinkNextOffset), next) ||
-                next == property)
-                break;
-            property = next;
-        }
-        uintptr_t super{};
-        if (!NativeRead(reinterpret_cast<const void*>(cls + kUStructSuperStructOffset), super) ||
-            super == cls)
-            break;
-        cls = super;
-    }
-    return 0;
-}
-
-bool ReadNativeDataTable(uintptr_t table,
-                         std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>>& rows) noexcept {
-    uintptr_t data{};
-    int32_t num{}, max{};
-    if (!table ||
-        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset), data) ||
-        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset + 8), num) ||
-        !NativeRead(reinterpret_cast<const void*>(table + kDataTableRowMapOffset + 12), max) ||
-        !data || num <= 0 || num > 4096 || max < num)
-        return false;
-    rows.clear();
-    rows.reserve(static_cast<size_t>(num));
-    for (int32_t i{}; i < num; ++i) {
-        const auto at = data + static_cast<size_t>(i) * kDataTableRowStride;
-        std::array<uint32_t, 2> key{};
-        uintptr_t row{};
-        if (NativeRead(reinterpret_cast<const void*>(at), key[0]) &&
-            NativeRead(reinterpret_cast<const void*>(at + 4), key[1]) &&
-            NativeRead(reinterpret_cast<const void*>(at + 8), row) &&
-            key[0] != 0 && row != 0)
-            rows.emplace_back(key, row);
-    }
-    return !rows.empty();
-}
-
-// Read DT_AbilityInput using the dump-verified FHTAbilityInputRow layout:
-// InputID at +0x08, AbilityName at +0x20, Param at +0x2C. The Host-owned
-// attack-input bridge performs the actual HTPlayerController ProcessEvent calls.
-bool ResolveInputRequest(Context& c, int32_t wanted_input_id,
-                         AnomalyNteAttackInputRequestV1& request) {
-    uintptr_t world{}, controller{};
-    if (!GetNativeController(c, world, controller)) return false;
-    const uintptr_t table = NativeObjectProperty(c, controller, "DT_AbilityInput");
-    std::vector<std::pair<std::array<uint32_t, 2>, uintptr_t>> rows;
-    if (!table || !ReadNativeDataTable(table, rows)) return false;
-
-    if (wanted_input_id < 0) {
-        for (const auto& entry : rows) {
-            if (NativeFName(c, entry.first[0], entry.first[1]) != "MeleeAtack") continue;
-            uint8_t input_id{};
-            int32_t param{};
-            if (!NativeRead(reinterpret_cast<const void*>(entry.second + 0x08), input_id) ||
-                !NativeRead(reinterpret_cast<const void*>(entry.second + 0x2C), param) ||
-                input_id >= 74U) return false;
-            request = {static_cast<uint32_t>(sizeof(request)), 0U, input_id, param};
-            return true;
-        }
-        return false;
-    }
-
-    if (wanted_input_id >= 74) return false;
-    bool found = false;
-    int32_t selected_param{};
-    for (const auto& entry : rows) {
-        uint8_t input_id{};
-        int32_t param{};
-        if (!NativeRead(reinterpret_cast<const void*>(entry.second + 0x08), input_id) ||
-            !NativeRead(reinterpret_cast<const void*>(entry.second + 0x2C), param)) continue;
-        if (static_cast<int32_t>(input_id) != wanted_input_id) continue;
-        if (!found) {
-            found = true;
-            selected_param = param;
-        } else if (selected_param != param) {
-            // More than one row maps this input to different Params. Refuse to guess.
-            return false;
-        }
-    }
-    if (!found) return false;
-    request = {static_cast<uint32_t>(sizeof(request)), 0U,
-               static_cast<uint32_t>(wanted_input_id), selected_param};
-    return true;
-}
-
-bool PrepareCapturedInput(Context& context) {
-    context.captured_input_request = {};
-    context.captured_input_request.struct_size =
-        static_cast<uint32_t>(sizeof(context.captured_input_request));
-    context.captured_input_valid = false;
-    // A skill input is used only when matched by the actual DamageSource. Otherwise,
-    // use the named normal-attack row; never invent an InputID or Param.
-    const int32_t input_id = context.captured_has_skill
-        ? context.captured_input_id : -1;
-    if (!ResolveInputRequest(context, input_id, context.captured_input_request))
-        return false;
-    context.captured_input_param = context.captured_input_request.param;
-    context.captured_input_valid = true;
-    return true;
-}
 
 std::string ReadAbilityPath(
     const AnomalyNteSkillsServiceV1* skills,
@@ -798,18 +465,15 @@ std::string ReadAbilityDisplayName(
     return result;
 }
 
-// Refresh the candidate skill before the combat stream is consumed. The Host's skill
-// snapshot is immutable for its sequence, so the plugin never walks UE objects itself.
-// UpdateSkillCandidate 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
+// Refresh optional active-skill metadata for display/source-name cross-checking only.
+// The damage chain executes a captured GameplayEffect call, never an input or skill request.
 void UpdateSkillCandidate(Context& context) {
     if (!SkillsReady(context.skills)) return;
 
     AnomalyNteSkillFrameV1 frame{};
     frame.struct_size = sizeof(frame);
     if (context.skills->frame(context.skills->user, &frame).code != ANOMALY_STATUS_V1_OK ||
-        frame.character.id == 0) {
-        return;
-    }
+        frame.character.id == 0) return;
 
     std::array<AnomalyNteSkillSnapshotV1, ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> skills{};
     AnomalyNteSkillPageRequestV1 request{};
@@ -819,104 +483,17 @@ void UpdateSkillCandidate(Context& context) {
     request.capacity = static_cast<uint32_t>(skills.size());
     AnomalyNteSkillPageResultV1 result{};
     result.struct_size = sizeof(result);
+    if (context.skills->page(context.skills->user, &request, skills.data(), &result).code !=
+        ANOMALY_STATUS_V1_OK) return;
 
-    if (context.skills->page(
-            context.skills->user, &request, skills.data(), &result).code !=
-        ANOMALY_STATUS_V1_OK) {
-        return;
-    }
-
-    context.last_skill_generation = frame.generation;
-    context.last_skill_sequence = frame.sequence;
-
-    // Clear the previous candidate first. A normal attack must never inherit
-    // the skill handle from the preceding attack.
-    context.captured_skill = {};
     context.captured_ability = {};
-    context.captured_input_id = -1;
-
-    // Prefer an explicitly pressed skill, then an active skill. This creates a
-    // deterministic correlation window around the next player damage event.
-    const AnomalyNteSkillSnapshotV1* selected = nullptr;
     for (uint32_t i = 0; i < result.returned; ++i) {
-        if ((skills[i].flags & ANOMALY_NTE_SKILL_V1_INPUT_PRESSED) != 0) {
-            selected = &skills[i];
+        if ((skills[i].flags & ANOMALY_NTE_SKILL_V1_ACTIVE) != 0 &&
+            SameHandle(skills[i].character, frame.character)) {
+            context.captured_ability = skills[i].ability_class;
             break;
         }
     }
-    if (selected == nullptr) {
-        for (uint32_t i = 0; i < result.returned; ++i) {
-            if ((skills[i].flags & ANOMALY_NTE_SKILL_V1_ACTIVE) != 0) {
-                selected = &skills[i];
-                break;
-            }
-        }
-    }
-    if (selected != nullptr) {
-        context.captured_skill = selected->handle;
-        context.captured_ability = selected->ability_class;
-        context.captured_input_id = selected->input_id;
-    }
-}
-
-// ResolveReplaySkill 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
-bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) {
-    if (!SkillsReady(context.skills) || skill_out == nullptr) return false;
-
-    // A handle from the capture can remain valid through the replay. Check it first.
-    if (context.skills->snapshot_by_handle != nullptr && context.captured_skill.id != 0) {
-        AnomalyNteSkillSnapshotV1 snapshot{};
-        snapshot.struct_size = sizeof(snapshot);
-        if (context.skills->snapshot_by_handle(
-                context.skills->user, context.captured_skill, &snapshot).code ==
-            ANOMALY_STATUS_V1_OK) {
-            if (SameHandle(snapshot.character, context.character)) {
-                *skill_out = snapshot.handle;
-                return true;
-            }
-        }
-    }
-
-    // Character/skill generations may refresh after the original attack. In that case,
-    // remap by ability class and input id instead of using a stale opaque handle.
-    AnomalyNteSkillFrameV1 frame{};
-    frame.struct_size = sizeof(frame);
-    if (context.skills->frame(context.skills->user, &frame).code != ANOMALY_STATUS_V1_OK) {
-        return false;
-    }
-
-    std::array<AnomalyNteSkillSnapshotV1, ANOMALY_NTE_SKILL_PAGE_V1_MAX_CAPACITY> skills{};
-    AnomalyNteSkillPageRequestV1 request{};
-    request.struct_size = sizeof(request);
-    request.generation = frame.generation;
-    request.offset = 0;
-    request.capacity = static_cast<uint32_t>(skills.size());
-    AnomalyNteSkillPageResultV1 result{};
-    result.struct_size = sizeof(result);
-    if (context.skills->page(
-            context.skills->user, &request, skills.data(), &result).code !=
-        ANOMALY_STATUS_V1_OK) {
-        return false;
-    }
-
-    for (uint32_t i = 0; i < result.returned; ++i) {
-        const auto& skill = skills[i];
-        if (!SameHandle(skill.character, context.character)) continue;
-        if (context.captured_ability.id != 0 &&
-            SameHandle(skill.ability_class, context.captured_ability)) {
-            *skill_out = skill.handle;
-            return true;
-        }
-    }
-    for (uint32_t i = 0; i < result.returned; ++i) {
-        const auto& skill = skills[i];
-        if (SameHandle(skill.character, context.character) &&
-            skill.input_id == context.captured_input_id) {
-            *skill_out = skill.handle;
-            return true;
-        }
-    }
-    return false;
 }
 
 // ArmForNextAttack 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -932,25 +509,16 @@ void ArmForNextAttack(Context& context) {
     context.captured = false;
     context.replaying = false;
     context.replay_done = 0;
-    context.captured_skill = {};
     context.captured_ability = {};
     context.captured_target = {};
-    context.captured_input_id = -1;
     context.captured_damage_sequence = 0;
     context.captured_damage_source_id = 0;
-    context.captured_input_param = 0;
-    context.captured_input_request = {};
-    context.captured_input_valid = false;
-    context.active_input_request = {};
-    context.release_input_pending = false;
-    context.input_press_tick = 0;
     context.captured_tick_sequence = 0;
     context.captured_damage_value = 0;
     context.captured_basic_value = 0;
     context.captured_final_value = 0;
     context.captured_damage_type = 0;
     context.captured_reaction_type = 0;
-    context.captured_has_skill = false;
     context.captured_ability_path.clear();
     context.captured_target_path.clear();
     context.captured_damage_source_name.clear();
@@ -1042,10 +610,8 @@ bool CaptureNextAttack(Context& context) {
         // A generic active-skill candidate is not proof that it caused this hit.
         // When the real DamageSource is available, keep only an exact name match.
         if (!context.captured_damage_source_name.empty()) {
-            context.captured_skill = {};
-            context.captured_ability = {};
-            context.captured_input_id = -1;
-        }
+                    context.captured_ability = {};
+            }
         if (!context.captured_damage_source_name.empty() &&
             SkillsReady(context.skills)) {
             AnomalyNteSkillFrameV1 frame{};
@@ -1071,9 +637,7 @@ bool CaptureNextAttack(Context& context) {
                             ReadAbilityDisplayName(context.skills, skill.ability_class);
                         if (!display_name.empty() &&
                             display_name == context.captured_damage_source_name) {
-                            context.captured_skill = skill.handle;
                             context.captured_ability = skill.ability_class;
-                            context.captured_input_id = skill.input_id;
                             break;
                         }
                     }
@@ -1081,11 +645,8 @@ bool CaptureNextAttack(Context& context) {
             }
         }
 
-        context.captured_has_skill = context.captured_skill.id != 0;
         context.captured_ability_path =
             ReadAbilityPath(context.skills, context.captured_ability);
-        // 仅读取既有数据行做只读交叉参考；重放路径不会再次按键或激活技能。
-        static_cast<void>(PrepareCapturedInput(context));
         if (context.combat->participant_path_utf8 != nullptr) {
             size_t size = 0;
             const auto sizing = context.combat->participant_path_utf8(
@@ -1223,13 +784,6 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     context->skills = sdk_host.Query<AnomalyNteSkillsServiceV1>(
         ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION).get();
-    context->invocation = sdk_host.Query<AnomalyNteSkillInvocationServiceV1>(
-        ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
-        ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION).get();
-    context->signature = sdk_host.Query<AnomalySignatureServiceV1>(
-        ANOMALY_SIGNATURE_SERVICE_V1_ID, ANOMALY_SIGNATURE_SERVICE_V1_VERSION).get();
-    context->names = sdk_host.Query<AnomalyUe5NamesServiceV1>(
-        ANOMALY_UE5_NAMES_SERVICE_V1_ID, ANOMALY_UE5_NAMES_SERVICE_V1_VERSION).get();
     context->framework = sdk_host.Query<AnomalyUe5FrameworkServiceV1>(
         ANOMALY_UE5_FRAMEWORK_SERVICE_V1_ID, ANOMALY_UE5_FRAMEWORK_SERVICE_V1_VERSION).get();
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
@@ -1251,7 +805,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     return anomaly::sdk::Ok();
 }
 
-// 建立 AttackReplay 的运行状态并启动事件/输入轮询，使后续 Update 可以捕获并重放攻击；重复启动不会重新创建已经存在的状态。
+// 建立 AttackReplay 的运行状态并启动真实伤害事件轮询，使后续 Update 可以捕获并重放攻击；重复启动不会重新创建已经存在的状态。
 AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
@@ -1612,7 +1166,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Damage Chain Reaction"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.9.6"),
+        anomaly::sdk::StringView("1.9.7"),
         Load,
         Start,
         Stop,
