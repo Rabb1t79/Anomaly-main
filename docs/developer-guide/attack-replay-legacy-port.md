@@ -29,6 +29,14 @@
 | 排除友方目标 | dump 反射校验的 `HTAbilityCharacter.IsFriendlyTarget(Target)`；校验不可用时拒绝重放 |
 | 按 Game Tick 重用原始效果调用 | `AnomalyNteDamageReplayServiceV1` 与 `plugins/NteAttackReplay/plugin.cpp` |
 
+## 链条生命周期与角色切换
+
+- 一条链的根是启用前后由“当前控制角色”产生的一次真实伤害事件；根事件捕获的攻击者、目标、DamageGEDef 和经过验证的 GameplayEffect 调用上下文在本条链中保持固定。
+- 切换当前角色不得自动取消已经开始的链，也不得把旧链的攻击者 ASC、目标或 GameplayEffect 参数改绑到新角色。每次追加仍使用同一根事件的固定快照，并要求原对象句柄、World 与 object generation 仍然有效。
+- 角色切换只影响后续新链的起点：旧链结束或被明确停止后，捕获器再从新的当前控制角色接收下一次真实伤害。
+- 角色切换与对象失效是不同情况。若旧攻击者/目标被销毁或换代、World generation 改变、原生上下文不再能通过身份校验，Core 必须拒绝继续重放；不得为了跨角色延续而跳过代际、目标或 Effect 校验。
+- 插件在链进行期间冻结根事件，不能让后续命中自动覆盖根快照。正常完成下一次链式追加的证明仍然是观察到相同 World、原攻击者、原目标和新序号的真实伤害事件，而不是仅凭重放调用返回成功。
+
 ## 移植约束
 
 1. 重放根必须来自真实的 `CharacterOnDamaged` 事件；不得以键位、动画、技能激活或动作回放替代。
