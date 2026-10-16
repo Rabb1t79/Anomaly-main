@@ -10,6 +10,7 @@
 // Record real player damage; replay is handled by Core's native GameplayEffect replay service.
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
+#include "anomaly/sdk/services/nte_damage_replay_experimental.h"
 #include "anomaly/sdk/services/ui.h"
 #include "anomaly/sdk/services/core.h"
 
