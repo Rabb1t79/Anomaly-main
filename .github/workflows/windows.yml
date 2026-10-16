@@ -95,7 +95,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Failed to generate ABI snapshot from the built SDK headers.' }
           # Validate the generated ABI document and installed SDK headers from this exact build.
           & $snapshotTool --check $generated
-          if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Generated stable ABI snapshot did not validate.' }
+          # The provisional Attack Replay contract is tracked in a separate snapshot and is
+          # intentionally excluded from the stable SDK ABI document.
+          $experimentalAbi = Join-Path $env:GITHUB_WORKSPACE 'abi/experimental/nte-damage-replay-v1-windows-x64.json'
+          if (!(Test-Path $experimentalAbi)) { throw 'Experimental Damage Replay ABI snapshot is missing.' }
+          & $snapshotTool --check-experimental $experimentalAbi
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental Damage Replay ABI snapshot did not validate.' }
+          $packagedExperimentalAbi = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi/experimental/nte-damage-replay-v1-windows-x64.json'
+          if (!(Test-Path $packagedExperimentalAbi)) { throw 'Packaged experimental Damage Replay ABI snapshot is missing.' }
+          $rootExperimentalHash = (Get-FileHash -LiteralPath $experimentalAbi -Algorithm SHA256).Hash
+          $packagedExperimentalHash = (Get-FileHash -LiteralPath $packagedExperimentalAbi -Algorithm SHA256).Hash
+          if ($rootExperimentalHash -ne $packagedExperimentalHash) { throw 'Experimental Damage Replay ABI snapshot drift.' }
           foreach ($relative in @('services/nte.h', 'services/nte_damage_replay_experimental.h', 'services/ui.h')) {
             $source = Join-Path $env:GITHUB_WORKSPACE ('include/anomaly/sdk/' + $relative)
             $packaged = Join-Path $env:GITHUB_WORKSPACE ('Anomaly-2.0.0-sdk/include/anomaly/sdk/' + $relative)
