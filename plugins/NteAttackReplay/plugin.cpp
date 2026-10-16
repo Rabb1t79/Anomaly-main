@@ -1525,7 +1525,8 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         const bool proof_status =
             context->status.rfind("单次验证", 0) == 0 ||
             context->status.rfind("单次观察", 0) == 0 ||
-            context->status.rfind("单次实验", 0) == 0;
+            context->status.rfind("单次实验", 0) == 0 ||
+            context->status.rfind("移植路径", 0) == 0;
         ui->text(ui->user, anomaly::sdk::StringView(
             context->enabled || proof_status
                 ? context->status : "自动记录中：重放功能未启用"));
