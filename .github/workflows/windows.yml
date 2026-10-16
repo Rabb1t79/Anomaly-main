@@ -96,7 +96,7 @@ jobs:
           # Validate the generated ABI document and installed SDK headers from this exact build.
           & $snapshotTool --check $generated
           if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
-          foreach ($relative in @('services/nte.h', 'services/ui.h')) {
+          foreach ($relative in @('services/nte.h', 'services/nte_damage_replay_experimental.h', 'services/ui.h')) {
             $source = Join-Path $env:GITHUB_WORKSPACE ('include/anomaly/sdk/' + $relative)
             $packaged = Join-Path $env:GITHUB_WORKSPACE ('Anomaly-2.0.0-sdk/include/anomaly/sdk/' + $relative)
             $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
