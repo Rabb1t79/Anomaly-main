@@ -7066,7 +7066,7 @@ struct Ue5NteAdapter::State {
                 std::to_string(replay_root.replay.duplicate_observation_count) +
                 "; matching_candidates=" +
                 std::to_string(replay_root.replay.matching_candidate_count) +
-                "; selection=newest-first; seed_final_damage=" +
+                "; selection=closest-prior-tick; seed_final_damage=" +
                 std::to_string(replay_root.event.final_damage) +
                 "; target_hp_probe=" + (target_hp_probe_valid ? "valid" : "unavailable") +
                 "; target_hp_before=" + (target_hp_before_valid
