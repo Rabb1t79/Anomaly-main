@@ -1704,7 +1704,9 @@ struct Ue5NteAdapter::State {
         case NteFunctionKind::GetAttackTarget:
             return {kind, "GetAttackTarget", "HTAbilityCharacter", 8, get_object};
         case NteFunctionKind::IsFriendlyTarget:
-            return {kind, "IsFriendlyTarget", "HTAbilityCharacter", 16, is_friendly_target};
+            // The dump's padded C++ parameter struct is 0x10 bytes, but the final
+            // bool ReturnValue at offset 0x08 ends the live reflected ParmsSize at 0x09.
+            return {kind, "IsFriendlyTarget", "HTAbilityCharacter", 9, is_friendly_target};
         case NteFunctionKind::GetShieldHealth:
             return {kind, "GetShieldHealth", "HTAttributeComponent", 4, get_float};
         case NteFunctionKind::GetActiveEffectTimeRemainingAndDuration:
