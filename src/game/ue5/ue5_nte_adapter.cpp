@@ -6687,7 +6687,7 @@ struct Ue5NteAdapter::State {
                 const bool trigger_is_attacker =
                     trigger_ability_system != 0 &&
                     trigger_ability_system == attacker_ability_system;
-                // 中文说明：触发 ASC 已经与当前玩家的已验证 ASC 一致时，优先采用这个强身份依据。
+                // 中文说明：触发 ASC 已经与根事件攻击者的已验证 ASC 一致时，优先采用这个强身份依据。
                 // 此时 SourceObj 仅保留原生调用参数，不再要求它也必须是攻击者对象；
                 // 只有触发 ASC 无法证明攻击者身份时，才要求 SourceObj 明确匹配攻击者。
                 const bool source_actor_is_attacker =
@@ -7145,14 +7145,14 @@ struct Ue5NteAdapter::State {
                 &array_count, sizeof(array_count));
         }
 
-        // Clear only dump-verified out/return fields, and rebind only the dump-defined
-        // triggering ASC to the current player. The character wrapper uses its original 0x80 ABI.
+        // Clear only dump-verified out/return fields, and rebind the triggering ASC to the
+        // original captured attacker's currently resolved ASC. The wrapper keeps its 0x80 ABI.
         if (record->replay.kind == 1U || record->replay.kind == 3U) {
             std::uintptr_t replay_attacker_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, replay_attacker_ability_system) ||
                 replay_attacker_ability_system == 0) {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    "current player AbilitySystemComponent is unavailable for actor-effect replay");
+                    "captured attacker's AbilitySystemComponent is unavailable for actor-effect replay");
             }
             const std::size_t trigger_offset = record->replay.kind == 3U ? 0x70U : 0x68U;
             const std::size_t return_offset = record->replay.kind == 3U ? 0x78U : 0x70U;
