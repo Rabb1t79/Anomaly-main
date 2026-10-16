@@ -33,6 +33,10 @@
 namespace anomaly {
 namespace {
 
+constexpr std::uint8_t kCombatCaptureIngressProcessEvent = 1U << 0U;
+constexpr std::uint8_t kCombatCaptureIngressActorProcessEvent = 1U << 1U;
+constexpr std::uint8_t kCombatCaptureIngressNativeExec = 1U << 2U;
+
 ThreadLocalScalar<const void*> g_active_tick_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_subscription_state;
@@ -1038,9 +1042,12 @@ struct Ue5NteAdapter::State {
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
         std::uint64_t tick_sequence{};
-        // Number of calls that matched this DamageEvent's effect/actors/receiver checks.
-        // This includes possible duplicate observations and is diagnostic, not an exact unique-call count.
+        // Count unique captured invocations after coalescing the same call observed at both
+        // ProcessEvent and Native Exec ingress points.
         std::uint32_t matching_candidate_count{};
+        std::uintptr_t source_parameter_address{};
+        std::uint8_t ingress_mask{};
+        std::uint16_t duplicate_observation_count{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
         std::array<std::uint8_t, kGameplayEffectReplayMaxParameterBytes> parameters{};
@@ -1247,6 +1254,8 @@ struct Ue5NteAdapter::State {
         std::uint64_t tick_sequence{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
+        std::uintptr_t source_parameter_address{};
+        std::uint8_t ingress_mask{};
         bool replay_tag_arrays_valid{};
         CapturedGameplayTagArrays replay_gameplay_tags{};
         std::array<std::uint8_t, kCombatCapturePayloadBytes> payload{};
@@ -5603,6 +5612,8 @@ struct Ue5NteAdapter::State {
         const CombatCaptureKind kind, const std::uintptr_t receiver,
         const std::uintptr_t function, const std::span<const std::uint8_t> parameters,
         const std::uint64_t capture_tick_sequence,
+        const std::uintptr_t source_parameter_address,
+        const std::uint8_t ingress_mask,
         const CapturedGameplayTagArrays& gameplay_tags,
         const bool tag_arrays_valid) noexcept {
         const bool character_by_actor_wrapper =
@@ -5640,10 +5651,74 @@ struct Ue5NteAdapter::State {
                         : kGameplayEffectReplayToTargetFunctionParmsSize)));
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
+        captured.source_parameter_address = source_parameter_address;
+        captured.ingress_mask = ingress_mask;
+        captured.duplicate_observation_count = 0;
         captured.receiver = receiver;
         captured.function = function;
         captured.gameplay_tags = gameplay_tags;
         std::memcpy(captured.parameters.data(), parameters.data(), parameters.size());
+
+        // The old runtime observes the same native call at both AActor/UObject
+        // ProcessEvent and the UFunction Native Exec thunk. Coalesce only a pair with
+        // the same live parameter-buffer address, receiver, function, tick, kind, and
+        // byte-identical parameters. Different ingress of the same class is not merged,
+        // so two genuine same-frame identical effects remain separate invocations.
+        const bool captured_has_native_exec =
+            (ingress_mask & kCombatCaptureIngressNativeExec) != 0;
+        if (source_parameter_address != 0 && ingress_mask != 0 &&
+            captured_has_native_exec != ((ingress_mask & kCombatCaptureIngressNativeExec) != 0)) {
+            // Defensive no-op: the comparison is kept explicit below to make the pairing
+            // criteria reviewable; a fresh capture's Native Exec state is its ingress bit.
+        }
+        if (source_parameter_address != 0 && ingress_mask != 0) {
+            for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+                const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                    reverse) % kReplayEffectCallCapacity;
+                auto& previous = replay_effect_calls[index];
+                if (!previous.valid ||
+                    previous.object_generation != captured.object_generation ||
+                    previous.tick_sequence != captured.tick_sequence ||
+                    previous.source_parameter_address != captured.source_parameter_address ||
+                    previous.receiver != captured.receiver ||
+                    previous.function != captured.function ||
+                    previous.kind != captured.kind ||
+                    previous.parameter_size != captured.parameter_size ||
+                    previous.tag_arrays_valid != captured.tag_arrays_valid ||
+                    (previous.ingress_mask & captured.ingress_mask) != 0) {
+                    continue;
+                }
+                const bool previous_has_native_exec =
+                    (previous.ingress_mask & kCombatCaptureIngressNativeExec) != 0;
+                if (previous_has_native_exec == captured_has_native_exec ||
+                    std::memcmp(previous.parameters.data(), captured.parameters.data(),
+                        parameters.size()) != 0) {
+                    continue;
+                }
+                bool tags_equal = true;
+                for (std::size_t tag_index{}; tag_index < previous.gameplay_tags.size();
+                     ++tag_index) {
+                    const auto& lhs = previous.gameplay_tags[tag_index];
+                    const auto& rhs = captured.gameplay_tags[tag_index];
+                    if (lhs.count != rhs.count ||
+                        lhs.count > kReplayGameplayTagCapacity ||
+                        std::memcmp(lhs.values.data(), rhs.values.data(),
+                            static_cast<std::size_t>(lhs.count) * sizeof(std::uint64_t)) != 0) {
+                        tags_equal = false;
+                        break;
+                    }
+                }
+                if (!tags_equal) continue;
+
+                previous.ingress_mask |= captured.ingress_mask;
+                if (previous.duplicate_observation_count !=
+                    (std::numeric_limits<std::uint16_t>::max)()) {
+                    ++previous.duplicate_observation_count;
+                }
+                return;
+            }
+        }
+
         std::size_t slot{};
         if (replay_effect_call_count == kReplayEffectCallCapacity) {
             slot = replay_effect_call_start;
@@ -5664,6 +5739,8 @@ struct Ue5NteAdapter::State {
         const std::uint64_t capture_tick_sequence,
         const std::uintptr_t receiver,
         const std::uintptr_t function,
+        const std::uintptr_t source_parameter_address,
+        const std::uint8_t ingress_mask,
         const CapturedGameplayTagArrays& gameplay_tags,
         const bool tag_arrays_valid) noexcept {
         switch (kind) {
@@ -5683,7 +5760,7 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::GameplayEffectByActorFromServer:
             CaptureReplayEffectInvocationLocked(
                 kind, receiver, function, parameters, capture_tick_sequence,
-                gameplay_tags, tag_arrays_valid);
+                source_parameter_address, ingress_mask, gameplay_tags, tag_arrays_valid);
             break;
         }
     }
@@ -5700,6 +5777,7 @@ struct Ue5NteAdapter::State {
                 capture.kind,
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
                 capture.info_offset, capture.tick_sequence, capture.receiver, capture.function,
+                capture.source_parameter_address, capture.ingress_mask,
                 capture.replay_gameplay_tags, capture.replay_tag_arrays_valid);
             ++read;
             ++drained;
@@ -5767,7 +5845,8 @@ struct Ue5NteAdapter::State {
         const CombatCaptureBindings& bindings,
         const std::uintptr_t receiver,
         const std::uintptr_t function,
-        const void* const parameters) noexcept {
+        const void* const parameters,
+        const std::uint8_t ingress_mask) noexcept {
         if (parameters == nullptr) return;
         if (function == bindings.damage) {
             damage_floaties_call_count.fetch_add(1, std::memory_order_relaxed);
@@ -5930,6 +6009,8 @@ struct Ue5NteAdapter::State {
         capture.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
         capture.receiver = receiver;
         capture.function = function;
+        capture.source_parameter_address = reinterpret_cast<std::uintptr_t>(parameters);
+        capture.ingress_mask = ingress_mask;
         capture.replay_gameplay_tags = {};
         capture.replay_tag_arrays_valid = true;
         const auto* const source = static_cast<const std::uint8_t*>(parameters);
@@ -19406,7 +19487,8 @@ void Ue5NteAdapter::OnCombatExecFunction(
         return;
     }
     state->EnqueueCombatProcessEvent(
-        *bindings, receiver, function, reinterpret_cast<void*>(parameters));
+        *bindings, receiver, function, reinterpret_cast<void*>(parameters),
+        kCombatCaptureIngressNativeExec);
     static_cast<void>(receiver);
 }
 
@@ -19435,7 +19517,9 @@ void Ue5NteAdapter::OnActorProcessEventPre(
         // A full nesting stack is an exceptional condition; preserve the capture even
         // though duplicate suppression for this invocation cannot be guaranteed.
     }
-    state->EnqueueCombatProcessEvent(*bindings, object, function, parameters);
+    state->EnqueueCombatProcessEvent(
+        *bindings, object, function, parameters,
+        kCombatCaptureIngressActorProcessEvent);
 }
 
 void Ue5NteAdapter::OnActorProcessEventPost(
@@ -19491,7 +19575,8 @@ void Ue5NteAdapter::OnProcessEventPre(
     if (combat_bindings != nullptr &&
         !IsTopActorReplayCaptureFrame(this, object, function, parameters)) {
         state->EnqueueCombatProcessEvent(
-            *combat_bindings, object, function, parameters);
+            *combat_bindings, object, function, parameters,
+            kCombatCaptureIngressProcessEvent);
     }
     const auto endpoint = state->process_event_endpoint.load(std::memory_order_acquire);
     if (endpoint) endpoint->Dispatch(object, function, parameters);
