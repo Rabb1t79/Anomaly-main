@@ -6555,7 +6555,13 @@ struct Ue5NteAdapter::State {
                 const bool trigger_is_attacker =
                     trigger_ability_system != 0 &&
                     trigger_ability_system == attacker_ability_system;
-                const bool source_actor_is_attacker = source_actor == attacker;
+                // SourceObj is not the authoritative attacker identity when the reflected
+                // trigger ASC is already the current player's validated ASC. Some native
+                // call paths leave SourceObj null or use a non-player context object; do
+                // not reject the hit on that field unless we need it as the identity proof.
+                const bool source_actor_is_attacker =
+                    source_actor != 0 && source_actor == attacker &&
+                    ReadableRange(*memory, source_actor, 0x20U);
                 const std::uintptr_t expected_function = character_wrapper
                     ? bindings->replay_activate_by_actor
                     : bindings->replay_apply_by_actor;
@@ -6568,8 +6574,7 @@ struct Ue5NteAdapter::State {
                 if (!receiver_matches_target) {
                     return reject(ReplayMatchFailure::ReceiverMismatch);
                 }
-                if (source_actor == 0 || !ReadableRange(*memory, source_actor, 0x20U) ||
-                    (!trigger_is_attacker && !source_actor_is_attacker)) {
+                if (!trigger_is_attacker && !source_actor_is_attacker) {
                     return reject(trigger_ability_system != 0
                         ? ReplayMatchFailure::TriggerAbilitySystemMismatch
                         : ReplayMatchFailure::SourceActorMismatch);
