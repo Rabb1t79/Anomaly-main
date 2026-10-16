@@ -139,7 +139,7 @@ void ReportReplayLogError(Context& context, std::string_view message) noexcept {
 bool WriteReplayLogBytes(Context& context, std::string_view line) noexcept {
     if (context.replay_log_path.empty()) {
         ReportReplayLogError(context, context.replay_log_error.empty()
-            ? "NTE Attack Replay: plugin log path is not initialized"
+            ? "NTE Damage Chain Reaction: plugin log path is not initialized"
             : context.replay_log_error);
         return false;
     }
@@ -150,7 +150,7 @@ bool WriteReplayLogBytes(Context& context, std::string_view line) noexcept {
     if (file == INVALID_HANDLE_VALUE) {
         const DWORD error = GetLastError();
         context.replay_log_ready = false;
-        context.replay_log_error = "NTE Attack Replay: cannot open attack-replay.log; Win32 error=" +
+        context.replay_log_error = "NTE Damage Chain Reaction: cannot open attack-replay.log; Win32 error=" +
             std::to_string(error);
         ReportReplayLogError(context, context.replay_log_error);
         return false;
@@ -169,7 +169,7 @@ bool WriteReplayLogBytes(Context& context, std::string_view line) noexcept {
     CloseHandle(file);
     if (!okay) {
         context.replay_log_ready = false;
-        context.replay_log_error = "NTE Attack Replay: cannot write attack-replay.log; Win32 error=" +
+        context.replay_log_error = "NTE Damage Chain Reaction: cannot write attack-replay.log; Win32 error=" +
             std::to_string(error);
         ReportReplayLogError(context, context.replay_log_error);
         return false;
@@ -203,7 +203,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
             context.core->struct_size < directory_field_end ||
             context.core->plugin_directory == nullptr) {
             context.replay_log_error =
-                "NTE Attack Replay: Core plugin_directory API is unavailable";
+                "NTE Damage Chain Reaction: Core plugin_directory API is unavailable";
             ReportReplayLogError(context, context.replay_log_error);
             return false;
         }
@@ -213,7 +213,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
             context.core->user, nullptr, &required);
         if (size_status.code != ANOMALY_STATUS_V1_OK || required < 2 || required > 32768) {
             context.replay_log_error =
-                "NTE Attack Replay: cannot query package directory; Core status=" +
+                "NTE Damage Chain Reaction: cannot query package directory; Core status=" +
                 std::to_string(size_status.code);
             ReportReplayLogError(context, context.replay_log_error);
             return false;
@@ -225,7 +225,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
         if (path_status.code != ANOMALY_STATUS_V1_OK || capacity < 2 ||
             capacity > utf8_path.size() || utf8_path[capacity - 1] != '\0') {
             context.replay_log_error =
-                "NTE Attack Replay: Core package directory read failed; status=" +
+                "NTE Damage Chain Reaction: Core package directory read failed; status=" +
                 std::to_string(path_status.code);
             ReportReplayLogError(context, context.replay_log_error);
             return false;
@@ -235,7 +235,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
             CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(), -1, nullptr, 0);
         if (wide_required < 2 || wide_required > 32768) {
             context.replay_log_error =
-                "NTE Attack Replay: Core package directory is not valid UTF-8";
+                "NTE Damage Chain Reaction: Core package directory is not valid UTF-8";
             ReportReplayLogError(context, context.replay_log_error);
             return false;
         }
@@ -244,7 +244,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
                 CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(), -1,
                 directory.data(), wide_required) != wide_required) {
             context.replay_log_error =
-                "NTE Attack Replay: failed to convert Core package directory to UTF-16";
+                "NTE Damage Chain Reaction: failed to convert Core package directory to UTF-16";
             ReportReplayLogError(context, context.replay_log_error);
             return false;
         }
@@ -254,7 +254,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
             directory.pop_back();
         }
         if (directory.empty()) {
-            context.replay_log_error = "NTE Attack Replay: Core returned an empty package directory";
+            context.replay_log_error = "NTE Damage Chain Reaction: Core returned an empty package directory";
             ReportReplayLogError(context, context.replay_log_error);
             return false;
         }
@@ -267,7 +267,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
         return true;
     } catch (...) {
         context.replay_log_error =
-            "NTE Attack Replay: unexpected failure while initializing attack-replay.log";
+            "NTE Damage Chain Reaction: unexpected failure while initializing attack-replay.log";
         ReportReplayLogError(context, context.replay_log_error);
         return false;
     }
@@ -302,7 +302,7 @@ void AppendReplayDiagnosticLog(
         WriteReplayLogBytes(context, line);
     } catch (...) {
         ReportReplayLogError(context,
-            "NTE Attack Replay: exception while writing replay failure diagnostic");
+            "NTE Damage Chain Reaction: exception while writing replay failure diagnostic");
     }
 }
 
@@ -337,7 +337,7 @@ void AppendReplayInvocationEvidenceLog(
         WriteReplayLogBytes(context, line);
     } catch (...) {
         ReportReplayLogError(context,
-            "NTE Attack Replay: exception while writing invocation evidence");
+            "NTE Damage Chain Reaction: exception while writing invocation evidence");
     }
 }
 
@@ -374,7 +374,7 @@ void AppendReplayObservedDamageEvidenceLog(
         WriteReplayLogBytes(context, line);
     } catch (...) {
         ReportReplayLogError(context,
-            "NTE Attack Replay: exception while writing observed-damage evidence");
+            "NTE Damage Chain Reaction: exception while writing observed-damage evidence");
     }
 }
 
@@ -1304,10 +1304,10 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         context->waiting_for_damage = false;
         context->replay_requested.store(false, std::memory_order_release);
         context->status = context->enabled
-            ? "已启用：自动等待下一次攻击"
+            ? "已启用：等待下一次真实伤害事件"
             : (context->captured
-                ? "自动记录中：重放未启用（已保留当前捕获）"
-                : "自动记录中：重放功能未启用");
+                ? "伤害链式反应已停用（保留当前捕获，继续监测真实伤害）"
+                : "持续监测真实伤害；伤害链式反应未启用");
     }
     // Continuously record the newest real player hit whenever no replay chain is active.
     // Freeze the selected hit during replay so the chain cannot replace its own source context.
@@ -1323,7 +1323,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replaying = true;
             context->waiting_for_damage = false;
             context->replay_last_tick = context->captured_tick_sequence;
-            context->status = "已自动启动连锁重放，等待原始伤害后的下一游戏帧";
+            context->status = "已自动启动伤害链式反应，等待下一游戏帧";
         } else {
             context->status = "自动重放未启动：功能已停用或尚无有效攻击";
         }
@@ -1411,7 +1411,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replaying = false;
             context->waiting_for_damage = false;
             ArmForNextAttack(*context);
-            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误；已恢复自动捕获，等待下一次攻击";
+            context->status = "伤害链验证失败：读取新的 DamageEvent 时发生错误；已恢复监测，等待下一次真实伤害事件";
             return;
         }
 
@@ -1426,7 +1426,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             ArmForNextAttack(*context);
             context->status = single_shot
                 ? "单次验证未通过：2 秒内未观察到同一目标的新 DamageEvent，已自动停用；检查 attack-replay.log"
-                : "连锁停止：2 秒内未确认同一目标的新伤害（目标可能已死亡或该击未生效）；自动等待下一次攻击";
+                : "伤害链停止：2 秒内未确认同一目标的新伤害（目标可能已死亡或追加未生效）；自动等待下一次真实伤害事件";
             return;
         }
         if (context->waiting_for_damage) return;
@@ -1482,7 +1482,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         AppendReplayInvocationEvidenceLog(*context, replay_status);
     }
     context->waiting_for_damage = true;
-    context->status = "已复用原始 GameplayEffect 调用，等待真实新伤害事件";
+    context->status = "已提交原生 GameplayEffect 追加调用，等待同一目标的新伤害事件";
 }
 
 // Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -1498,18 +1498,18 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     // begin_window/end_window are always paired. The host UI follows ImGui's
     // Begin/End rule: End is required even when Begin returns false.
     const int window_visible = ui->begin_window(
-        ui->user, anomaly::sdk::StringView("自动伤害录制/重放"), &open, 0);
+        ui->user, anomaly::sdk::StringView("伤害链式反应"), &open, 0);
     if (window_visible != 0) {
         int enabled = context->enabled ? 1 : 0;
-        if (ui->checkbox(ui->user, anomaly::sdk::StringView("[启用]"), &enabled) != 0) {
+        if (ui->checkbox(ui->user, anomaly::sdk::StringView("启用伤害链式反应"), &enabled) != 0) {
             const bool next_enabled = enabled != 0;
             if (next_enabled != context->enabled) {
                 context->enabled = next_enabled;
                 if (context->enabled) {
                     // Enabling replay must not reset or interrupt the always-on recorder.
                     context->status = context->captured
-                        ? "已启用：自动开始连锁"
-                        : "已启用：自动等待下一次攻击";
+                        ? "已启用：自动开始伤害链式反应"
+                        : "已启用：等待下一次真实伤害事件";
                     if (context->captured) {
                         context->replay_requested.store(true, std::memory_order_release);
                     }
@@ -1517,7 +1517,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
                     // Disabling replay must not stop recording or discard a captured attack.
                     // Draw is Render-domain code; disable replay through the Game-domain request.
                     context->stop_requested.store(true, std::memory_order_release);
-                    context->status = "已停用：停止连锁，重新启用后等待下一次攻击";
+                    context->status = "已停用伤害链式反应；重新启用后等待下一次真实伤害事件";
                 }
             }
         }
@@ -1529,7 +1529,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             context->status.rfind("移植路径", 0) == 0;
         ui->text(ui->user, anomaly::sdk::StringView(
             context->enabled || proof_status
-                ? context->status : "自动记录中：重放功能未启用"));
+                ? context->status : "持续监测真实伤害；伤害链式反应未启用"));
 
         if (ui->separator != nullptr) ui->separator(ui->user);
 
@@ -1546,7 +1546,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("重放间隔（Game 帧；1=每帧一次）"),
+            ui->user, anomaly::sdk::StringView("链式伤害间隔（Game 帧；1=每帧一次）"),
             &context->replay_interval_frames, 1, 10);
         context->replay_interval_frames = std::clamp(context->replay_interval_frames, 1u, 10u);
     }
@@ -1554,7 +1554,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     if (context->captured) {
         ui->text(ui->user, anomaly::sdk::StringView(
             context->captured_ability_path.empty()
-                ? "已捕获玩家→目标的攻击/伤害事件"
+                ? "已捕获玩家→目标的真实伤害事件"
                 : context->captured_ability_path));
         if (!context->captured_damage_source_name.empty()) {
             ui->text(ui->user, anomaly::sdk::StringView(
@@ -1580,7 +1580,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
                 "（目标持续受击时继续）";
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("启用后自动持续重放原始 GameplayEffect，不重放按键、动画或技能激活；间隔设为 1 即每个 Game 帧最多一次，直到目标不再产生新伤害或关闭本功能。"));
+        ui->text(ui->user, anomaly::sdk::StringView("启用后持续复用 Core 验证过的原生 GameplayEffect，在同一目标上形成伤害链式反应；不模拟按键、不重放技能或动画，也不直接写入 HP。间隔设为 1 时每个 Game 帧最多追加一次；若目标在 2 秒内未产生新的匹配伤害事件，或手动关闭，链条即停止。"));
     } else {
         const std::string capture_monitor =
             "Core 伤害事件序列：" +
@@ -1610,9 +1610,9 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         ANOMALY_PLUGIN_API_V1_MAJOR,
         ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
-        anomaly::sdk::StringView("NTE Attack Replay"),
+        anomaly::sdk::StringView("NTE Damage Chain Reaction"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.9.5"),
+        anomaly::sdk::StringView("1.9.6"),
         Load,
         Start,
         Stop,
