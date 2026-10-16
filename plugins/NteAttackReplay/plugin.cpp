@@ -97,6 +97,8 @@ struct Context final {
     bool proof_single_replay_candidate_count_available{};
     bool proof_single_replay_single_candidate{};
     uint32_t proof_single_replay_candidate_count{};
+    bool proof_single_replay_hp_result_available{};
+    bool proof_single_replay_hp_reduced{};
     // Draw runs in the Render domain. Replay/stop requests are posted atomically
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
@@ -921,6 +923,8 @@ void ArmForNextAttack(Context& context) {
     context.proof_single_replay_candidate_count_available = false;
     context.proof_single_replay_single_candidate = false;
     context.proof_single_replay_candidate_count = 0;
+    context.proof_single_replay_hp_result_available = false;
+    context.proof_single_replay_hp_reduced = false;
     context.captured = false;
     context.replaying = false;
     context.replay_done = 0;
@@ -1011,6 +1015,8 @@ bool CaptureNextAttack(Context& context) {
         context.proof_single_replay_candidate_count_available = false;
         context.proof_single_replay_single_candidate = false;
         context.proof_single_replay_candidate_count = 0;
+        context.proof_single_replay_hp_result_available = false;
+        context.proof_single_replay_hp_reduced = false;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
         context.captured_damage_value = event.display_damage;
@@ -1107,6 +1113,21 @@ enum class ReplayCallResult : uint32_t {
     ServiceError,
     Rejected,
 };
+
+// Read a diagnostic-only HP probe emitted around the native dispatch by Core.
+bool ReadTargetHpReduction(const AnomalyStatusV1& status, bool& reduced) noexcept {
+    reduced = false;
+    if (status.message.data == nullptr || status.message.size == 0) return false;
+    const std::string_view message(status.message.data, status.message.size);
+    constexpr std::string_view key = "target_hp_reduced=";
+    const std::size_t key_position = message.find(key);
+    if (key_position == std::string_view::npos) return false;
+    const std::size_t position = key_position + key.size();
+    if (position >= message.size()) return false;
+    if (message[position] == '1') { reduced = true; return true; }
+    if (message[position] == '0') { reduced = false; return true; }
+    return false;
+}
 
 // Parse Core's diagnostic-only matching-candidate field without changing the host ABI.
 bool ReadMatchingCandidateCount(
@@ -1346,9 +1367,15 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                             "单次观察结束：已见新伤害，但匹配候选数=" +
                             std::to_string(context->proof_single_replay_candidate_count) +
                             "；存在歧义，不能认定路线正确";
+                    } else if (!context->proof_single_replay_hp_result_available) {
+                        context->status =
+                            "单次观察结束：候选数=1 且观察到新伤害，但目标 HP 探针不可用；路线未证实";
+                    } else if (!context->proof_single_replay_hp_reduced) {
+                        context->status =
+                            "单次观察结束：候选数=1 且观察到新伤害，但同步 GetHP 未下降；需排除护盾或异步结算";
                     } else {
                         context->status =
-                            "单次观察完成：已见同来源的新伤害，当前已验证入口匹配候选数=1；仍需核实是否有未观测原生路径";
+                            "单次实验支持当前路线：同来源新伤害、候选数=1、同步 GetHP 下降；仍需排查未观测入口";
                     }
                     return;
                 }
@@ -1421,6 +1448,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         context->proof_single_replay_single_candidate =
             context->proof_single_replay_candidate_count_available &&
             context->proof_single_replay_candidate_count == 1U;
+        context->proof_single_replay_hp_result_available =
+            ReadTargetHpReduction(replay_status, context->proof_single_replay_hp_reduced);
         AppendReplayInvocationEvidenceLog(*context, replay_status);
     }
     context->waiting_for_damage = true;
@@ -1504,9 +1533,12 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         }
         const std::string progress = context->proof_single_replay_completed
             ? (context->proof_single_replay_candidate_count_available
-                ? "单次观测已结束；当前已验证入口匹配候选数：" +
+                ? "单次观测已结束；匹配候选数=" +
                     std::to_string(context->proof_single_replay_candidate_count) +
-                    "（候选计数不是全原生路径唯一性的证明）"
+                    "；同步 HP 下降=" +
+                    (context->proof_single_replay_hp_result_available
+                        ? (context->proof_single_replay_hp_reduced ? "是" : "否")
+                        : "未测得")
                 : "单次观测已结束；缺少匹配候选数，路线仍未证实")
             : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
                 "（目标持续受击时继续）";
