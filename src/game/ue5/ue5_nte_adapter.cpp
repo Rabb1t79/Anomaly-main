@@ -1,4 +1,5 @@
 #include "anomaly/ue5_nte_adapter.hpp"
+#include "anomaly/sdk/services/nte_damage_replay_experimental.h"
 #include "anomaly/nte_damage_capture.hpp"
 #include "anomaly/nte_vehicle.hpp"
 #include "anomaly/nte_monster_names.hpp"
