@@ -6704,10 +6704,15 @@ struct Ue5NteAdapter::State {
                  bindings->replay_apply_to_target != 0 ||
                  bindings->replay_activate_by_actor != 0);
             if (replay_effect_call_count != 0) {
-                const std::string diagnostic =
-                    "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick; match diagnostics: " +
-                    replay_match_diagnostics.Summary();
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE, diagnostic.c_str());
+                try {
+                    const std::string diagnostic =
+                        "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick; match diagnostics: " +
+                        replay_match_diagnostics.Summary();
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE, diagnostic.c_str());
+                } catch (...) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "validated GameplayEffect calls were captured, but none matched this hit; match-diagnostic allocation failed");
+                }
             }
             if (!has_validated_gameplay_effect_entry) {
                 try {
