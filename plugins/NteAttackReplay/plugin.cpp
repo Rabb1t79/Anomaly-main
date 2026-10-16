@@ -296,6 +296,78 @@ void AppendReplayDiagnosticLog(
     }
 }
 
+// 单次路线验证的正向证据：记录实际调用的 Core 路由，以及调用之后出现的新原生伤害事件。
+void AppendReplayInvocationEvidenceLog(
+    Context& context, const AnomalyStatusV1& status) noexcept {
+    try {
+        std::string line;
+        line.reserve(512U + context.captured_target_path.size() +
+            context.captured_damage_source_name.size() + status.message.size);
+        line += "[";
+        line += ReplayLogTimestampUtc();
+        line += "] replay=invocation_returned status_code=";
+        line += std::to_string(status.code);
+        line += " damage_sequence=";
+        line += std::to_string(context.captured_damage_sequence);
+        line += " source_id=";
+        line += std::to_string(context.captured_damage_source_id);
+        line += " target=";
+        line += context.captured_target_path.empty()
+            ? "(unknown)" : context.captured_target_path;
+        line += " damage_source=";
+        line += context.captured_damage_source_name.empty()
+            ? "(unknown)" : context.captured_damage_source_name;
+        line += "\r\nroute=";
+        if (status.message.data != nullptr && status.message.size != 0) {
+            line.append(status.message.data, status.message.size);
+        } else {
+            line += "(Core did not report the selected route)";
+        }
+        line += "\r\nnote=ProcessEvent dispatch completion is not proof of applied damage\r\n\r\n";
+        WriteReplayLogBytes(context, line);
+    } catch (...) {
+        ReportReplayLogError(context,
+            "NTE Attack Replay: exception while writing invocation evidence");
+    }
+}
+
+void AppendReplayObservedDamageEvidenceLog(
+    Context& context, const AnomalyNteDamageEventV1& event) noexcept {
+    try {
+        std::string line;
+        line.reserve(512U + context.captured_target_path.size() +
+            context.captured_damage_source_name.size());
+        line += "[";
+        line += ReplayLogTimestampUtc();
+        line += "] verification=observed_new_character_damage_event";
+        line += " original_damage_sequence=";
+        line += std::to_string(context.captured_damage_sequence);
+        line += " observed_damage_sequence=";
+        line += std::to_string(event.sequence);
+        line += " captured_source_id=";
+        line += std::to_string(context.captured_damage_source_id);
+        line += " observed_source_id=";
+        line += std::to_string(event.source_id);
+        line += " tick_sequence=";
+        line += std::to_string(event.tick_sequence);
+        line += " final_damage=";
+        line += std::to_string(event.final_damage);
+        line += " display_damage=";
+        line += std::to_string(event.display_damage);
+        line += " target=";
+        line += context.captured_target_path.empty()
+            ? "(unknown)" : context.captured_target_path;
+        line += " damage_source=";
+        line += context.captured_damage_source_name.empty()
+            ? "(unknown)" : context.captured_damage_source_name;
+        line += "\r\nproof=exact source_id, same world, same attacker, same victim, newer event sequence\r\n\r\n";
+        WriteReplayLogBytes(context, line);
+    } catch (...) {
+        ReportReplayLogError(context,
+            "NTE Attack Replay: exception while writing observed-damage evidence");
+    }
+}
+
 template <typename Struct, typename Field>
 // HasField 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool HasField(const Struct* value, std::size_t offset) noexcept {
@@ -1193,16 +1265,26 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->combat->user, context->replay_damage_cursor, &event);
         if (damage_status.code == ANOMALY_STATUS_V1_OK) {
             context->replay_damage_cursor = event.sequence;
+            const bool exact_source_identity =
+                event.source_id == context->captured_damage_source_id;
+            bool source_name_fallback_matches = false;
+            // 单次路线证明不接受仅显示名称相同的弱匹配；一般连锁监控仍保留历史兼容回退。
+            if (!exact_source_identity && !context->proof_single_replay &&
+                !context->captured_damage_source_name.empty()) {
+                const std::string observed_source_name =
+                    ReadDamageSourceName(context->combat, event.source_id);
+                source_name_fallback_matches = !observed_source_name.empty() &&
+                    observed_source_name == context->captured_damage_source_name;
+            }
             if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) != 0 &&
                 SameHandle(event.world, context->world) &&
                 SameHandle(event.attacker, context->character) &&
                 SameHandle(event.victim, context->captured_target) &&
                 event.sequence > context->captured_damage_sequence &&
-                (event.source_id == context->captured_damage_source_id ||
-                 (!context->captured_damage_source_name.empty() &&
-                  !ReadDamageSourceName(context->combat, event.source_id).empty() &&
-                  ReadDamageSourceName(context->combat, event.source_id) ==
-                    context->captured_damage_source_name))) {
+                (exact_source_identity || source_name_fallback_matches)) {
+                if (context->proof_single_replay) {
+                    AppendReplayObservedDamageEvidenceLog(*context, event);
+                }
                 context->waiting_for_damage = false;
                 ++context->replay_done;
                 // Rate limiting is based on the actual Game tick observed here,
@@ -1281,6 +1363,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             ? "单次验证失败：Core 拒绝此次重放，已自动停用；详见 attack-replay.log"
             : "重放失败；已恢复捕获。详见 attack-replay.log";
         return;
+    }
+    if (context->proof_single_replay) {
+        AppendReplayInvocationEvidenceLog(*context, replay_status);
     }
     context->waiting_for_damage = true;
     context->status = "已复用原始 GameplayEffect 调用，等待真实新伤害事件";
