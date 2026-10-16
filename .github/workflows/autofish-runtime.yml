@@ -1,0 +1,77 @@
+name: autofish-runtime
+
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'cmake/**'
+      - 'include/**'
+      - 'src/**'
+      - 'sdk/**'
+      - 'plugins/AutoFish/**'
+      - '.github/workflows/autofish-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autofish-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-runtime:
+    name: Build Runtime with AutoFish (Windows x64)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare optional asset folders
+        shell: pwsh
+        run: |
+          # Several optional resource directories are intentionally empty in source control.
+          # Ensure CMake's post-build copy steps have valid source directories.
+          foreach ($relative in @('assets/images', 'assets/fonts', 'config/themes')) {
+            $optionalPath = Join-Path $env:GITHUB_WORKSPACE $relative
+            if (!(Test-Path $optionalPath)) {
+              New-Item -ItemType Directory -Path $optionalPath -Force | Out-Null
+            }
+          }
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-vs2022
+
+      - name: Build
+        run: cmake --build --preset windows-relwithdebinfo --parallel
+
+      - name: Stage Runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime'
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $prefix --component GameRuntime
+          $anomaly = Join-Path $prefix 'Anomaly'
+          $plugin = Join-Path $anomaly 'plugins/AutoFish'
+          $dll = Join-Path $plugin 'plugin.dll'
+          $manifest = Join-Path $plugin 'manifest.json'
+          if (!(Test-Path $anomaly)) { throw 'Runtime staging root is missing the Anomaly directory.' }
+          if (!(Test-Path $dll)) { throw "AutoFish DLL missing from Runtime package: $dll" }
+          if (!(Test-Path $manifest)) { throw "AutoFish manifest missing from Runtime package: $manifest" }
+          $json = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+          if ($json.id -ne 'b1ank.autofish' -or $json.entry -ne 'plugin.dll') {
+            throw "Unexpected AutoFish manifest identity or entry: id=$($json.id), entry=$($json.entry)"
+          }
+          Write-Host 'Verified Runtime contains AutoFish plugin.dll and manifest.json.'
+          Get-Item -LiteralPath $dll | Select-Object FullName, Length
+
+      - name: Upload verified Runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: anomaly-runtime-autofish-windows-x64
+          path: .build/ci-artifacts/runtime
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
