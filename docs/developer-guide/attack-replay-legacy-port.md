@@ -24,6 +24,7 @@
 | 同时兼容 ProcessEvent/ActorProcessEvent | `OnProcessEventPre`、`OnActorProcessEventPre` |
 | 保存原始 GameplayEffect 参数及标签数组 | `CaptureReplayEffectInvocationLocked` |
 | 关联原始伤害与实际 GameplayEffect 调用 | `FindReplayContextForDamageLocked` / `ReplayContextMatchesDamageLocked` |
+| 排除友方目标 | dump 反射校验的 `HTAbilityCharacter.IsFriendlyTarget(Target)`；校验不可用时拒绝重放 |
 | 按 Game Tick 重用原始效果调用 | `AnomalyNteDamageReplayServiceV1` 与 `plugins/NteAttackReplay/plugin.cpp` |
 
 ## 移植约束
