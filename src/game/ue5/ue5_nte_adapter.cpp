@@ -6387,29 +6387,52 @@ struct Ue5NteAdapter::State {
             if (source_it == damage_source_objects.end() || source_it->second == 0) return false;
             const std::uintptr_t damage_source_object = source_it->second;
 
-            // HTDamageEvent::DamageGEDef is a weak UHTGamePlayEffect object. Compare it
-            // only to the effect class/CDO identity represented in the observed call.
+            // HTDamageEvent::DamageGEDef is a weak UHTGamePlayEffect object.
+            // The dump-validated ASC "WithClass" entries expose GameplayEffect as
+            // ClassProperty, while ServerActivateGameEffectsWithClassByActor exposes
+            // it as ObjectProperty. Compare each using its actual reflected identity.
             const std::size_t effect_offset = character_wrapper ? 0x10U
                 : ((context.kind == 1U || server_character_wrapper) ? 0x08U : 0x00U);
-            std::uintptr_t gameplay_effect_class{};
-            std::memcpy(&gameplay_effect_class,
-                context.parameters.data() + effect_offset, sizeof(gameplay_effect_class));
-            if (gameplay_effect_class == 0 ||
-                !ReadableRange(*memory, gameplay_effect_class, 0x20U)) return false;
-            std::uintptr_t class_default_object{};
-            const bool class_default_object_available = ReadPointerAt(
-                *memory, gameplay_effect_class,
-                Layout(profile, "uclass.classDefaultObject"), class_default_object);
-            bool source_matches_effect =
-                damage_source_object == gameplay_effect_class ||
-                (class_default_object_available &&
-                    damage_source_object == class_default_object);
-            if (!source_matches_effect) {
-                std::uintptr_t source_class{};
-                source_matches_effect =
+            std::uintptr_t gameplay_effect_identity{};
+            std::memcpy(&gameplay_effect_identity,
+                context.parameters.data() + effect_offset, sizeof(gameplay_effect_identity));
+            if (gameplay_effect_identity == 0 ||
+                !ReadableRange(*memory, gameplay_effect_identity, 0x20U)) return false;
+
+            bool source_matches_effect{};
+            if (server_character_wrapper) {
+                // ValidateReplayServerActivateByActorFunctionLocked verifies this field
+                // as ObjectProperty. It is therefore an effect UObject, not a UClass:
+                // compare the exact object first, then the UObject class identity so a
+                // live effect object can match the same DamageGEDef class/CDO.
+                std::uintptr_t source_class{}, observed_effect_class{};
+                source_matches_effect = damage_source_object == gameplay_effect_identity;
+                if (!source_matches_effect &&
                     ReadPointerAt(*memory, damage_source_object,
                         Layout(profile, "object.class"), source_class) &&
-                    source_class == gameplay_effect_class;
+                    ReadPointerAt(*memory, gameplay_effect_identity,
+                        Layout(profile, "object.class"), observed_effect_class) &&
+                    source_class != 0 && source_class == observed_effect_class) {
+                    source_matches_effect = true;
+                }
+            } else {
+                // For the other validated entry points the reflected field is a UClass.
+                // Match DamageGEDef against either that class's CDO or its exact class.
+                std::uintptr_t class_default_object{};
+                const bool class_default_object_available = ReadPointerAt(
+                    *memory, gameplay_effect_identity,
+                    Layout(profile, "uclass.classDefaultObject"), class_default_object);
+                source_matches_effect =
+                    damage_source_object == gameplay_effect_identity ||
+                    (class_default_object_available &&
+                        damage_source_object == class_default_object);
+                if (!source_matches_effect) {
+                    std::uintptr_t source_class{};
+                    source_matches_effect =
+                        ReadPointerAt(*memory, damage_source_object,
+                            Layout(profile, "object.class"), source_class) &&
+                        source_class == gameplay_effect_identity;
+                }
             }
             if (!source_matches_effect) return false;
 
