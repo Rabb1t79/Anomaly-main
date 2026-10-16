@@ -1,31 +1,13 @@
 /*
- * 中文维护说明：本插件
- * - 本文件是该插件的主要实现入口，后续维护时优先在这里说明新增、修改和删除的行为。
- * - 当前代码逻辑保持不变；本次仅补充中文维护注释，便于后续逆向、排错和功能回溯。
- * - 不把未经验证的猜测写成实现依据；涉及游戏调用、偏移、签名或 ABI 时应注明实际证据来源。
- */
-/*
  * 中文维护说明：
- * 1. 本文件是 NTE Attack Replay 插件的实现；本分支不修改 Anomaly 宿主核心。
- * 2. 插件始终监听玩家对目标产生的真实 DamageEvent，并记录攻击上下文。
- * 3. 普通攻击不依赖技能句柄；其重放路径依据 HTGame 中已确认的
- *    DT_AbilityInput / HTAbilityInputRow / MeleeAtack / InputID / Param
- *    以及 ActivateAbilityFromID、ReleaseAbilityFromID 反射函数执行。
- * 4. 技能攻击继续通过 Anomaly NTE skill-invocation 服务执行。
- * 5. Draw 只产生请求；真正的游戏调用在 Update 的 Game 域执行，避免跨线程
- *    直接操作游戏对象。
- * 6. 每次重放只有在之后观察到新的“玩家 -> 非玩家目标”DamageEvent 后，
- *    才计为一次成功重放；仅收到 accepted=1 不作为成功依据。
- * 7. 本文件中的原生偏移、函数名、DataTable 字段和 ProcessEvent 调用链，
- *    均对应当前项目/HTGame 证据；禁止把未经验证的猜测写入这里。
- *
- * 本次改动行为说明：
- * - 新增/完善普通攻击原生输入绑定与重放路径。
- * - 增加对 DataTable 行结构、属性类型、参数大小的运行时校验。
- * - 增加重放后的真实 DamageEvent 验证。
- * - 保留自动捕获、技能重放和 UI 请求/游戏线程分离行为。
+ * 1. 本插件记录真实的 CharacterOnDamaged 事件，并把原始 DamageEvent 序列交给 Core 的 damage-replay 服务。
+ * 2. 当前 ReplayOnce 的实际重放路径是 Core 重新调用捕获并验证过的原生 GameplayEffect 应用，不重放按键/动画，也不直接写目标 HP。
+ * 3. 技能与输入映射数据仅用作 DamageSource 交叉核对和 UI 辅助，不是 ReplayOnce 的执行入口。
+ * 4. Draw 只修改 UI 状态/提交请求；真正的 Core 重放请求由 Update 在 Game 域执行。
+ * 5. 重放成功的判据是之后观察到同一攻击者、目标和伤害来源的新 CharacterOnDamaged 事件，调用返回成功不等于实际命中。
+ * 6. Dump 的函数签名与布局只能证明 ABI 形状；覆盖率、因果匹配和重复应用语义仍须由运行时诊断与受控实验验证。
  */
-// Record the first player->target DAMAGE event; normal attacks do not require a skill.
+// Record real player damage; replay is handled by Core's native GameplayEffect replay service.
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
@@ -1036,7 +1018,7 @@ enum class ReplayCallResult : uint32_t {
     Rejected,
 };
 
-// 重放通过 Host 暴露的原生攻击输入服务执行；每次按下后必须观察到新的玩家->目标 DamageEvent 才能计数。
+// 通过 Core damage-replay 服务重用捕获的 GameplayEffect 应用调用；只有观察到新的真实 DamageEvent 才计数。
 ReplayCallResult ReplayOnce(Context& context, AnomalyStatusV1* replay_status) {
     if (replay_status != nullptr) {
         *replay_status = Status(ANOMALY_STATUS_V1_OK);
