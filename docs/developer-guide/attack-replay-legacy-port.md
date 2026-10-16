@@ -30,12 +30,18 @@
 ## 移植约束
 
 1. 重放根必须来自真实的 `CharacterOnDamaged` 事件；不得以键位、动画、技能激活或动作回放替代。
-2. 重放必须复用与该伤害根严格匹配的原生 GameplayEffect 调用，至少约束 Effect identity、攻击者 ASC、目标 ASC/接收对象、函数路径、对象代际与邻近 Game Tick。
+2. 重放必须复用与该伤害根严格匹配的原生 GameplayEffect 调用，至少约束 Effect identity、攻击者 ASC、目标 ASC/接收对象、函数路径与对象代际。初始关联先完整验证这些身份字段，再仅从伤害事件同一 Tick 或此前最多 8 个 Game Tick 内的调用中选择时间最近者；未来 Tick 的调用不得关联。该窗口仅用于容忍伤害通知延迟，不放宽 Effect/ASC/函数校验，超窗或没有身份匹配的候选仍拒绝重放。
 3. `FBufferData` 中的 `FGameplayTagContainer` TArray 必须复制到自有内存；不得在后续 Game Tick 使用原调用栈里的数组指针。
 4. 同一次原生调用可能同时经过 ProcessEvent 与 Native Exec Hook。只有原参数缓冲区地址、receiver、function、tick、kind、参数字节以及已复制标签一致，且观测来源互补时，才把它们合并成一条调用记录；相同入口重复触发的独立调用不得被合并。
 5. 每次连锁的间隔以真实 Game Tick 计数，间隔为 1 表示每个 Game Tick 至多发起一次原生效果调用。只在之后观察到同 World、同攻击者、同目标、同来源的新 DamageEvent 时计数。
 6. 运行时诊断应区分“ProcessEvent 调用已返回”“Native Exec Hook 观察到调用”与“目标产生新伤害”这三个不同事实。
 7. 旧截图中的 Hook 地址、旧进程地址与临时 Profile 值仅作参考；不移植为固定地址。5.6.1 CppSDK/dump 只作布局与反射签名参考，不纳入 Runtime、SDK 或 Tools 发布包。
+
+## 当前伤害调用关联规则
+
+- `ReplayContextMatchesDamageLocked` 先验证原始 DamageGEDef、攻击者/目标 ASC、receiver、函数路由、来源 Actor 与对象代际；这些校验失败的候选不会因为 Tick 接近而被接受。
+- `FindReplayContextForDamageLocked` 随后限制候选必须在事件 Tick 之前或同 Tick，且不早于 8 个 Game Tick；多个精确匹配时选择时间最近的调用，同 Tick 时沿用新捕获优先的确定性顺序。
+- 日志使用 `tick_delta_gt_8`、`future_tick` 和 `nearest_exact_tick_delta` 区分超出时间窗、未来调用和已通过身份校验的最近时间差。
 
 ## 目前本轮代码改动
 
