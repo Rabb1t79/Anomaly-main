@@ -1317,7 +1317,10 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             }
         }
 
-        ui->text(ui->user, anomaly::sdk::StringView(context->status));
+        const bool proof_status = context->status.rfind("单次验证", 0) == 0;
+        ui->text(ui->user, anomaly::sdk::StringView(
+            context->enabled || proof_status
+                ? context->status : "自动记录中：重放功能未启用"));
 
         if (ui->separator != nullptr) ui->separator(ui->user);
 
@@ -1352,9 +1355,10 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             ui->text(ui->user, anomaly::sdk::StringView(
                 "目标：" + context->captured_target_path));
         }
-        const std::string progress =
-            "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
-            "（目标持续受击时继续）";
+        const std::string progress = context->proof_single_replay && !context->enabled
+            ? "单次验证完成：已确认新的真实伤害事件（重放已自动停用）"
+            : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
+                "（目标持续受击时继续）";
         ui->text(ui->user, anomaly::sdk::StringView(progress));
         ui->text(ui->user, anomaly::sdk::StringView("启用后自动持续重放原始 GameplayEffect，不重放按键、动画或技能激活；间隔设为 1 即每个 Game 帧最多一次，直到目标不再产生新伤害或关闭本功能。"));
     } else {
