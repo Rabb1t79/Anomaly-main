@@ -25,6 +25,7 @@
 #include <new>
 #include <mutex>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -91,6 +92,11 @@ struct Context final {
     // 可选的受控实验模式：一次真实新伤害事件确认后自动停用连锁。
     bool proof_single_replay{};
     bool proof_single_replay_completed{};
+    // The current matcher only sees its four validated capture families. This is a
+    // diagnostic guard, not proof that no unobserved native route exists.
+    bool proof_single_replay_candidate_count_available{};
+    bool proof_single_replay_single_candidate{};
+    uint32_t proof_single_replay_candidate_count{};
     // Draw runs in the Render domain. Replay/stop requests are posted atomically
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
@@ -912,6 +918,9 @@ bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) 
 // ArmForNextAttack 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ArmForNextAttack(Context& context) {
     context.proof_single_replay_completed = false;
+    context.proof_single_replay_candidate_count_available = false;
+    context.proof_single_replay_single_candidate = false;
+    context.proof_single_replay_candidate_count = 0;
     context.captured = false;
     context.replaying = false;
     context.replay_done = 0;
@@ -999,6 +1008,9 @@ bool CaptureNextAttack(Context& context) {
         context.captured = true;
         context.replay_done = 0;
         context.proof_single_replay_completed = false;
+        context.proof_single_replay_candidate_count_available = false;
+        context.proof_single_replay_single_candidate = false;
+        context.proof_single_replay_candidate_count = 0;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
         context.captured_damage_value = event.display_damage;
@@ -1095,6 +1107,31 @@ enum class ReplayCallResult : uint32_t {
     ServiceError,
     Rejected,
 };
+
+// Parse Core's diagnostic-only matching-candidate field without changing the host ABI.
+bool ReadMatchingCandidateCount(
+    const AnomalyStatusV1& status, uint32_t& count) noexcept {
+    count = 0;
+    if (status.message.data == nullptr || status.message.size == 0) return false;
+    const std::string_view message(status.message.data, status.message.size);
+    constexpr std::string_view key = "matching_candidates=";
+    const std::size_t key_position = message.find(key);
+    if (key_position == std::string_view::npos) return false;
+    std::size_t position = key_position + key.size();
+    if (position >= message.size() || message[position] < '0' || message[position] > '9') {
+        return false;
+    }
+    uint32_t parsed = 0;
+    while (position < message.size() &&
+           message[position] >= '0' && message[position] <= '9') {
+        const uint32_t digit = static_cast<uint32_t>(message[position] - '0');
+        if (parsed > (std::numeric_limits<uint32_t>::max() - digit) / 10U) return false;
+        parsed = parsed * 10U + digit;
+        ++position;
+    }
+    count = parsed;
+    return true;
+}
 
 // 通过 Core damage-replay 服务重用捕获的 GameplayEffect 应用调用；只有观察到新的真实 DamageEvent 才计数。
 ReplayCallResult ReplayOnce(Context& context, AnomalyStatusV1* replay_status) {
@@ -1301,7 +1338,18 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                     context->waiting_for_damage = false;
                     context->replay_requested.store(false, std::memory_order_release);
                     context->proof_single_replay_completed = true;
-                    context->status = "单次验证通过：已观察到同一目标的新 DamageEvent，重放已自动停用";
+                    if (!context->proof_single_replay_candidate_count_available) {
+                        context->status =
+                            "单次观察结束：已见新伤害，但 Core 未提供匹配候选数；路线未证实";
+                    } else if (!context->proof_single_replay_single_candidate) {
+                        context->status =
+                            "单次观察结束：已见新伤害，但匹配候选数=" +
+                            std::to_string(context->proof_single_replay_candidate_count) +
+                            "；存在歧义，不能认定路线正确";
+                    } else {
+                        context->status =
+                            "单次观察完成：已见同来源的新伤害，当前已验证入口匹配候选数=1；仍需核实是否有未观测原生路径";
+                    }
                     return;
                 }
             }
@@ -1368,6 +1416,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         return;
     }
     if (context->proof_single_replay) {
+        context->proof_single_replay_candidate_count_available =
+            ReadMatchingCandidateCount(replay_status, context->proof_single_replay_candidate_count);
+        context->proof_single_replay_single_candidate =
+            context->proof_single_replay_candidate_count_available &&
+            context->proof_single_replay_candidate_count == 1U;
         AppendReplayInvocationEvidenceLog(*context, replay_status);
     }
     context->waiting_for_damage = true;
@@ -1450,7 +1503,11 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
                 "目标：" + context->captured_target_path));
         }
         const std::string progress = context->proof_single_replay_completed
-            ? "单次验证完成：已确认新的真实伤害事件（重放已自动停用）"
+            ? (context->proof_single_replay_candidate_count_available
+                ? "单次观测已结束；当前已验证入口匹配候选数：" +
+                    std::to_string(context->proof_single_replay_candidate_count) +
+                    "（候选计数不是全原生路径唯一性的证明）"
+                : "单次观测已结束；缺少匹配候选数，路线仍未证实")
             : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
                 "（目标持续受击时继续）";
         ui->text(ui->user, anomaly::sdk::StringView(progress));
