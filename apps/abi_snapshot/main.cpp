@@ -1,4 +1,5 @@
 #include "anomaly/sdk/anomaly_sdk.h"
+#include "anomaly/sdk/services/nte_damage_replay_experimental.h"
 
 #include <cstddef>
 #include <cstdint>
