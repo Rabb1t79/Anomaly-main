@@ -99,6 +99,8 @@ struct Context final {
     uint32_t proof_single_replay_candidate_count{};
     bool proof_single_replay_hp_result_available{};
     bool proof_single_replay_hp_reduced{};
+    bool proof_single_replay_native_exec_result_available{};
+    bool proof_single_replay_native_exec_seen{};
     // Draw runs in the Render domain. Replay/stop requests are posted atomically
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
@@ -925,6 +927,8 @@ void ArmForNextAttack(Context& context) {
     context.proof_single_replay_candidate_count = 0;
     context.proof_single_replay_hp_result_available = false;
     context.proof_single_replay_hp_reduced = false;
+    context.proof_single_replay_native_exec_result_available = false;
+    context.proof_single_replay_native_exec_seen = false;
     context.captured = false;
     context.replaying = false;
     context.replay_done = 0;
@@ -1017,6 +1021,8 @@ bool CaptureNextAttack(Context& context) {
         context.proof_single_replay_candidate_count = 0;
         context.proof_single_replay_hp_result_available = false;
         context.proof_single_replay_hp_reduced = false;
+        context.proof_single_replay_native_exec_result_available = false;
+        context.proof_single_replay_native_exec_seen = false;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
         context.captured_damage_value = event.display_damage;
@@ -1113,6 +1119,21 @@ enum class ReplayCallResult : uint32_t {
     ServiceError,
     Rejected,
 };
+
+// Read the native-exec ingress observation reported by Core for the selected invocation.
+bool ReadNativeExecSeen(const AnomalyStatusV1& status, bool& seen) noexcept {
+    seen = false;
+    if (status.message.data == nullptr || status.message.size == 0) return false;
+    const std::string_view message(status.message.data, status.message.size);
+    constexpr std::string_view key = "native_exec_seen=";
+    const std::size_t key_position = message.find(key);
+    if (key_position == std::string_view::npos) return false;
+    const std::size_t position = key_position + key.size();
+    if (position >= message.size()) return false;
+    if (message[position] == '1') { seen = true; return true; }
+    if (message[position] == '0') { seen = false; return true; }
+    return false;
+}
 
 // Read a diagnostic-only HP probe emitted around the native dispatch by Core.
 bool ReadTargetHpReduction(const AnomalyStatusV1& status, bool& reduced) noexcept {
@@ -1373,9 +1394,15 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                     } else if (!context->proof_single_replay_hp_reduced) {
                         context->status =
                             "单次观察结束：候选数=1 且观察到新伤害，但同步 GetHP 未下降；需排除护盾或异步结算";
+                    } else if (!context->proof_single_replay_native_exec_result_available) {
+                        context->status =
+                            "单次观测结束：单候选、同来源新伤害且 HP 下降，但缺少 Native Exec 命中证据";
+                    } else if (!context->proof_single_replay_native_exec_seen) {
+                        context->status =
+                            "单次观测结束：伤害已生效，但只观测到 ProcessEvent 入口；原生 Exec 路径尚未确认";
                     } else {
                         context->status =
-                            "单次实验支持当前路线：同来源新伤害、候选数=1、同步 GetHP 下降；仍需排查未观测入口";
+                            "移植路径得到支持：单候选、Native Exec 命中、同来源新伤害且同步 GetHP 下降";
                     }
                     return;
                 }
@@ -1450,6 +1477,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->proof_single_replay_candidate_count == 1U;
         context->proof_single_replay_hp_result_available =
             ReadTargetHpReduction(replay_status, context->proof_single_replay_hp_reduced);
+        context->proof_single_replay_native_exec_result_available =
+            ReadNativeExecSeen(replay_status, context->proof_single_replay_native_exec_seen);
         AppendReplayInvocationEvidenceLog(*context, replay_status);
     }
     context->waiting_for_damage = true;
@@ -1541,6 +1570,10 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
                     "；同步 HP 下降=" +
                     (context->proof_single_replay_hp_result_available
                         ? (context->proof_single_replay_hp_reduced ? "是" : "否")
+                        : "未测得") +
+                    "；Native Exec 命中=" +
+                    (context->proof_single_replay_native_exec_result_available
+                        ? (context->proof_single_replay_native_exec_seen ? "是" : "否")
                         : "未测得")
                 : "单次观测已结束；缺少匹配候选数，路线仍未证实")
             : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
