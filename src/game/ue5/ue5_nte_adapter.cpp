@@ -1003,17 +1003,18 @@ struct Ue5NteAdapter::State {
 
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
-    // The dump-generated parameter structs use aligned storage sizes 0x78 / 0x78 / 0x80.
-    // On the live HTGame UFunctions, ParmsSize ends at the final reflected property:
-    // 0x71 / 0x74 / 0x79. Keep these separate: capture only reflected bytes, then replay
-    // from a zero-initialized backing buffer with the full dump-defined aligned size.
+    // Dump-generated parameter structs use aligned storage sizes 0x78 / 0x78 / 0x80 / 0x80.
+    // Live HTGame UFunctions end at the final reflected property: 0x71 / 0x74 / 0x79 / 0x7C.
+    // Keep reflected capture lengths separate from the zero-initialized, aligned replay buffers.
     static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
     static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71;
     static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74;
     static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x79;
+    static constexpr std::size_t kGameplayEffectReplayServerCharacterParmsSize = 0x7C;
     static constexpr std::uint16_t kGameplayEffectReplayByActorFunctionParmsSize = 0x78;
     static constexpr std::uint16_t kGameplayEffectReplayToTargetFunctionParmsSize = 0x78;
     static constexpr std::uint16_t kGameplayEffectReplayWrapperFunctionParmsSize = 0x80;
+    static constexpr std::uint16_t kGameplayEffectReplayServerCharacterFunctionParmsSize = 0x80;
     static constexpr std::size_t kGameplayEffectReplayTagArraysEnd = 0x38;
     static_assert(kGameplayEffectReplayByActorParmsSize == 0x70U + sizeof(std::uint8_t));
     static_assert(kGameplayEffectReplayToTargetParmsSize == 0x6CU + sizeof(std::uint64_t));
@@ -1033,7 +1034,7 @@ struct Ue5NteAdapter::State {
     struct ReplayEffectContext {
         bool valid{};
         bool tag_arrays_valid{};
-        std::uint8_t kind{}; // 1 = ASC ByActor, 2 = ASC ToTarget, 3 = Character ByActor wrapper.
+        std::uint8_t kind{}; // 1 = ASC ByActor, 2 = ASC ToTarget, 3 = Character wrapper, 4 = server RPC.
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
         std::uint64_t tick_sequence{};
@@ -1231,6 +1232,7 @@ struct Ue5NteAdapter::State {
         GameplayEffectToTarget,
         // Normalized capture of the dump-declared HTAbilityCharacter actor-effect wrapper.
         GameplayEffectByActorFromCharacter,
+        GameplayEffectByActorFromServer,
     };
     struct PendingCombatCapture {
         CombatCaptureKind kind{};
@@ -1271,6 +1273,7 @@ struct Ue5NteAdapter::State {
         std::uintptr_t replay_apply_by_actor{};
         std::uintptr_t replay_apply_to_target{};
         std::uintptr_t replay_activate_by_actor{};
+        std::uintptr_t replay_server_activate_by_actor{};
     };
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
@@ -5596,13 +5599,17 @@ struct Ue5NteAdapter::State {
         const bool tag_arrays_valid) noexcept {
         const bool character_by_actor_wrapper =
             kind == CombatCaptureKind::GameplayEffectByActorFromCharacter;
+        const bool server_character_by_actor =
+            kind == CombatCaptureKind::GameplayEffectByActorFromServer;
         const bool by_actor = kind == CombatCaptureKind::GameplayEffectByActor ||
-            character_by_actor_wrapper;
+            character_by_actor_wrapper || server_character_by_actor;
         const std::size_t expected_parameter_size = character_by_actor_wrapper
             ? kGameplayEffectReplayWrapperParmsSize
-            : (kind == CombatCaptureKind::GameplayEffectByActor
-                ? kGameplayEffectReplayByActorParmsSize
-                : kGameplayEffectReplayToTargetParmsSize);
+            : (server_character_by_actor
+                ? kGameplayEffectReplayServerCharacterParmsSize
+                : (kind == CombatCaptureKind::GameplayEffectByActor
+                    ? kGameplayEffectReplayByActorParmsSize
+                    : kGameplayEffectReplayToTargetParmsSize));
         if ((!by_actor && kind != CombatCaptureKind::GameplayEffectToTarget) ||
             receiver == 0 || function == 0 ||
             parameters.size() != expected_parameter_size) return;
@@ -5613,13 +5620,16 @@ struct Ue5NteAdapter::State {
         ReplayEffectContext captured{};
         captured.valid = true;
         captured.tag_arrays_valid = tag_arrays_valid;
-        captured.kind = character_by_actor_wrapper ? 3U : (by_actor ? 1U : 2U);
+        captured.kind = server_character_by_actor ? 4U :
+            (character_by_actor_wrapper ? 3U : (by_actor ? 1U : 2U));
         captured.parameter_size = static_cast<std::uint16_t>(
-            character_by_actor_wrapper
-                ? kGameplayEffectReplayWrapperFunctionParmsSize
-                : (kind == CombatCaptureKind::GameplayEffectByActor
-                    ? kGameplayEffectReplayByActorFunctionParmsSize
-                    : kGameplayEffectReplayToTargetFunctionParmsSize));
+            server_character_by_actor
+                ? kGameplayEffectReplayServerCharacterFunctionParmsSize
+                : (character_by_actor_wrapper
+                    ? kGameplayEffectReplayWrapperFunctionParmsSize
+                    : (kind == CombatCaptureKind::GameplayEffectByActor
+                        ? kGameplayEffectReplayByActorFunctionParmsSize
+                        : kGameplayEffectReplayToTargetFunctionParmsSize)));
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
         captured.receiver = receiver;
@@ -5662,6 +5672,7 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::GameplayEffectByActor:
         case CombatCaptureKind::GameplayEffectToTarget:
         case CombatCaptureKind::GameplayEffectByActorFromCharacter:
+        case CombatCaptureKind::GameplayEffectByActorFromServer:
             CaptureReplayEffectInvocationLocked(
                 kind, receiver, function, parameters, capture_tick_sequence,
                 gameplay_tags, tag_arrays_valid);
@@ -5760,7 +5771,8 @@ struct Ue5NteAdapter::State {
             damage_widget_call_count.fetch_add(1, std::memory_order_relaxed);
         } else if (function == bindings.replay_apply_by_actor ||
                    function == bindings.replay_apply_to_target ||
-                   function == bindings.replay_activate_by_actor) {
+                   function == bindings.replay_activate_by_actor ||
+                   function == bindings.replay_server_activate_by_actor) {
             // These are dump-validated ASC calls or the validated character wrapper.
         } else if (std::ranges::any_of(
                        bindings.buffs, [function](const auto& buff) {
@@ -5811,6 +5823,12 @@ struct Ue5NteAdapter::State {
             kind = CombatCaptureKind::GameplayEffectByActorFromCharacter;
             info_offset = 0;
             payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
+        } else if (function == bindings.replay_server_activate_by_actor) {
+            // Preserve the server RPC's full FBufferData and PredictionKey while capturing
+            // only its live reflected endpoint (0x7C bytes); replay uses the aligned 0x80 buffer.
+            kind = CombatCaptureKind::GameplayEffectByActorFromServer;
+            info_offset = 0;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayServerCharacterParmsSize);
         } else if (function == bindings.replay_apply_by_actor) {
             kind = CombatCaptureKind::GameplayEffectByActor;
             payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayByActorParmsSize);
@@ -6347,12 +6365,16 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t victim, const std::uint64_t source_id) const noexcept {
         try {
             const bool character_wrapper = context.kind == 3U;
-            const bool by_actor = context.kind == 1U || character_wrapper;
+            const bool server_character_wrapper = context.kind == 4U;
+            const bool by_actor = context.kind == 1U ||
+                character_wrapper || server_character_wrapper;
             const std::size_t expected_parameter_size = character_wrapper
                 ? kGameplayEffectReplayWrapperFunctionParmsSize
-                : (context.kind == 1U
-                    ? kGameplayEffectReplayByActorFunctionParmsSize
-                    : kGameplayEffectReplayToTargetFunctionParmsSize);
+                : (server_character_wrapper
+                    ? kGameplayEffectReplayServerCharacterFunctionParmsSize
+                    : (context.kind == 1U
+                        ? kGameplayEffectReplayByActorFunctionParmsSize
+                        : kGameplayEffectReplayToTargetFunctionParmsSize));
             if (!context.valid || context.parameter_size != expected_parameter_size ||
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
                 source_id == 0 || context.receiver == 0 || context.function == 0 ||
@@ -6368,7 +6390,7 @@ struct Ue5NteAdapter::State {
             // HTDamageEvent::DamageGEDef is a weak UHTGamePlayEffect object. Compare it
             // only to the effect class/CDO identity represented in the observed call.
             const std::size_t effect_offset = character_wrapper ? 0x10U
-                : (context.kind == 1U ? 0x08U : 0x00U);
+                : ((context.kind == 1U || server_character_wrapper) ? 0x08U : 0x00U);
             std::uintptr_t gameplay_effect_class{};
             std::memcpy(&gameplay_effect_class,
                 context.parameters.data() + effect_offset, sizeof(gameplay_effect_class));
@@ -6394,6 +6416,16 @@ struct Ue5NteAdapter::State {
             std::uintptr_t attacker_ability_system{}, victim_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
                 !CurrentAbilitySystemLocked(victim, victim_ability_system)) return false;
+            if (server_character_wrapper) {
+                // The dump-defined server RPC is owned by the recipient character and
+                // carries the source actor explicitly. It has no trigger-ASC or return field.
+                std::uintptr_t source_actor{};
+                std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
+                return bindings->replay_server_activate_by_actor != 0 &&
+                    context.function == bindings->replay_server_activate_by_actor &&
+                    context.receiver == victim && source_actor == attacker &&
+                    source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U);
+            }
             if (by_actor) {
                 std::uintptr_t source_actor{}, trigger_ability_system{};
                 const std::size_t source_actor_offset = character_wrapper ? 0x08U : 0x00U;
@@ -6543,8 +6575,18 @@ struct Ue5NteAdapter::State {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                     "Core had pending combat-capture records before replay, but draining them produced no validated GameplayEffect invocation; the entry calls may not match the dump-validated parameter ABI");
             }
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "dump-validated GameplayEffect entry points exist, but neither ProcessEvent nor Native Exec capture observed a call for this hit");
+            try {
+                replay_status_message =
+                    "dump-validated GameplayEffect entry points exist, but neither ProcessEvent nor Native Exec capture observed a call for this hit";
+                if (!replay_entrypoint_diagnostics.empty()) {
+                    replay_status_message += "; live entry points: ";
+                    replay_status_message += replay_entrypoint_diagnostics;
+                }
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE, replay_status_message.c_str());
+            } catch (...) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "dump-validated GameplayEffect entry points exist, but neither ProcessEvent nor Native Exec capture observed a call for this hit");
+            }
         }
         if (!record->replay.tag_arrays_valid) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -6620,6 +6662,10 @@ struct Ue5NteAdapter::State {
             std::memcpy(parameters.data() + trigger_offset, &replay_attacker_ability_system,
                 sizeof(replay_attacker_ability_system));
             parameters[return_offset] = 0;
+        } else if (record->replay.kind == 4U) {
+            // The validated ServerActivate RPC has no return/out field. Preserve the captured
+            // FBufferData scalars, BuffEventType, source actor, and PredictionKey; only the
+            // call-scoped GameplayTag TArray storage above is rebound.
         } else if (record->replay.kind == 2U) {
             parameters[0x69U] = 0;
             std::memset(parameters.data() + 0x6CU, 0, sizeof(std::uint64_t));
@@ -8532,6 +8578,96 @@ struct Ue5NteAdapter::State {
             field("ModifyData", "StructProperty", 0x58, 0x18) &&
             field("pTriggerAbilityComp", "ObjectProperty", 8, 0x70) &&
             field("ReturnValue", "BoolProperty", 1, 0x78);
+    }
+
+    // The native HTGame dump also declares a NetServer GameplayEffect entry point on
+    // HTAbilityCharacter. Validate it independently: GameplayEffect is an object pointer,
+    // and PredictionKey@0x6C extends the live reflected parameter range through 0x7C.
+    [[nodiscard]] bool ValidateReplayServerActivateByActorFunctionLocked(
+        const std::uintptr_t function, std::string& failure_reason) const {
+        constexpr std::string_view entry_name =
+            "HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor";
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(entry_name);
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (function == 0) return fail("function pointer is null");
+
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
+        }
+        if (function_class_name != "Function") {
+            return fail("expected class Function, observed " + function_class_name);
+        }
+        if (outer_name != "HTAbilityCharacter") {
+            return fail("expected owner HTAbilityCharacter, observed " + outer_name);
+        }
+        if (function_name != "ServerActivateGameEffectsWithClassByActor") {
+            return fail("expected function ServerActivateGameEffectsWithClassByActor, observed " +
+                function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        constexpr std::uint8_t kExpectedServerNumParms = 5U;
+        constexpr std::uint16_t kExpectedServerReturnOffset = 0xFFFFU;
+        if (parms_size != kGameplayEffectReplayServerCharacterParmsSize ||
+            num_parms != kExpectedServerNumParms ||
+            return_offset != kExpectedServerReturnOffset) {
+            return fail("UFunction header mismatch: expected NumParms=5, ParmsSize=124, ReturnValueOffset=65535; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
+        const auto field = [&](const std::string_view name, const std::string_view type,
+                               const std::uint16_t size, const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            if (!FindReflectedPropertyLocked(function, name, property, false)) {
+                return fail("could not find reflected field " + std::string(name) +
+                    " in the UFunction PropertyLink");
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
+        };
+
+        ReflectedPropertyInfo buff_event_type;
+        if (!field("SourceObj", "ObjectProperty", 8, 0x00) ||
+            !field("GameplayEffect", "ObjectProperty", 8, 0x08) ||
+            !field("ModifyData", "StructProperty", 0x58, 0x10)) {
+            return false;
+        }
+        if (!FindReflectedPropertyLocked(function, "BuffEventType", buff_event_type, false)) {
+            return fail("could not find reflected field BuffEventType in the UFunction PropertyLink");
+        }
+        if ((buff_event_type.type != "ByteProperty" && buff_event_type.type != "EnumProperty") ||
+            buff_event_type.element_size != 1 || buff_event_type.offset != 0x68 ||
+            buff_event_type.array_dim != 1) {
+            return fail("field BuffEventType expected ByteProperty/EnumProperty, size=1, offset=104, arrayDim=1; observed type=" +
+                buff_event_type.type + ", size=" + std::to_string(buff_event_type.element_size) +
+                ", offset=" + std::to_string(buff_event_type.offset) +
+                ", arrayDim=" + std::to_string(buff_event_type.array_dim));
+        }
+        return field("PredictionKey", "StructProperty", 0x10, 0x6C);
     }
 
     // Convert the dump-declared FVehicleData.Name FText via the dump-declared
@@ -12277,6 +12413,7 @@ struct Ue5NteAdapter::State {
                     std::string replay_by_actor_failure;
                     std::string replay_to_target_failure;
                     std::string replay_character_failure;
+                    std::string replay_server_character_failure;
                     std::uintptr_t replay_apply_by_actor{};
                     if (!FindExactObjectLocked(
                             L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor",
@@ -12313,6 +12450,17 @@ struct Ue5NteAdapter::State {
                                    replay_activate_by_actor, replay_character_failure)) {
                         next_capture_bindings.replay_activate_by_actor = replay_activate_by_actor;
                     }
+                    std::uintptr_t replay_server_activate_by_actor{};
+                    if (!FindExactObjectLocked(
+                            L"/Script/HTGame.HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor",
+                            replay_server_activate_by_actor)) {
+                        replay_server_character_failure =
+                            "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayServerActivateByActorFunctionLocked(
+                                   replay_server_activate_by_actor, replay_server_character_failure)) {
+                        next_capture_bindings.replay_server_activate_by_actor =
+                            replay_server_activate_by_actor;
+                    }
                     replay_entrypoint_diagnostics =
                         "ASC ByActor: " +
                         (next_capture_bindings.replay_apply_by_actor != 0
@@ -12322,7 +12470,10 @@ struct Ue5NteAdapter::State {
                             ? std::string("validated") : replay_to_target_failure) +
                         "; Character wrapper: " +
                         (next_capture_bindings.replay_activate_by_actor != 0
-                            ? std::string("validated") : replay_character_failure);
+                            ? std::string("validated") : replay_character_failure) +
+                        "; Character server RPC: " +
+                        (next_capture_bindings.replay_server_activate_by_actor != 0
+                            ? std::string("validated") : replay_server_character_failure);
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
@@ -12343,6 +12494,7 @@ struct Ue5NteAdapter::State {
                     next_capture_bindings.replay_apply_by_actor != 0 ||
                     next_capture_bindings.replay_apply_to_target != 0 ||
                     next_capture_bindings.replay_activate_by_actor != 0 ||
+                    next_capture_bindings.replay_server_activate_by_actor != 0 ||
                     std::ranges::any_of(next_capture_bindings.buffs,
                         [](const auto& buff) { return buff.function != 0; });
                 if (has_capture_binding) {
@@ -19005,6 +19157,7 @@ void Ue5NteAdapter::OnCombatExecFunction(
         function != bindings->replay_apply_by_actor &&
         function != bindings->replay_apply_to_target &&
         function != bindings->replay_activate_by_actor &&
+        function != bindings->replay_server_activate_by_actor &&
         !is_buff_function) {
         return;
     }
@@ -19026,7 +19179,8 @@ void Ue5NteAdapter::OnActorProcessEventPre(
     if (bindings == nullptr ||
         (function != bindings->replay_apply_by_actor &&
          function != bindings->replay_apply_to_target &&
-         function != bindings->replay_activate_by_actor)) {
+         function != bindings->replay_activate_by_actor &&
+         function != bindings->replay_server_activate_by_actor)) {
         return;
     }
 
@@ -19194,6 +19348,7 @@ Ue5NteAdapter::CombatExecFunctionTargets() const noexcept {
     append_target(bindings->replay_apply_by_actor);
     append_target(bindings->replay_apply_to_target);
     append_target(bindings->replay_activate_by_actor);
+    append_target(bindings->replay_server_activate_by_actor);
     return snapshot;
 }
 
