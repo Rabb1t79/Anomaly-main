@@ -69,3 +69,11 @@
 - 运行时产生可读日志，明确显示所选 route、`native_exec_seen`、`matching_candidates`、新伤害事件与 HP 探针。
 - 游戏内对单次普通攻击进行一次受控验证，再测试投射物、多段与范围伤害。
 - 在没有实际运行时日志时，不把 CI 绿色称作游戏内功能通过。
+
+## Character-switch continuity
+
+- A chain is bound to the root hit's captured attacker handle, victim handle, DamageSource identity, and validated GameplayEffect parameter snapshot. It must not follow the currently selected character after a switch.
+- While a chain is active, the plugin freezes its root context and accepts descendant DamageEvents only when world, attacker, victim, and source identity still match that root. A newly selected character's ordinary attack can seed a new chain only after the old chain ends; it must not cancel or overwrite the active chain.
+- Core's initial attacker eligibility check is historical: it verifies that the root attacker was the player-controlled character when the root hit occurred. Later replay dispatch must use that same captured attacker/ASC binding, not the current Pawn/ASC.
+- Character selection changes alone are not a cancellation signal. A chain may still stop if the world changes, the captured attacker/target or ASC/effect becomes invalid, the object registry generation changes, or the game refuses/does not apply the validated native call. Do not bypass those validity checks to force continuation.
+- This rule is derived from the user's observed legacy behavior. The legacy DLL has not yet been disassembled in this environment, so the binary's exact internal implementation remains unverified.
