@@ -90,6 +90,7 @@ struct Context final {
     bool replaying{};
     // 可选的受控实验模式：一次真实新伤害事件确认后自动停用连锁。
     bool proof_single_replay{};
+    bool proof_single_replay_completed{};
     // Draw runs in the Render domain. Replay/stop requests are posted atomically
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
@@ -838,6 +839,7 @@ bool ResolveReplaySkill(Context& context, AnomalyGenerationHandleV1* skill_out) 
 
 // ArmForNextAttack 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 void ArmForNextAttack(Context& context) {
+    context.proof_single_replay_completed = false;
     context.captured = false;
     context.replaying = false;
     context.replay_done = 0;
@@ -923,6 +925,8 @@ bool CaptureNextAttack(Context& context) {
         }
 
         context.captured = true;
+        context.replay_done = 0;
+        context.proof_single_replay_completed = false;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
         context.captured_damage_value = event.display_damage;
@@ -1109,6 +1113,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     context->replay_requested.store(false, std::memory_order_release);
     context->stop_requested.store(false, std::memory_order_release);
     context->proof_single_replay = false;
+    context->proof_single_replay_completed = false;
     ArmForNextAttack(*context);
     return anomaly::sdk::Ok();
 }
@@ -1210,6 +1215,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                     context->replaying = false;
                     context->waiting_for_damage = false;
                     context->replay_requested.store(false, std::memory_order_release);
+                    context->proof_single_replay_completed = true;
                     context->status = "单次验证通过：已观察到同一目标的新 DamageEvent，重放已自动停用";
                     return;
                 }
@@ -1355,7 +1361,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             ui->text(ui->user, anomaly::sdk::StringView(
                 "目标：" + context->captured_target_path));
         }
-        const std::string progress = context->proof_single_replay && !context->enabled
+        const std::string progress = context->proof_single_replay_completed
             ? "单次验证完成：已确认新的真实伤害事件（重放已自动停用）"
             : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
                 "（目标持续受击时继续）";
