@@ -1,0 +1,36 @@
+name: Legacy DLL Static Triage
+
+on:
+  push:
+    branches:
+      - audit/legacy-dll-triage-20261016
+    paths:
+      - tools/legacy_dll_triage.py
+      - .github/workflows/legacy-dll-triage.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Checkout archived DLL and scanner
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect PE metadata and redact likely credentials from strings
+        shell: pwsh
+        run: |
+          python tools/legacy_dll_triage.py plugins/TimeAccel/plugin.dll .build/legacy-dll-triage/report.json
+      - name: Upload redacted triage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-plugin-dll-triage
+          path: .build/legacy-dll-triage/report.json
+          if-no-files-found: error
+          retention-days: 3
