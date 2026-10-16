@@ -1046,6 +1046,9 @@ struct Ue5NteAdapter::State {
     struct DamageRecord {
         AnomalyNteDamageEventV1 event{};
         float raw_damage{};
+        // Freeze local-player possession evidence at hit time; do not bind a chain root
+        // to whichever playable character happens to be active when Replay is requested.
+        bool attacker_was_local_player_pawn{};
         ReplayEffectContext replay{};
     };
     static constexpr std::size_t kReplayEffectCallCapacity = 32;
@@ -4114,12 +4117,14 @@ struct Ue5NteAdapter::State {
 
     void RecordDamageEventLocked(
         AnomalyNteDamageEventV1 event, const float raw_damage = 0.0F,
-        const ReplayEffectContext* replay_context = nullptr) noexcept {
+        const ReplayEffectContext* replay_context = nullptr,
+        const bool attacker_was_local_player_pawn = false) noexcept {
         event.struct_size = sizeof(event);
         event.sequence = ++damage_event_sequence;
         DamageRecord record{};
         record.event = event;
         record.raw_damage = raw_damage;
+        record.attacker_was_local_player_pawn = attacker_was_local_player_pawn;
         if (replay_context != nullptr) record.replay = *replay_context;
         if (damage_event_count == kDamageEventCapacity) {
             damage_events[damage_event_start] = record;
@@ -6758,25 +6763,18 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "original damage belongs to a stale world/object generation");
         }
-        if (player_pawn == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "current player character is unavailable");
-        }
-        AnomalyGenerationHandleV1 live_player{};
-        if (!ObjectHandleLocked(player_pawn, live_player) ||
-            live_player.id != record->event.attacker.id ||
-            live_player.generation != record->event.attacker.generation) {
+        if (!record->attacker_was_local_player_pawn) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
-                "captured damage attacker is no longer the current player character");
+                "captured damage attacker was not the local player-controlled character when the hit occurred");
         }
         std::uintptr_t attacker{}, victim{};
         if (!ResolveObjectHandleLocked(record->event.attacker, attacker) ||
             !ResolveObjectHandleLocked(record->event.victim, victim) ||
-            attacker != player_pawn || victim == 0 || attacker == victim ||
+            attacker == 0 || victim == 0 || attacker == victim ||
             !ReplayContextMatchesDamageLocked(
                 record->replay, attacker, victim, record->event.source_id)) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
-                "captured GameplayEffect receiver/source/target no longer matches live player and victim");
+                "captured GameplayEffect receiver/source/target no longer matches the captured player-controlled character and victim");
         }
 
         // The recorded receiver/function pair is kept from the exact validated native
@@ -6902,7 +6900,8 @@ struct Ue5NteAdapter::State {
             const bool has_replay_context = FindReplayContextForDamageLocked(
                 attacker, victim, event.source_id, capture_tick_sequence, replay_context);
             RecordDamageEventLocked(event, damage,
-                has_replay_context ? &replay_context : nullptr);
+                has_replay_context ? &replay_context : nullptr,
+                attacker != 0 && attacker == player_pawn);
             AnomalyNteCombatEventV1 combat_event{};
             combat_event.kind = ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE;
             combat_event.tick_sequence = event.tick_sequence;
