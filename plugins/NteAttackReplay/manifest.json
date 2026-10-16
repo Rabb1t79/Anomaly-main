@@ -5,7 +5,7 @@
   "description": "Captures a real player-to-target CharacterOnDamaged event and, when enabled, continuously reapplies only the exact Core-validated HTAbilitySystemComponent GameplayEffect call against the same target at a configurable Game-tick interval, creating a damage-chain reaction. A chain stops when no fresh matching damage event arrives within 2 seconds or the feature is disabled. It does not replay player input, skills, or animations and does not directly write target HP.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "1.9.6",
+  "version": "1.9.7",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
