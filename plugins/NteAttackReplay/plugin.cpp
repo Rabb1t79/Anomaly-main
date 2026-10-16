@@ -360,7 +360,7 @@ void AppendReplayObservedDamageEvidenceLog(
         line += " damage_source=";
         line += context.captured_damage_source_name.empty()
             ? "(unknown)" : context.captured_damage_source_name;
-        line += "\r\nproof=exact source_id, same world, same attacker, same victim, newer event sequence\r\n\r\n";
+        line += "\r\nproof=resolved exact source_id, same world, same attacker, same victim, newer sequence, positive final_damage\r\n\r\n";
         WriteReplayLogBytes(context, line);
     } catch (...) {
         ReportReplayLogError(context,
@@ -1283,7 +1283,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                 SameHandle(event.attacker, context->character) &&
                 SameHandle(event.victim, context->captured_target) &&
                 event.sequence > context->captured_damage_sequence &&
-                (exact_source_identity || source_name_fallback_matches)) {
+                (exact_source_identity || source_name_fallback_matches) &&
+                (!context->proof_single_replay || event.final_damage > 0)) {
                 if (context->proof_single_replay) {
                     AppendReplayObservedDamageEvidenceLog(*context, event);
                 }
