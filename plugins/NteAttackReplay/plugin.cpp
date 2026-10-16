@@ -267,7 +267,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
         context.replay_log_path = directory + L"\\attack-replay.log";
         const std::string startup_line =
             "[" + ReplayLogTimestampUtc() + "] plugin=anomaly.builtin.nte-attack-replay "
-            "version=1.9.4 log=initialized\r\n";
+            "version=1.9.5 log=initialized\r\n";
         if (!WriteReplayLogBytes(context, startup_line)) return false;
         return true;
     } catch (...) {
