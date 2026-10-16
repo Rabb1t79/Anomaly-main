@@ -6465,7 +6465,28 @@ struct Ue5NteAdapter::State {
         Exception,
     };
 
-    // 中文说明：保存每类匹配失败的次数，在拒绝 Replay 时输出具体原因，避免只留下笼统的校验失败信息。
+    [[nodiscard]] static std::string_view ReplayMatchFailureName(
+        const ReplayMatchFailure failure) noexcept {
+        switch (failure) {
+        case ReplayMatchFailure::None: return "none";
+        case ReplayMatchFailure::InvalidContext: return "invalid-context";
+        case ReplayMatchFailure::MissingBindings: return "missing-bindings";
+        case ReplayMatchFailure::MissingDamageSource: return "missing-damage-source";
+        case ReplayMatchFailure::InvalidEffectIdentity: return "invalid-effect-identity";
+        case ReplayMatchFailure::DamageEffectMismatch: return "damage-effect-mismatch";
+        case ReplayMatchFailure::AbilitySystemUnavailable: return "ability-system-unavailable";
+        case ReplayMatchFailure::FunctionMismatch: return "function-mismatch";
+        case ReplayMatchFailure::ReceiverMismatch: return "receiver-mismatch";
+        case ReplayMatchFailure::SourceActorMismatch: return "source-actor-mismatch";
+        case ReplayMatchFailure::TriggerAbilitySystemMismatch: return "trigger-asc-mismatch";
+        case ReplayMatchFailure::TargetAbilitySystemMismatch: return "target-asc-mismatch";
+        case ReplayMatchFailure::UnsupportedCallKind: return "unsupported-call-kind";
+        case ReplayMatchFailure::Exception: return "exception";
+        }
+        return "unknown";
+    }
+
+    // 中文说明：保存每类匹配失败的次数，并为少量候选记录具体对象关系；不据此放宽任何校验。
     struct ReplayMatchDiagnostics {
         std::uint32_t candidates{};
         std::uint32_t invalid_context{};
@@ -6476,6 +6497,8 @@ struct Ue5NteAdapter::State {
         // 中文诊断：记录少量原始槽位与 Effect identity 路径，避免在证据不足时放宽关联条件。
         std::string invalid_context_detail;
         std::string damage_effect_mismatch_detail;
+        std::string structural_mismatch_detail;
+        std::uint8_t structural_mismatch_entries{};
         std::uint32_t missing_bindings{};
         std::uint32_t missing_damage_source{};
         std::uint32_t invalid_effect_identity{};
@@ -6534,6 +6557,9 @@ struct Ue5NteAdapter::State {
             }
             if (!damage_effect_mismatch_detail.empty()) {
                 summary += ",effect_detail=" + damage_effect_mismatch_detail;
+            }
+            if (!structural_mismatch_detail.empty()) {
+                summary += ",object_detail=" + structural_mismatch_detail;
             }
             return summary;
         }
@@ -6757,6 +6783,74 @@ struct Ue5NteAdapter::State {
                     candidate, attacker, victim, source_id, &failure)) {
                 if (diagnostics != nullptr) {
                     diagnostics->Record(failure);
+                    // 只记录前三个结构性不匹配候选的对象路径；始终不改变原有匹配条件。
+                    if (diagnostics->structural_mismatch_entries < 3U) {
+                        try {
+                            const auto object_label = [this](const std::uintptr_t object) {
+                                if (object == 0) return std::string("null");
+                                try {
+                                    const std::string path = ObjectPathLocked(object);
+                                    if (!path.empty()) return path.substr(0, 180U);
+                                } catch (...) {
+                                }
+                                return std::string("ptr:") + std::to_string(object);
+                            };
+                            const auto read_parameter_pointer = [&candidate](
+                                const std::size_t offset, std::uintptr_t& value) noexcept {
+                                value = 0;
+                                if (offset > candidate.parameter_size ||
+                                    sizeof(value) > candidate.parameter_size - offset) {
+                                    return false;
+                                }
+                                std::memcpy(&value, candidate.parameters.data() + offset,
+                                    sizeof(value));
+                                return true;
+                            };
+                            std::uintptr_t effect_argument{}, source_actor{};
+                            std::uintptr_t trigger_asc{}, target_asc{};
+                            const std::size_t effect_offset = candidate.kind == 3U ? 0x10U
+                                : ((candidate.kind == 1U || candidate.kind == 4U) ? 0x08U : 0U);
+                            static_cast<void>(read_parameter_pointer(effect_offset, effect_argument));
+                            if (candidate.kind == 1U || candidate.kind == 4U) {
+                                static_cast<void>(read_parameter_pointer(0U, source_actor));
+                            } else if (candidate.kind == 3U) {
+                                static_cast<void>(read_parameter_pointer(0x08U, source_actor));
+                            }
+                            if (candidate.kind == 1U) {
+                                static_cast<void>(read_parameter_pointer(0x68U, trigger_asc));
+                            } else if (candidate.kind == 3U) {
+                                static_cast<void>(read_parameter_pointer(0x70U, trigger_asc));
+                            } else if (candidate.kind == 2U) {
+                                static_cast<void>(read_parameter_pointer(0x08U, target_asc));
+                            }
+                            std::uintptr_t attacker_asc{}, victim_asc{};
+                            static_cast<void>(CurrentAbilitySystemLocked(attacker, attacker_asc));
+                            static_cast<void>(CurrentAbilitySystemLocked(victim, victim_asc));
+                            std::string detail =
+                                "failure=" + std::string(ReplayMatchFailureName(failure)) +
+                                ";kind=" + std::to_string(candidate.kind) +
+                                ";tick=" + std::to_string(candidate.tick_sequence) +
+                                ";delta=" + (candidate.tick_sequence <= capture_tick_sequence
+                                    ? std::to_string(capture_tick_sequence - candidate.tick_sequence)
+                                    : std::string("future")) +
+                                ";fn=" + object_label(candidate.function) +
+                                ";receiver=" + object_label(candidate.receiver) +
+                                ";effect_arg=" + object_label(effect_argument) +
+                                ";source_actor=" + object_label(source_actor) +
+                                ";trigger_asc=" + object_label(trigger_asc) +
+                                ";target_asc=" + object_label(target_asc) +
+                                ";expected_attacker=" + object_label(attacker) +
+                                ";expected_victim=" + object_label(victim) +
+                                ";expected_attacker_asc=" + object_label(attacker_asc) +
+                                ";expected_victim_asc=" + object_label(victim_asc);
+                            if (!diagnostics->structural_mismatch_detail.empty()) {
+                                diagnostics->structural_mismatch_detail += " || ";
+                            }
+                            diagnostics->structural_mismatch_detail += detail;
+                            ++diagnostics->structural_mismatch_entries;
+                        } catch (...) {
+                        }
+                    }
                     // 中文诊断：Effect mismatch 是首个失败条件；此时不能假设 ASC/receiver 也已匹配。
                     // 输出 Dump 路由、DamageGEDef、实参及关键对象路径，下一次实测据此修复字段/路由。
                     if (failure == ReplayMatchFailure::DamageEffectMismatch &&
