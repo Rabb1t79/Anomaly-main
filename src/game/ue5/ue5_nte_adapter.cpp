@@ -5666,11 +5666,6 @@ struct Ue5NteAdapter::State {
         // so two genuine same-frame identical effects remain separate invocations.
         const bool captured_has_native_exec =
             (ingress_mask & kCombatCaptureIngressNativeExec) != 0;
-        if (source_parameter_address != 0 && ingress_mask != 0 &&
-            captured_has_native_exec != ((ingress_mask & kCombatCaptureIngressNativeExec) != 0)) {
-            // Defensive no-op: the comparison is kept explicit below to make the pairing
-            // criteria reviewable; a fresh capture's Native Exec state is its ingress bit.
-        }
         if (source_parameter_address != 0 && ingress_mask != 0) {
             for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
                 const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
@@ -6976,7 +6971,26 @@ struct Ue5NteAdapter::State {
                 route = "unknown validated GameplayEffect entry";
                 break;
             }
+            std::string capture_ingress;
+            if ((replay_root.replay.ingress_mask & kCombatCaptureIngressActorProcessEvent) != 0) {
+                capture_ingress += "actor-process-event";
+            }
+            if ((replay_root.replay.ingress_mask & kCombatCaptureIngressProcessEvent) != 0) {
+                if (!capture_ingress.empty()) capture_ingress += "+";
+                capture_ingress += "process-event";
+            }
+            const bool native_exec_observed =
+                (replay_root.replay.ingress_mask & kCombatCaptureIngressNativeExec) != 0;
+            if (native_exec_observed) {
+                if (!capture_ingress.empty()) capture_ingress += "+";
+                capture_ingress += "native-exec";
+            }
+            if (capture_ingress.empty()) capture_ingress = "unknown";
             replay_status_message = "ProcessEvent dispatch returned; route=" + route +
+                "; capture_ingress=" + capture_ingress +
+                "; native_exec_seen=" + (native_exec_observed ? "1" : "0") +
+                "; duplicate_ingress_observations=" +
+                std::to_string(replay_root.replay.duplicate_observation_count) +
                 "; matching_candidates=" +
                 std::to_string(replay_root.replay.matching_candidate_count) +
                 "; selection=newest-first; seed_final_damage=" +
