@@ -829,6 +829,7 @@ struct Ue5NteAdapter::State {
         GetHpMax,
         GetIsDead,
         GetAttackTarget,
+        IsFriendlyTarget,
         GetShieldHealth,
         GetActiveEffectTimeRemainingAndDuration,
         ActivateAbilityByClass,
@@ -1626,6 +1627,9 @@ struct Ue5NteAdapter::State {
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
         static constexpr std::array get_object{
             NteFunctionParameterSpec{"ReturnValue", "ObjectProperty", 8, true}};
+        static constexpr std::array is_friendly_target{
+            NteFunctionParameterSpec{"Target", "ObjectProperty", 8, false},
+            NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
         static constexpr std::array activate{
             NteFunctionParameterSpec{
                 "InAbilityToActivate", "ClassProperty", 8, false},
@@ -1699,6 +1703,8 @@ struct Ue5NteAdapter::State {
             return {kind, "GetIsDead", "HTAbilityCharacter", 1, get_bool};
         case NteFunctionKind::GetAttackTarget:
             return {kind, "GetAttackTarget", "HTAbilityCharacter", 8, get_object};
+        case NteFunctionKind::IsFriendlyTarget:
+            return {kind, "IsFriendlyTarget", "HTAbilityCharacter", 16, is_friendly_target};
         case NteFunctionKind::GetShieldHealth:
             return {kind, "GetShieldHealth", "HTAttributeComponent", 4, get_float};
         case NteFunctionKind::GetActiveEffectTimeRemainingAndDuration:
@@ -3249,6 +3255,33 @@ struct Ue5NteAdapter::State {
         const ReflectedBoolParameter& reflected = binding->bool_parameters[index];
         if (reflected.byte_offset >= binding->parms_size) return false;
         value = (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
+        return true;
+    }
+
+    // Dump-backed enemy gating for replay. The target is supplied as the reflected
+    // IsFriendlyTarget(Target) input; unresolved signatures fail closed.
+    [[nodiscard]] bool IsFriendlyTargetLocked(
+        const std::uintptr_t attacker,
+        const std::uintptr_t target,
+        bool& is_friendly) const noexcept {
+        is_friendly = true;
+        const auto kind = NteFunctionKind::IsFriendlyTarget;
+        const auto& binding = combat_skill_discovery.functions[NteIndex(kind)];
+        if (!binding || binding->parms_size > 64U || attacker == 0 || target == 0) {
+            return false;
+        }
+        alignas(std::uint64_t) std::array<std::uint8_t, 64> parameters{};
+        const auto target_offset = binding->offsets[0];
+        if (target_offset > binding->parms_size ||
+            sizeof(target) > binding->parms_size - target_offset) {
+            return false;
+        }
+        std::memcpy(parameters.data() + target_offset, &target, sizeof(target));
+        if (!InvokeNteFunctionLocked(kind, attacker, parameters)) return false;
+        const std::size_t return_index = NteSpec(kind).parameters.size() - 1U;
+        const ReflectedBoolParameter& reflected = binding->bool_parameters[return_index];
+        if (reflected.byte_offset >= binding->parms_size) return false;
+        is_friendly = (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
         return true;
     }
 
@@ -6859,8 +6892,20 @@ struct Ue5NteAdapter::State {
         std::uintptr_t attacker{}, victim{};
         if (!ResolveObjectHandleLocked(record->event.attacker, attacker) ||
             !ResolveObjectHandleLocked(record->event.victim, victim) ||
-            attacker == 0 || victim == 0 || attacker == victim ||
-            !ReplayContextMatchesDamageLocked(
+            attacker == 0 || victim == 0 || attacker == victim) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured player-controlled attacker or target is no longer valid");
+        }
+        bool victim_is_friendly{};
+        if (!IsFriendlyTargetLocked(attacker, victim, victim_is_friendly)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "dump-validated HTAbilityCharacter.IsFriendlyTarget is unavailable; refusing to replay without the target-faction check");
+        }
+        if (victim_is_friendly) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured target is friendly according to HTAbilityCharacter.IsFriendlyTarget; damage replay is restricted to non-friendly targets");
+        }
+        if (!ReplayContextMatchesDamageLocked(
                 record->replay, attacker, victim, record->event.source_id)) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "captured GameplayEffect receiver/source/target no longer matches the captured player-controlled character and victim");
@@ -12729,6 +12774,7 @@ struct Ue5NteAdapter::State {
                     lookup_function(NteFunctionKind::GetHpMax);
                     lookup_function(NteFunctionKind::GetIsDead);
                     lookup_function(NteFunctionKind::GetAttackTarget);
+                    lookup_optional(NteFunctionKind::IsFriendlyTarget);
                     lookup_function(NteFunctionKind::GetShieldHealth);
                     // UI/achievement bindings are optional enrichers. Their
                     // absence must not disable the native damage service.
