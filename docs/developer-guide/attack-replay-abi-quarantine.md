@@ -40,4 +40,4 @@ Keep the provisional service contract created during the Attack Replay port sepa
 
 ## Build boundary
 
-The ABI snapshot tool includes the experimental header explicitly so its field offsets continue to be measured. The general `nte.h` header does not import it transitively. A future change that alters this provisional contract should update both the source and packaged experimental headers, then pass the Attack plugin and Runtime/ABI workflows before being considered usable.
+The stable ABI snapshot excludes the provisional Damage Replay request, service table and service entry. Their compiler-measured layout lives separately at `abi/experimental/nte-damage-replay-v1-windows-x64.json` with a mirrored copy under the packaged SDK. The ABI snapshot tool exposes `--write-experimental` and `--check-experimental` modes to measure and validate that separate file. The general `nte.h` header does not import the experimental declaration transitively. A future change that alters this provisional contract should update both the source and packaged experimental headers and snapshots, then pass the Attack plugin and Runtime/ABI workflows before being considered usable.
