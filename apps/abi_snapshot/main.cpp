@@ -2227,25 +2227,8 @@ std::string BuildSnapshot() {
          {"event_name_utf8", offsetof(AnomalyNteCombatServiceV1, event_name_utf8)},
          {"participant_display_name_utf8", offsetof(AnomalyNteCombatServiceV1, participant_display_name_utf8)}},
         false);
-    AppendStruct(
-        output,
-        "AnomalyNteDamageReplayRequestV1",
-        sizeof(AnomalyNteDamageReplayRequestV1),
-        alignof(AnomalyNteDamageReplayRequestV1),
-        {{"struct_size", offsetof(AnomalyNteDamageReplayRequestV1, struct_size)},
-         {"flags", offsetof(AnomalyNteDamageReplayRequestV1, flags)},
-         {"damage_sequence", offsetof(AnomalyNteDamageReplayRequestV1, damage_sequence)}},
-        false);
-    AppendStruct(
-        output,
-        "AnomalyNteDamageReplayServiceV1",
-        sizeof(AnomalyNteDamageReplayServiceV1),
-        alignof(AnomalyNteDamageReplayServiceV1),
-        {{"struct_size", offsetof(AnomalyNteDamageReplayServiceV1, struct_size)},
-         {"service_version", offsetof(AnomalyNteDamageReplayServiceV1, service_version)},
-         {"user", offsetof(AnomalyNteDamageReplayServiceV1, user)},
-         {"replay_damage", offsetof(AnomalyNteDamageReplayServiceV1, replay_damage)}},
-        false);
+    // Damage Replay is kept out of the stable snapshot. Its layout is measured separately
+    // by BuildExperimentalDamageReplaySnapshot() because this port's service contract remains provisional.
     AppendStruct(
         output,
         "AnomalyNteSkillFrameV1",
@@ -2487,9 +2470,7 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION, "AnomalyNteActorsServiceV1", false);
     AppendService(output, ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION, "AnomalyNteCombatServiceV1", false);
-    AppendService(output, ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
-        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
-        "AnomalyNteDamageReplayServiceV1", false);
+    // The provisional Damage Replay service is described by the separate experimental snapshot.
     AppendService(output, ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION, "AnomalyNteSkillsServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
@@ -2502,6 +2483,57 @@ std::string BuildSnapshot() {
     AppendService(output, ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID,
         ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION,
         "AnomalyNteEscMenuButtonServiceV1", true);
+    output.append("  ]\n");
+    output.append("}\n");
+    return output;
+}
+
+std::string BuildExperimentalDamageReplaySnapshot() {
+    static_assert(sizeof(void*) == 8u);
+    static_assert(sizeof(std::size_t) == 8u);
+    static_assert(sizeof(std::uintptr_t) == 8u);
+
+    std::string output;
+    output.reserve(2'048u);
+    output.append("{\n");
+    output.append("  \"schema_version\": 1,\n");
+    output.append("  \"status\": \"experimental\",\n");
+    output.append("  \"target\": {\n");
+    output.append("    \"os\": \"windows\",\n");
+    output.append("    \"architecture\": \"x86_64\",\n");
+    output.append("    \"calling_convention\": \"cdecl\",\n");
+    output.append("    \"pointer_size\": 8,\n");
+    output.append("    \"size_t_size\": 8\n");
+    output.append("  },\n");
+    output.append("  \"constants\": {\n");
+    output.append("    \"ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION);
+    output.append("\n  },\n");
+    output.append("  \"structs\": {\n");
+    AppendStruct(
+        output,
+        "AnomalyNteDamageReplayRequestV1",
+        sizeof(AnomalyNteDamageReplayRequestV1),
+        alignof(AnomalyNteDamageReplayRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageReplayRequestV1, flags)},
+         {"damage_sequence", offsetof(AnomalyNteDamageReplayRequestV1, damage_sequence)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageReplayServiceV1",
+        sizeof(AnomalyNteDamageReplayServiceV1),
+        alignof(AnomalyNteDamageReplayServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageReplayServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageReplayServiceV1, user)},
+         {"replay_damage", offsetof(AnomalyNteDamageReplayServiceV1, replay_damage)}},
+        true);
+    output.append("  },\n");
+    output.append("  \"services\": [\n");
+    AppendService(output, ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+        "AnomalyNteDamageReplayServiceV1", true);
     output.append("  ]\n");
     output.append("}\n");
     return output;
@@ -2589,6 +2621,35 @@ int main(const int argc, char* argv[]) {
     }
 
     const std::string_view option(argv[1]);
+    if (option == "--write-experimental") {
+        const std::string experimental_snapshot = BuildExperimentalDamageReplaySnapshot();
+        if (!WriteFile(argv[2], experimental_snapshot)) {
+            std::cerr << "Failed to write experimental Damage Replay ABI snapshot: " << argv[2] << '\\n';
+            return 1;
+        }
+        return 0;
+    }
+    if (option == "--check-experimental") {
+        std::string expected;
+        if (!ReadFile(argv[2], expected)) {
+            std::cerr << "Failed to read experimental Damage Replay ABI snapshot: " << argv[2] << '\\n';
+            return 1;
+        }
+        expected = NormalizeJsonWhitespace(NormalizeLineEndings(expected));
+        const std::string experimental_snapshot = NormalizeJsonWhitespace(
+            NormalizeLineEndings(BuildExperimentalDamageReplaySnapshot()));
+        if (expected != experimental_snapshot) {
+            std::size_t offset = 0u;
+            while (offset < expected.size() && offset < experimental_snapshot.size() &&
+                   expected[offset] == experimental_snapshot[offset]) {
+                ++offset;
+            }
+            std::cerr << "Experimental Damage Replay ABI snapshot mismatch at byte "
+                      << offset << ": " << argv[2] << '\\n';
+            return 1;
+        }
+        return 0;
+    }
     if (option == "--write") {
         if (!WriteFile(argv[2], snapshot)) {
             std::cerr << "Failed to write ABI snapshot: " << argv[2] << '\n';
