@@ -94,6 +94,8 @@ struct Context final {
     // 连锁没有固定命中次数上限；该值仅控制两次 GameplayEffect 重放之间的 Game 帧间隔。
     uint32_t replay_interval_frames{1};
     uint32_t replay_done{};
+    // Outstanding descendants created by the binary damage tree. This is not a hit cap.
+    uint64_t replay_pending_jobs{};
     uint64_t replay_last_tick{};
     std::string status{"自动等待玩家下一次攻击"};
 
@@ -524,6 +526,7 @@ void ArmForNextAttack(Context& context) {
     context.captured_damage_source_name.clear();
     context.replay_damage_cursor = 0;
     context.replay_damage_deadline = {};
+    context.replay_pending_jobs = 0;
     context.replay_last_tick = 0;
     context.waiting_for_damage = false;
     context.status = context.enabled
@@ -876,8 +879,14 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
+            // The original player hit seeds two child jobs. Every confirmed descendant
+            // adds two more jobs; requests reuse this chain's pinned native-effect root.
+            context->replay_pending_jobs = context->proof_single_replay ? 1U : 2U;
+            context->replay_damage_cursor = context->captured_damage_sequence;
             context->replay_last_tick = context->captured_tick_sequence;
-            context->status = "已自动启动伤害链式反应，等待下一游戏帧";
+            context->status = context->proof_single_replay
+                ? "单次验证已启动，等待原生追加伤害"
+                : "二叉伤害链已启动：根节点产生两个待执行分支";
         } else {
             context->status = "自动重放未启动：功能已停用或尚无有效攻击";
         }
@@ -889,111 +898,150 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
 
     const auto now = std::chrono::steady_clock::now();
 
-    // accepted=1 only means the call reached the game. A replay is counted
-    // only after a fresh player->target DamageEvent is observed.
-    if (context->waiting_for_damage) {
+    // A native call returning OK is not a hit. Continuously scan all newly captured events
+    // while the chain is active so multi-hit effects can each add their own two descendants.
+    // The cursor is monotonic across replay calls; do not jump to the latest tail, or extra
+    // events produced by one native invocation could be silently skipped.
+    bool matching_damage_observed_while_waiting = false;
+    bool damage_stream_failed = false;
+    constexpr uint32_t kDamageEventsScannedPerUpdate = 64;
+    for (uint32_t scanned = 0; scanned < kDamageEventsScannedPerUpdate; ++scanned) {
         AnomalyNteDamageEventV1 event{};
         event.struct_size = sizeof(event);
         const auto damage_status = context->combat->next_damage_event(
             context->combat->user, context->replay_damage_cursor, &event);
-        if (damage_status.code == ANOMALY_STATUS_V1_OK) {
-            context->replay_damage_cursor = event.sequence;
-            const bool exact_source_identity =
-                context->captured_damage_source_id != 0 &&
-                event.source_id != 0 &&
-                event.source_id == context->captured_damage_source_id;
-            bool source_name_fallback_matches = false;
-            // 单次路线证明不接受仅显示名称相同的弱匹配；一般连锁监控仍保留历史兼容回退。
-            if (!exact_source_identity && !context->proof_single_replay &&
-                !context->captured_damage_source_name.empty()) {
-                const std::string observed_source_name =
-                    ReadDamageSourceName(context->combat, event.source_id);
-                source_name_fallback_matches = !observed_source_name.empty() &&
-                    observed_source_name == context->captured_damage_source_name;
-            }
-            if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) != 0 &&
-                SameHandle(event.world, context->world) &&
-                SameHandle(event.attacker, context->character) &&
-                SameHandle(event.victim, context->captured_target) &&
-                event.sequence > context->captured_damage_sequence &&
-                (exact_source_identity || source_name_fallback_matches) &&
-                (!context->proof_single_replay || event.final_damage > 0)) {
-                if (context->proof_single_replay) {
-                    AppendReplayObservedDamageEvidenceLog(*context, event);
-                }
-                context->waiting_for_damage = false;
-                ++context->replay_done;
-                // Rate limiting is based on the actual Game tick observed here,
-                // not the event's potentially earlier capture tick.
-                context->replay_last_tick = current_tick;
-                context->status = "已确认新的 DamageEvent，下一游戏帧继续";
-                if (context->proof_single_replay) {
-                    // 一次已确认的原生重放结束实验，防止测试过程中连续扣除目标生命。
-                    context->enabled = false;
-                    context->replaying = false;
-                    context->waiting_for_damage = false;
-                    context->replay_requested.store(false, std::memory_order_release);
-                    context->proof_single_replay_completed = true;
-                    if (!context->proof_single_replay_candidate_count_available) {
-                        context->status =
-                            "单次观察结束：已见新伤害，但 Core 未提供匹配候选数；路线未证实";
-                    } else if (!context->proof_single_replay_single_candidate) {
-                        context->status =
-                            "单次观察结束：已见新伤害，但匹配候选数=" +
-                            std::to_string(context->proof_single_replay_candidate_count) +
-                            "；存在歧义，不能认定路线正确";
-                    } else if (!context->proof_single_replay_hp_result_available) {
-                        context->status =
-                            "单次观察结束：候选数=1 且观察到新伤害，但目标 HP 探针不可用；路线未证实";
-                    } else if (!context->proof_single_replay_hp_reduced) {
-                        context->status =
-                            "单次观察结束：候选数=1 且观察到新伤害，但同步 GetHP 未下降；需排除护盾或异步结算";
-                    } else if (!context->proof_single_replay_native_exec_result_available) {
-                        context->status =
-                            "单次观测结束：单候选、同来源新伤害且 HP 下降，但缺少 Native Exec 命中证据";
-                    } else if (!context->proof_single_replay_native_exec_seen) {
-                        context->status =
-                            "单次观测结束：伤害已生效，但只观测到 ProcessEvent 入口；原生 Exec 路径尚未确认";
-                    } else {
-                        context->status =
-                            "移植路径得到支持：单候选、Native Exec 命中、同来源新伤害且同步 GetHP 下降";
-                    }
-                    return;
-                }
-            }
-        } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
+        if (damage_status.code == ANOMALY_STATUS_V1_NOT_FOUND) break;
+        if (damage_status.code != ANOMALY_STATUS_V1_OK ||
+            event.sequence <= context->replay_damage_cursor) {
+            damage_stream_failed = true;
+            break;
+        }
+        context->replay_damage_cursor = event.sequence;
+
+        const bool exact_source_identity =
+            context->captured_damage_source_id != 0 &&
+            event.source_id != 0 &&
+            event.source_id == context->captured_damage_source_id;
+        bool source_name_fallback_matches = false;
+        // A single-shot proof never accepts display-name-only source identity.
+        if (!exact_source_identity && !context->proof_single_replay &&
+            !context->captured_damage_source_name.empty()) {
+            const std::string observed_source_name =
+                ReadDamageSourceName(context->combat, event.source_id);
+            source_name_fallback_matches = !observed_source_name.empty() &&
+                observed_source_name == context->captured_damage_source_name;
+        }
+
+        if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
+            !SameHandle(event.world, context->world) ||
+            !SameHandle(event.attacker, context->character) ||
+            !SameHandle(event.victim, context->captured_target) ||
+            event.sequence <= context->captured_damage_sequence ||
+            !(exact_source_identity || source_name_fallback_matches) ||
+            (context->proof_single_replay && event.final_damage <= 0)) {
+            continue;
+        }
+
+        if (context->proof_single_replay) {
+            AppendReplayObservedDamageEvidenceLog(*context, event);
+            context->waiting_for_damage = false;
+            ++context->replay_done;
+            // One controlled observation ends immediately; it must not fan out.
+            context->enabled = false;
             context->replaying = false;
             context->waiting_for_damage = false;
-            ArmForNextAttack(*context);
-            context->status = "伤害链验证失败：读取新的 DamageEvent 时发生错误；已恢复监测，等待下一次真实伤害事件";
+            context->replay_requested.store(false, std::memory_order_release);
+            context->proof_single_replay_completed = true;
+            if (!context->proof_single_replay_candidate_count_available) {
+                context->status =
+                    "单次观察结束：已见新伤害，但 Core 未提供匹配候选数；路线未证实";
+            } else if (!context->proof_single_replay_single_candidate) {
+                context->status =
+                    "单次观察结束：已见新伤害，但匹配候选数=" +
+                    std::to_string(context->proof_single_replay_candidate_count) +
+                    "；存在歧义，不能认定路线正确";
+            } else if (!context->proof_single_replay_hp_result_available) {
+                context->status =
+                    "单次观察结束：候选数=1 且观察到新伤害，但目标 HP 探针不可用；路线未证实";
+            } else if (!context->proof_single_replay_hp_reduced) {
+                context->status =
+                    "单次观察结束：候选数=1 且观察到新伤害，但同步 GetHP 未下降；需排除护盾或异步结算";
+            } else if (!context->proof_single_replay_native_exec_result_available) {
+                context->status =
+                    "单次观测结束：单候选、同来源新伤害且 HP 下降，但缺少 Native Exec 命中证据";
+            } else if (!context->proof_single_replay_native_exec_seen) {
+                context->status =
+                    "单次观测结束：伤害已生效，但只观测到 ProcessEvent 入口；原生 Exec 路径尚未确认";
+            } else {
+                context->status =
+                    "移植路径得到支持：单候选、Native Exec 命中、同来源新伤害且同步 GetHP 下降";
+            }
             return;
         }
 
-        if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
-            const bool single_shot = context->proof_single_replay;
-            context->replaying = false;
-            context->waiting_for_damage = false;
-            if (single_shot) {
-                context->enabled = false;
-                context->replay_requested.store(false, std::memory_order_release);
-            }
-            ArmForNextAttack(*context);
-            context->status = single_shot
-                ? "单次验证未通过：2 秒内未观察到同一目标的新 DamageEvent，已自动停用；检查 attack-replay.log"
-                : "伤害链停止：2 秒内未确认同一目标的新伤害（目标可能已死亡或追加未生效）；自动等待下一次真实伤害事件";
-            return;
+        // Each real descendant creates two more pending native-effect replays. Use a
+        // saturating 64-bit work counter rather than imposing a fixed hit/time limit.
+        constexpr uint64_t kTwoChildren = 2U;
+        if (context->replay_pending_jobs >
+            (std::numeric_limits<uint64_t>::max)() - kTwoChildren) {
+            context->replay_pending_jobs = (std::numeric_limits<uint64_t>::max)();
+        } else {
+            context->replay_pending_jobs += kTwoChildren;
         }
-        if (context->waiting_for_damage) return;
+        if (context->replay_done != (std::numeric_limits<uint32_t>::max)()) {
+            ++context->replay_done;
+        }
+        if (context->waiting_for_damage) {
+            matching_damage_observed_while_waiting = true;
+        }
     }
+
+    if (damage_stream_failed) {
+        context->replaying = false;
+        context->waiting_for_damage = false;
+        ArmForNextAttack(*context);
+        context->status =
+            "伤害链验证失败：读取新增 DamageEvent 流发生错误；已恢复监测，等待下一次真实伤害事件";
+        return;
+    }
+
+    if (context->waiting_for_damage && matching_damage_observed_while_waiting) {
+        context->waiting_for_damage = false;
+        // Measure the configured interval from the Game tick where real damage was seen.
+        context->replay_last_tick = current_tick;
+        context->status = "已确认新伤害节点：为该节点新增两个待执行分支";
+    }
+
+    if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
+        const bool single_shot = context->proof_single_replay;
+        context->replaying = false;
+        context->waiting_for_damage = false;
+        if (single_shot) {
+            context->enabled = false;
+            context->replay_requested.store(false, std::memory_order_release);
+        }
+        ArmForNextAttack(*context);
+        context->status = single_shot
+            ? "单次验证未通过：2 秒内未观察到同一目标的新 DamageEvent，已自动停用；检查 attack-replay.log"
+            : "伤害链停止：2 秒内未确认同一目标的新伤害（目标可能已死亡或追加未生效）；自动等待下一次真实伤害事件";
+        return;
+    }
+    if (context->waiting_for_damage) return;
 
     // 连锁没有固定次数上限；速率只影响两次原生 GameplayEffect 调用之间的 Game 帧间隔。
     const uint64_t interval = static_cast<uint64_t>(
         std::clamp(context->replay_interval_frames, 1u, 10u));
     if (current_tick == 0 || current_tick <= context->replay_last_tick ||
         current_tick - context->replay_last_tick < interval) return;
-    // Snapshot the raw DamageEvent tail immediately before invoking the replay.
-    context->replay_damage_cursor = context->combat->latest_damage_sequence(
-        context->combat->user);
+    if (context->replay_pending_jobs == 0) {
+        context->replaying = false;
+        ArmForNextAttack(*context);
+        context->status = "伤害链的待执行分支已耗尽；自动等待下一次真实伤害事件";
+        return;
+    }
+    --context->replay_pending_jobs;
+    // Preserve the monotonic event cursor across invocations so all descendant hits
+    // observed after the root can create their own two child jobs.
     context->replay_damage_deadline = now + std::chrono::milliseconds(2000);
 
     AnomalyStatusV1 replay_status{};
@@ -1132,9 +1180,10 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
                         : "未测得")
                 : "单次观测已结束；缺少匹配候选数，路线仍未证实")
             : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
-                "（目标持续受击时继续）";
+                "；待执行分支：" + std::to_string(context->replay_pending_jobs) +
+                "（每个匹配节点派生两个）";
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("启用后持续复用 Core 验证过的原生 GameplayEffect，在同一目标上形成伤害链式反应；不模拟按键、不重放技能或动画，也不直接写入 HP。间隔设为 1 时每个 Game 帧最多追加一次；若目标在 2 秒内未产生新的匹配伤害事件，或手动关闭，链条即停止。"));
+        ui->text(ui->user, anomaly::sdk::StringView("根伤害来自玩家当前控制角色的真实命中。起始节点产生两个待执行分支；此后每个匹配的新伤害节点再增加两个分支，直到目标死亡或不再出现有效新伤害。整条链固定使用根事件的已验证原生 GameplayEffect 快照，因此切换角色不会把旧链改绑到新角色；不模拟按键、不重放技能或动画，也不直接写入 HP。间隔设为 1 时每个 Game 帧最多发起一次追加调用；若 2 秒内未确认新伤害，链条停止。"));
     } else {
         const std::string capture_monitor =
             "Core 伤害事件序列：" +
