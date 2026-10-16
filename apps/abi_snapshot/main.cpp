@@ -2600,7 +2600,7 @@ std::string NormalizeJsonWhitespace(const std::string_view input) {
 }
 
 void PrintUsage(const char* executable) {
-    std::cerr << "Usage: " << executable << " [--write PATH | --check PATH]\n";
+    std::cerr << "Usage: " << executable << " [--write PATH | --check PATH | --write-experimental PATH | --check-experimental PATH]\n";
 }
 
 }  // namespace
@@ -2624,7 +2624,7 @@ int main(const int argc, char* argv[]) {
     if (option == "--write-experimental") {
         const std::string experimental_snapshot = BuildExperimentalDamageReplaySnapshot();
         if (!WriteFile(argv[2], experimental_snapshot)) {
-            std::cerr << "Failed to write experimental Damage Replay ABI snapshot: " << argv[2] << '\\n';
+            std::cerr << "Failed to write experimental Damage Replay ABI snapshot: " << argv[2] << '\n';
             return 1;
         }
         return 0;
@@ -2632,7 +2632,7 @@ int main(const int argc, char* argv[]) {
     if (option == "--check-experimental") {
         std::string expected;
         if (!ReadFile(argv[2], expected)) {
-            std::cerr << "Failed to read experimental Damage Replay ABI snapshot: " << argv[2] << '\\n';
+            std::cerr << "Failed to read experimental Damage Replay ABI snapshot: " << argv[2] << '\n';
             return 1;
         }
         expected = NormalizeJsonWhitespace(NormalizeLineEndings(expected));
@@ -2645,7 +2645,7 @@ int main(const int argc, char* argv[]) {
                 ++offset;
             }
             std::cerr << "Experimental Damage Replay ABI snapshot mismatch at byte "
-                      << offset << ": " << argv[2] << '\\n';
+                      << offset << ": " << argv[2] << '\n';
             return 1;
         }
         return 0;
