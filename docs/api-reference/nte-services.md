@@ -64,24 +64,9 @@ typedef struct AnomalyNteVehicleServiceV1 {
 
 ---
 
-## `anomaly.nte.attack-input`
+## Legacy Attack Input service (not exported)
 
-- **ID**：`"anomaly.nte.attack-input"` · **版本** 1 · **capability** `nte-attack-input`
-
-该服务把输入转发到游戏原生玩家控制器输入桥，不接收任意 UFunction 或参数缓冲。它用于由游戏自己创建新的攻击动作，不能把调用已完成的伤害回调当作实际伤害重放成功。
-
-```c
-typedef struct AnomalyNteAttackInputRequestV1 {
-    uint32_t struct_size; uint32_t flags; uint32_t input_id; int32_t param;
-} AnomalyNteAttackInputRequestV1;
-typedef struct AnomalyNteAttackInputServiceV1 {
-    uint32_t struct_size; uint32_t service_version; void* user;
-    AnomalyStatusV1 (ANOMALY_CALL *press)(void*, const AnomalyNteAttackInputRequestV1*);
-    AnomalyStatusV1 (ANOMALY_CALL *release)(void*, const AnomalyNteAttackInputRequestV1*);
-} AnomalyNteAttackInputServiceV1;
-```
-
-Host 依据 dump 验证 `HTPlayerController.ActivateAbilityFromID(InputID, Param)` 和 `ReleaseAbilityFromID(InputID, Param)` 的参数布局，并只接受 `input_id` 在有效原生枚举范围内且 `flags == 0` 的请求。调用只能在 Game 域进行：`OK` 仅表示输入桥已成功调用，不等于已命中。需要确认攻击的插件必须继续监听新的玩家→敌人 `DamageEvent`。
+`anomaly.nte.attack-input` / `nte-attack-input` is a retired implementation path, not part of the current NTE SDK contract. The current stable `services/nte.h`, capability policy, plugin manifests and ABI snapshot do not publish that service. Attack Replay must not invoke controller press/release or use simulated input as a fallback; the current port keeps its provisional Damage Replay service isolated in the experimental header and snapshot described in [the ABI quarantine note](../developer-guide/attack-replay-abi-quarantine.md).
 
 ---
 
