@@ -381,8 +381,16 @@ public:
         RuntimeRecoveryResult loaded = LoadLocked();
         if (!loaded.Ok()) return loaded;
         RuntimeRecoveryState state = std::move(*loaded.state);
-        if (state.recent_failures.empty()) return loaded;
+        if (state.recent_failures.empty() && !state.safe_mode.Active()) return loaded;
+
+        // The caller invokes MarkHealthy only after the Runtime has remained RUNNING
+        // through its health-stability window. If this instance booted in safe mode,
+        // keep its in-memory restrictions for the current session, but clear the
+        // persisted crash-loop decision so the next launch can retry normal plugin
+        // loading. Otherwise one transient rendering or startup crash could leave
+        // the Runtime permanently suspended with no user-facing restore control.
         state.recent_failures.clear();
+        state.safe_mode = {};
         ++state.revision;
         return SaveLocked(std::move(state));
     }
