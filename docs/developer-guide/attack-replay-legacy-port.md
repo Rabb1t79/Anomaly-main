@@ -9,7 +9,9 @@
 - `anomaly.nte.damage-native / character-on-damaged`：原生角色伤害事件入口。
 - `anomaly.nte.gameplay-effect-exec / combat-exec-0..3`：四个 GameplayEffect Native Exec Hook。
 - `anomaly.ue5.process-event` 与 `anomaly.ue5.actor-process-event`：反射调用与 Actor 调用入口。
-- 服务清单包含 `anomaly.nte.combat v1`、`anomaly.nte.damage-replay v1`、`anomaly.nte.skills v1`、`anomaly.nte.skill-invocation v1`、`anomaly.nte.attack-input v1`。
+- 服务清单包含 `anomaly.nte.combat v1`、`anomaly.nte.damage-replay v1`、`anomaly.nte.skills v1`、`anomaly.nte.skill-invocation v1`。
+
+旧截图中的控制器按下/释放桥属于已淘汰的实现路线。当前仓库已从插件、Core、Profile、SDK、ABI 快照和 capability policy 中移除该桥；伤害链只允许复用经过校验的原生 GameplayEffect 调用。
 
 截图中的地址只是旧进程的一次运行地址，不得硬编码到新版本。当前移植必须从当前 Profile、反射对象与经过校验的 Native Exec 指针重新建立绑定。
 

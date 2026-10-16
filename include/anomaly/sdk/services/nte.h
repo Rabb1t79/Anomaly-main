@@ -377,25 +377,6 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
 } AnomalyNteVehicleServiceV1;
 
-// Uses the game's own HTPlayerController input-to-ability bridge. It is kept
-// separate from skill-class activation because accepting a class activation did
-// not guarantee the actual attack action or a resulting damage event.
-#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID "anomaly.nte.attack-input"
-#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION 1u
-typedef struct AnomalyNteAttackInputRequestV1 {
-    uint32_t struct_size;
-    uint32_t flags;
-    uint32_t input_id;
-    int32_t param;
-} AnomalyNteAttackInputRequestV1;
-typedef struct AnomalyNteAttackInputServiceV1 {
-    uint32_t struct_size; uint32_t service_version; void* user;
-    AnomalyStatusV1 (ANOMALY_CALL *press)(
-        void* user, const AnomalyNteAttackInputRequestV1* request);
-    AnomalyStatusV1 (ANOMALY_CALL *release)(
-        void* user, const AnomalyNteAttackInputRequestV1* request);
-} AnomalyNteAttackInputServiceV1;
-
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
 // active Game callback domain; it never exposes UE object pointers, reflected functions, or
 // Profile offsets. Confirmation is reported independently from the interaction trigger.
@@ -872,8 +853,8 @@ typedef struct AnomalyNteCombatServiceV1 {
 } AnomalyNteCombatServiceV1;
 
 // Replays the exact HTAbilitySystemComponent GameplayEffect application captured with
-// a real CharacterOnDamaged event. This is deliberately not an attack-input or skill
-// activation API. OK means the original GameplayEffect call was dispatched; plugins
+// a real CharacterOnDamaged event. This is a native GameplayEffect application API, not
+// simulated input or skill activation. OK means the original call was dispatched; plugins
 // must still observe a newer damage event before reporting a successful extra hit.
 #define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID "anomaly.nte.damage-replay"
 #define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION 1u

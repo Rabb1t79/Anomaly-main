@@ -29,8 +29,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.FNamePool": {
@@ -60,8 +59,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.FTextData.GetDisplayString": {
@@ -137,8 +135,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.StaticFindObject": {
@@ -189,8 +186,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.ProcessEvent": {
@@ -214,8 +210,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "nte.ClientIgnoreGameAndUiInput": {
@@ -393,13 +388,6 @@
       "ue5.GObjects",
       "ue5.ProcessEvent"
     ],
-    "nte.attack-input": [
-      "ue5.GWorld",
-      "ue5.GameTick",
-      "ue5.FNamePool",
-      "ue5.GObjects",
-      "ue5.ProcessEvent"
-    ],
     "nte.player-esp": [
       "ue5.GWorld",
       "ue5.GameTick"
@@ -484,8 +472,7 @@
     "nte.skills",
     "nte.skill-invocation",
     "ue5.streaming-source",
-    "nte.vehicle",
-    "nte.attack-input"
+    "nte.vehicle"
   ],
   "featureLayoutValidators": {
     "ue5.ftext": [
@@ -551,9 +538,6 @@
     ],
     "nte.vehicle": [
       "nte-vehicle-layout-v1"
-    ],
-    "nte.attack-input": [
-      "nte-attack-input-layout-v1"
     ]
   },
   "featureDependencies": {
@@ -641,12 +625,6 @@
       "nte.player"
     ],
     "nte.vehicle": [
-      "nte.player",
-      "ue5.names",
-      "ue5.objects",
-      "ue5.process-event"
-    ],
-    "nte.attack-input": [
       "nte.player",
       "ue5.names",
       "ue5.objects",

@@ -11,7 +11,7 @@ struct ServiceCapabilityMapping {
     std::string_view capability;
 };
 
-constexpr std::array<std::string_view, 47> kKnownCapabilities{
+constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "commands",
     "configuration",
     "diagnostics",
@@ -24,7 +24,6 @@ constexpr std::array<std::string_view, 47> kKnownCapabilities{
     "memory-read",
     "memory-write",
     "nte-actor-snapshot",
-    "nte-attack-input",
     "nte-build",
     "nte-combat-read",
     "nte-damage-replay",
@@ -108,7 +107,6 @@ constexpr std::array<ServiceCapabilityMapping, 47> kServiceCapabilities{{
     {"anomaly.nte.esc-menu-button", "nte-esc-menu-button"},
     {"anomaly.nte.actors", "nte-actor-snapshot"},
     {"anomaly.nte.vehicle", "nte-vehicle"},
-    {"anomaly.nte.attack-input", "nte-attack-input"},
 }};
 
 [[nodiscard]] bool IsKnownCapability(const std::string_view capability) noexcept {

@@ -956,17 +956,6 @@ struct Ue5NteAdapter::State {
     std::unordered_map<std::string, std::string> vehicle_display_name_cache;
     std::uint64_t vehicle_display_name_cache_generation{};
     std::string selected_summon_vehicle_id;
-    struct AttackInputFunctionBinding {
-        std::uintptr_t function{};
-        std::uint16_t parms_size{};
-        std::uint16_t input_id_offset{};
-        std::uint16_t param_offset{};
-    };
-    struct AttackInputBindings {
-        AttackInputFunctionBinding press{};
-        AttackInputFunctionBinding release{};
-        std::uint64_t object_generation{};
-    } attack_input_bindings;
     std::uintptr_t current_vehicle_object{};
     std::uintptr_t vehicle_movement_component{};
     bool vehicle_is_water{};
@@ -1961,25 +1950,6 @@ struct Ue5NteAdapter::State {
             FeatureDeclaresLayoutValidator(profile, kNteVehicleFeature, kNteVehicleLayoutValidator);
     }
 
-    [[nodiscard]] bool NteAttackInputProfileAvailable() const noexcept {
-        return static_cast<bool>(process_event_invoker) && framework_hook_ready &&
-            resolution.FeatureAvailable(kNteAttackInputFeature) &&
-            resolution.FeatureAvailable("nte.player") &&
-            resolution.FeatureAvailable("ue5.names") &&
-            resolution.FeatureAvailable("ue5.objects") &&
-            resolution.FeatureAvailable(kUe5ProcessEventFeature) &&
-            NtePlayerLayoutAvailable() && LayoutKeysAvailable(profile, {
-                "object.class", "object.nameOffset", "object.outer", "ustruct.propertyLink",
-                "ufunction.numParms", "ufunction.parmsSize", "ufunction.returnValueOffset",
-                "ffield.name", "ffield.class", "ffieldClass.name", "fproperty.arrayDim",
-                "fproperty.elementSize", "fproperty.offsetInternal", "fproperty.propertyLinkNext"}) &&
-            FeatureDeclaresDependency(profile, kNteAttackInputFeature, "nte.player") &&
-            FeatureDeclaresDependency(profile, kNteAttackInputFeature, "ue5.names") &&
-            FeatureDeclaresDependency(profile, kNteAttackInputFeature, "ue5.objects") &&
-            FeatureDeclaresDependency(profile, kNteAttackInputFeature, kUe5ProcessEventFeature) &&
-            FeatureDeclaresLayoutValidator(profile, kNteAttackInputFeature, kNteAttackInputLayoutValidator);
-    }
-
     [[nodiscard]] bool NteCombatProfileAvailable() const noexcept {
         return static_cast<bool>(process_event_invoker) && framework_hook_ready &&
             resolution.FeatureAvailable("nte.combat") &&
@@ -2444,7 +2414,6 @@ struct Ue5NteAdapter::State {
         if (feature == "nte.map-landmarks") return NteMapLandmarksAvailable();
         if (feature == "nte.navigation") return NteNavigationAvailable();
         if (feature == "nte.vehicle") return NteVehicleProfileAvailable();
-        if (feature == "nte.attack-input") return NteAttackInputProfileAvailable();
         if (feature == "nte.pickup") return NtePickupAvailable();
         if (feature == "nte.ui-buttons") return NteUiButtonsAvailable();
         if (feature == "nte.entities") {
@@ -2590,9 +2559,6 @@ struct Ue5NteAdapter::State {
         }
         if (id == ANOMALY_NTE_VEHICLE_SERVICE_V1_ID) {
             return framework_hook_ready && NteVehicleProfileAvailable();
-        }
-        if (id == ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID) {
-            return framework_hook_ready && NteAttackInputProfileAvailable();
         }
         if (id == ANOMALY_NTE_PICKUP_SERVICE_V1_ID) {
             return framework_hook_ready && SemanticFeatureAvailable("nte.pickup");
@@ -2872,7 +2838,6 @@ struct Ue5NteAdapter::State {
         vehicle_catalog_table = 0;
         vehicle_catalog_valid = false;
         selected_summon_vehicle_id.clear();
-        attack_input_bindings = {};
         map_landmark_next_refresh_sequence = 0;
         navigation = {};
         pickup_sequence = 0;
@@ -9512,77 +9477,6 @@ struct Ue5NteAdapter::State {
             }
             return true;
         } catch (...) { return false; }
-    }
-
-    [[nodiscard]] bool BuildAttackInputBindingLocked(
-        const std::string_view name, AttackInputFunctionBinding& binding) const noexcept {
-        try {
-            std::wstring path = L"/Script/HTGame.HTPlayerController.";
-            for (char c : name) path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-            std::uintptr_t function{};
-            if (!FindExactObjectLocked(path.c_str(), function)) return false;
-            std::string reflected_name;
-            std::uintptr_t function_class{};
-            std::uintptr_t outer{};
-            std::uint8_t num_parms{};
-            std::uint16_t parms_size{};
-            std::uint16_t return_offset{};
-            if (!ReadReflectedObjectNameLocked(function, reflected_name) || reflected_name != name ||
-                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
-                !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
-                !ReadReflectedObjectNameLocked(function_class, reflected_name) || reflected_name != "Function" ||
-                !ReadReflectedObjectNameLocked(outer, reflected_name) || reflected_name != "HTPlayerController" ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
-                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
-                num_parms != 2 || parms_size != 8 || return_offset != 0xFFFFu) return false;
-            ReflectedPropertyInfo input_id;
-            ReflectedPropertyInfo param;
-            if (!FindReflectedPropertyLocked(function, "InputID", input_id, false) ||
-                !FindReflectedPropertyLocked(function, "Param", param, false) ||
-                (input_id.type != "ByteProperty" && input_id.type != "EnumProperty") ||
-                input_id.element_size != 1 || input_id.offset != 0 ||
-                param.type != "IntProperty" || param.element_size != 4 || param.offset != 4 ||
-                !((input_id.next == param.property && param.next == 0) ||
-                  (param.next == input_id.property && input_id.next == 0))) return false;
-            binding = {function, parms_size,
-                static_cast<std::uint16_t>(input_id.offset), static_cast<std::uint16_t>(param.offset)};
-            return true;
-        } catch (...) { return false; }
-    }
-
-    [[nodiscard]] AnomalyStatusV1 AttackInput(
-        const AnomalyNteAttackInputRequestV1* request, bool pressed) noexcept {
-        // The native enum's last real input is InputID_VehicleBoost=73; InputID_Num=74 is a sentinel.
-        if (request == nullptr || request->struct_size < sizeof(*request) || request->input_id >= 74U) {
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid game input ID request");
-        }
-        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
-            return Status(ANOMALY_STATUS_V1_CONFLICT, "attack input requires the Game thread");
-        }
-        std::scoped_lock lock(mutex);
-        if (!NteAttackInputProfileAvailable() || player_controller == 0 || !process_event_invoker) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "native attack-input bridge is unavailable");
-        }
-        if (attack_input_bindings.object_generation != object_generation) {
-            attack_input_bindings = {};
-            attack_input_bindings.object_generation = object_generation;
-        }
-        auto& binding = pressed ? attack_input_bindings.press : attack_input_bindings.release;
-        if (binding.function == 0 && !BuildAttackInputBindingLocked(
-                pressed ? "ActivateAbilityFromID" : "ReleaseAbilityFromID", binding)) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "HTPlayerController input binding failed ABI validation");
-        }
-        std::array<std::uint8_t, 8> parameters{};
-        parameters[binding.input_id_offset] = static_cast<std::uint8_t>(request->input_id);
-        std::memcpy(parameters.data() + binding.param_offset, &request->param, sizeof(request->param));
-        if (!InvokeProcessEventGuarded(process_event_invoker, player_controller,
-                binding.function, parameters.data(), binding.parms_size)) {
-            return Status(ANOMALY_STATUS_V1_FAILED, pressed
-                ? "ActivateAbilityFromID ProcessEvent failed" : "ReleaseAbilityFromID ProcessEvent failed");
-        }
-        return Status(ANOMALY_STATUS_V1_OK, pressed
-            ? "game input activation dispatched" : "game input release dispatched");
     }
 
     // Anomaly's readable .text locates and calls this dump-defined native function
@@ -17236,9 +17130,6 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetOtherVehiclesMinSpeedRatioThunk,
             VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
             VehicleRevokeFineSpeedAuthorizationThunk};
-        attack_input_service = {
-            sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
-            this, AttackInputPressThunk, AttackInputReleaseThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -17314,7 +17205,6 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteMapLandmarksServiceV1 map_landmarks_service{};
     AnomalyNteNavigationServiceV1 navigation_service{};
     AnomalyNteVehicleServiceV1 vehicle_service{};
-    AnomalyNteAttackInputServiceV1 attack_input_service{};
     AnomalyNtePickupServiceV1 pickup_service{};
     AnomalyNteUiButtonsServiceV1 ui_buttons_service{};
     AnomalyNteEntitiesServiceV1 entities_service{};
@@ -17670,18 +17560,6 @@ private:
         void* user, const AnomalyNteVehicleSummonRequestV1* request) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSummon(request) : StoppedStatus();
-    }
-
-    static AnomalyStatusV1 ANOMALY_CALL AttackInputPressThunk(
-        void* user, const AnomalyNteAttackInputRequestV1* request) noexcept {
-        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? static_cast<State*>(lease.User())->AttackInput(request, true) : StoppedStatus();
-    }
-
-    static AnomalyStatusV1 ANOMALY_CALL AttackInputReleaseThunk(
-        void* user, const AnomalyNteAttackInputRequestV1* request) noexcept {
-        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? static_cast<State*>(lease.User())->AttackInput(request, false) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
@@ -18908,22 +18786,6 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_NTE_VEHICLE_SERVICE_V1_ID,
             ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             &endpoint->vehicle_service, {}, semantic_lifetime)) {
-        return false;
-    }
-    if (framework_hook_ready && NteAttackInputProfileAvailable() &&
-        !PublishIfMissing(
-            ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
-            ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
-            &endpoint->attack_input_service,
-            [self, observer_endpoint] {
-                const auto locked = self.lock();
-                const auto observed = observer_endpoint.lock();
-                if (!locked || !observed ||
-                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) {
-                    return;
-                }
-                locked->player_demand.store(true, std::memory_order_release);
-            }, semantic_lifetime)) {
         return false;
     }
     if (framework_hook_ready && SemanticFeatureAvailable("nte.entities") &&

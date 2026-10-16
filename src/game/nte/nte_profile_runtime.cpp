@@ -453,29 +453,6 @@ FeatureValidationResult ValidateNteVehicleLayout(
     return {true, {}};
 }
 
-FeatureValidationResult ValidateNteAttackInputLayout(
-    const BuildProfile& profile,
-    const std::string_view feature,
-    const ProfileResolutionSnapshot&,
-    const SymbolMemory&) {
-    if (feature != kNteAttackInputFeature) {
-        return {false, "attack-input layout validator used by another feature"};
-    }
-    static constexpr std::array<std::string_view, 14> kRequiredLayout{
-        "world.gameInstance", "gameInstance.localPlayers", "localPlayer.controller",
-        "controller.pawn", "object.class", "object.nameOffset", "object.outer",
-        "ustruct.propertyLink", "ufunction.numParms", "ufunction.parmsSize",
-        "ufunction.returnValueOffset", "ffield.name", "fproperty.offsetInternal",
-        "fproperty.propertyLinkNext"};
-    for (const std::string_view key : kRequiredLayout) {
-        std::uint64_t value{};
-        if (!ProfileLayoutValue(profile, key, &value) || value > 64U * 1024U * 1024U) {
-            return {false, "attack-input reflection layout is incomplete or out of bounds"};
-        }
-    }
-    return {true, {}};
-}
-
 FeatureValidationResult ValidatePickupLayout(
     const BuildProfile& profile,
     const std::string_view feature,
@@ -877,8 +854,6 @@ FeatureLayoutValidatorRegistry NteFeatureLayoutValidators(
         std::string(kNteUiButtonsLayoutValidator), ValidateUiButtonsLayout);
     validators.Register(
         std::string(kNteVehicleLayoutValidator), ValidateNteVehicleLayout);
-    validators.Register(
-        std::string(kNteAttackInputLayoutValidator), ValidateNteAttackInputLayout);
     validators.Register(
         std::string(kCombatReflectionValidator), ValidateCombatReflectionLayout);
     validators.Register(std::string(kSkillsLayoutValidator), ValidateSkillsLayout);

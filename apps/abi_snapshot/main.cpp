@@ -228,8 +228,6 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION);
-    output.append(",\n    \"ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION\": ");
-    AppendUnsigned(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES\": ");
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_VALID\": ");
@@ -1851,27 +1849,6 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
-        "AnomalyNteAttackInputRequestV1",
-        sizeof(AnomalyNteAttackInputRequestV1),
-        alignof(AnomalyNteAttackInputRequestV1),
-        {{"struct_size", offsetof(AnomalyNteAttackInputRequestV1, struct_size)},
-         {"flags", offsetof(AnomalyNteAttackInputRequestV1, flags)},
-         {"input_id", offsetof(AnomalyNteAttackInputRequestV1, input_id)},
-         {"param", offsetof(AnomalyNteAttackInputRequestV1, param)}},
-        false);
-    AppendStruct(
-        output,
-        "AnomalyNteAttackInputServiceV1",
-        sizeof(AnomalyNteAttackInputServiceV1),
-        alignof(AnomalyNteAttackInputServiceV1),
-        {{"struct_size", offsetof(AnomalyNteAttackInputServiceV1, struct_size)},
-         {"service_version", offsetof(AnomalyNteAttackInputServiceV1, service_version)},
-         {"user", offsetof(AnomalyNteAttackInputServiceV1, user)},
-         {"press", offsetof(AnomalyNteAttackInputServiceV1, press)},
-         {"release", offsetof(AnomalyNteAttackInputServiceV1, release)}},
-        false);
-    AppendStruct(
-        output,
         "AnomalyNtePickupRequestV1",
         sizeof(AnomalyNtePickupRequestV1),
         alignof(AnomalyNtePickupRequestV1),
@@ -2521,8 +2498,6 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_METRICS_SERVICE_V1_VERSION, "AnomalyNteMetricsServiceV1", false);
     AppendService(output, ANOMALY_NTE_VEHICLE_SERVICE_V1_ID,
         ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION, "AnomalyNteVehicleServiceV1", false);
-    AppendService(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
-        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION, "AnomalyNteAttackInputServiceV1", false);
     AppendService(output, ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID,
         ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION,
         "AnomalyNteEscMenuButtonServiceV1", true);
