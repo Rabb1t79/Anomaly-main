@@ -6363,9 +6363,85 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    enum class ReplayMatchFailure : std::uint8_t {
+        None,
+        InvalidContext,
+        MissingBindings,
+        MissingDamageSource,
+        InvalidEffectIdentity,
+        DamageEffectMismatch,
+        AbilitySystemUnavailable,
+        FunctionMismatch,
+        ReceiverMismatch,
+        SourceActorMismatch,
+        TriggerAbilitySystemMismatch,
+        TargetAbilitySystemMismatch,
+        UnsupportedCallKind,
+        Exception,
+    };
+
+    struct ReplayMatchDiagnostics {
+        std::uint32_t candidates{};
+        std::uint32_t invalid_context{};
+        std::uint32_t tick_delta_too_large{};
+        std::uint32_t missing_bindings{};
+        std::uint32_t missing_damage_source{};
+        std::uint32_t invalid_effect_identity{};
+        std::uint32_t damage_effect_mismatch{};
+        std::uint32_t ability_system_unavailable{};
+        std::uint32_t function_mismatch{};
+        std::uint32_t receiver_mismatch{};
+        std::uint32_t source_actor_mismatch{};
+        std::uint32_t trigger_ability_system_mismatch{};
+        std::uint32_t target_ability_system_mismatch{};
+        std::uint32_t unsupported_call_kind{};
+        std::uint32_t exceptions{};
+
+        void Record(ReplayMatchFailure failure) noexcept {
+            switch (failure) {
+            case ReplayMatchFailure::None: break;
+            case ReplayMatchFailure::InvalidContext: ++invalid_context; break;
+            case ReplayMatchFailure::MissingBindings: ++missing_bindings; break;
+            case ReplayMatchFailure::MissingDamageSource: ++missing_damage_source; break;
+            case ReplayMatchFailure::InvalidEffectIdentity: ++invalid_effect_identity; break;
+            case ReplayMatchFailure::DamageEffectMismatch: ++damage_effect_mismatch; break;
+            case ReplayMatchFailure::AbilitySystemUnavailable: ++ability_system_unavailable; break;
+            case ReplayMatchFailure::FunctionMismatch: ++function_mismatch; break;
+            case ReplayMatchFailure::ReceiverMismatch: ++receiver_mismatch; break;
+            case ReplayMatchFailure::SourceActorMismatch: ++source_actor_mismatch; break;
+            case ReplayMatchFailure::TriggerAbilitySystemMismatch: ++trigger_ability_system_mismatch; break;
+            case ReplayMatchFailure::TargetAbilitySystemMismatch: ++target_ability_system_mismatch; break;
+            case ReplayMatchFailure::UnsupportedCallKind: ++unsupported_call_kind; break;
+            case ReplayMatchFailure::Exception: ++exceptions; break;
+            }
+        }
+
+        [[nodiscard]] std::string Summary() const {
+            return "candidates=" + std::to_string(candidates) +
+                ",invalid=" + std::to_string(invalid_context) +
+                ",tick_delta_gt_1=" + std::to_string(tick_delta_too_large) +
+                ",effect_mismatch=" + std::to_string(damage_effect_mismatch) +
+                ",asc_unavailable=" + std::to_string(ability_system_unavailable) +
+                ",function_mismatch=" + std::to_string(function_mismatch) +
+                ",receiver_mismatch=" + std::to_string(receiver_mismatch) +
+                ",source_actor_mismatch=" + std::to_string(source_actor_mismatch) +
+                ",trigger_asc_mismatch=" + std::to_string(trigger_ability_system_mismatch) +
+                ",target_asc_mismatch=" + std::to_string(target_ability_system_mismatch) +
+                ",source_missing=" + std::to_string(missing_damage_source) +
+                ",other=" + std::to_string(
+                    missing_bindings + invalid_effect_identity + unsupported_call_kind + exceptions);
+        }
+    };
+
     [[nodiscard]] bool ReplayContextMatchesDamageLocked(
         const ReplayEffectContext& context, const std::uintptr_t attacker,
-        const std::uintptr_t victim, const std::uint64_t source_id) const noexcept {
+        const std::uintptr_t victim, const std::uint64_t source_id,
+        ReplayMatchFailure* const failure = nullptr) const noexcept {
+        const auto reject = [failure](const ReplayMatchFailure reason) noexcept {
+            if (failure != nullptr) *failure = reason;
+            return false;
+        };
+        if (failure != nullptr) *failure = ReplayMatchFailure::None;
         try {
             const bool character_wrapper = context.kind == 3U;
             const bool server_character_wrapper = context.kind == 4U;
@@ -6382,32 +6458,35 @@ struct Ue5NteAdapter::State {
                 context.object_generation != object_generation || attacker == 0 || victim == 0 ||
                 source_id == 0 || context.receiver == 0 || context.function == 0 ||
                 !ReadableRange(*memory, context.receiver, 0x20U) ||
-                !ReadableRange(*memory, context.function, 0x20U)) return false;
+                !ReadableRange(*memory, context.function, 0x20U)) {
+                return reject(ReplayMatchFailure::InvalidContext);
+            }
             const auto* const bindings =
                 combat_capture_bindings.load(std::memory_order_acquire);
-            if (bindings == nullptr) return false;
+            if (bindings == nullptr) return reject(ReplayMatchFailure::MissingBindings);
             const auto source_it = damage_source_objects.find(source_id);
-            if (source_it == damage_source_objects.end() || source_it->second == 0) return false;
+            if (source_it == damage_source_objects.end() || source_it->second == 0) {
+                return reject(ReplayMatchFailure::MissingDamageSource);
+            }
             const std::uintptr_t damage_source_object = source_it->second;
 
             // HTDamageEvent::DamageGEDef is a weak UHTGamePlayEffect object.
-            // The dump-validated ASC "WithClass" entries expose GameplayEffect as
-            // ClassProperty, while ServerActivateGameEffectsWithClassByActor exposes
-            // it as ObjectProperty. Compare each using its actual reflected identity.
+            // Dump-validated ASC "WithClass" entries expose GameplayEffect as ClassProperty,
+            // whereas ServerActivateGameEffectsWithClassByActor exposes an ObjectProperty.
             const std::size_t effect_offset = character_wrapper ? 0x10U
                 : ((context.kind == 1U || server_character_wrapper) ? 0x08U : 0x00U);
             std::uintptr_t gameplay_effect_identity{};
             std::memcpy(&gameplay_effect_identity,
                 context.parameters.data() + effect_offset, sizeof(gameplay_effect_identity));
             if (gameplay_effect_identity == 0 ||
-                !ReadableRange(*memory, gameplay_effect_identity, 0x20U)) return false;
+                !ReadableRange(*memory, gameplay_effect_identity, 0x20U)) {
+                return reject(ReplayMatchFailure::InvalidEffectIdentity);
+            }
 
             bool source_matches_effect{};
             if (server_character_wrapper) {
-                // ValidateReplayServerActivateByActorFunctionLocked verifies this field
-                // as ObjectProperty. It is therefore an effect UObject, not a UClass:
-                // compare the exact object first, then the UObject class identity so a
-                // live effect object can match the same DamageGEDef class/CDO.
+                // The reflected server-RPC field is an effect UObject. Match either the exact
+                // DamageGEDef object or the same UClass, covering CDO/instance representations.
                 std::uintptr_t source_class{}, observed_effect_class{};
                 source_matches_effect = damage_source_object == gameplay_effect_identity;
                 if (!source_matches_effect &&
@@ -6419,8 +6498,8 @@ struct Ue5NteAdapter::State {
                     source_matches_effect = true;
                 }
             } else {
-                // For the other validated entry points the reflected field is a UClass.
-                // Match DamageGEDef against either that class's CDO or its exact class.
+                // The other validated entry points pass a UClass. Match DamageGEDef against
+                // that class, its CDO, or the CDO's class identity.
                 std::uintptr_t class_default_object{};
                 const bool class_default_object_available = ReadPointerAt(
                     *memory, gameplay_effect_identity,
@@ -6437,20 +6516,32 @@ struct Ue5NteAdapter::State {
                         source_class == gameplay_effect_identity;
                 }
             }
-            if (!source_matches_effect) return false;
+            if (!source_matches_effect) {
+                return reject(ReplayMatchFailure::DamageEffectMismatch);
+            }
 
             std::uintptr_t attacker_ability_system{}, victim_ability_system{};
             if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
-                !CurrentAbilitySystemLocked(victim, victim_ability_system)) return false;
+                !CurrentAbilitySystemLocked(victim, victim_ability_system)) {
+                return reject(ReplayMatchFailure::AbilitySystemUnavailable);
+            }
             if (server_character_wrapper) {
-                // The dump-defined server RPC is owned by the recipient character and
-                // carries the source actor explicitly. It has no trigger-ASC or return field.
+                // The server RPC has no trigger-ASC or return field; keep its dump-validated
+                // receiver/source relationship explicit rather than weakening the match.
                 std::uintptr_t source_actor{};
                 std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
-                return bindings->replay_server_activate_by_actor != 0 &&
-                    context.function == bindings->replay_server_activate_by_actor &&
-                    context.receiver == victim && source_actor == attacker &&
-                    source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U);
+                if (bindings->replay_server_activate_by_actor == 0 ||
+                    context.function != bindings->replay_server_activate_by_actor) {
+                    return reject(ReplayMatchFailure::FunctionMismatch);
+                }
+                if (context.receiver != victim) {
+                    return reject(ReplayMatchFailure::ReceiverMismatch);
+                }
+                if (source_actor == 0 || source_actor != attacker ||
+                    !ReadableRange(*memory, source_actor, 0x20U)) {
+                    return reject(ReplayMatchFailure::SourceActorMismatch);
+                }
+                return true;
             }
             if (by_actor) {
                 std::uintptr_t source_actor{}, trigger_ability_system{};
@@ -6465,52 +6556,81 @@ struct Ue5NteAdapter::State {
                     trigger_ability_system != 0 &&
                     trigger_ability_system == attacker_ability_system;
                 const bool source_actor_is_attacker = source_actor == attacker;
-                const bool receiver_matches_target = character_wrapper
-                    ? (context.receiver == victim)
-                    : (context.receiver == victim_ability_system);
                 const std::uintptr_t expected_function = character_wrapper
                     ? bindings->replay_activate_by_actor
                     : bindings->replay_apply_by_actor;
-                return expected_function != 0 && context.function == expected_function &&
-                    receiver_matches_target &&
-                    source_actor != 0 && ReadableRange(*memory, source_actor, 0x20U) &&
-                    (trigger_is_attacker || source_actor_is_attacker);
+                if (expected_function == 0 || context.function != expected_function) {
+                    return reject(ReplayMatchFailure::FunctionMismatch);
+                }
+                const bool receiver_matches_target = character_wrapper
+                    ? (context.receiver == victim)
+                    : (context.receiver == victim_ability_system);
+                if (!receiver_matches_target) {
+                    return reject(ReplayMatchFailure::ReceiverMismatch);
+                }
+                if (source_actor == 0 || !ReadableRange(*memory, source_actor, 0x20U) ||
+                    (!trigger_is_attacker && !source_actor_is_attacker)) {
+                    return reject(trigger_ability_system != 0
+                        ? ReplayMatchFailure::TriggerAbilitySystemMismatch
+                        : ReplayMatchFailure::SourceActorMismatch);
+                }
+                return true;
             }
             if (context.kind == 2U) {
                 std::uintptr_t target_ability_system{};
                 std::memcpy(&target_ability_system,
                     context.parameters.data() + 0x08U, sizeof(target_ability_system));
-                return bindings->replay_apply_to_target != 0 &&
-                    context.function == bindings->replay_apply_to_target &&
-                    context.receiver == attacker_ability_system &&
-                    target_ability_system == victim_ability_system;
+                if (bindings->replay_apply_to_target == 0 ||
+                    context.function != bindings->replay_apply_to_target) {
+                    return reject(ReplayMatchFailure::FunctionMismatch);
+                }
+                if (context.receiver != attacker_ability_system) {
+                    return reject(ReplayMatchFailure::ReceiverMismatch);
+                }
+                if (target_ability_system != victim_ability_system) {
+                    return reject(ReplayMatchFailure::TargetAbilitySystemMismatch);
+                }
+                return true;
             }
-            return false;
+            return reject(ReplayMatchFailure::UnsupportedCallKind);
         } catch (...) {
-            return false;
+            return reject(ReplayMatchFailure::Exception);
         }
     }
 
     [[nodiscard]] bool FindReplayContextForDamageLocked(
         const std::uintptr_t attacker, const std::uintptr_t victim,
         const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
-        ReplayEffectContext& result) const noexcept {
+        ReplayEffectContext& result,
+        ReplayMatchDiagnostics* const diagnostics = nullptr) const noexcept {
+        if (diagnostics != nullptr) diagnostics->candidates = static_cast<std::uint32_t>(
+            (std::min)(replay_effect_call_count,
+                static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())));
         if (replay_effect_call_count == 0) return false;
         for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
             const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
                 reverse) % kReplayEffectCallCapacity;
             const auto& candidate = replay_effect_calls[index];
+            if (!candidate.valid) {
+                if (diagnostics != nullptr) ++diagnostics->invalid_context;
+                continue;
+            }
             const auto delta = candidate.tick_sequence >= capture_tick_sequence
                 ? candidate.tick_sequence - capture_tick_sequence
                 : capture_tick_sequence - candidate.tick_sequence;
             // Calls are queued before the resulting CharacterOnDamaged callback; tolerate
             // only the adjacent Host tick to cover a tick-boundary handoff.
-            if (!candidate.valid || delta > 1U) continue;
+            if (delta > 1U) {
+                if (diagnostics != nullptr) ++diagnostics->tick_delta_too_large;
+                continue;
+            }
+            ReplayMatchFailure failure = ReplayMatchFailure::None;
             if (ReplayContextMatchesDamageLocked(
-                    candidate, attacker, victim, source_id)) {
+                    candidate, attacker, victim, source_id, &failure)) {
                 result = candidate;
                 return true;
             }
+            if (diagnostics != nullptr) diagnostics->Record(failure);
         }
         return false;
     }
@@ -6560,11 +6680,14 @@ struct Ue5NteAdapter::State {
             std::uintptr_t delayed_attacker{};
             std::uintptr_t delayed_victim{};
             ReplayEffectContext delayed_replay{};
-            if (ResolveObjectHandleLocked(record->event.attacker, delayed_attacker) &&
+            ReplayMatchDiagnostics replay_match_diagnostics{};
+            const bool replay_context_found =
+                ResolveObjectHandleLocked(record->event.attacker, delayed_attacker) &&
                 ResolveObjectHandleLocked(record->event.victim, delayed_victim) &&
                 FindReplayContextForDamageLocked(
                     delayed_attacker, delayed_victim, record->event.source_id,
-                    record->event.tick_sequence, delayed_replay)) {
+                    record->event.tick_sequence, delayed_replay, &replay_match_diagnostics);
+            if (replay_context_found) {
                 record->replay = delayed_replay;
             }
         }
@@ -6576,8 +6699,10 @@ struct Ue5NteAdapter::State {
                  bindings->replay_apply_to_target != 0 ||
                  bindings->replay_activate_by_actor != 0);
             if (replay_effect_call_count != 0) {
-                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                    "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick");
+                const std::string diagnostic =
+                    "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick; match diagnostics: " +
+                    replay_match_diagnostics.Summary();
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE, diagnostic.c_str());
             }
             if (!has_validated_gameplay_effect_entry) {
                 try {
