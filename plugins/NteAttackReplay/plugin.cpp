@@ -88,6 +88,8 @@ struct Context final {
     bool enabled{};
     bool captured{};
     bool replaying{};
+    // 可选的受控实验模式：一次真实新伤害事件确认后自动停用连锁。
+    bool proof_single_replay{};
     // Draw runs in the Render domain. Replay/stop requests are posted atomically
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
@@ -1106,6 +1108,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     context->replaying = false;
     context->replay_requested.store(false, std::memory_order_release);
     context->stop_requested.store(false, std::memory_order_release);
+    context->proof_single_replay = false;
     ArmForNextAttack(*context);
     return anomaly::sdk::Ok();
 }
@@ -1201,6 +1204,15 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                 // not the event's potentially earlier capture tick.
                 context->replay_last_tick = current_tick;
                 context->status = "已确认新的 DamageEvent，下一游戏帧继续";
+                if (context->proof_single_replay) {
+                    // 一次已确认的原生重放结束实验，防止测试过程中连续扣除目标生命。
+                    context->enabled = false;
+                    context->replaying = false;
+                    context->waiting_for_damage = false;
+                    context->replay_requested.store(false, std::memory_order_release);
+                    context->status = "单次验证通过：已观察到同一目标的新 DamageEvent，重放已自动停用";
+                    return;
+                }
             }
         } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
             context->replaying = false;
@@ -1211,10 +1223,17 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         }
 
         if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
+            const bool single_shot = context->proof_single_replay;
             context->replaying = false;
             context->waiting_for_damage = false;
+            if (single_shot) {
+                context->enabled = false;
+                context->replay_requested.store(false, std::memory_order_release);
+            }
             ArmForNextAttack(*context);
-            context->status = "连锁停止：2 秒内未确认同一目标的新伤害（目标可能已死亡或该击未生效）；自动等待下一次攻击";
+            context->status = single_shot
+                ? "单次验证未通过：2 秒内未观察到同一目标的新 DamageEvent，已自动停用；检查 attack-replay.log"
+                : "连锁停止：2 秒内未确认同一目标的新伤害（目标可能已死亡或该击未生效）；自动等待下一次攻击";
             return;
         }
         if (context->waiting_for_damage) return;
@@ -1244,10 +1263,17 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         // The UI remains short; the complete Core message and call context go to
         // attack-replay.log in this plugin's own directory.
         AppendReplayDiagnosticLog(*context, replay_status.code, failure);
+        const bool single_shot = context->proof_single_replay;
         context->replaying = false;
         context->waiting_for_damage = false;
+        if (single_shot) {
+            context->enabled = false;
+            context->replay_requested.store(false, std::memory_order_release);
+        }
         ArmForNextAttack(*context);
-        context->status = "重放失败；已恢复捕获。详见 attack-replay.log";
+        context->status = single_shot
+            ? "单次验证失败：Core 拒绝此次重放，已自动停用；详见 attack-replay.log"
+            : "重放失败；已恢复捕获。详见 attack-replay.log";
         return;
     }
     context->waiting_for_damage = true;
@@ -1291,10 +1317,20 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             }
         }
 
-        ui->text(ui->user, anomaly::sdk::StringView(
-            context->enabled ? context->status : "自动记录中：重放功能未启用"));
+        ui->text(ui->user, anomaly::sdk::StringView(context->status));
 
         if (ui->separator != nullptr) ui->separator(ui->user);
+
+        int single_shot = context->proof_single_replay ? 1 : 0;
+        if (ui->checkbox(ui->user,
+                anomaly::sdk::StringView("单次路线验证（一次确认后自动停用）"),
+                &single_shot) != 0) {
+            context->proof_single_replay = single_shot != 0;
+        }
+        if (context->proof_single_replay) {
+            ui->text(ui->user, anomaly::sdk::StringView(
+                "验证模式：最多重放一次；成功、失败或超时后都会自动关闭重放。"));
+        }
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
@@ -1329,7 +1365,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         ui->text(ui->user, anomaly::sdk::StringView(capture_monitor));
     }
 
-    // 没有手动开始/停止按钮；上方启用复选框是唯一的链式重放开关。
+    // 不启用单次路线验证时，重放开关仍保持原有的连续连锁行为。
 
         ui->end_window(ui->user);
     } else {
