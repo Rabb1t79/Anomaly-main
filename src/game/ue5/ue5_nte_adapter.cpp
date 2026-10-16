@@ -878,8 +878,6 @@ struct Ue5NteAdapter::State {
         std::uintptr_t ability_system_class{};
         std::uintptr_t gameplay_ability_class{};
         std::uintptr_t ability_spawn_actor_class{};
-        // Dump-derived enemy root; replay is restricted to this class hierarchy.
-        std::uintptr_t monster_character_class{};
         std::uint64_t object_generation{};
         bool direct_lookup_succeeded{};
         std::uint64_t direct_lookup_next_sequence{};
@@ -6909,21 +6907,6 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "captured target is friendly according to HTAbilityCharacter.IsFriendlyTarget; damage replay is restricted to non-friendly targets");
         }
-        // Friendly-state checks alone do not prove that a target is an Enemy. Use the
-        // exact dump-defined AHTMonsterCharacter root and fail closed if its live class
-        // could not be resolved from the current game's reflected object registry.
-        if (combat_skill_discovery.monster_character_class == 0) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "dump-validated HTMonsterCharacter enemy class is unavailable; refusing damage replay");
-        }
-        std::uintptr_t victim_class{};
-        if (!ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
-            victim_class == 0 ||
-            !IsClassDerivedFromLocked(victim_class,
-                combat_skill_discovery.monster_character_class)) {
-            return Status(ANOMALY_STATUS_V1_CONFLICT,
-                "captured target is not derived from dump-validated HTMonsterCharacter; damage replay is restricted to Enemy character targets");
-        }
         if (!ReplayContextMatchesDamageLocked(
                 record->replay, attacker, victim, record->event.source_id)) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
@@ -12785,14 +12768,6 @@ struct Ue5NteAdapter::State {
                         !FindExactObjectLocked(L"/Script/HTGame.HTAbilitySpawnActor",
                             combat_skill_discovery.ability_spawn_actor_class)) {
                         direct_lookup_succeeded = false;
-                    }
-                    // The supplied 5.6.1 dump's enemy character hierarchy derives from
-                    // AHTMonsterCharacter, including standard monster and boss classes.
-                    // Treat this as an optional replay gate, not a prerequisite for read-only combat.
-                    if (combat_skill_discovery.monster_character_class == 0) {
-                        static_cast<void>(FindExactObjectLocked(
-                            L"/Script/HTGame.HTMonsterCharacter",
-                            combat_skill_discovery.monster_character_class));
                     }
                     lookup_function(NteFunctionKind::GetAbilitySystemComponent);
                     lookup_optional(NteFunctionKind::GetMainCharacterId);
