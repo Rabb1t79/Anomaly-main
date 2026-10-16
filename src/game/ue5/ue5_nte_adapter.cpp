@@ -6842,7 +6842,25 @@ struct Ue5NteAdapter::State {
                 "validated native GameplayEffect call failed");
         }
         RetainPinnedDamageReplayLocked(replay_root);
-        return Status(ANOMALY_STATUS_V1_OK);
+        // Report which dump-validated route was actually dispatched. This is diagnostic
+        // evidence only: the plugin must still observe a new matching CharacterOnDamaged event.
+        switch (replay_root.replay.kind) {
+        case 1U:
+            return Status(ANOMALY_STATUS_V1_OK,
+                "ProcessEvent dispatch returned; route=HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor");
+        case 2U:
+            return Status(ANOMALY_STATUS_V1_OK,
+                "ProcessEvent dispatch returned; route=HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass");
+        case 3U:
+            return Status(ANOMALY_STATUS_V1_OK,
+                "ProcessEvent dispatch returned; route=HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor");
+        case 4U:
+            return Status(ANOMALY_STATUS_V1_OK,
+                "ProcessEvent dispatch returned; route=HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor");
+        default:
+            return Status(ANOMALY_STATUS_V1_OK,
+                "ProcessEvent dispatch returned; route=unknown validated GameplayEffect entry");
+        }
     }
 
     void ProcessCharacterDamageLocked(
