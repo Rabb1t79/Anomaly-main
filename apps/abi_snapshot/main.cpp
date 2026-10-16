@@ -1251,7 +1251,9 @@ std::string BuildSnapshot() {
          {"begin_tab_bar", offsetof(AnomalyUiServiceV1, begin_tab_bar)},
          {"begin_tab_item", offsetof(AnomalyUiServiceV1, begin_tab_item)},
          {"end_tab_item", offsetof(AnomalyUiServiceV1, end_tab_item)},
-         {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)}},
+         {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)},
+         {"text_wrapped", offsetof(AnomalyUiServiceV1, text_wrapped)},
+         {"begin_child_auto_fit_y", offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y)}},
         false);
     AppendStruct(
         output,
@@ -1779,7 +1781,9 @@ std::string BuildSnapshot() {
          {"speed_kmh", offsetof(AnomalyNteVehicleSnapshotV1, speed_kmh)},
          {"top_speed_ratio", offsetof(AnomalyNteVehicleSnapshotV1, top_speed_ratio)},
          {"wheel_friction_enabled", offsetof(AnomalyNteVehicleSnapshotV1, wheel_friction_enabled)},
-         {"engine_torque_ratio", offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio)}},
+         {"engine_torque_ratio", offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio)},
+         {"vehicle_entity_id", offsetof(AnomalyNteVehicleSnapshotV1, vehicle_entity_id)},
+         {"vehicle_class_name", offsetof(AnomalyNteVehicleSnapshotV1, vehicle_class_name)}},
         false);
     AppendStruct(
         output,
@@ -1817,7 +1821,13 @@ std::string BuildSnapshot() {
          {"vehicle_id_at", offsetof(AnomalyNteVehicleServiceV1, vehicle_id_at)},
          {"set_summon_vehicle_id", offsetof(AnomalyNteVehicleServiceV1, set_summon_vehicle_id)},
          {"summon_vehicle", offsetof(AnomalyNteVehicleServiceV1, summon_vehicle)},
-         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)}},
+         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)},
+         {"refresh_catalog", offsetof(AnomalyNteVehicleServiceV1, refresh_catalog)},
+         {"catalog_label_at", offsetof(AnomalyNteVehicleServiceV1, catalog_label_at)},
+         {"set_other_vehicles_top_speed_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)},
+         {"set_other_vehicles_engine_torque_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)}},
         false);
     AppendStruct(
         output,
@@ -2221,6 +2231,25 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteDamageReplayRequestV1",
+        sizeof(AnomalyNteDamageReplayRequestV1),
+        alignof(AnomalyNteDamageReplayRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageReplayRequestV1, flags)},
+         {"damage_sequence", offsetof(AnomalyNteDamageReplayRequestV1, damage_sequence)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageReplayServiceV1",
+        sizeof(AnomalyNteDamageReplayServiceV1),
+        alignof(AnomalyNteDamageReplayServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageReplayServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageReplayServiceV1, user)},
+         {"replay_damage", offsetof(AnomalyNteDamageReplayServiceV1, replay_damage)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNteSkillFrameV1",
         sizeof(AnomalyNteSkillFrameV1),
         alignof(AnomalyNteSkillFrameV1),
@@ -2460,6 +2489,9 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION, "AnomalyNteActorsServiceV1", false);
     AppendService(output, ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION, "AnomalyNteCombatServiceV1", false);
+    AppendService(output, ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+        "AnomalyNteDamageReplayServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION, "AnomalyNteSkillsServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
