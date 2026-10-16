@@ -6504,6 +6504,9 @@ struct Ue5NteAdapter::State {
         std::uint32_t candidates{};
         std::uint32_t invalid_context{};
         std::uint32_t tick_delta_too_large{};
+        std::uint32_t future_tick{};
+        std::uint64_t nearest_exact_match_tick_delta{
+            (std::numeric_limits<std::uint64_t>::max)()};
         std::uint32_t missing_bindings{};
         std::uint32_t missing_damage_source{};
         std::uint32_t invalid_effect_identity{};
@@ -6537,9 +6540,16 @@ struct Ue5NteAdapter::State {
         }
 
         [[nodiscard]] std::string Summary() const {
+            const auto nearest_delta_text =
+                nearest_exact_match_tick_delta ==
+                        (std::numeric_limits<std::uint64_t>::max)()
+                    ? std::string("none")
+                    : std::to_string(nearest_exact_match_tick_delta);
             return "candidates=" + std::to_string(candidates) +
                 ",invalid=" + std::to_string(invalid_context) +
-                ",tick_delta_gt_1=" + std::to_string(tick_delta_too_large) +
+                ",tick_delta_gt_8=" + std::to_string(tick_delta_too_large) +
+                ",future_tick=" + std::to_string(future_tick) +
+                ",nearest_exact_tick_delta=" + nearest_delta_text +
                 ",effect_mismatch=" + std::to_string(damage_effect_mismatch) +
                 ",asc_unavailable=" + std::to_string(ability_system_unavailable) +
                 ",function_mismatch=" + std::to_string(function_mismatch) +
@@ -6731,7 +6741,13 @@ struct Ue5NteAdapter::State {
             (std::min)(replay_effect_call_count,
                 static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())));
         if (replay_effect_call_count == 0) return false;
-        ReplayEffectContext newest_match{};
+
+        // CharacterOnDamaged may be delivered a few Game Ticks after the native
+        // GameplayEffect entry. Keep the grace period bounded, but validate the exact
+        // DamageGEDef/ASC/function/source relationship before applying the time filter.
+        constexpr std::uint64_t kReplayCorrelationMaxTickAge = 8U;
+        ReplayEffectContext closest_match{};
+        std::uint64_t closest_tick_delta = (std::numeric_limits<std::uint64_t>::max)();
         std::uint32_t matching_candidates{};
         for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
             const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
@@ -6741,31 +6757,43 @@ struct Ue5NteAdapter::State {
                 if (diagnostics != nullptr) ++diagnostics->invalid_context;
                 continue;
             }
-            const auto delta = candidate.tick_sequence >= capture_tick_sequence
-                ? candidate.tick_sequence - capture_tick_sequence
-                : capture_tick_sequence - candidate.tick_sequence;
-            // Calls are queued before the resulting CharacterOnDamaged callback; tolerate
-            // only the adjacent Host tick to cover a tick-boundary handoff.
-            if (delta > 1U) {
+
+            ReplayMatchFailure failure = ReplayMatchFailure::None;
+            if (!ReplayContextMatchesDamageLocked(
+                    candidate, attacker, victim, source_id, &failure)) {
+                if (diagnostics != nullptr) diagnostics->Record(failure);
+                continue;
+            }
+
+            // A call from a later tick cannot have caused an earlier CharacterOnDamaged
+            // event. Only correlate the closest exact match in the past (or same tick).
+            if (candidate.tick_sequence > capture_tick_sequence) {
+                if (diagnostics != nullptr) ++diagnostics->future_tick;
+                continue;
+            }
+            const auto delta = capture_tick_sequence - candidate.tick_sequence;
+            if (diagnostics != nullptr &&
+                delta < diagnostics->nearest_exact_match_tick_delta) {
+                diagnostics->nearest_exact_match_tick_delta = delta;
+            }
+            if (delta > kReplayCorrelationMaxTickAge) {
                 if (diagnostics != nullptr) ++diagnostics->tick_delta_too_large;
                 continue;
             }
-            ReplayMatchFailure failure = ReplayMatchFailure::None;
-            if (ReplayContextMatchesDamageLocked(
-                    candidate, attacker, victim, source_id, &failure)) {
-                // Preserve the existing newest-first choice, but inspect the whole bounded
-                // window so the single-shot evidence log can reveal possible ambiguity.
-                if (matching_candidates == 0) newest_match = candidate;
-                if (matching_candidates != (std::numeric_limits<std::uint32_t>::max)()) {
-                    ++matching_candidates;
-                }
-                continue;
+
+            // Prefer the temporally closest exact invocation. Reverse iteration provides
+            // a deterministic newest-first tie-break for calls captured on the same tick.
+            if (matching_candidates == 0 || delta < closest_tick_delta) {
+                closest_match = candidate;
+                closest_tick_delta = delta;
             }
-            if (diagnostics != nullptr) diagnostics->Record(failure);
+            if (matching_candidates != (std::numeric_limits<std::uint32_t>::max)()) {
+                ++matching_candidates;
+            }
         }
         if (matching_candidates == 0) return false;
-        newest_match.matching_candidate_count = matching_candidates;
-        result = newest_match;
+        closest_match.matching_candidate_count = matching_candidates;
+        result = closest_match;
         return true;
     }
 
@@ -6835,7 +6863,7 @@ struct Ue5NteAdapter::State {
             if (replay_effect_call_count != 0) {
                 try {
                     const std::string diagnostic =
-                        "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and adjacent Game tick; match diagnostics: " +
+                        "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and bounded past Game-Tick window; match diagnostics: " +
                         replay_match_diagnostics.Summary();
                     return Status(ANOMALY_STATUS_V1_UNAVAILABLE, diagnostic.c_str());
                 } catch (...) {
