@@ -7100,6 +7100,12 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "captured player-controlled attacker or target is no longer valid");
         }
+        // Only the currently controlled character may seed or continue a chain.
+        // Character swaps must not keep replaying a previously selected pawn's effect.
+        if (player_pawn == 0 || attacker != player_pawn) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured damage attacker is no longer the current player-controlled character; wait for a new hit from the active character");
+        }
         bool victim_is_friendly{};
         if (!IsFriendlyTargetLocked(attacker, victim, victim_is_friendly)) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
