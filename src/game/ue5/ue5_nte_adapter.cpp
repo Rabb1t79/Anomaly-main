@@ -6673,6 +6673,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND,
                 "original damage sequence expired or was not found in the live or pinned replay records");
         }
+        ReplayMatchDiagnostics replay_match_diagnostics{};
         if (!record->replay.valid) {
             // If the native effect invocation was drained after the damage notification,
             // associate it lazily now. DamageRecord keeps generation-checked handles, so
@@ -6680,7 +6681,6 @@ struct Ue5NteAdapter::State {
             std::uintptr_t delayed_attacker{};
             std::uintptr_t delayed_victim{};
             ReplayEffectContext delayed_replay{};
-            ReplayMatchDiagnostics replay_match_diagnostics{};
             const bool replay_context_found =
                 ResolveObjectHandleLocked(record->event.attacker, delayed_attacker) &&
                 ResolveObjectHandleLocked(record->event.victim, delayed_victim) &&
