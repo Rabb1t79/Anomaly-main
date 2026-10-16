@@ -1,81 +1,46 @@
 {
   "schemaVersion": 2,
-  "id": "anomaly.builtin.nte-time-accel",
-  "name": "Time Accel",
-  "description": "NTE 时间加速（世界时间膨胀）：给游戏世界设置时间膨胀倍率，整体加速游戏节奏。界面可改键，Backspace 解除绑定。窗口底部显示当前实际生效倍率。注意2倍数以上角色伤害可能会异常。",
-  "author": "WawMew",
+  "id": "anomaly.local.ultimate",
+  "name": "AnomalyUltimate",
+  "description": "究极异象",
+  "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "audience": "developer",
-  "version": "0.3.7",
+  "version": "1.2.0",
   "entry": "plugin.dll",
-  "api": {
-    "major": 1,
-    "minMinor": 0,
-    "maxMinor": 0
-  },
-  "games": [
-    "nte"
-  ],
-  "builds": [
-    "nte-*"
-  ],
+  "api": {"major": 1, "minMinor": 0, "maxMinor": 0},
+  "games": ["nte"],
+  "builds": ["nte-*"],
   "loadPhase": "game-ready",
   "services": [
-    {
-      "id": "anomaly.ui",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.core",
-      "minVersion": 1,
-      "optional": true
-    },
-    {
-      "id": "anomaly.ue5.names",
-      "minVersion": 1,
-      "optional": true
-    },
-    {
-      "id": "anomaly.ue5.objects",
-      "minVersion": 1,
-      "optional": true
-    },
-    {
-      "id": "anomaly.ue5.process-event",
-      "minVersion": 1,
-      "optional": true
-    },
-    {
-      "id": "anomaly.nte.player",
-      "minVersion": 1,
-      "optional": true
-    },
-    {
-      "id": "anomaly.input",
-      "minVersion": 1,
-      "optional": true
-    },
-    {
-      "id": "anomaly.storage",
-      "minVersion": 1,
-      "optional": true
-    },
-    {
-      "id": "anomaly.scheduler",
-      "minVersion": 1,
-      "optional": true
-    }
+    {"id": "anomaly.core", "minVersion": 1},
+    {"id": "anomaly.config", "minVersion": 1},
+    {"id": "anomaly.interop.signature", "minVersion": 1},
+    {"id": "anomaly.interop.hook", "minVersion": 1},
+    {"id": "anomaly.interop.patch", "minVersion": 1},
+    {"id": "anomaly.ui", "minVersion": 1},
+    {"id": "anomaly.window", "minVersion": 1},
+    {"id": "anomaly.input", "minVersion": 1},
+    {"id": "anomaly.nte.combat", "minVersion": 1},
+    {"id": "anomaly.ue5.framework", "minVersion": 1},
+    {"id": "anomaly.ue5.names", "minVersion": 1},
+    {"id": "anomaly.ue5.objects", "minVersion": 1},
+    {"id": "anomaly.ue5.process-event", "minVersion": 1},
+    {"id": "anomaly.ue5.world", "minVersion": 1}
   ],
   "capabilities": [
-    "ui",
+    "configuration",
+    "game-events",
+    "interop-signature",
+    "interop-hook",
+    "interop-patch",
     "memory-read",
     "memory-write",
+    "input",
+    "ui",
+    "ui-window",
     "ue5-names",
     "ue5-objects",
-    "game-events",
-    "nte-player-snapshot",
-    "input",
-    "storage",
-    "scheduler"
+    "ue5-world",
+    "nte-combat-read"
   ]
 }
