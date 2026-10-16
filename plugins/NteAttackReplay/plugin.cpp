@@ -1266,6 +1266,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         if (damage_status.code == ANOMALY_STATUS_V1_OK) {
             context->replay_damage_cursor = event.sequence;
             const bool exact_source_identity =
+                context->captured_damage_source_id != 0 &&
+                event.source_id != 0 &&
                 event.source_id == context->captured_damage_source_id;
             bool source_name_fallback_matches = false;
             // 单次路线证明不接受仅显示名称相同的弱匹配；一般连锁监控仍保留历史兼容回退。
