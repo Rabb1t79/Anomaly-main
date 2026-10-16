@@ -1038,6 +1038,9 @@ struct Ue5NteAdapter::State {
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
         std::uint64_t tick_sequence{};
+        // Number of calls that matched this DamageEvent's effect/actors/receiver checks.
+        // This includes possible duplicate observations and is diagnostic, not an exact unique-call count.
+        std::uint32_t matching_candidate_count{};
         std::uintptr_t receiver{};
         std::uintptr_t function{};
         std::array<std::uint8_t, kGameplayEffectReplayMaxParameterBytes> parameters{};
@@ -6617,6 +6620,8 @@ struct Ue5NteAdapter::State {
             (std::min)(replay_effect_call_count,
                 static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())));
         if (replay_effect_call_count == 0) return false;
+        ReplayEffectContext newest_match{};
+        std::uint32_t matching_candidates{};
         for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
             const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
                 reverse) % kReplayEffectCallCapacity;
@@ -6637,12 +6642,20 @@ struct Ue5NteAdapter::State {
             ReplayMatchFailure failure = ReplayMatchFailure::None;
             if (ReplayContextMatchesDamageLocked(
                     candidate, attacker, victim, source_id, &failure)) {
-                result = candidate;
-                return true;
+                // Preserve the existing newest-first choice, but inspect the whole bounded
+                // window so the single-shot evidence log can reveal possible ambiguity.
+                if (matching_candidates == 0) newest_match = candidate;
+                if (matching_candidates != (std::numeric_limits<std::uint32_t>::max)()) {
+                    ++matching_candidates;
+                }
+                continue;
             }
             if (diagnostics != nullptr) diagnostics->Record(failure);
         }
-        return false;
+        if (matching_candidates == 0) return false;
+        newest_match.matching_candidate_count = matching_candidates;
+        result = newest_match;
+        return true;
     }
 
     AnomalyStatusV1 ReplayDamage(
@@ -6842,24 +6855,36 @@ struct Ue5NteAdapter::State {
                 "validated native GameplayEffect call failed");
         }
         RetainPinnedDamageReplayLocked(replay_root);
-        // Report which dump-validated route was actually dispatched. This is diagnostic
-        // evidence only: the plugin must still observe a new matching CharacterOnDamaged event.
-        switch (replay_root.replay.kind) {
-        case 1U:
+        // Report the actual selected route and how many captured calls matched this hit.
+        // The count includes possible duplicate observations, so it is evidence to inspect,
+        // not by itself proof that there was one unique native invocation.
+        try {
+            std::string route;
+            switch (replay_root.replay.kind) {
+            case 1U:
+                route = "HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor";
+                break;
+            case 2U:
+                route = "HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass";
+                break;
+            case 3U:
+                route = "HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor";
+                break;
+            case 4U:
+                route = "HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor";
+                break;
+            default:
+                route = "unknown validated GameplayEffect entry";
+                break;
+            }
+            replay_status_message = "ProcessEvent dispatch returned; route=" + route +
+                "; matching_candidates=" +
+                std::to_string(replay_root.replay.matching_candidate_count) +
+                "; selection=newest-first";
+            return Status(ANOMALY_STATUS_V1_OK, replay_status_message.c_str());
+        } catch (...) {
             return Status(ANOMALY_STATUS_V1_OK,
-                "ProcessEvent dispatch returned; route=HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor");
-        case 2U:
-            return Status(ANOMALY_STATUS_V1_OK,
-                "ProcessEvent dispatch returned; route=HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass");
-        case 3U:
-            return Status(ANOMALY_STATUS_V1_OK,
-                "ProcessEvent dispatch returned; route=HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor");
-        case 4U:
-            return Status(ANOMALY_STATUS_V1_OK,
-                "ProcessEvent dispatch returned; route=HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor");
-        default:
-            return Status(ANOMALY_STATUS_V1_OK,
-                "ProcessEvent dispatch returned; route=unknown validated GameplayEffect entry");
+                "ProcessEvent dispatch returned; route details unavailable after allocation failure");
         }
     }
 
