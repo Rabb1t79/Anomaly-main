@@ -6845,6 +6845,15 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "unsupported captured GameplayEffect call kind");
         }
+        // Read the target's dump-bound GetHP result immediately before dispatch. This is
+        // diagnostic-only: it does not modify HP and cannot by itself distinguish HP damage
+        // from shield damage or a later asynchronous server update.
+        float target_hp_before{};
+        float target_hp_after{};
+        const bool target_hp_before_valid =
+            NteFunctionReady(NteFunctionKind::GetHp) &&
+            InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, target_hp_before) &&
+            std::isfinite(target_hp_before);
         // Native dispatch can enqueue a new hit that later rotates the rolling ring.
         // Snapshot the root before dispatch, then pin only after the validated call succeeds.
         const DamageRecord replay_root = *record;
@@ -6854,6 +6863,15 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "validated native GameplayEffect call failed");
         }
+        const bool target_hp_after_valid =
+            NteFunctionReady(NteFunctionKind::GetHp) &&
+            InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, target_hp_after) &&
+            std::isfinite(target_hp_after);
+        const bool target_hp_probe_valid =
+            target_hp_before_valid && target_hp_after_valid;
+        const float target_hp_delta = target_hp_probe_valid
+            ? target_hp_before - target_hp_after : 0.0F;
+        const bool target_hp_reduced = target_hp_probe_valid && target_hp_delta > 0.0001F;
         RetainPinnedDamageReplayLocked(replay_root);
         // Report the actual selected route and how many captured calls matched this hit.
         // The count includes possible duplicate observations, so it is evidence to inspect,
@@ -6880,7 +6898,17 @@ struct Ue5NteAdapter::State {
             replay_status_message = "ProcessEvent dispatch returned; route=" + route +
                 "; matching_candidates=" +
                 std::to_string(replay_root.replay.matching_candidate_count) +
-                "; selection=newest-first";
+                "; selection=newest-first; seed_final_damage=" +
+                std::to_string(replay_root.event.final_damage) +
+                "; target_hp_probe=" + (target_hp_probe_valid ? "valid" : "unavailable") +
+                "; target_hp_before=" + (target_hp_before_valid
+                    ? std::to_string(target_hp_before) : "unknown") +
+                "; target_hp_after=" + (target_hp_after_valid
+                    ? std::to_string(target_hp_after) : "unknown") +
+                "; target_hp_delta=" + (target_hp_probe_valid
+                    ? std::to_string(target_hp_delta) : "unknown") +
+                "; target_hp_reduced=" + (target_hp_probe_valid
+                    ? (target_hp_reduced ? "1" : "0") : "unknown");
             return Status(ANOMALY_STATUS_V1_OK, replay_status_message.c_str());
         } catch (...) {
             return Status(ANOMALY_STATUS_V1_OK,
