@@ -6472,6 +6472,9 @@ struct Ue5NteAdapter::State {
         std::uint32_t future_tick{};
         std::uint64_t nearest_exact_match_tick_delta{
             (std::numeric_limits<std::uint64_t>::max)()};
+        // 中文诊断：记录少量原始槽位与 Effect identity 路径，避免在证据不足时放宽关联条件。
+        std::string invalid_context_detail;
+        std::string damage_effect_mismatch_detail;
         std::uint32_t missing_bindings{};
         std::uint32_t missing_damage_source{};
         std::uint32_t invalid_effect_identity{};
@@ -6510,7 +6513,7 @@ struct Ue5NteAdapter::State {
                         (std::numeric_limits<std::uint64_t>::max)()
                     ? std::string("none")
                     : std::to_string(nearest_exact_match_tick_delta);
-            return "candidates=" + std::to_string(candidates) +
+            std::string summary = "candidates=" + std::to_string(candidates) +
                 ",invalid=" + std::to_string(invalid_context) +
                 ",tick_delta_gt_8=" + std::to_string(tick_delta_too_large) +
                 ",future_tick=" + std::to_string(future_tick) +
@@ -6525,6 +6528,13 @@ struct Ue5NteAdapter::State {
                 ",source_missing=" + std::to_string(missing_damage_source) +
                 ",other=" + std::to_string(
                     missing_bindings + invalid_effect_identity + unsupported_call_kind + exceptions);
+            if (!invalid_context_detail.empty()) {
+                summary += ",invalid_detail=" + invalid_context_detail;
+            }
+            if (!damage_effect_mismatch_detail.empty()) {
+                summary += ",effect_detail=" + damage_effect_mismatch_detail;
+            }
+            return summary;
         }
     };
 
@@ -6718,14 +6728,120 @@ struct Ue5NteAdapter::State {
                 reverse) % kReplayEffectCallCapacity;
             const auto& candidate = replay_effect_calls[index];
             if (!candidate.valid) {
-                if (diagnostics != nullptr) ++diagnostics->invalid_context;
+                if (diagnostics != nullptr) {
+                    ++diagnostics->invalid_context;
+                    // 中文诊断：无效槽位不解引用其中的对象指针，只输出原始标量以定位缓存状态。
+                    if (diagnostics->invalid_context <= 3U) {
+                        try {
+                            if (!diagnostics->invalid_context_detail.empty()) {
+                                diagnostics->invalid_context_detail += "|";
+                            }
+                            diagnostics->invalid_context_detail +=
+                                "slot=" + std::to_string(index) +
+                                ";kind=" + std::to_string(candidate.kind) +
+                                ";generation=" + std::to_string(candidate.object_generation) +
+                                ";tick=" + std::to_string(candidate.tick_sequence) +
+                                ";size=" + std::to_string(candidate.parameter_size) +
+                                ";receiver=" + std::to_string(candidate.receiver) +
+                                ";function=" + std::to_string(candidate.function);
+                        } catch (...) {
+                        }
+                    }
+                }
                 continue;
             }
 
             ReplayMatchFailure failure = ReplayMatchFailure::None;
             if (!ReplayContextMatchesDamageLocked(
                     candidate, attacker, victim, source_id, &failure)) {
-                if (diagnostics != nullptr) diagnostics->Record(failure);
+                if (diagnostics != nullptr) {
+                    diagnostics->Record(failure);
+                    // 中文诊断：Effect mismatch 是首个失败条件；此时不能假设 ASC/receiver 也已匹配。
+                    // 输出 Dump 路由、DamageGEDef、实参及关键对象路径，下一次实测据此修复字段/路由。
+                    if (failure == ReplayMatchFailure::DamageEffectMismatch &&
+                        diagnostics->damage_effect_mismatch <= 2U) {
+                        try {
+                            const bool character_wrapper = candidate.kind == 3U;
+                            const bool server_character_wrapper = candidate.kind == 4U;
+                            const std::size_t effect_offset = character_wrapper ? 0x10U
+                                : ((candidate.kind == 1U || server_character_wrapper)
+                                    ? 0x08U : 0x00U);
+                            std::uintptr_t effect_argument{};
+                            std::memcpy(&effect_argument,
+                                candidate.parameters.data() + effect_offset,
+                                sizeof(effect_argument));
+                            const auto source = damage_source_objects.find(source_id);
+                            const std::uintptr_t damage_object =
+                                source == damage_source_objects.end() ? 0U : source->second;
+                            std::uintptr_t damage_class{}, argument_class{}, argument_cdo{};
+                            const auto object_class_offset = Layout(profile, "object.class");
+                            if (damage_object != 0) {
+                                static_cast<void>(ReadPointerAt(*memory, damage_object,
+                                    object_class_offset, damage_class));
+                            }
+                            if (effect_argument != 0) {
+                                static_cast<void>(ReadPointerAt(*memory, effect_argument,
+                                    object_class_offset, argument_class));
+                                if (!server_character_wrapper) {
+                                    static_cast<void>(ReadPointerAt(*memory, effect_argument,
+                                        Layout(profile, "uclass.classDefaultObject"), argument_cdo));
+                                }
+                            }
+                            const auto object_label = [this](const std::uintptr_t object) {
+                                if (object == 0) return std::string("null");
+                                try {
+                                    const std::string path = ObjectPathLocked(object);
+                                    if (!path.empty()) return path;
+                                } catch (...) {
+                                }
+                                return std::string("ptr:") + std::to_string(object);
+                            };
+                            std::uintptr_t source_actor{}, trigger_asc{}, target_asc{};
+                            if (candidate.kind == 1U || candidate.kind == 3U ||
+                                candidate.kind == 4U) {
+                                const std::size_t source_actor_offset =
+                                    candidate.kind == 3U ? 0x08U : 0x00U;
+                                std::memcpy(&source_actor,
+                                    candidate.parameters.data() + source_actor_offset,
+                                    sizeof(source_actor));
+                            }
+                            if (candidate.kind == 1U || candidate.kind == 3U) {
+                                const std::size_t trigger_offset =
+                                    candidate.kind == 3U ? 0x70U : 0x68U;
+                                std::memcpy(&trigger_asc,
+                                    candidate.parameters.data() + trigger_offset,
+                                    sizeof(trigger_asc));
+                            } else if (candidate.kind == 2U) {
+                                std::memcpy(&target_asc,
+                                    candidate.parameters.data() + 0x08U,
+                                    sizeof(target_asc));
+                            }
+                            std::uintptr_t attacker_asc{}, victim_asc{};
+                            static_cast<void>(CurrentAbilitySystemLocked(attacker, attacker_asc));
+                            static_cast<void>(CurrentAbilitySystemLocked(victim, victim_asc));
+                            std::string detail =
+                                "kind=" + std::to_string(candidate.kind) +
+                                ";tick=" + std::to_string(candidate.tick_sequence) +
+                                ";fn=" + object_label(candidate.function) +
+                                ";receiver=" + object_label(candidate.receiver) +
+                                ";damage=" + object_label(damage_object) +
+                                ";damage_class=" + object_label(damage_class) +
+                                ";arg=" + object_label(effect_argument) +
+                                ";arg_class=" + object_label(argument_class) +
+                                ";arg_cdo=" + object_label(argument_cdo) +
+                                ";source_actor=" + object_label(source_actor) +
+                                ";trigger_asc=" + object_label(trigger_asc) +
+                                ";target_asc=" + object_label(target_asc) +
+                                ";attacker_asc=" + object_label(attacker_asc) +
+                                ";victim_asc=" + object_label(victim_asc);
+                            if (!diagnostics->damage_effect_mismatch_detail.empty()) {
+                                diagnostics->damage_effect_mismatch_detail += " || ";
+                            }
+                            diagnostics->damage_effect_mismatch_detail += detail;
+                        } catch (...) {
+                        }
+                    }
+                }
                 continue;
             }
 
