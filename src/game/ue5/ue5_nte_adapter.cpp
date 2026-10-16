@@ -6380,6 +6380,7 @@ struct Ue5NteAdapter::State {
         Exception,
     };
 
+    // 中文说明：保存每类匹配失败的次数，在拒绝 Replay 时输出具体原因，避免只留下笼统的校验失败信息。
     struct ReplayMatchDiagnostics {
         std::uint32_t candidates{};
         std::uint32_t invalid_context{};
@@ -6555,10 +6556,9 @@ struct Ue5NteAdapter::State {
                 const bool trigger_is_attacker =
                     trigger_ability_system != 0 &&
                     trigger_ability_system == attacker_ability_system;
-                // SourceObj is not the authoritative attacker identity when the reflected
-                // trigger ASC is already the current player's validated ASC. Some native
-                // call paths leave SourceObj null or use a non-player context object; do
-                // not reject the hit on that field unless we need it as the identity proof.
+                // 中文说明：触发 ASC 已经与当前玩家的已验证 ASC 一致时，优先采用这个强身份依据。
+                // 此时 SourceObj 仅保留原生调用参数，不再要求它也必须是攻击者对象；
+                // 只有触发 ASC 无法证明攻击者身份时，才要求 SourceObj 明确匹配攻击者。
                 const bool source_actor_is_attacker =
                     source_actor != 0 && source_actor == attacker &&
                     ReadableRange(*memory, source_actor, 0x20U);
