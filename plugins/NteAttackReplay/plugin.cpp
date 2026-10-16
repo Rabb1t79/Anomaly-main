@@ -11,7 +11,6 @@
 #include "anomaly/sdk/cpp.hpp"
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
-#include "anomaly/sdk/services/interop.h"
 #include "anomaly/sdk/services/core.h"
 
 #include <Windows.h>
