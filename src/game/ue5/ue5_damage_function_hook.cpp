@@ -276,9 +276,12 @@ private:
         if (original == nullptr) return;
         if (self != nullptr && self->exec_callback_) {
             try {
+                // ExecCallback's contract is (receiver, function, stack), matching
+                // Ue5NteAdapter::OnCombatExecFunction. The detour slot identifies the
+                // UFunction; the first native thunk argument is the actual receiver.
                 self->exec_callback_(
-                    reinterpret_cast<std::uintptr_t>(self->exec_functions_[slot]),
                     reinterpret_cast<std::uintptr_t>(object),
+                    reinterpret_cast<std::uintptr_t>(self->exec_functions_[slot]),
                     reinterpret_cast<std::uintptr_t>(stack));
             } catch (...) {
             }
