@@ -379,7 +379,17 @@ public:
         RecoveryLock lock(state_directory_);
         if (auto failure = Ready(lock)) return *failure;
         RuntimeRecoveryResult loaded = LoadLocked();
-        if (!loaded.Ok()) return loaded;
+        if (!loaded.Ok()) {
+            if (loaded.error != RuntimeRecoveryError::StateInvalid) return loaded;
+
+            // A malformed or obsolete recovery document already forced conservative
+            // minimal-core mode during startup. Reinitialize it only after the Runtime
+            // has passed its health-stability window, so the next launch can retry
+            // normal plugin loading instead of remaining locked out indefinitely.
+            RuntimeRecoveryState recovered;
+            recovered.revision = 1;
+            return SaveLocked(std::move(recovered));
+        }
         RuntimeRecoveryState state = std::move(*loaded.state);
         if (state.recent_failures.empty() && !state.safe_mode.Active()) return loaded;
 
