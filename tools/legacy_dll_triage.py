@@ -10,6 +10,7 @@ import json
 import math
 import re
 import struct
+import shutil
 import sys
 from pathlib import Path
 
@@ -219,7 +220,10 @@ def main():
         ],
     }
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # This binary is already present in the public source repository. Include the exact
+    # bytes in a short-lived analysis artifact for offline disassembly; never execute it.
+    shutil.copy2(src, dst.parent / src.name)
+    dst.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")
     print(f"input={src.name} bytes={len(data)} sha256={report['sha256']} git_blob_sha1={report['git_blob_sha1']}")
     print(f"architecture={pe['machine_name']} sections={pe['section_count']} imports={len(pe['imports'])} exports={len(pe['exports'])}")
     print(f"interesting_strings={len(selected)} (credential-like values redacted); report={dst}")
