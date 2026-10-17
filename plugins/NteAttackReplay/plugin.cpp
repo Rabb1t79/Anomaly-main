@@ -91,7 +91,8 @@ struct Context final {
     std::atomic_bool replay_requested{false};
     std::atomic_bool stop_requested{false};
     // UI value is a repeat rate (times per second), not a total replay limit.
-    uint32_t replay_rate_per_second{1};
+    uint32_t replay_rate_per_second{1}; // Internal cadence; not exposed in the final compact UI.
+    uint32_t repeat_count{1};
     uint64_t damage_event_count{};
     uint64_t replay_failure_count{};
     uint64_t replay_attempt_count{};
@@ -247,7 +248,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
         context.replay_log_path = directory + L"\\attack-replay.log";
         const std::string startup_line =
             "[" + ReplayLogTimestampUtc() + "] plugin=anomaly.builtin.nte-attack-replay "
-            "version=1.9.8 log=initialized\r\n";
+            "version=1.9.9 log=initialized\r\n";
         if (!WriteReplayLogBytes(context, startup_line)) return false;
         return true;
     } catch (...) {
@@ -814,6 +815,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
     context->replay_rate_per_second = 1;
+    context->repeat_count = 1;
     context->damage_event_count = 0;
     context->replay_failure_count = 0;
     context->replay_attempt_count = 0;
@@ -924,9 +926,12 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                     AppendReplayObservedDamageEvidenceLog(*context, event);
                 }
                 context->waiting_for_damage = false;
+                if (context->damage_event_count != (std::numeric_limits<uint64_t>::max)()) {
+                    ++context->damage_event_count;
+                }
                 ++context->replay_done;
-                // Rate limiting is based on the actual Game tick observed here,
-                // not the event's potentially earlier capture tick.
+                // Keep the native replay cadence internal; the finalized compact UI
+                // exposes a total repeat count rather than a rate control.
                 context->next_replay_at = now + std::chrono::milliseconds(
                     (1000U + context->replay_rate_per_second - 1U) /
                     std::clamp(context->replay_rate_per_second, 1U, 100U));
@@ -962,6 +967,14 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                         context->status =
                             "移植路径得到支持：单候选、Native Exec 命中、同来源新伤害且同步 GetHP 下降";
                     }
+                    return;
+                }
+                if (context->replay_done >= std::clamp(context->repeat_count, 1U, 10U)) {
+                    context->replaying = false;
+                    context->waiting_for_damage = false;
+                    context->replay_requested.store(false, std::memory_order_release);
+                    ArmForNextAttack(*context);
+                    context->status = "已完成设定重复次数，等待下一次真实伤害";
                     return;
                 }
             }
@@ -1079,10 +1092,9 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
         if (ui->input_uint32 != nullptr) {
             ui->input_uint32(
-                ui->user, anomaly::sdk::StringView("伤害重复次数（次/秒）"),
-                &context->replay_rate_per_second, 1, 100);
-            context->replay_rate_per_second =
-                std::clamp(context->replay_rate_per_second, 1U, 100U);
+                ui->user, anomaly::sdk::StringView("伤害重复次数"),
+                &context->repeat_count, 1U, 10U);
+            context->repeat_count = std::clamp(context->repeat_count, 1U, 10U);
         }
 
         const bool binding_ready = CombatReady(context->combat) &&
@@ -1098,9 +1110,6 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             "次 重放=" + std::to_string(context->replay_attempt_count) + "次";
         ui->text(ui->user, anomaly::sdk::StringView(counters));
 
-        if (!context->enabled && ui->separator != nullptr) {
-            ui->separator(ui->user);
-        }
         // No route-validation controls or diagnostic internals are exposed in the final UI.
         ui->end_window(ui->user);
     } else {
@@ -1123,7 +1132,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Damage Chain Reaction"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.9.8"),
+        anomaly::sdk::StringView("1.9.9"),
         Load,
         Start,
         Stop,
