@@ -8224,6 +8224,137 @@ struct Ue5NteAdapter::State {
         return !name.empty();
     }
 
+    // Validate observer-only UFunctions against the exact 5.6.1 dump layout.
+    // These candidates remain count-only: this validation does not read call parameters
+    // and never makes a candidate eligible for GameplayEffect replay.
+    [[nodiscard]] bool ValidateObserverOnlyFunctionLocked(
+        const std::uintptr_t function, const std::size_t index,
+        std::string& failure_reason) const {
+        constexpr std::array<std::string_view, 8> owners{
+            "HTAbilityCharacter", "HTAbilitySystemComponent",
+            "HTAbilitySystemBlueprintLibrary", "AbilitySystemComponent",
+            "AbilitySystemComponent", "AbilitySystemComponent",
+            "AbilitySystemComponent", "HTAbilitySystemComponent"
+        };
+        constexpr std::array<std::string_view, 8> names{
+            "K2_ActivateGameEffectsWithClass", "ApplyEffectContainerSpec",
+            "ApplyExternalEffectContainerSpec", "BP_ApplyGameplayEffectSpecToSelf",
+            "BP_ApplyGameplayEffectSpecToTarget", "BP_ApplyGameplayEffectToSelf",
+            "BP_ApplyGameplayEffectToTarget", "ServerApplyTraceProjectileResults"
+        };
+        constexpr std::array<std::uint8_t, 8> expected_num_parms{
+            3U, 1U, 1U, 1U, 2U, 3U, 4U, 7U
+        };
+        constexpr std::array<std::uint16_t, 8> expected_parms_size{
+            0x68U, 0x48U, 0x48U, 0x18U, 0x20U, 0x30U, 0x38U, 0xE8U
+        };
+        constexpr std::array<std::uint16_t, 8> expected_return_offset{
+            0xFFFFU, 0x38U, 0x38U, 0x10U, 0x18U, 0x28U, 0x30U, 0xFFFFU
+        };
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(owners[index]);
+            failure_reason.push_back('.');
+            failure_reason.append(names[index]);
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (index >= owners.size()) return false;
+        if (function == 0) return fail("function pointer is null");
+
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
+        }
+        if (function_class_name != "Function" || outer_name != owners[index] ||
+            function_name != names[index]) {
+            return fail("identity mismatch: expected Function/" + std::string(owners[index]) +
+                "." + std::string(names[index]) + "; observed " + function_class_name + "/" +
+                outer_name + "." + function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        if (num_parms != expected_num_parms[index] ||
+            parms_size != expected_parms_size[index] ||
+            return_offset != expected_return_offset[index]) {
+            return fail("UFunction header mismatch: expected NumParms=" +
+                std::to_string(expected_num_parms[index]) + ", ParmsSize=" +
+                std::to_string(expected_parms_size[index]) + ", ReturnValueOffset=" +
+                std::to_string(expected_return_offset[index]) + "; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
+        const auto field = [&](const std::string_view field_name,
+                               const std::string_view type,
+                               const std::uint16_t size,
+                               const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false)) {
+                return fail("could not find reflected field " + std::string(field_name));
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(field_name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
+        };
+
+        switch (index) {
+        case 0:
+            return field("WorldContextObject", "ObjectProperty", 8, 0x00) &&
+                field("GameplayEffect", "ClassProperty", 8, 0x08) &&
+                field("ModifyData", "StructProperty", 0x58, 0x10);
+        case 1:
+        case 2:
+            return field("ContainerSpec", "StructProperty", 0x38, 0x00) &&
+                field("ReturnValue", "ArrayProperty", 0x10, 0x38);
+        case 3:
+            return field("SpecHandle", "StructProperty", 0x10, 0x00) &&
+                field("ReturnValue", "StructProperty", 0x08, 0x10);
+        case 4:
+            return field("SpecHandle", "StructProperty", 0x10, 0x00) &&
+                field("Target", "ObjectProperty", 0x08, 0x10) &&
+                field("ReturnValue", "StructProperty", 0x08, 0x18);
+        case 5:
+            return field("GameplayEffectClass", "ClassProperty", 0x08, 0x00) &&
+                field("Level", "FloatProperty", 0x04, 0x08) &&
+                field("EffectContext", "StructProperty", 0x18, 0x10) &&
+                field("ReturnValue", "StructProperty", 0x08, 0x28);
+        case 6:
+            return field("GameplayEffectClass", "ClassProperty", 0x08, 0x00) &&
+                field("Target", "ObjectProperty", 0x08, 0x08) &&
+                field("Level", "FloatProperty", 0x04, 0x10) &&
+                field("Context", "StructProperty", 0x18, 0x18) &&
+                field("ReturnValue", "StructProperty", 0x08, 0x30);
+        case 7:
+            return field("Handle", "StructProperty", 0x04, 0x00) &&
+                field("ContainerTag", "StructProperty", 0x08, 0x04) &&
+                field("EventData", "StructProperty", 0xB0, 0x10) &&
+                field("ShotID", "UInt32Property", 0x04, 0xC0) &&
+                field("RandomSeed", "IntProperty", 0x04, 0xC4) &&
+                field("TraceResults", "ArrayProperty", 0x10, 0xC8) &&
+                field("PredictionKey", "StructProperty", 0x10, 0xD8);
+        default:
+            return fail("unknown observer-only candidate index");
+        }
+    }
+
     [[nodiscard]] bool FindExactObjectLocked(
         const wchar_t* const path,
         std::uintptr_t& object) const noexcept {
@@ -12902,10 +13033,33 @@ struct Ue5NteAdapter::State {
                         L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectToTarget",
                         L"/Script/HTGame.HTAbilitySystemComponent.ServerApplyTraceProjectileResults"
                     };
+                    constexpr std::array<std::string_view, 8> observer_only_names{
+                        "activateGameEffectsWithClass", "applyEffectContainerSpec",
+                        "applyExternalEffectContainerSpec", "bpApplyGameplayEffectSpecToSelf",
+                        "bpApplyGameplayEffectSpecToTarget", "bpApplyGameplayEffectToSelf",
+                        "bpApplyGameplayEffectToTarget", "serverApplyTraceProjectileResults"
+                    };
+                    std::string observer_layout_diagnostics;
                     for (std::size_t index{}; index < observer_only_paths.size(); ++index) {
                         std::uintptr_t candidate{};
-                        if (FindExactObjectLocked(observer_only_paths[index].data(), candidate)) {
+                        if (!FindExactObjectLocked(observer_only_paths[index].data(), candidate)) {
+                            if (!observer_layout_diagnostics.empty()) observer_layout_diagnostics += "; ";
+                            observer_layout_diagnostics += observer_only_names[index];
+                            observer_layout_diagnostics += "=not-found";
+                            continue;
+                        }
+                        std::string validation_failure;
+                        if (ValidateObserverOnlyFunctionLocked(candidate, index, validation_failure)) {
                             next_capture_bindings.observer_only_functions[index] = candidate;
+                            if (!observer_layout_diagnostics.empty()) observer_layout_diagnostics += "; ";
+                            observer_layout_diagnostics += observer_only_names[index];
+                            observer_layout_diagnostics += "=validated";
+                        } else {
+                            if (!observer_layout_diagnostics.empty()) observer_layout_diagnostics += "; ";
+                            observer_layout_diagnostics += observer_only_names[index];
+                            observer_layout_diagnostics += "=rejected(";
+                            observer_layout_diagnostics += validation_failure;
+                            observer_layout_diagnostics += ")";
                         }
                     }
                     replay_entrypoint_diagnostics =
@@ -12920,7 +13074,8 @@ struct Ue5NteAdapter::State {
                             ? std::string("validated") : replay_character_failure) +
                         "; Character server RPC: " +
                         (next_capture_bindings.replay_server_activate_by_actor != 0
-                            ? std::string("validated") : replay_server_character_failure);
+                            ? std::string("validated") : replay_server_character_failure) +
+                        "; observer-only layout: " + observer_layout_diagnostics;
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
