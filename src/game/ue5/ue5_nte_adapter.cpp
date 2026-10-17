@@ -1279,10 +1279,13 @@ struct Ue5NteAdapter::State {
         std::uintptr_t replay_apply_to_target{};
         std::uintptr_t replay_activate_by_actor{};
         std::uintptr_t replay_server_activate_by_actor{};
+        // Count-only candidates: never capture parameter bytes or authorize replay here.
+        std::array<std::uintptr_t, 8> observer_only_functions{};
     };
     // Counts are ingress observations, not deduplicated native calls: one invocation may
     // be seen by ActorProcessEvent, UObject ProcessEvent and Native Exec independently.
     std::array<std::atomic<std::uint64_t>, 4> replay_entrypoint_observation_counts{};
+    std::array<std::atomic<std::uint64_t>, 8> observer_only_observation_counts{};
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
     std::array<CombatCaptureBindings, 2> combat_capture_binding_slots{};
@@ -12887,6 +12890,24 @@ struct Ue5NteAdapter::State {
                         next_capture_bindings.replay_server_activate_by_actor =
                             replay_server_activate_by_actor;
                     }
+                    // Exact-path lookup for read-only observation only. Path identity
+                    // alone does not validate parameter layout and never enables replay.
+                    constexpr std::array<std::wstring_view, 8> observer_only_paths{
+                        L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClass",
+                        L"/Script/HTGame.HTAbilitySystemComponent.ApplyEffectContainerSpec",
+                        L"/Script/HTGame.HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToSelf",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToTarget",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectToSelf",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectToTarget",
+                        L"/Script/HTGame.HTAbilitySystemComponent.ServerApplyTraceProjectileResults"
+                    };
+                    for (std::size_t index{}; index < observer_only_paths.size(); ++index) {
+                        std::uintptr_t candidate{};
+                        if (FindExactObjectLocked(observer_only_paths[index], candidate)) {
+                            next_capture_bindings.observer_only_functions[index] = candidate;
+                        }
+                    }
                     replay_entrypoint_diagnostics =
                         "ASC ByActor: " +
                         (next_capture_bindings.replay_apply_by_actor != 0
@@ -12921,6 +12942,8 @@ struct Ue5NteAdapter::State {
                     next_capture_bindings.replay_apply_to_target != 0 ||
                     next_capture_bindings.replay_activate_by_actor != 0 ||
                     next_capture_bindings.replay_server_activate_by_actor != 0 ||
+                    std::ranges::any_of(next_capture_bindings.observer_only_functions,
+                        [](const auto function) { return function != 0; }) ||
                     std::ranges::any_of(next_capture_bindings.buffs,
                         [](const auto& buff) { return buff.function != 0; });
                 if (has_capture_binding) {
@@ -19555,6 +19578,11 @@ void Ue5NteAdapter::OnCombatExecFunction(
         !is_buff_function) {
         return;
     }
+    for (std::size_t index{}; index < bindings->observer_only_functions.size(); ++index) {
+        if (bindings->observer_only_functions[index] == function && function != 0) {
+            state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     if (function == bindings->replay_apply_by_actor) {
         state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
     } else if (function == bindings->replay_apply_to_target) {
@@ -19661,6 +19689,11 @@ void Ue5NteAdapter::OnProcessEventPre(
         state->combat_capture_bindings.load(std::memory_order_acquire);
     if (combat_bindings != nullptr &&
         !IsTopActorReplayCaptureFrame(this, object, function, parameters)) {
+        for (std::size_t index{}; index < combat_bindings->observer_only_functions.size(); ++index) {
+            if (combat_bindings->observer_only_functions[index] == function && function != 0) {
+                state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            }
+        }
         if (function == combat_bindings->replay_apply_by_actor) {
             state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
         } else if (function == combat_bindings->replay_apply_to_target) {
@@ -19889,6 +19922,21 @@ std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
             std::to_string(state->replay_entrypoint_observation_counts[2].load(std::memory_order_relaxed)) +
             ",\"characterServerByActor\":" +
             std::to_string(state->replay_entrypoint_observation_counts[3].load(std::memory_order_relaxed)) + "}";
+        constexpr std::array<std::string_view, 8> observer_only_names{
+            "activateGameEffectsWithClass", "applyEffectContainerSpec",
+            "applyExternalEffectContainerSpec", "bpApplyGameplayEffectSpecToSelf",
+            "bpApplyGameplayEffectSpecToTarget", "bpApplyGameplayEffectToSelf",
+            "bpApplyGameplayEffectToTarget", "serverApplyTraceProjectileResults"
+        };
+        result += ",\"observerOnlyProcessEventObservations\":{";
+        for (std::size_t index{}; index < observer_only_names.size(); ++index) {
+            if (index != 0) result.push_back(',');
+            result += "\\"";
+            result += observer_only_names[index];
+            result += "\\":";
+            result += std::to_string(state->observer_only_observation_counts[index].load(std::memory_order_relaxed));
+        }
+        result += "}";
         result += ",\"events\":[";
     bool first = true;
     for (std::size_t index{}; index < state->combat_event_count; ++index) {
