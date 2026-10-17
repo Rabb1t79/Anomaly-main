@@ -1,41 +1,41 @@
-# 伤害链候选原生机制：Dump 正文初读
+# 伤害链候选原生机制：阶段性结论
 
-> 来源：`5.6.1/CppSDK/SDK/HTGame_classes.hpp`（blob `526091ab6679ac6833634e5a6d08d807e90dbf0c`）与 `HTGame_structs.hpp`（blob `cc6781d70b782a0e3ec6cf06dfbd75f323f04a53`）。本页记录 Dump 声明，不证明旧插件采用此路径。
+> 本页只记录 Dump 声明证据和当前候选方向；不证明旧插件实际使用了某条路径。
 
-## 已读声明：`ADamageTriggerActor`
+## 已直接证实的原生声明
 
-**直接证实（Dump 声明）**
-- `class ADamageTriggerActor : public AHTAbilitySpawnActor`。
-- `OverlapTriggerLinkTimeCharacters` 为 `TArray<AHTPlayerCharacter*>`，偏移 `0x05A8`。
-- 私有瞬态字段：`RuntimeTriggerPeriod`（float，`0x05E8`）、`RuntimeTriggerDuration`（float，`0x05EC`）、`RuntimeTriggerCountPerPeriod`（int32，`0x05F0`）、`RuntimeMaxTriggerCount`（int32，`0x05F4`）。
-- 类注释总大小 `0x0618`，基类布局大小 `0x04A8`，派生类增量 `0x0170`。
-- 函数声明包括：`K2_OnTriggerPeriodGamePlayEffect`、`OnCharacterDeadChanged`、`OnPlayerBeginOverlap`、`OnPlayerEndOverlap`、`StartTriggerGamePlayEffect`、`TriggerAbsorbBegin/End`、`TriggerPeriodGamePlayEffectEvent`。
-- 这些声明支持“有重叠目标集合及周期/持续时间/每周期次数/最大次数状态”的结论；函数名不能证明其内部逻辑。
+在 `5.6.1/` 与同仓库历史提交中可读取的 `5.6.1-new/` 真实正文之间，以下候选符号段逐字一致：
 
-## 已读声明：`FHTGameplayEffectContainer`
-- 总大小 `0x28`。
-- `TargetType`、`AddTargetType`、`NotFindToDoTargetType` 是三个 `TSubclassOf<UHTGATargetType>`，偏移分别为 `0x00`、`0x08`、`0x10`。
-- `TargetGameplayEffectClasses` 为 `TArray<TSubclassOf<UGameplayEffect>>`，偏移 `0x18`、大小 `0x10`。
-- 证明存在描述目标类型与 GameplayEffect 类集合的数据结构；不能推出应用顺序、应用者或实际目标。
+- `ADamageTriggerActor`：继承 `AHTAbilitySpawnActor`；有 `OverlapTriggerLinkTimeCharacters` 目标数组，以及 `RuntimeTriggerPeriod`、`RuntimeTriggerDuration`、`RuntimeTriggerCountPerPeriod`、`RuntimeMaxTriggerCount` 字段。
+- `FHTGameplayEffectContainer`：包含目标类型选择字段和 `TargetGameplayEffectClasses`。
+- `FSpawnDamageTriggerActor` / `FSpawnDamageTriggerActorArray`：描述生成 Actor、生成条件/位置/旋转/缩放、配置 ID、效果容器、随机生成数与目标类型。
+- `FDamageTriggerActorStaticData`：有延迟生成、持续时间、延迟触发、链接持续时间、周期和最大次数字段。
+- `UHTAbilitySpawnDamageTriggerActor`：继承 `UHTAbilitySpawnActorEffect`，持有 `SpawnDamageTriggerActorsInfo`。
+- `UFindSpawnLocationObj_Target`：包含目标位置偏移、方向、胶囊和预位置时间相关字段。
+- `AHTAbilityCharacter::OnDamaged`：公开事件声明携带 `DamageAmount`、`HitInfo`、`DamageTags`、`DamageGameplayEffect`、`InstigatorCharacter` 和 `DamageCauser`。
 
-## 已读声明：`FSpawnDamageTriggerActor`
-- 总大小 `0x70`。
-- `SapwnActorClass`（保留 Dump 原始拼写）为 `TSubclassOf<AHTAbilitySpawnActor>`，偏移 `0x00`。
-- 生成条件数组、生成位置/旋转/缩放对象位于 `0x08`、`0x18`、`0x20`、`0x28`。
-- `DamageTriggerConfigID` 在 `0x34`；`EffectContainer` 在 `0x40`、大小 `0x28`；`RandomCountCurve` 在 `0x68`。
-- 证明存在“生成伤害触发 Actor + 效果容器”的数据描述，但不证明它与旧插件有关。
+详细逐段说明见：
+- [DamageTrigger 源码注释](damage-trigger-source-notes.md)
+- [伤害事件候选](damage-event-candidates.md)
+- [生成修改器和周边类型](related-spawn-modifiers.md)
+- [版本对照](version-diff.md)
 
-## 已读声明：`FDamageTriggerActorStaticData`
-- 继承 `FTableRowBase`，总大小 `0x58`（含基类布局）。
-- `DelaySpawnTime`（`0x38`）、`duration`（`0x3C`）、`DelayDestoryTime`（`0x40`）、`TriggerOnSpawn`（`0x44`）、`DelayTriggerTime`（`0x48`）、`TriggerLinkTimeDuration`（`0x4C`）、`Period`（`0x50`）、`MaxTriggerCount`（`0x54`）。
-- 字段名支持存在延迟生成、延迟触发、持续时间、周期和最大次数配置；真实语义、单位、消费者和字段关系仍需核验。
+## 候选路线（未选定实现）
 
-## 继续读取
-- 完整核验 `UHTAbilitySpawnDamageTriggerActor`、`FSpawnDamageTriggerActorArray`、`UFindSpawnLocationObj_Target`。
-- 读取相关 `HTGame_parameters.hpp`、`HTGame_functions.cpp` 和 `Dumpspace/FunctionsInfo.json`，核对 owner、参数 ABI、返回值布局。
-- 新版真实 LFS 正文仍未取得，故不做字段差异结论。
+1. **周期触发 Actor 路线**：调查 `ADamageTriggerActor` 的实际触发函数、目标集合维护、时序字段写入点和生成配置消费者。
+2. **原生伤害事件观察路线**：调查 `AHTAbilityCharacter::OnDamaged` 的真实调用时序和事件覆盖范围，判断是否能识别有效的 player→enemy 伤害。
+3. **生成参数配置路线**：调查 `UHTSpawnActorNumericParamModifier` 及专用 DamageTrigger modifiers 的应用阶段和具体消费者。
+4. **调用桥接路线**：只有在确定原生候选路径后，才核验 Anomaly 的公开 ABI 是否有可用且合规的入口；缺少接口时再评估最小 ABI/Core 扩展。
 
-## 状态
-- **直接证实**：Dump 存在周期触发 Actor、目标集合、GameplayEffect 类容器和周期/延迟/最大次数字段。
-- **有证据支持但未验证**：这些类型是周期伤害机制的研究候选。
-- **未知**：旧插件是否使用此路线、触发条件、目标绑定、独立实例语义，以及能否由受支持 Anomaly ABI 安全桥接。
+## 仍未证实
+
+- 旧插件是否使用上述任意候选类型。
+- 首次伤害后是否自动重复同一原生伤害效果。
+- 多个敌人是否独立计时、不互相重置。
+- 目标离开重叠范围、死亡或对象失效时的清理行为。
+- 哪些函数在真实战斗路径中被调用，以及是否可以通过受支持的 Anomaly ABI 桥接。
+- 用户视频中的可观察效果与以上原生候选是否对应。
+
+## 证据顺序
+
+先以两个 Dump 版本的类/结构/参数/反射元数据建立候选；再对照用户视频的可观察行为；旧 DLL 控制流和常量分析按当前计划后置，用于交叉验证而非先验决定实现。
