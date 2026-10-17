@@ -128,7 +128,6 @@ def main():
     exp_rva, exp_size = directory(0)
     eo = rva_off(exp_rva) if exp_rva else None
     if eo is not None and eo+40<=len(b):
-        base, nfunc, nname = struct.unpack_from("<IIIIII",b,eo+16)[:6:1] if False else (None,None,None,None,None,None)
         # IMAGE_EXPORT_DIRECTORY fields are read by their actual offsets.
         base=u32(b,eo+16); nfunc=u32(b,eo+20); nname=u32(b,eo+24)
         names_rva=u32(b,eo+32); ords_rva=u32(b,eo+36)
