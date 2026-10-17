@@ -15,6 +15,7 @@
 - AProjectileBase：存在 OverlapDamageInterval、OverlapDamageMaxCount、HitActorList、OverlapTriggerLinkTimeComp 和 FinishSpawningDamageTriggerActor。
 - AHTLaserActor：存在 TriggerDamageInterval、PerTargetDamageInterval、MaxHitCount、TriggerDuration、目标对象类型数组和 FinishSpawningDamageTriggerActor。
 - AHTAbilityCharacter::OnDamaged：事件声明携带 DamageAmount、HitInfo、DamageTags、DamageGameplayEffect、InstigatorCharacter、DamageCauser。
+- UHTAbilitySystemBlueprintLibrary::ModifySpawnActorNumericParam：静态 Native|BlueprintCallable 函数，接受能力实例、ParamId、Set/Add/Multiply 操作和值；这可能是配置数值的候选入口，但不是公开 Anomaly ABI。
 
 ## GObjects 对象路径交叉证据
 
@@ -35,7 +36,7 @@
 1. **周期触发 Actor 路线**：调查 ADamageTriggerActor 的实际触发函数、目标集合维护、时序字段写入点和生成配置消费者。
 2. **Projectile/Laser 持续伤害路线**：调查 AProjectileBase 的重叠伤害间隔/最大次数，以及 AHTLaserActor 的逐目标伤害间隔、持续时间和命中计数。详见 projectile-laser-trigger-path.md。
 3. **原生伤害事件观察路线**：区分并调查 AHTAbilityCharacter::OnDamaged 反射事件、CharacterOnDamaged 多播委托和 Anomaly profile 中的内部广播符号；不能把它们视为同一个入口。
-4. **生成参数配置路线**：调查 UHTSpawnActorNumericParamModifier 及专用 DamageTrigger modifiers 的应用阶段与消费者。
+4. **生成参数配置路线**：调查 UHTSpawnActorNumericParamModifier、专用 DamageTrigger modifiers 与 ModifySpawnActorNumericParam 的应用阶段/消费者。
 5. **调用桥接路线**：只有确定原生候选路径后，才核验 Anomaly 公开 ABI；缺少接口时再评估最小合规 ABI/Core 扩展。
 
 ## 仍未证实

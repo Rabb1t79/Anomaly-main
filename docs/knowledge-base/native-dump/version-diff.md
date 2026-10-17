@@ -21,6 +21,7 @@
 | AHTAbilityCharacter | 同上 | 同上 | 类段逐字一致。 |
 | AProjectileBase | 同上 | 同上 | 类段逐字一致；含 OverlapDamageInterval、OverlapDamageMaxCount、HitActorList 等字段。 |
 | AHTLaserActor | 同上 | 同上 | 类段逐字一致；含 TriggerDamageInterval、PerTargetDamageInterval、MaxHitCount 等字段。 |
+| UHTAbilitySystemBlueprintLibrary | 同上 | 同上 | 类段逐字一致；ModifySpawnActorNumericParam 签名/flags 相同。 |
 | UProjectileSpawnDamageActorsEffect | 同上 | 同上 | 类段逐字一致；持有 FSpawnDamageTriggerActor 数组。 |
 | ULaserSpawnDamageActorsEffect | 同上 | 同上 | 类段逐字一致；持有 FSpawnDamageTriggerActor 数组及 TriggerInterval/MaxSpawnCount。 |
 | HTGame_structs.hpp | cc6781d70b782a0e3ec6cf06dfbd75f323f04a53 | 28b7cb52252fc062bcbb7d23ccfc9ddf52621079 | 文件大小分别 6,879,049 / 6,879,572 字节；已检查候选结构段逐字一致。 |
@@ -30,8 +31,10 @@
 | FDamageTriggerActorStaticData | 上述 structs blob | 上述 structs blob | 结构段逐字一致。 |
 | FHTDamageEvent | 上述 structs blob | 上述 structs blob | 结构段逐字一致。 |
 | FHTGameplayEffectContext | 上述 structs blob | 上述 structs blob | 结构段逐字一致。 |
+| EHTSpawnActorParamPhase / EHTNumericParamOperation | 上述 structs blob | 上述 structs blob | 枚举段逐字一致；PreSpawn/PostSpawn 与 Set/Add/Multiply 数值相同。 |
 | HTGame_parameters.hpp | b839b1a326e90ad3ac1c598f6bbca6b6eee465e | 同一 SHA | 文件内容逐字相同。 |
 | HTGame_functions.cpp | c0a5f1dfa3540ab656d18578950d02e4de522ef2 | 同一 SHA | 文件内容逐字相同。 |
+| HTAbilitySystemBlueprintLibrary_ModifySpawnActorNumericParam | HTGame_parameters.hpp 中的参数结构 | 同一文件 SHA | 参数布局 0x20；两版参数/包装文件逐字相同，FunctionsInfo 的返回值、参数和 flags 规范化后相同。 |
 | Dumpspace/FunctionsInfo.json | 77f814d20c38455538d2ae3224a02a023c353e7e | d920ace94722578035d5659295cffaf38ba2cae1 | 元数据文件不同；ADamageTriggerActor 的 17 个函数名称、返回类型、参数和 flags 规范化后相同。数值地址/标识不同，不能作为稳定 ABI。 |
 
 ## 直接结论

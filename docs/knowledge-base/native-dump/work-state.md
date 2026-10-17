@@ -18,7 +18,7 @@
 - FHTGameplayEffectContainer、FSpawnDamageTriggerActor、FSpawnDamageTriggerActorArray、FDamageTriggerActorStaticData。
 - UHTAbilitySpawnDamageTriggerActor、UFindSpawnLocationObj_Target。
 - AHTAbilitySpawnActor 的效果容器、EventData 和能力关联字段。
-- UHTSpawnActorParamModifier / UHTSpawnActorNumericParamModifier 及专用 DamageTrigger 数值修改器。
+- UHTSpawnActorParamModifier / UHTSpawnActorNumericParamModifier、专用 DamageTrigger 数值修改器，以及 UHTAbilitySystemBlueprintLibrary::ModifySpawnActorNumericParam 的参数布局/反射元数据。
 - AProjectileBase 的重叠伤害间隔/最大次数/命中列表/追踪目标字段。
 - AHTLaserActor 的 TriggerDamageInterval、PerTargetDamageInterval、TriggerDuration、MaxHitCount 与重叠回调。
 - AHTAbilityCharacter::OnDamaged 的反射签名和参数布局。

@@ -49,7 +49,23 @@
 
 这些类名和继承关系直接支持存在针对生成伤害触发器的次数、周期、持续时间、最大次数和半径参数修改机制；它们是否参与目标旧插件、如何与 `ADamageTriggerActor` 的 Runtime 字段关联，仍未知。
 
-## 3. 其他持有生成伤害触发配置的效果类
+## 3. 数值修改入口与枚举（新增正文核验）
+
+来源：HTGame_structs.hpp 第 11,439–11,455 行；HTGame_classes.hpp 第 15,266 行；HTGame_parameters.hpp 第 15,231 行。
+
+- EHTSpawnActorParamPhase：PreSpawn = 0、PostSpawn = 1。此枚举明确只有生成前/生成后两个有效阶段值。
+- EHTNumericParamOperation：Set = 0、Add = 1、Multiply = 2。
+- UHTAbilitySystemBlueprintLibrary 声明静态函数：
+
+  ModifySpawnActorNumericParam(UHTGameplayAbility* AbilityInstance, const FGameplayTag& ParamId, EHTNumericParamOperation Operation, float Value) -> bool
+
+- FunctionsInfo.json flags：Final|Native|Static|Public|BlueprintCallable。
+- 参数结构 HTAbilitySystemBlueprintLibrary_ModifySpawnActorNumericParam 总大小 0x20：AbilityInstance @ 0x00（8 字节）、ParamId @ 0x08（8 字节）、Operation @ 0x10（1 字节）、padding @ 0x11–0x13、Value @ 0x14（4 字节）、ReturnValue @ 0x18（1 字节）、尾部 padding @ 0x19–0x1F。
+- 两版 HTGame_parameters.hpp 和 HTGame_functions.cpp 的 blob SHA 相同；因此该参数布局和生成反射包装文件逐字一致。
+
+**边界：** 这是游戏 Dump 中声明的静态 BlueprintCallable 函数，不等于 Anomaly 插件已有对应公开 ABI。它以 UHTGameplayAbility 实例、ParamId、操作类型和值为输入；不能据此断言它直接修改已生成 Actor 的 Runtime 字段、能创建 Actor，或就是旧插件机制。生成的函数包装仍只是 ProcessEvent wrapper，不是函数原生实现体。
+
+## 4. 其他持有生成伤害触发配置的效果类
 
 ### `UProjectileSpawnDamageActorsEffect`
 继承 `UHTProjectileFunc`：
@@ -64,7 +80,7 @@
 - `MaxSpawnCount` @ `0x4C`，int32。
 - 这说明激光效果类也有生成伤害触发 Actor 数组和间隔/最大生成数配置；不证明与旧插件有关。
 
-## 4. 目标类型候选
+## 5. 目标类型候选
 
 `FHTGameplayEffectContainer` 中引用 `UHTGATargetType` 子类。Dump 声明存在：
 - `UHTGATargetType_UseEventData`
@@ -73,7 +89,7 @@
 
 仅凭名字不能确定目标选择结果；需继续检查这些类型的函数元数据、父类方法和实际调用者。
 
-## 5. 与目标需求的关系
+## 6. 与目标需求的关系
 
 - **直接证实：** 原生 SDK 声明有伤害触发 Actor、目标/效果容器、参数修改器、生成配置，以及投射物/激光效果持有该配置的结构。
 - **有证据支持但未验证：** 游戏可能通过配置化的 SpawnActor effect 来构造周期伤害触发实例。
