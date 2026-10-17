@@ -8242,8 +8242,9 @@ struct Ue5NteAdapter::State {
             "BP_ApplyGameplayEffectSpecToTarget", "BP_ApplyGameplayEffectToSelf",
             "BP_ApplyGameplayEffectToTarget", "ServerApplyTraceProjectileResults"
         };
+        // UFunction::NumParms includes the ReturnParm property where present.
         constexpr std::array<std::uint8_t, 8> expected_num_parms{
-            3U, 1U, 1U, 1U, 2U, 3U, 4U, 7U
+            3U, 2U, 2U, 2U, 3U, 4U, 5U, 7U
         };
         constexpr std::array<std::uint16_t, 8> expected_parms_size{
             0x68U, 0x48U, 0x48U, 0x18U, 0x20U, 0x30U, 0x38U, 0xE8U
