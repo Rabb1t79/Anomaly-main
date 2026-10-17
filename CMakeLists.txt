@@ -1483,13 +1483,17 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/DllLoader/manifest.json
         PACKAGE_NAME DllLoader
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/DllLoader")
-    anomaly_add_plugin(anomaly_builtin_time_accel
-        SOURCES plugins/TimeAccel/plugin.cpp
-        MANIFEST plugins/TimeAccel/manifest.json
-        PACKAGE_NAME TimeAccel
-        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/TimeAccel")
-    # 插件源码把中文直接写在字符串字面量里（非 locale），MSVC 需按 UTF-8 读源码并编码窄字符串。
-    target_compile_options(anomaly_builtin_time_accel PRIVATE /utf-8)
+    # The source for TimeAccel is not present in this checkout. Do not synthesize or
+    # restore it from unrelated historical code; stage the plugin only when its source exists.
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/plugins/TimeAccel/plugin.cpp")
+        anomaly_add_plugin(anomaly_builtin_time_accel
+            SOURCES plugins/TimeAccel/plugin.cpp
+            MANIFEST plugins/TimeAccel/manifest.json
+            PACKAGE_NAME TimeAccel
+            OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/TimeAccel")
+        # Plugin source contains Chinese literals rather than locale resources.
+        target_compile_options(anomaly_builtin_time_accel PRIVATE /utf-8)
+    endif()
     target_link_libraries(anomaly_builtin_fake_uid PRIVATE nlohmann_json::nlohmann_json)
     target_link_libraries(anomaly_builtin_camera_tools PRIVATE nlohmann_json::nlohmann_json)
     target_link_libraries(anomaly_builtin_better_pose PRIVATE nlohmann_json::nlohmann_json)
@@ -1601,7 +1605,9 @@ anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_free_fly NteFreeFly)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_skin_changer SkinChanger)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_ui_buttons UiButtons)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_dll_loader DllLoader)
-anomaly_stage_platform_preview_plugin(anomaly_builtin_time_accel TimeAccel)
+if(TARGET anomaly_builtin_time_accel)
+    anomaly_stage_platform_preview_plugin(anomaly_builtin_time_accel TimeAccel)
+endif()
 anomaly_stage_platform_preview_plugin(anomaly_builtin_hifi_vehicle_music HiFiVehicleMusic)
 
 if(TARGET anomaly-platform-preview)
