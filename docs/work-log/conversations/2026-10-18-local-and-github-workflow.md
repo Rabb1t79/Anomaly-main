@@ -136,27 +136,27 @@ Anomaly 主仓库自身规定的完整本机构建需要 Visual Studio 2022 C++ 
 
 > 明白了。是我之前没有充分利用已经打通的 GitHub 连接，把本来可以由我继续核查和执行的步骤又推回给你了。抱歉。
 >
-> **你不用先检查本机的 Node.js，也不用为了继续工作去折腾 Codex。** 我直接以 \`Rabb1t79/Anomaly-main\` 为工作仓库，优先检查现有分支、GitHub Actions 构建和可交付产物；能在仓库侧完成的就直接做，遇到确实需要你本机或游戏内验证的步骤，我再明确区分。
+> **你不用先检查本机的 Node.js，也不用为了继续工作去折腾 Codex。** 我直接以 `Rabb1t79/Anomaly-main` 为工作仓库，优先检查现有分支、GitHub Actions 构建和可交付产物；能在仓库侧完成的就直接做，遇到确实需要你本机或游戏内验证的步骤，我再明确区分。
 
-> 我已经直接从仓库触发了现有的 GitHub Actions 构建重跑。GitHub 已接受任务，目前状态是 \`queued\`；构建目标是伤害链测试分支上的 \`f05abf43\`，不是 \`main\` 上的实验以外代码。我会核对它最终是成功还是失败，并检查产物是否生成。
+> 我已经直接从仓库触发了现有的 GitHub Actions 构建重跑。GitHub 已接受任务，目前状态是 `queued`；构建目标是伤害链测试分支上的 `f05abf43`，不是 `main` 上的实验以外代码。我会核对它最终是成功还是失败，并检查产物是否生成。
 
 > 构建已经过了检出阶段，正在配置 MSVC；下一步会编译插件并上传 ZIP。当前运行针对已有测试提交，因此它能验证仓库侧构建链路，但不会把这次重跑冒充成新的功能修复或实机测试。
 
-> 我核对时发现工作记录里的构建提交 \`f05abf43\` 并不是这条分支最新版本；分支后来又修了无界分支计数和测试包说明。早先那个构建已经成功，但我不会把它当作最新产物交给你。我正在改以分支当前提交 \`fe2d84d7\` 为准，核对并重跑对应构建。
+> 我核对时发现工作记录里的构建提交 `f05abf43` 并不是这条分支最新版本；分支后来又修了无界分支计数和测试包说明。早先那个构建已经成功，但我不会把它当作最新产物交给你。我正在改以分支当前提交 `fe2d84d7` 为准，核对并重跑对应构建。
 
-> 我进一步检查了同一提交的框架构建：Core/Runtime 的编译和 ABI/SDK 校验步骤都通过了，但整个 Windows 工作流在“暂存运行包”阶段失败，具体报错是 \`Manifest mismatch ... NteAttackReplay\`。这比单独插件构建更值得处理；我现在追查是哪一份 Manifest 不一致，不会把绿色的插件构建当成整套 Runtime 已经打包成功。
+> 我进一步检查了同一提交的框架构建：Core/Runtime 的编译和 ABI/SDK 校验步骤都通过了，但整个 Windows 工作流在“暂存运行包”阶段失败，具体报错是 `Manifest mismatch ... NteAttackReplay`。这比单独插件构建更值得处理；我现在追查是哪一份 Manifest 不一致，不会把绿色的插件构建当成整套 Runtime 已经打包成功。
 
-> 还发现了一个可以直接修的具体问题：仓库自己的插件开发文档要求 DLL 描述符中的插件版本与 \`manifest.json\` 一致；当前测试包 Manifest 是 \`2.0.0-test1\`，但 DLL 描述符和启动日志仍标着 \`1.9.9\`。我会只修正这两个版本标记，不碰伤害调用逻辑，再让仓库现有插件构建自动跑一遍。
+> 还发现了一个可以直接修的具体问题：仓库自己的插件开发文档要求 DLL 描述符中的插件版本与 `manifest.json` 一致；当前测试包 Manifest 是 `2.0.0-test1`，但 DLL 描述符和启动日志仍标着 `1.9.9`。我会只修正这两个版本标记，不碰伤害调用逻辑，再让仓库现有插件构建自动跑一遍。
 
 ### 本轮仓库操作与证据
 
-1. 触发了旧构建 \`39073628248\` 的第 2 次运行，GitHub 接受并完成，结论 \`success\`；这次针对旧提交 \`f05abf43...\`，只用于确认现有构建权限可用，不作为最新产物。
-2. 通过分支 API 核对当前测试分支实际 HEAD 已是 \`fe2d84d7cf0d1f11c0062466f905fd56e80c2655\`，高于工作日志原记录的 \`f05abf43...\`。
-3. 重跑当前 HEAD 对应的插件构建工作流 \`39075214243\` 第 2 次运行，结论 \`success\`；产物 ZIP 在工作流 artifact 中，验证包含 \`manifest.json\` 与 \`plugin.dll\`，DLL 具有有效 PE 签名并标示 AMD64。该版本 Manifest 为 \`2.0.0-test1\`、描述 unbounded fan-out；对应源码 HEAD 是 \`fe2d84d7...\`。
-4. 核查该 HEAD 的整体 \`windows\` 工作流 \`39075214300\`。Core/Runtime 编译、ABI snapshot 生成与 ABI/SDK 校验均通过；失败点发生在“Stage CI runtime and tools”，错误为 \`Manifest mismatch in current-build plugin package: NteAttackReplay\`。工作流硬编码要求 NteAttackReplay manifest version 为 \`1.9.8\`，而这个专用实验分支故意使用 \`2.0.0-test1\`。现阶段不将其自动当作框架编译失败，也不擅自把实验插件注入正式 Runtime 包。
-5. 按仓库自己的 \`docs/api-reference/lifecycle-and-core.md\`，\`AnomalyPluginDescriptorV1\` 的 \`id/name/author/version\` 元数据必须与 Manifest 一致。检查发现 \`plugins/NteAttackReplay/plugin.cpp\` 仍在启动日志和入口描述符中报告版本 \`1.9.9\`，与 Manifest \`2.0.0-test1\` 不一致。
-6. 已在测试分支 \`recreation/damage-chain-test-unbounded-ui-20261018\` 修复这两个字符串，不改动伤害链调用逻辑。新提交：\`cc4b47ab16b4fa9f17f756003816609e379ffe0b\`，消息为 \`fix(plugin): align descriptor version with test manifest\`。
-7. 该提交已自动启动两个 GitHub Actions 工作流：插件构建 run \`39080707154\`，全框架 Windows run \`39080707148\`。本检查点记录时两者仍为 \`in_progress\`，待核对最终结论与最新 artifact。
+1. 触发了旧构建 `39073628248` 的第 2 次运行，GitHub 接受并完成，结论 `success`；这次针对旧提交 `f05abf43...`，只用于确认现有构建权限可用，不作为最新产物。
+2. 通过分支 API 核对当前测试分支实际 HEAD 已是 `fe2d84d7cf0d1f11c0062466f905fd56e80c2655`，高于工作日志原记录的 `f05abf43...`。
+3. 重跑当前 HEAD 对应的插件构建工作流 `39075214243` 第 2 次运行，结论 `success`；产物 ZIP 在工作流 artifact 中，验证包含 `manifest.json` 与 `plugin.dll`，DLL 具有有效 PE 签名并标示 AMD64。该版本 Manifest 为 `2.0.0-test1`、描述 unbounded fan-out；对应源码 HEAD 是 `fe2d84d7...`。
+4. 核查该 HEAD 的整体 `windows` 工作流 `39075214300`。Core/Runtime 编译、ABI snapshot 生成与 ABI/SDK 校验均通过；失败点发生在“Stage CI runtime and tools”，错误为 `Manifest mismatch in current-build plugin package: NteAttackReplay`。工作流硬编码要求 NteAttackReplay manifest version 为 `1.9.8`，而这个专用实验分支故意使用 `2.0.0-test1`。现阶段不将其自动当作框架编译失败，也不擅自把实验插件注入正式 Runtime 包。
+5. 按仓库自己的 `docs/api-reference/lifecycle-and-core.md`，`AnomalyPluginDescriptorV1` 的 `id/name/author/version` 元数据必须与 Manifest 一致。检查发现 `plugins/NteAttackReplay/plugin.cpp` 仍在启动日志和入口描述符中报告版本 `1.9.9`，与 Manifest `2.0.0-test1` 不一致。
+6. 已在测试分支 `recreation/damage-chain-test-unbounded-ui-20261018` 修复这两个字符串，不改动伤害链调用逻辑。新提交：`cc4b47ab16b4fa9f17f756003816609e379ffe0b`，消息为 `fix(plugin): align descriptor version with test manifest`。
+7. 该提交已自动启动两个 GitHub Actions 工作流：插件构建 run `39080707154`，全框架 Windows run `39080707148`。本检查点记录时两者仍为 `in_progress`，待核对最终结论与最新 artifact。
 
 ### 相关链接
 
@@ -169,8 +169,22 @@ Anomaly 主仓库自身规定的完整本机构建需要 Visual Studio 2022 C++ 
 
 ### 未完成与下一步
 
-1. 等待并核实新提交 \`cc4b47ab...\` 的插件构建和全框架工作流最终状态。
+1. 等待并核实新提交 `cc4b47ab...` 的插件构建和全框架工作流最终状态。
 2. 如果插件构建成功，下载本次最新 artifact，提取其内部 package ZIP，核对 Manifest、DLL PE 签名、哈希，然后把可验证的包交付给用户。
 3. 检查全框架工作流是否仍仅因测试 manifest 版本不符合 release guard 而停止；不要将测试版插件作为正式 Runtime 发布。
 4. 这轮构建仍不证明游戏内加载、真实伤害链行为或与旧 DLL 机制一致；这三项必须保留为未验证。
 5. 之后继续执行工作流接入与具体项目任务；不要求用户检查 Node/npm 作为前置步骤。
+
+
+### 最新助手公开消息
+
+> 最新修正已提交并通过插件构建。产物已经下载到本轮工作区并做了结构检查：ZIP 内恰好包含 manifest.json 和 plugin.dll，DLL 是 64 位 PE；新 DLL 中的两个版本标记都已变为 2.0.0-test1，不再残留 1.9.9。我还在核对同一提交的全框架工作流是否会继续被实验版的发布版本保护规则拦截。
+
+### 最新提交构建结果
+
+- 插件构建 run：39080707154；结果 success；HEAD：cc4b47ab16b4fa9f17f756003816609e379ffe0b。
+- Artifact ID：12118717548；artifact digest：sha256:2aab08ddfad2888eceb3affe461187986d3272f1e104e073ccde295486e3165f。
+- 下载并提取的内部测试包：NteAttackReplay-cc4b47ab-windows-x64.zip；大小 29842 bytes；SHA-256：01d519863e5c4e624a7ebd78df6104cd52f3106e047ac911af1a143b755f5bfc。
+- ZIP 只包含 manifest.json 和 plugin.dll。Manifest 版本 2.0.0-test1；DLL 为 x64 PE/AMD64，大小 71168 bytes；DLL SHA-256：8e173504456c4f7063d2ef3079dd2223b1e49ab5014e75a523903afce9cdcb57。
+- DLL 字符串核验：包含两处 2.0.0-test1，不再包含 1.9.9。包结构及版本标记检查通过。
+- 全框架 Windows run 39080707148 在此记录时仍为 in_progress。旧提交的全框架工作流在 staging guard 处因为实验 Manifest 2.0.0-test1 与正式包固定版本 1.9.8 不一致而失败；当前提交结果尚待确认。
