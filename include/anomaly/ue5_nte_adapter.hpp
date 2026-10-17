@@ -63,6 +63,10 @@ struct NteCombatDiagnosticsSnapshot {
     std::uint32_t last_reflection_fault_code{};
     // Diagnostic-only observation of HTAbilityCharacter.K2_ActivateGameEffectsWithClass.
     std::uint64_t game_effect_wrapper_call_count{};
+    std::uint64_t game_effect_by_actor_wrapper_call_count{};
+    std::uint64_t apply_game_effect_by_actor_call_count{};
+    std::uint64_t apply_effect_container_spec_call_count{};
+    std::uint64_t apply_external_effect_container_spec_call_count{};
 };
 
 inline constexpr std::size_t kNteCombatExecFunctionCapacity = 14;
