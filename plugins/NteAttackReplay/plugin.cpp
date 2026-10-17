@@ -395,8 +395,8 @@ bool UiReady(const AnomalyUiServiceV1* service) noexcept {
                     decltype(AnomalyUiServiceV1::end_window)>(
                service, offsetof(AnomalyUiServiceV1, end_window)) &&
            service->begin_window != nullptr && service->end_window != nullptr &&
-           service->text != nullptr && service->checkbox != nullptr && service->button != nullptr &&
-           service->input_uint32 != nullptr && service->input_double != nullptr;
+           service->text != nullptr && service->checkbox != nullptr &&
+           service->input_uint32 != nullptr;
 }
 
 AnomalyStatusV1 Status(uint32_t code, std::string_view message = {}) noexcept {
