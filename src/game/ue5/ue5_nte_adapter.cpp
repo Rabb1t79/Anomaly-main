@@ -8231,7 +8231,7 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t function, const std::size_t index,
         std::string& failure_reason) const {
         constexpr std::array<std::string_view, 8> owners{
-            "HTAbilityCharacter", "HTAbilitySystemComponent",
+            "HTAbilityCharacter", "HTGameplayAbility",
             "HTAbilitySystemBlueprintLibrary", "AbilitySystemComponent",
             "AbilitySystemComponent", "AbilitySystemComponent",
             "AbilitySystemComponent", "HTAbilitySystemComponent"
@@ -13026,7 +13026,7 @@ struct Ue5NteAdapter::State {
                     // alone does not validate parameter layout and never enables replay.
                     constexpr std::array<std::wstring_view, 8> observer_only_paths{
                         L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClass",
-                        L"/Script/HTGame.HTAbilitySystemComponent.ApplyEffectContainerSpec",
+                        L"/Script/HTGame.HTGameplayAbility.ApplyEffectContainerSpec",
                         L"/Script/HTGame.HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec",
                         L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToSelf",
                         L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToTarget",
