@@ -28,6 +28,8 @@ Dumpspace/FunctionsInfo.json 将 owner 记为 AHTAbilityCharacter，flags 为 Na
 
 ## 2. CharacterOnDamaged 多播委托
 
+来源：HTGame_classes.hpp 第 1,265 行，字段偏移 0x0DB8、大小 0x10。
+
 HTGame_classes.hpp 另有一个名为 CharacterOnDamaged 的 TMulticastInlineDelegate 属性。它的参数形状是：
 - const FHTDamageEvent&
 - 被伤害角色
