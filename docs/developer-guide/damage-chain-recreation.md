@@ -65,3 +65,6 @@ These counters establish whether candidate entry points execute during a test. T
 
 
 The read-only counters are now included in the existing combat diagnostics JSON under `gameplayEffectRoutes`. Each candidate has a `Bound` boolean and a `Calls` count. A bound candidate means the exact path and reflected metadata passed discovery; a non-zero count means that reflected function was observed through the existing Game-thread ProcessEvent tap. Neither condition alone proves causal linkage to a specific hit. No native effect call or replay behavior is enabled by these diagnostics.
+
+
+The reflected binding validator now also checks the exact UStruct object name for the candidate's pointer-backed struct parameters: `BufferData`, `HTGameplayEffectContainerSpec`, and `ActiveGameplayEffectHandle`. This avoids treating an arbitrary same-sized struct as equivalent. The enum parameter remains fail-closed on its expected reflected property type; if the live metadata uses a different property representation, that candidate will stay unbound rather than bypass validation.
