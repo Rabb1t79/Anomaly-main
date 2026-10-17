@@ -4,6 +4,8 @@
 
 ## 1. AProjectileBase：重叠伤害参数
 
+源码位置：HTGame_classes.hpp 第 4,478–4,572 行；关键字段在第 4,500–4,504 行，重叠回调/生成触发 Actor 方法在第 4,560–4,572 行。
+
 类声明：AProjectileBase 继承 AHTAbilitySpawnActor。以下字段均为 Dump 中的对象字段偏移，不是函数参数偏移。
 
 | 字段 | 偏移 / 大小 | 注释 |
@@ -37,6 +39,8 @@
 
 ## 2. AHTLaserActor：逐目标间隔与命中次数
 
+源码位置：HTGame_classes.hpp 第 14,947 行起；关键间隔/次数字段在第 14,971–14,980 行，FinishSpawningDamageTriggerActor 与 LinkTime 重叠回调在第 15,006–15,008 行。
+
 AHTLaserActor 继承 AHTAbilitySpawnActor。相关字段：
 
 | 字段 | 偏移 / 大小 | 注释 |
@@ -65,6 +69,8 @@ AHTLaserActor 继承 AHTAbilitySpawnActor。相关字段：
 这些字段提供了“激光持续期间按间隔对每个目标触发伤害，并限制命中次数”的强命名线索，但实际语义、单位、目标重置行为和运行时调用路径仍未知。
 
 ## 3. SpawnDamageActorsEffect 配置类
+
+HTGame_classes.hpp 中 UProjectileSpawnDamageActorsEffect 位于第 71,380 行，ULaserSpawnDamageActorsEffect 位于第 49,462 行。
 
 ### UProjectileSpawnDamageActorsEffect
 - 继承 UHTProjectileFunc。

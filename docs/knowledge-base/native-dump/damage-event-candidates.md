@@ -4,13 +4,13 @@
 
 ## 1. 反射函数 AHTAbilityCharacter::OnDamaged
 
-HTGame_classes.hpp 声明：
+HTGame_classes.hpp 第 1,445 行声明：
 
 void OnDamaged(float DamageAmount, const FHitResult& HitInfo, const FGameplayTagContainer& DamageTags, const UHTGamePlayEffect* DamageGameplayEffect, AHTAbilityCharacter* InstigatorCharacter, AActor* DamageCauser);
 
 Dumpspace/FunctionsInfo.json 将 owner 记为 AHTAbilityCharacter，flags 为 Native|Event|Public|HasOutParams|BlueprintEvent。
 
-参数结构 HTAbilityCharacter_OnDamaged 总大小 0x148，来自两版 SHA 相同的 HTGame_parameters.hpp：
+参数结构 HTAbilityCharacter_OnDamaged 总大小 0x148，位于 HTGame_parameters.hpp 第 2,385 行附近，来自两版 SHA 相同的文件：
 
 | 参数 | 偏移 / 大小 | 注释 |
 |---|---|---|
@@ -51,12 +51,14 @@ HTGame_classes.hpp 另有一个名为 CharacterOnDamaged 的 TMulticastInlineDel
 ## 4. 关联结构
 
 ### FHTDamageEvent
+来源：HTGame_structs.hpp 第 23,127 行起。
 - 继承 FPointDamageEvent，总大小 0x170。
 - DamageGEDef：TWeakObjectPtr<UHTGamePlayEffect>，偏移 0x138。
 - DamageTags：FGameplayTagContainer，偏移 0x148，大小 0x20。
 - 两版结构段逐字一致。
 
 ### FHTGameplayEffectContext
+来源：HTGame_structs.hpp 第 59,869 行起。
 - 继承 FGameplayEffectContext。
 - Target：TWeakObjectPtr<AActor>，偏移 0x80。
 - 字段存在不证明每次伤害都带有有效上下文。

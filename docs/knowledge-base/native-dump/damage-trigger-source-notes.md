@@ -4,7 +4,7 @@
 
 ## 1. `ADamageTriggerActor` 类与字段
 
-旧版 classes blob：`526091ab6679ac6833634e5a6d08d807e90dbf0c`；新版历史 classes blob：`7b56987f6db8efe91f66273f3e8d136de45485a3`。候选类段逐字一致。
+旧版 classes blob：`526091ab6679ac6833634e5a6d08d807e90dbf0c`；新版历史 classes blob：`7b56987f6db8efe91f66273f3e8d136de45485a3`。候选类段逐字一致。旧版源码位置：HTGame_classes.hpp 第 20,942–21,014 行；结构位置：HTGame_structs.hpp 第 21,548–21,575 行、第 78,757–78,824 行。
 
 | 字段 / 偏移 | 简要注释 | 证据状态 |
 |---|---|---|
@@ -24,6 +24,8 @@
 类大小注释为 `0x0618`，派生字段增量 `0x0170`。这些字段说明类中存在周期/时长/次数状态，但不揭示更新或触发算法。
 
 ## 2. 函数声明逐项注释
+
+源码位置：HTGame_classes.hpp 第 20,989–20,997 行。
 
 两版该类均有相同的 17 个函数，函数名、返回类型、参数列表与 flags 在 `Dumpspace/FunctionsInfo.json` 中规范化后相同。
 
@@ -66,6 +68,8 @@
 
 ## 4. 时序与目标位置字段
 
+源码位置：FDamageTriggerActorStaticData 在 HTGame_structs.hpp 第 78,809 行起；UFindSpawnLocationObj_Target 在 HTGame_classes.hpp 第 29,846 行起；UHTAbilitySpawnDamageTriggerActor 在 HTGame_classes.hpp 第 35,020 行起。
+
 ### `FDamageTriggerActorStaticData`（大小 `0x58`，继承 `FTableRowBase`）
 - `SpawnOffset` @ `0x08`，`SpawnOffsetRotation` @ `0x20`。
 - `DelaySpawnTime` @ `0x38`、`duration` @ `0x3C`、`DelayDestoryTime` @ `0x40`。
@@ -79,6 +83,8 @@
 - 名称提示生成位置可能相对目标，但实际算法、坐标系和单位未知。
 
 ## 5. 参数布局与生成包装
+
+源码位置：HTAbilityCharacter::OnDamaged 在 HTGame_classes.hpp 第 1,445 行；对应参数结构位于 HTGame_parameters.hpp 第 2,385 行附近。
 
 两版 `HTGame_parameters.hpp` 都是 blob `b839b1a326e90ad3ac1c598f6bbca6b6eee465e1`；两版 `HTGame_functions.cpp` 都是 blob `c0a5f1dfa3540ab656d18578950d02e4de522ef2`，因此两个文件内容逐字相同。
 
