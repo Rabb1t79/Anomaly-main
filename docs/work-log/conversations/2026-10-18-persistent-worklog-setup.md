@@ -57,3 +57,36 @@
 - 本文件保存了上述用户请求与助手回复的文字记录。
 - 记录不取代当前分支、实际代码、构建记录或日期进度文档。
 - 新对话开始时，应先读取 `docs/work-log/README.md`、最新日期记录以及本文件，再对照仓库实时状态。
+
+
+---
+
+## 后续对话记录：要求保存每次助手输出
+
+### 用户原话
+
+> 每一段你将对我输出的文本应保存至仓库md中。我举例：我输入了要求，你正在思考并回应，你思考过程结束，开始输出回应：思考了 23s
+>
+> 已保存到仓库，并且重新读取确认文件存在、索引已更新。
+>
+> 新增的对话记录文件：
+>
+> [**打开完整对话记录：2026-10-18-persistent-worklog-setup.md**](https://github.com/Rabb1t79/Anomaly-main/blob/main/docs/work-log/conversations/2026-10-18-persistent-worklog-setup.md?utm_source=chatgpt.com)[svg](https://github.com/Rabb1t79/Anomaly-main/blob/main/docs/work-log/conversations/2026-10-18-persistent-worklog-setup.md?utm_source=chatgpt.com)
+>
+> 记录了你关于建立持续进度记录机制的原始要求、我上一条回复的完整正文，以及新对话的承接说明。
+>
+> [查看更新后的工作记录索引svg](https://github.com/Rabb1t79/Anomaly-main/blob/main/docs/work-log/README.md?utm_source=chatgpt.com)
+>
+> **现在可以开启新对话进行测试。** 建议你在新对话中直接发送：
+>
+> > 延续项目工作。先读取仓库 **`Rabb1t79/Anomaly-main`** 的 **`docs/work-log/README.md`**、最新日期进度记录及相关对话记录，然后告诉我当前工作状态、最近提交、未解决问题和下一步计划。先核对记录与仓库实际状态，不要直接猜测或修改代码。
+>
+> 我会根据实际可读取的仓库资料进行承接；如果新对话中遇到权限或读取问题，应明确告诉你，而不是假装已经恢复进度。
+>
+> 这是你上一条最新的回应，应该保存至md，并在最后批注：本对话开始将阅读进程后简略回复明白即可。
+
+### 本轮执行结果
+
+- 已将上方用户提供的上一条助手回复原文保存进本文件。
+- 用户要求的末尾批注原文：**本对话开始将阅读进程后简略回复明白即可。**
+- 执行规则：从本对话开始，助手每次实际发送给用户的回复正文均应同步保存到仓库 Markdown 对话记录；不保存隐藏思考过程。承接新对话时，先阅读工作进度记录，再简略回复“明白”即可。
