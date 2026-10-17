@@ -94,3 +94,31 @@
 - **重要限制**：`HTGame_functions.cpp` 中的生成函数包装通过反射 `ProcessEvent` 调用，不是原生业务实现体；目前不能由它证明周期计时的真实行为、原始受击目标绑定、自动启动关系或多目标独立性。候选机制仍是“有证据支持但未验证”，不是已确认的复现路线。
 - **第二套 Dump 阻塞已进一步核验**：当前分支树未出现 `5.6.1_new/`；在 `main`、`recreation/damage-chain-native-20261017`、`recovery/analyze-old-plugin-dll-20261017`、`experiment/damage-chain-legacy-ui-20261017`、`feat/damage-chain-reference-ui-20261017` 这五个相关分支/提交树中也未找到。此结论仅限这些已检查的仓库树，不推断其他仓库、用户本地或未检查来源不存在。
 - 本次只新增知识文档与状态记录，没有改插件/Core/ABI 源码；未构建、未加载、未做实机验证。
+
+
+## 2026-10-18 新增：计时状态与新版 Dump 实际可读性复核
+
+### 本轮来源身份
+- 仓库：`Rabb1t79/Anomaly-main`
+- 工作分支：`fix/restore-attack-work-and-repair-20261016`
+- 本轮只读核验 Dump 与文档；没有修改功能源码、Core、ABI、Profile，没有构建、运行 DLL 或实机测试。
+
+### 新版 Dump 路径纠偏
+- **直接证实：** 当前工作分支根目录内容列表含 `5.6.1/`，不含 `5.6.1_new/`，也不含 `5.6.1-new/`。
+- **直接证实：** 仓库 `main` 分支存在目录 `5.6.1-new/`（连字符，不是下划线）。
+- **直接证实：** `main:5.6.1-new/CppSDK/SDK/HTGame_classes.hpp`、`HTGame_structs.hpp`、`HTGame_parameters.hpp` 与 `HTGame_functions.cpp` 经 GitHub Contents API 读取时返回 Git LFS 指针，而不是源文件正文。指针分别记录的对象 SHA-256/大小为：classes `7112b6e93246fb56622db8acf258559d29087f73879e46204947ea3ca92cba8e` / 15,466,064 bytes；structs `c85b2ca5d5375b25ea8aa6c5db46e14d46164a7051df6f470cba6f47909a4d39` / 6,966,999 bytes；parameters `272ba3b8b3fc2a8f07bed7e94f94edfce252161b878439d30bec71aa1506934d` / 10,749,434 bytes；functions `b922ed74bf23c37e3e72a476a46efcbc742c559a1795a19109c5c0134d8ddac2` / 18,542,548 bytes。
+- **结论边界：** 不能据此说新版 Dump 不存在；也不能把 LFS 指针当作已读的新版 SDK 正文。当前仍未完成 `5.6.1/` 与新版正文的差异比较。后续先解决 LFS 对象的可读性/确认正确分支路径，不要重复把一次 404 当成目录不存在。
+
+### 旧 Dump 的计时与目标状态线索
+来源均为当前工作分支 `5.6.1/` 的实际 Blob 原文：
+- `CppSDK/SDK/HTGame_classes.hpp`，Blob SHA `526091ab6679ac6833634e5a6d08d807e90dbf0c`：`ADamageTriggerActor` 在第 20,942 行；`OverlapTriggerLinkTimeCharacters` 是 `TArray<AHTPlayerCharacter*>`，偏移 `0x05A8`；`RuntimeTriggerPeriod`、`RuntimeTriggerDuration`、`RuntimeTriggerCountPerPeriod`、`RuntimeMaxTriggerCount` 分别位于 `0x05E8`、`0x05EC`、`0x05F0`、`0x05F4`；同一类声明 `OnPlayerBeginOverlap`、`OnPlayerEndOverlap`、`StartTriggerGamePlayEffect`、`TriggerPeriodGamePlayEffectEvent`。
+- 同文件第 29,846–29,857 行的 `UFindSpawnLocationObj_Target` 声明 `LocationOffset`、`TargetLocationOffset`、`UseToTargetDirection`、`IncludeTargetCapsule`、`PreLocationTime`。
+- 同文件第 35,020–35,023 行的 `UHTAbilitySpawnDamageTriggerActor` 持有 `FSpawnDamageTriggerActorArray` 配置。
+- `CppSDK/SDK/HTGame_structs.hpp`，Blob SHA `cc6781d70b782a0e3ec6cf06dfbd75f323f04a53`：`FSpawnDamageTriggerActor` 包含 Actor class、生成条件/位置/旋转/缩放对象、`DamageTriggerConfigID`、`FHTGameplayEffectContainer` 与 `RandomCountCurve`；`FSpawnDamageTriggerActorArray` 包含 `SpawnArray`、`nRandomSpawnCount`、`SelectTargetType`、`SecondSelectTargetType`；`FDamageTriggerActorStaticData` 包含 `DelaySpawnTime`、`duration`、`DelayDestoryTime`、`TriggerOnSpawn`、`DelayTriggerTime`、`TriggerLinkTimeDuration`、`Period`、`MaxTriggerCount`。
+- `5.6.1/GObjects-Dump.txt`，Blob SHA `4ea559ff564c3c68bcba226368e8839b4dee0034`：`DamageTriggerActorDataTable.DamageTriggerActorDataTable` 对象位于第 199,415 行；找到 74 条 `HTAbilitySpawnDamageTriggerActor` 文本命中，其中 21 条为具有父资产路径的对象实例/默认对象，例如 `GA_Lacrimosa_MeleeModA`、`GA_Lacrimosa_PerfectEvade`、`GA_Shinku_Skill_Rage`、`GA_Female051_Melee` 等。该清单只能证明对象/资产引用存在，不证明其与目标视频的关系。
+
+### 计时/重置结论边界
+- **直接证实：** Dump 声明了 Actor 级运行计时/计数变量、目标角色数组、重叠开始/结束事件、周期触发函数，以及数据配置中的周期、持续时间、最大次数和延迟字段。
+- **有证据支持但未验证：** 原生机制可能由能力配置生成一个或多个 `ADamageTriggerActor`，并由 Actor 的周期状态驱动 GameplayEffect 触发；目标位置可由 `UFindSpawnLocationObj_Target` 配置计算。GObjects 中多个能力资产确实引用了此生成组件。
+- **未知：** 周期变量是否每个 Actor 独立递增、同一 Actor 内多个目标是否有独立计时器、重叠结束是否重置计数、死亡/离开范围/销毁时的停止规则、目标位置是生成时锁定还是每次触发重新计算，以及视频中的链式效果是否使用此路线。Dump 只展示字段和声明，没有给出这些函数的原生实现体；生成的 `*_functions.cpp` 包装不能证明蓝图/业务逻辑。
+- **下一步：** 继续核对可读的原生类、配置/资产引用和 Anomaly 当前合法桥接边界；在新版 LFS 正文未可读前，不宣称完成版本差异对照，不改实现源码，不新增 ABI。
