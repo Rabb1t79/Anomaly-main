@@ -67,6 +67,7 @@ struct NteCombatDiagnosticsSnapshot {
     std::uint64_t apply_game_effect_by_actor_call_count{};
     std::uint64_t apply_effect_container_spec_call_count{};
     std::uint64_t apply_external_effect_container_spec_call_count{};
+    std::uint64_t apply_gameplay_effect_to_target_call_count{};
 };
 
 inline constexpr std::size_t kNteCombatExecFunctionCapacity = 14;
