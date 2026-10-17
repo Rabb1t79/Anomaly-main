@@ -1,0 +1,39 @@
+name: damage-chain-runtime-probe
+
+on:
+  push:
+    branches:
+      - recreation/damage-chain-native-20261017
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-runtime-probe:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake --preset windows-vs2022 `
+            -DANOMALY_BUILD_TEST_FIXTURES=OFF `
+            -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF `
+            -DANOMALY_BUILD_TEST_PLUGINS=OFF
+      - name: Build runtime
+        run: cmake --build --preset windows-relwithdebinfo --parallel
+      - name: Stage runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component GameRuntime
+          if (!(Test-Path '.build/ci-artifacts/runtime/Anomaly')) {
+            throw 'Runtime staging root did not contain the expected Anomaly directory.'
+          }
+      - name: Upload runtime probe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: damage-chain-runtime-probe-windows-x64
+          path: .build/ci-artifacts/runtime
+          if-no-files-found: error
