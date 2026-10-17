@@ -28,3 +28,10 @@ The target is the user's old-plugin damage-chain behavior. It is not defined as 
 - Native damage-event surface in current SDK: **directly confirmed**.
 - Native GameplayEffect re-application route on current `main`: **not yet implemented or validated**.
 - In-game behavior: **not tested**.
+
+## Initial source inspection (2026-10-17)
+
+- `include/anomaly/sdk/services/nte.h` on `main` defines the public damage event record and combat service. Its comments identify `AHTAbilityCharacter::CharacterOnDamaged` as the capture source. This confirms the root-event observation surface, not a safe effect-reapplication API.
+- `src/game/ue5/ue5_damage_function_hook.cpp` implements the `anomaly.nte.damage-native / character-on-damaged` hook. It observes and forwards the original call; it does not itself establish a supported GameplayEffect re-application route.
+- `profiles/nte/nte-current.json` declares `nte.HTAbilityCharacter.BroadcastCharacterOnDamaged` and layout values including `damageEvent.size = 368` and `damageEvent.damageGEDef = 312`. These are current repository Profile values; they must still be checked against the user's authoritative 5.6.1 Dump before being treated as sufficient for a new invocation path.
+- The current Profile does not, in the inspected function entries, provide a verified GameplayEffect apply entry point for the chain. The next implementation gate is to validate such an entry point and full reflected signature from the provided Dump and the current Anomaly reflection/hook code. Until then, implementing a call based only on the old Replay branch would repeat an unverified assumption.
