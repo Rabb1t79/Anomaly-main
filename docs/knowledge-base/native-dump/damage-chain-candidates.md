@@ -24,9 +24,9 @@
 
 - 类声明：`HTGame_classes.hpp:35020-35037`。
 - 字段 `SpawnDamageTriggerActorsInfo` 类型为 `FSpawnDamageTriggerActorArray`，offset `0x28`，大小 `0x28`。
-- 结构定义位于 `HTGame_structs.hpp` 的 `FSpawnDamageTriggerActor`（约行 21560，需以当前文件定位结果为准）与 `FSpawnDamageTriggerActorArray`（约行 16500? 不使用估算行号；按类型名检索）。结构包含 Actor 子类、spawn condition/location/rotation/scale 对象、`DamageTriggerConfigID`、`FHTGameplayEffectContainer`、`RandomCountCurve`；数组还包含 `SpawnArray`、`nRandomSpawnCount`、`SelectTargetType`、`SecondSelectTargetType`。
-- `FHTGameplayEffectContainer` 大小 `0x28`，成员包括 `TargetType`、`AddTargetType`、`NotFindToDoTargetType` 与 `TargetGameplayEffectClasses`（`HTGame_structs.hpp` 中 ScriptStruct 段落）。
-- `FDamageTriggerActorStaticData`（继承 `FTableRowBase`，总大小 `0x58`）包含 `DelaySpawnTime`、`duration`、`DelayDestoryTime`、`TriggerOnSpawn`、`DelayTriggerTime`、`TriggerLinkTimeDuration`、`Period`、`MaxTriggerCount`，并含 spawn offset/rotation。
+- 结构定义位于 `HTGame_structs.hpp` 的 `FSpawnDamageTriggerActor`（`HTGame_structs.hpp:21560`）与 `FSpawnDamageTriggerActorArray`（`HTGame_structs.hpp:78759`）。结构包含 Actor 子类、spawn condition/location/rotation/scale 对象、`DamageTriggerConfigID`、`FHTGameplayEffectContainer`、`RandomCountCurve`；数组还包含 `SpawnArray`、`nRandomSpawnCount`、`SelectTargetType`、`SecondSelectTargetType`。
+- `FHTGameplayEffectContainer` 大小 `0x28`，成员包括 `TargetType`、`AddTargetType`、`NotFindToDoTargetType` 与 `TargetGameplayEffectClasses`（`HTGame_structs.hpp:21548`）。
+- `FDamageTriggerActorStaticData`（`HTGame_structs.hpp:78809`；继承 `FTableRowBase`，总大小 `0x58`）包含 `DelaySpawnTime`、`duration`、`DelayDestoryTime`、`TriggerOnSpawn`、`DelayTriggerTime`、`TriggerLinkTimeDuration`、`Period`、`MaxTriggerCount`，并含 spawn offset/rotation。
 - 这些配置字段与“延迟生成、持续时长、周期触发、最大触发次数、按目标选择”的目标模型有结构上的对应关系，但**目前没有证据证明它们就是视频所示插件采用的机制**。
 
 ## 继承/配置连接线索

@@ -44,10 +44,6 @@
 - [文件索引 13](./file-index-13.md)（500 个文件）
 - [文件索引 14](./file-index-14.md)（361 个文件）
 
-## 语义研究笔记
-
-- [伤害链式反应候选机制（5.6.1）](./damage-chain-candidates.md)：当前已阅读的周期触发 Actor、配置结构与证据边界。
-
 ## 伤害链研究入口
 
 后续正文阅读优先围绕 `ADamageTriggerActor`、`AHTAbilitySpawnActor`、`UHTAbilitySpawnDamageTriggerActor`、`FHTGameplayEffectContainer`、`FSpawnDamageTriggerActor`、`FDamageTriggerActorStaticData` 等已知候选符号，并对完整 owner、函数参数、调用关系、时序、目标绑定和生命周期逐项取证。这些候选名称本身不构成机制已被确认的结论。
