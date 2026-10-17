@@ -966,6 +966,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
                 }
             }
         } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
+            ++context->replay_failure_count;
             context->replaying = false;
             context->waiting_for_damage = false;
             ArmForNextAttack(*context);
@@ -974,6 +975,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         }
 
         if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
+            ++context->replay_failure_count;
             const bool single_shot = context->proof_single_replay;
             context->replaying = false;
             context->waiting_for_damage = false;
