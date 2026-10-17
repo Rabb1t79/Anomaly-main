@@ -823,7 +823,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
     context->replay_interval_frames = 1;
-     context->damage_count = 0;
+    context->damage_count = 0;
     context->failure_count = 0;
     context->replay_count = 0;
     context->replay_done = 0;
