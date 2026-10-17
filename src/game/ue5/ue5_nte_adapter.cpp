@@ -1279,10 +1279,14 @@ struct Ue5NteAdapter::State {
         std::uintptr_t replay_apply_to_target{};
         std::uintptr_t replay_activate_by_actor{};
         std::uintptr_t replay_server_activate_by_actor{};
+        // Count-only candidates: never capture parameter bytes or authorize replay here.
+        std::array<std::uintptr_t, 8> observer_only_functions{};
     };
     // Counts are ingress observations, not deduplicated native calls: one invocation may
     // be seen by ActorProcessEvent, UObject ProcessEvent and Native Exec independently.
     std::array<std::atomic<std::uint64_t>, 4> replay_entrypoint_observation_counts{};
+    std::array<std::atomic<std::uint64_t>, 8> observer_only_observation_counts{};
+    std::array<std::atomic<std::uint64_t>, 8> observer_only_last_tick{};
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
     std::array<CombatCaptureBindings, 2> combat_capture_binding_slots{};
@@ -8221,6 +8225,224 @@ struct Ue5NteAdapter::State {
         return !name.empty();
     }
 
+    // Validate observer-only UFunctions against the exact 5.6.1 dump layout.
+    // These candidates remain count-only: this validation does not read call parameters
+    // and never makes a candidate eligible for GameplayEffect replay.
+    [[nodiscard]] bool ValidateObserverOnlyFunctionLocked(
+        const std::uintptr_t function, const std::size_t index,
+        std::string& failure_reason) const {
+        constexpr std::array<std::string_view, 8> owners{
+            "HTAbilityCharacter", "HTGameplayAbility",
+            "HTAbilitySystemBlueprintLibrary", "AbilitySystemComponent",
+            "AbilitySystemComponent", "AbilitySystemComponent",
+            "AbilitySystemComponent", "HTAbilitySystemComponent"
+        };
+        constexpr std::array<std::string_view, 8> names{
+            "K2_ActivateGameEffectsWithClass", "ApplyEffectContainerSpec",
+            "ApplyExternalEffectContainerSpec", "BP_ApplyGameplayEffectSpecToSelf",
+            "BP_ApplyGameplayEffectSpecToTarget", "BP_ApplyGameplayEffectToSelf",
+            "BP_ApplyGameplayEffectToTarget", "ServerApplyTraceProjectileResults"
+        };
+        // UFunction::NumParms includes the ReturnParm property where present.
+        constexpr std::array<std::uint8_t, 8> expected_num_parms{
+            3U, 2U, 2U, 2U, 3U, 4U, 5U, 7U
+        };
+        constexpr std::array<std::uint16_t, 8> expected_parms_size{
+            0x68U, 0x48U, 0x48U, 0x18U, 0x20U, 0x30U, 0x38U, 0xE8U
+        };
+        constexpr std::array<std::uint16_t, 8> expected_return_offset{
+            0xFFFFU, 0x38U, 0x38U, 0x10U, 0x18U, 0x28U, 0x30U, 0xFFFFU
+        };
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(owners[index]);
+            failure_reason.push_back('.');
+            failure_reason += names[index];
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (index >= owners.size()) return false;
+        if (function == 0) return fail("function pointer is null");
+
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
+        }
+        if (function_class_name != "Function" || outer_name != owners[index] ||
+            function_name != names[index]) {
+            return fail("identity mismatch: expected Function/" + std::string(owners[index]) +
+                "." + std::string(names[index]) + "; observed " + function_class_name + "/" +
+                outer_name + "." + function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        if (num_parms != expected_num_parms[index] ||
+            parms_size != expected_parms_size[index] ||
+            return_offset != expected_return_offset[index]) {
+            return fail("UFunction header mismatch: expected NumParms=" +
+                std::to_string(expected_num_parms[index]) + ", ParmsSize=" +
+                std::to_string(expected_parms_size[index]) + ", ReturnValueOffset=" +
+                std::to_string(expected_return_offset[index]) + "; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
+        const auto field = [&](const std::string_view field_name,
+                               const std::string_view type,
+                               const std::uint16_t size,
+                               const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false)) {
+                return fail("could not find reflected field " + std::string(field_name));
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(field_name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
+        };
+        const auto struct_field = [&](const std::string_view field_name,
+                                      const std::uint16_t size,
+                                      const std::uint16_t offset,
+                                      const std::string_view expected_structure) {
+            if (!field(field_name, "StructProperty", size, offset)) return false;
+            ReflectedPropertyInfo property;
+            std::string structure_name;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false) ||
+                property.structure == 0 ||
+                !ReadReflectedObjectNameLocked(property.structure, structure_name) ||
+                structure_name != expected_structure) {
+                return fail("field " + std::string(field_name) +
+                    " has unexpected or unreadable struct type; expected " +
+                    std::string(expected_structure));
+            }
+            return true;
+        };
+        const auto array_struct_field = [&](const std::string_view field_name,
+                                            const std::uint16_t size,
+                                            const std::uint16_t offset,
+                                            const std::uint16_t expected_element_size,
+                                            const std::string_view expected_structure) {
+            if (!field(field_name, "ArrayProperty", size, offset)) return false;
+            ReflectedPropertyInfo property;
+            std::uintptr_t inner{}, inner_structure{};
+            std::int32_t inner_element_size{};
+            std::string inner_type, structure_name;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false) ||
+                !ReadPointerAt(*memory, property.property,
+                    Layout(profile, "farrayProperty.inner"), inner) ||
+                inner == 0 ||
+                !ReadReflectedFieldClassNameLocked(inner, inner_type) ||
+                inner_type != "StructProperty" ||
+                !ReadValue(*memory, inner + Layout(profile, "fproperty.elementSize"),
+                    inner_element_size) ||
+                inner_element_size != expected_element_size ||
+                !ReadPointerAt(*memory, inner,
+                    Layout(profile, "fstructProperty.struct"), inner_structure) ||
+                inner_structure == 0 ||
+                !ReadReflectedObjectNameLocked(inner_structure, structure_name) ||
+                structure_name != expected_structure) {
+                return fail("array field " + std::string(field_name) +
+                    " has unexpected or unreadable inner struct type/size; expected " +
+                    std::string(expected_structure) + " size=" +
+                    std::to_string(expected_element_size));
+            }
+            return true;
+        };
+        const auto class_field = [&](const std::string_view field_name,
+                                     const std::uint16_t offset,
+                                     const std::string_view expected_meta_class) {
+            if (!field(field_name, "ClassProperty", 0x08, offset)) return false;
+            ReflectedPropertyInfo property;
+            std::uintptr_t meta_class{};
+            std::string meta_class_name;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false) ||
+                !ReadPointerAt(*memory, property.property,
+                    Layout(profile, "fclassProperty.metaClass"), meta_class) ||
+                meta_class == 0 ||
+                !ReadReflectedObjectNameLocked(meta_class, meta_class_name) ||
+                meta_class_name != expected_meta_class) {
+                return fail("class field " + std::string(field_name) +
+                    " has unexpected or unreadable meta-class; expected " +
+                    std::string(expected_meta_class));
+            }
+            return true;
+        };
+        const auto object_field = [&](const std::string_view field_name,
+                                      const std::uint16_t offset,
+                                      const std::string_view expected_class) {
+            if (!field(field_name, "ObjectProperty", 0x08, offset)) return false;
+            ReflectedPropertyInfo property;
+            std::uintptr_t property_class{};
+            std::string property_class_name;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false) ||
+                !ReadPointerAt(*memory, property.property,
+                    Layout(profile, "fobjectProperty.propertyClass"), property_class) ||
+                property_class == 0 ||
+                !ReadReflectedObjectNameLocked(property_class, property_class_name) ||
+                property_class_name != expected_class) {
+                return fail("object field " + std::string(field_name) +
+                    " has unexpected or unreadable object class; expected " +
+                    std::string(expected_class));
+            }
+            return true;
+        };
+
+        switch (index) {
+        case 0:
+            return field("WorldContextObject", "ObjectProperty", 8, 0x00) &&
+                class_field("GameplayEffect", 0x08, "GameplayEffect") &&
+                struct_field("ModifyData", 0x58, 0x10, "BufferData");
+        case 1:
+        case 2:
+            return struct_field("ContainerSpec", 0x38, 0x00, "HTGameplayEffectContainerSpec") &&
+                array_struct_field("ReturnValue", 0x10, 0x38, 0x08, "ActiveGameplayEffectHandle");
+        case 3:
+            return struct_field("SpecHandle", 0x10, 0x00, "GameplayEffectSpecHandle") &&
+                struct_field("ReturnValue", 0x08, 0x10, "ActiveGameplayEffectHandle");
+        case 4:
+            return struct_field("SpecHandle", 0x10, 0x00, "GameplayEffectSpecHandle") &&
+                object_field("Target", 0x10, "AbilitySystemComponent") &&
+                struct_field("ReturnValue", 0x08, 0x18, "ActiveGameplayEffectHandle");
+        case 5:
+            return class_field("GameplayEffectClass", 0x00, "GameplayEffect") &&
+                field("Level", "FloatProperty", 0x04, 0x08) &&
+                struct_field("EffectContext", 0x18, 0x10, "GameplayEffectContextHandle") &&
+                struct_field("ReturnValue", 0x08, 0x28, "ActiveGameplayEffectHandle");
+        case 6:
+            return field("GameplayEffectClass", "ClassProperty", 0x08, 0x00) &&
+                object_field("Target", 0x08, "AbilitySystemComponent") &&
+                field("Level", "FloatProperty", 0x04, 0x10) &&
+                struct_field("Context", 0x18, 0x18, "GameplayEffectContextHandle") &&
+                struct_field("ReturnValue", 0x08, 0x30, "ActiveGameplayEffectHandle");
+        case 7:
+            return struct_field("Handle", 0x04, 0x00, "GameplayAbilitySpecHandle") &&
+                struct_field("ContainerTag", 0x08, 0x04, "GameplayTag") &&
+                struct_field("EventData", 0xB0, 0x10, "GameplayEventData") &&
+                field("ShotID", "UInt32Property", 0x04, 0xC0) &&
+                field("RandomSeed", "IntProperty", 0x04, 0xC4) &&
+                array_struct_field("TraceResults", 0x10, 0xC8, 0x48, "ClientTraceProjectileResult") &&
+                struct_field("PredictionKey", 0x10, 0xD8, "PredictionKey");
+        default:
+            return fail("unknown observer-only candidate index");
+        }
+    }
+
     [[nodiscard]] bool FindExactObjectLocked(
         const wchar_t* const path,
         std::uintptr_t& object) const noexcept {
@@ -12887,6 +13109,47 @@ struct Ue5NteAdapter::State {
                         next_capture_bindings.replay_server_activate_by_actor =
                             replay_server_activate_by_actor;
                     }
+                    // Exact-path lookup for read-only observation only. Path identity
+                    // alone does not validate parameter layout and never enables replay.
+                    constexpr std::array<std::wstring_view, 8> observer_only_paths{
+                        L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClass",
+                        L"/Script/HTGame.HTGameplayAbility.ApplyEffectContainerSpec",
+                        L"/Script/HTGame.HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToSelf",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToTarget",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectToSelf",
+                        L"/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectToTarget",
+                        L"/Script/HTGame.HTAbilitySystemComponent.ServerApplyTraceProjectileResults"
+                    };
+                    constexpr std::array<std::string_view, 8> observer_only_names{
+                        "activateGameEffectsWithClass", "applyEffectContainerSpec",
+                        "applyExternalEffectContainerSpec", "bpApplyGameplayEffectSpecToSelf",
+                        "bpApplyGameplayEffectSpecToTarget", "bpApplyGameplayEffectToSelf",
+                        "bpApplyGameplayEffectToTarget", "serverApplyTraceProjectileResults"
+                    };
+                    std::string observer_layout_diagnostics;
+                    for (std::size_t index{}; index < observer_only_paths.size(); ++index) {
+                        std::uintptr_t candidate{};
+                        if (!FindExactObjectLocked(observer_only_paths[index].data(), candidate)) {
+                            if (!observer_layout_diagnostics.empty()) observer_layout_diagnostics += "; ";
+                            observer_layout_diagnostics += observer_only_names[index];
+                            observer_layout_diagnostics += "=not-found";
+                            continue;
+                        }
+                        std::string validation_failure;
+                        if (ValidateObserverOnlyFunctionLocked(candidate, index, validation_failure)) {
+                            next_capture_bindings.observer_only_functions[index] = candidate;
+                            if (!observer_layout_diagnostics.empty()) observer_layout_diagnostics += "; ";
+                            observer_layout_diagnostics += observer_only_names[index];
+                            observer_layout_diagnostics += "=validated";
+                        } else {
+                            if (!observer_layout_diagnostics.empty()) observer_layout_diagnostics += "; ";
+                            observer_layout_diagnostics += observer_only_names[index];
+                            observer_layout_diagnostics += "=rejected(";
+                            observer_layout_diagnostics += validation_failure;
+                            observer_layout_diagnostics += ")";
+                        }
+                    }
                     replay_entrypoint_diagnostics =
                         "ASC ByActor: " +
                         (next_capture_bindings.replay_apply_by_actor != 0
@@ -12899,7 +13162,8 @@ struct Ue5NteAdapter::State {
                             ? std::string("validated") : replay_character_failure) +
                         "; Character server RPC: " +
                         (next_capture_bindings.replay_server_activate_by_actor != 0
-                            ? std::string("validated") : replay_server_character_failure);
+                            ? std::string("validated") : replay_server_character_failure) +
+                        "; observer-only layout: " + observer_layout_diagnostics;
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
@@ -12921,6 +13185,8 @@ struct Ue5NteAdapter::State {
                     next_capture_bindings.replay_apply_to_target != 0 ||
                     next_capture_bindings.replay_activate_by_actor != 0 ||
                     next_capture_bindings.replay_server_activate_by_actor != 0 ||
+                    std::ranges::any_of(next_capture_bindings.observer_only_functions,
+                        [](const auto function) { return function != 0; }) ||
                     std::ranges::any_of(next_capture_bindings.buffs,
                         [](const auto& buff) { return buff.function != 0; });
                 if (has_capture_binding) {
@@ -19544,6 +19810,8 @@ void Ue5NteAdapter::OnCombatExecFunction(
         bindings->buffs, [function](const auto& buff) {
             return buff.function != 0 && buff.function == function;
         });
+    const bool is_observer_only_function = std::ranges::find(
+        bindings->observer_only_functions, function) != bindings->observer_only_functions.end();
     if (function != bindings->damage &&
         function != bindings->monster_damage &&
         function != bindings->player_damage_queue &&
@@ -19552,8 +19820,15 @@ void Ue5NteAdapter::OnCombatExecFunction(
         function != bindings->replay_apply_to_target &&
         function != bindings->replay_activate_by_actor &&
         function != bindings->replay_server_activate_by_actor &&
-        !is_buff_function) {
+        !is_buff_function && !is_observer_only_function) {
         return;
+    }
+    for (std::size_t index{}; index < bindings->observer_only_functions.size(); ++index) {
+        if (bindings->observer_only_functions[index] == function && function != 0) {
+            state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            state->observer_only_last_tick[index].store(
+                state->tick_sequence.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        }
     }
     if (function == bindings->replay_apply_by_actor) {
         state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
@@ -19580,11 +19855,22 @@ void Ue5NteAdapter::OnActorProcessEventPre(
         return;
     }
     const auto* const bindings = state->combat_capture_bindings.load(std::memory_order_acquire);
-    if (bindings == nullptr ||
-        (function != bindings->replay_apply_by_actor &&
-         function != bindings->replay_apply_to_target &&
-         function != bindings->replay_activate_by_actor &&
-         function != bindings->replay_server_activate_by_actor)) {
+    if (bindings == nullptr) return;
+
+    // Candidate functions are count-only observations. Do not read their parameter
+    // buffers or install replay-capture suppression frames without layout validation.
+    for (std::size_t index{}; index < bindings->observer_only_functions.size(); ++index) {
+        if (bindings->observer_only_functions[index] == function && function != 0) {
+            state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            state->observer_only_last_tick[index].store(
+                state->tick_sequence.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            return;
+        }
+    }
+    if (function != bindings->replay_apply_by_actor &&
+        function != bindings->replay_apply_to_target &&
+        function != bindings->replay_activate_by_actor &&
+        function != bindings->replay_server_activate_by_actor) {
         return;
     }
 
@@ -19661,6 +19947,13 @@ void Ue5NteAdapter::OnProcessEventPre(
         state->combat_capture_bindings.load(std::memory_order_acquire);
     if (combat_bindings != nullptr &&
         !IsTopActorReplayCaptureFrame(this, object, function, parameters)) {
+        for (std::size_t index{}; index < combat_bindings->observer_only_functions.size(); ++index) {
+            if (combat_bindings->observer_only_functions[index] == function && function != 0) {
+                state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            state->observer_only_last_tick[index].store(
+                state->tick_sequence.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            }
+        }
         if (function == combat_bindings->replay_apply_by_actor) {
             state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
         } else if (function == combat_bindings->replay_apply_to_target) {
@@ -19889,6 +20182,31 @@ std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
             std::to_string(state->replay_entrypoint_observation_counts[2].load(std::memory_order_relaxed)) +
             ",\"characterServerByActor\":" +
             std::to_string(state->replay_entrypoint_observation_counts[3].load(std::memory_order_relaxed)) + "}";
+        constexpr std::array<std::string_view, 8> observer_only_names{
+            "activateGameEffectsWithClass", "applyEffectContainerSpec",
+            "applyExternalEffectContainerSpec", "bpApplyGameplayEffectSpecToSelf",
+            "bpApplyGameplayEffectSpecToTarget", "bpApplyGameplayEffectToSelf",
+            "bpApplyGameplayEffectToTarget", "serverApplyTraceProjectileResults"
+        };
+        result += ",\"observerOnlyIngressObservations\":{";
+        for (std::size_t index{}; index < observer_only_names.size(); ++index) {
+            if (index != 0) result.push_back(',');
+            result += "\"";
+            result += observer_only_names[index];
+            result += "\":";
+            result += std::to_string(state->observer_only_observation_counts[index].load(std::memory_order_relaxed));
+        }
+        result += "}";
+        result += ",\"observerOnlyLastSeenTick\":{";
+        for (std::size_t index{}; index < observer_only_names.size(); ++index) {
+            if (index != 0) result.push_back(',');
+            result += "\"";
+            result += observer_only_names[index];
+            result += "\":";
+            result += std::to_string(
+                state->observer_only_last_tick[index].load(std::memory_order_relaxed));
+        }
+        result += "}";
         result += ",\"events\":[";
     bool first = true;
     for (std::size_t index{}; index < state->combat_event_count; ++index) {

@@ -60,7 +60,7 @@ jobs:
 
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           if ($manifest.id -ne 'anomaly.builtin.nte-attack-replay' -or
-              $manifest.version -ne '1.9.7' -or $manifest.entry -ne 'plugin.dll') {
+              $manifest.version -ne '1.9.9' -or $manifest.entry -ne 'plugin.dll') {
             throw 'Runtime probe Attack Replay manifest does not match the expected identity/version.'
           }
 
