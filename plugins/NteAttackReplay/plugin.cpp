@@ -1131,7 +1131,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
         }
 
         const std::string binding = context->captured ? "绑定=就绪" : "绑定=等待";
-        const std::string trigger = context->enabled ? "触发=战斗中" : "触发=待机";
+        const std::string trigger = "触发=战斗中";
         ui->text(ui->user, anomaly::sdk::StringView(binding + "    " + trigger));
         const std::string counters =
             "伤害=" + std::to_string(context->damage_count) +
