@@ -11,6 +11,7 @@ namespace anomaly {
 namespace {
 
 inline constexpr std::string_view kOwner = "anomaly.nte.damage-native";
+inline constexpr std::string_view kExecOwner = "anomaly.nte.gameplay-effect-exec";
 inline constexpr std::uint64_t kGeneration = 1;
 
 }  // namespace
@@ -34,87 +35,138 @@ public:
 
     bool Start(const Ue5DamageFunctionTargets targets) {
         std::scoped_lock stop_lock(stop_mutex_);
-        if (attempted_.exchange(true, std::memory_order_acq_rel) ||
+        if (attempted_.load(std::memory_order_acquire) ||
             targets.character_on_damaged == nullptr ||
-            targets.combat_exec_function_count > kUe5CombatExecFunctionCapacity ||
-            started_.load(std::memory_order_acquire) || owner_registered_) {
+            targets.combat_exec_function_count > kUe5CombatExecFunctionCapacity) {
             return false;
         }
-        std::scoped_lock process_lock(process_mutex_);
-        if (active_.load(std::memory_order_acquire) != nullptr) return false;
 
-        target_ = targets.character_on_damaged;
-        original_ = nullptr;
-        if (!hooks_.Create(
-                std::string(kOwner), kGeneration, "character-on-damaged",
-                target_, reinterpret_cast<void*>(&Thunk),
-                reinterpret_cast<void**>(&original_))) {
-            target_ = nullptr;
+        // Install the native damage event hook independently. The event stream must
+        // remain available while dump-validated GameplayEffect Exec targets are still
+        // being discovered; otherwise Attack Replay can only wait silently.
+        if (!started_.load(std::memory_order_acquire)) {
+            std::scoped_lock process_lock(process_mutex_);
+            Impl* active = active_.load(std::memory_order_acquire);
+            if (active != nullptr && active != this) return false;
+
+            target_ = targets.character_on_damaged;
+            original_ = nullptr;
+            if (!hooks_.Create(
+                    std::string(kOwner), kGeneration, "character-on-damaged",
+                    target_, reinterpret_cast<void*>(&Thunk),
+                    reinterpret_cast<void**>(&original_))) {
+                target_ = nullptr;
+                return false;
+            }
+            owner_registered_ = true;
+            // If a callback lease is unavailable while detours are draining, call
+            // MinHook's trampoline rather than re-entering the detoured target.
+            passthrough_.store(
+                reinterpret_cast<NativeFunction>(original_), std::memory_order_release);
+            active_.store(this, std::memory_order_release);
+            if (!hooks_.EnableOwner(kOwner, kGeneration)) {
+                if (hooks_.RemoveOwner(kOwner, kGeneration)) {
+                    owner_registered_ = false;
+                    Impl* expected = this;
+                    static_cast<void>(active_.compare_exchange_strong(
+                        expected, nullptr, std::memory_order_acq_rel));
+                    ClearTarget();
+                } else {
+                    // Keep state alive when the backend could not safely roll back.
+                    started_.store(true, std::memory_order_release);
+                }
+                return false;
+            }
+            started_.store(true, std::memory_order_release);
+        } else if (target_ != targets.character_on_damaged) {
+            // Never silently switch a live detour to another reflected function.
             return false;
         }
-        owner_registered_ = true;
-        exec_count_ = targets.combat_exec_function_count;
-        for (std::size_t index{}; index < exec_count_; ++index) {
+
+        // The caller retries Start from the game tick until this separate owner has
+        // at least one validated Exec target and all of its hooks are enabled.
+        if (targets.combat_exec_function_count == 0) return false;
+        std::scoped_lock process_lock(process_mutex_);
+        if (active_.load(std::memory_order_acquire) != this) return false;
+        if (exec_owner_registered_) return attempted_.load(std::memory_order_acquire);
+
+        exec_count_ = 0;
+        for (std::size_t index{}; index < targets.combat_exec_function_count; ++index) {
             const auto& entry = targets.combat_exec_functions[index];
             if (entry.function == nullptr || entry.target == nullptr ||
+                ThunkForSlot(index) == nullptr ||
                 !hooks_.Create(
-                    std::string(kOwner), kGeneration,
+                    std::string(kExecOwner), kGeneration,
                     "combat-exec-" + std::to_string(index),
                     entry.target,
                     reinterpret_cast<void*>(ThunkForSlot(index)),
                     reinterpret_cast<void**>(&exec_originals_[index]))) {
-                static_cast<void>(hooks_.RemoveOwner(kOwner, kGeneration));
-                owner_registered_ = false;
-                ClearTarget();
+                static_cast<void>(hooks_.RemoveOwner(kExecOwner, kGeneration));
+                exec_owner_registered_ = false;
+                ClearExecTargets();
                 return false;
             }
+            exec_owner_registered_ = true;
             exec_functions_[index] = entry.function;
             exec_targets_[index] = entry.target;
+            exec_count_ = index + 1;
         }
-        passthrough_.store(
-            reinterpret_cast<NativeFunction>(target_), std::memory_order_release);
         for (std::size_t index{}; index < exec_count_; ++index) {
+            // The passthrough must be the original trampoline, not the hooked entry.
             exec_passthroughs_[index].store(
-                reinterpret_cast<ExecFunction>(exec_targets_[index]),
+                reinterpret_cast<ExecFunction>(exec_originals_[index]),
                 std::memory_order_release);
         }
-        active_.store(this, std::memory_order_release);
-        if (!hooks_.EnableOwner(kOwner, kGeneration)) {
-            if (hooks_.RemoveOwner(kOwner, kGeneration)) {
-                owner_registered_ = false;
-                Impl* expected = this;
-                static_cast<void>(active_.compare_exchange_strong(
-                    expected, nullptr, std::memory_order_acq_rel));
-                ClearTarget();
+        if (!hooks_.EnableOwner(kExecOwner, kGeneration)) {
+            if (hooks_.RemoveOwner(kExecOwner, kGeneration)) {
+                exec_owner_registered_ = false;
+                ClearExecTargets();
+            } else {
+                // Rollback could not be completed. Avoid duplicate Create attempts
+                // against a still-registered owner and preserve callback storage.
+                attempted_.store(true, std::memory_order_release);
             }
             return false;
         }
-        started_.store(true, std::memory_order_release);
+        attempted_.store(true, std::memory_order_release);
         return true;
     }
 
     bool Stop(const std::chrono::milliseconds timeout) noexcept {
         std::scoped_lock stop_lock(stop_mutex_);
         static_cast<void>(started_.exchange(false, std::memory_order_acq_rel));
-        if (!owner_registered_) return true;
         const auto bounded_timeout =
             (std::max)(timeout, std::chrono::milliseconds::zero());
-        const bool detours_disabled = hooks_.DisableOwner(kOwner, kGeneration);
-        if (!detours_disabled &&
-            !hooks_.RemoveOwner(kOwner, kGeneration, bounded_timeout)) {
-            return false;
+
+        const bool event_owner_disabled =
+            !owner_registered_ || hooks_.DisableOwner(kOwner, kGeneration);
+        if (!event_owner_disabled && owner_registered_) {
+            if (!hooks_.RemoveOwner(kOwner, kGeneration, bounded_timeout)) return false;
+            owner_registered_ = false;
         }
+
+        const bool exec_owner_disabled =
+            !exec_owner_registered_ || hooks_.DisableOwner(kExecOwner, kGeneration);
+        if (!exec_owner_disabled && exec_owner_registered_) {
+            if (!hooks_.RemoveOwner(kExecOwner, kGeneration, bounded_timeout)) return false;
+            exec_owner_registered_ = false;
+        }
+
         {
             std::scoped_lock process_lock(process_mutex_);
             Impl* expected = this;
             static_cast<void>(active_.compare_exchange_strong(
                 expected, nullptr, std::memory_order_acq_rel));
         }
-        if (detours_disabled &&
-            !hooks_.RemoveOwner(kOwner, kGeneration, bounded_timeout)) {
-            return false;
+
+        if (event_owner_disabled && owner_registered_) {
+            if (!hooks_.RemoveOwner(kOwner, kGeneration, bounded_timeout)) return false;
+            owner_registered_ = false;
         }
-        owner_registered_ = false;
+        if (exec_owner_disabled && exec_owner_registered_) {
+            if (!hooks_.RemoveOwner(kExecOwner, kGeneration, bounded_timeout)) return false;
+            exec_owner_registered_ = false;
+        }
         ClearTarget();
         return true;
     }
@@ -132,10 +184,7 @@ public:
     }
 
 private:
-    void ClearTarget() noexcept {
-        original_ = nullptr;
-        target_ = nullptr;
-        passthrough_.store(nullptr, std::memory_order_release);
+    void ClearExecTargets() noexcept {
         for (std::size_t index{}; index < kUe5CombatExecFunctionCapacity; ++index) {
             exec_originals_[index] = nullptr;
             exec_functions_[index] = nullptr;
@@ -143,6 +192,13 @@ private:
             exec_passthroughs_[index].store(nullptr, std::memory_order_release);
         }
         exec_count_ = 0;
+    }
+
+    void ClearTarget() noexcept {
+        original_ = nullptr;
+        target_ = nullptr;
+        passthrough_.store(nullptr, std::memory_order_release);
+        ClearExecTargets();
     }
 
     static void Dispatch(
@@ -207,7 +263,7 @@ private:
                 original = self->exec_originals_[slot];
                 if (original != nullptr) {
                     lease = self->hooks_.AcquireCallback(
-                        kOwner, kGeneration, self->exec_targets_[slot]);
+                        kExecOwner, kGeneration, self->exec_targets_[slot]);
                 }
                 if (!lease) self = nullptr;
             } else {
@@ -267,6 +323,7 @@ private:
     std::atomic_bool started_{};
     std::atomic_bool attempted_{};
     bool owner_registered_{};
+    bool exec_owner_registered_{};
     std::mutex stop_mutex_;
     static std::atomic<Impl*> active_;
     static std::atomic<NativeFunction> passthrough_;

@@ -228,8 +228,6 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION);
-    output.append(",\n    \"ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION\": ");
-    AppendUnsigned(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES\": ");
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_VALID\": ");
@@ -618,7 +616,17 @@ std::string BuildSnapshot() {
         sizeof(AnomalyUiTextInputFlagsV1),
         alignof(AnomalyUiTextInputFlagsV1),
         {{"ANOMALY_UI_TEXT_INPUT_V1_NONE", ANOMALY_UI_TEXT_INPUT_V1_NONE},
-         {"ANOMALY_UI_TEXT_INPUT_V1_DIGITS", ANOMALY_UI_TEXT_INPUT_V1_DIGITS}},
+         {"ANOMALY_UI_TEXT_INPUT_V1_DIGITS", ANOMALY_UI_TEXT_INPUT_V1_DIGITS},
+         {"ANOMALY_UI_TEXT_INPUT_V1_PASSWORD", ANOMALY_UI_TEXT_INPUT_V1_PASSWORD}},
+        false);
+    AppendEnum(
+        output,
+        "AnomalyUiTableFlagsV1",
+        sizeof(AnomalyUiTableFlagsV1),
+        alignof(AnomalyUiTableFlagsV1),
+        {{"ANOMALY_UI_TABLE_V1_NONE", ANOMALY_UI_TABLE_V1_NONE},
+         {"ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT", ANOMALY_UI_TABLE_V1_SIZING_FIXED_FIT},
+         {"ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP", ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP}},
         false);
     AppendEnum(
         output,
@@ -788,7 +796,17 @@ std::string BuildSnapshot() {
          {"ANOMALY_IPC_ERROR_V1_QUEUE_FULL", ANOMALY_IPC_ERROR_V1_QUEUE_FULL},
          {"ANOMALY_IPC_ERROR_V1_STALE_GENERATION", ANOMALY_IPC_ERROR_V1_STALE_GENERATION},
          {"ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED", ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED}},
-        true);
+        false);
+    AppendEnum(
+        output,
+        "AnomalyNteCombatEventKindV1",
+        sizeof(AnomalyNteCombatEventKindV1),
+        alignof(AnomalyNteCombatEventKindV1),
+        {{"ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE", ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE},
+         {"ANOMALY_NTE_COMBAT_EVENT_V1_HEAL", ANOMALY_NTE_COMBAT_EVENT_V1_HEAL},
+         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD},
+         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE}},
+        false);
     output.append("  },\n");
 
     output.append("  \"structs\": {\n");
@@ -936,16 +954,6 @@ std::string BuildSnapshot() {
          {"read", offsetof(AnomalyStorageServiceV1, read)},
          {"write_atomic", offsetof(AnomalyStorageServiceV1, write_atomic)},
          {"remove", offsetof(AnomalyStorageServiceV1, remove)}},
-        false);
-    AppendEnum(
-        output,
-        "AnomalyNteCombatEventKindV1",
-        sizeof(AnomalyNteCombatEventKindV1),
-        alignof(AnomalyNteCombatEventKindV1),
-        {{"ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE", ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE},
-         {"ANOMALY_NTE_COMBAT_EVENT_V1_HEAL", ANOMALY_NTE_COMBAT_EVENT_V1_HEAL},
-         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD},
-         {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE}},
         false);
     AppendStruct(
         output,
@@ -1251,7 +1259,10 @@ std::string BuildSnapshot() {
          {"begin_tab_bar", offsetof(AnomalyUiServiceV1, begin_tab_bar)},
          {"begin_tab_item", offsetof(AnomalyUiServiceV1, begin_tab_item)},
          {"end_tab_item", offsetof(AnomalyUiServiceV1, end_tab_item)},
-         {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)}},
+         {"end_tab_bar", offsetof(AnomalyUiServiceV1, end_tab_bar)},
+         {"text_wrapped", offsetof(AnomalyUiServiceV1, text_wrapped)},
+         {"begin_child_auto_fit_y", offsetof(AnomalyUiServiceV1, begin_child_auto_fit_y)},
+         {"slider_float_enabled", offsetof(AnomalyUiServiceV1, slider_float_enabled)}},
         false);
     AppendStruct(
         output,
@@ -1491,7 +1502,8 @@ std::string BuildSnapshot() {
          {"service_version", offsetof(AnomalyUe5NamesServiceV1, service_version)},
          {"user", offsetof(AnomalyUe5NamesServiceV1, user)},
          {"resolve_utf8", offsetof(AnomalyUe5NamesServiceV1, resolve_utf8)},
-         {"resolve_ftext_utf8", offsetof(AnomalyUe5NamesServiceV1, resolve_ftext_utf8)}},
+         {"resolve_ftext_utf8", offsetof(AnomalyUe5NamesServiceV1, resolve_ftext_utf8)},
+         {"find_utf8", offsetof(AnomalyUe5NamesServiceV1, find_utf8)}},
         false);
     AppendStruct(
         output,
@@ -1779,7 +1791,9 @@ std::string BuildSnapshot() {
          {"speed_kmh", offsetof(AnomalyNteVehicleSnapshotV1, speed_kmh)},
          {"top_speed_ratio", offsetof(AnomalyNteVehicleSnapshotV1, top_speed_ratio)},
          {"wheel_friction_enabled", offsetof(AnomalyNteVehicleSnapshotV1, wheel_friction_enabled)},
-         {"engine_torque_ratio", offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio)}},
+         {"engine_torque_ratio", offsetof(AnomalyNteVehicleSnapshotV1, engine_torque_ratio)},
+         {"vehicle_entity_id", offsetof(AnomalyNteVehicleSnapshotV1, vehicle_entity_id)},
+         {"vehicle_class_name", offsetof(AnomalyNteVehicleSnapshotV1, vehicle_class_name)}},
         false);
     AppendStruct(
         output,
@@ -1817,28 +1831,21 @@ std::string BuildSnapshot() {
          {"vehicle_id_at", offsetof(AnomalyNteVehicleServiceV1, vehicle_id_at)},
          {"set_summon_vehicle_id", offsetof(AnomalyNteVehicleServiceV1, set_summon_vehicle_id)},
          {"summon_vehicle", offsetof(AnomalyNteVehicleServiceV1, summon_vehicle)},
-         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)}},
-        false);
-    AppendStruct(
-        output,
-        "AnomalyNteAttackInputRequestV1",
-        sizeof(AnomalyNteAttackInputRequestV1),
-        alignof(AnomalyNteAttackInputRequestV1),
-        {{"struct_size", offsetof(AnomalyNteAttackInputRequestV1, struct_size)},
-         {"flags", offsetof(AnomalyNteAttackInputRequestV1, flags)},
-         {"input_id", offsetof(AnomalyNteAttackInputRequestV1, input_id)},
-         {"param", offsetof(AnomalyNteAttackInputRequestV1, param)}},
-        false);
-    AppendStruct(
-        output,
-        "AnomalyNteAttackInputServiceV1",
-        sizeof(AnomalyNteAttackInputServiceV1),
-        alignof(AnomalyNteAttackInputServiceV1),
-        {{"struct_size", offsetof(AnomalyNteAttackInputServiceV1, struct_size)},
-         {"service_version", offsetof(AnomalyNteAttackInputServiceV1, service_version)},
-         {"user", offsetof(AnomalyNteAttackInputServiceV1, user)},
-         {"press", offsetof(AnomalyNteAttackInputServiceV1, press)},
-         {"release", offsetof(AnomalyNteAttackInputServiceV1, release)}},
+         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)},
+         {"refresh_catalog", offsetof(AnomalyNteVehicleServiceV1, refresh_catalog)},
+         {"catalog_label_at", offsetof(AnomalyNteVehicleServiceV1, catalog_label_at)},
+         {"set_other_vehicles_top_speed_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)},
+         {"set_other_vehicles_engine_torque_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)},
+         {"set_other_vehicles_min_speed_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_min_speed_ratio)},
+         {"authorize_fine_speed_tuning",
+          offsetof(AnomalyNteVehicleServiceV1, authorize_fine_speed_tuning)},
+         {"set_fine_speed_tuning_enabled",
+          offsetof(AnomalyNteVehicleServiceV1, set_fine_speed_tuning_enabled)},
+         {"revoke_fine_speed_authorization",
+          offsetof(AnomalyNteVehicleServiceV1, revoke_fine_speed_authorization)}},
         false);
     AppendStruct(
         output,
@@ -2221,6 +2228,25 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteDamageReplayRequestV1",
+        sizeof(AnomalyNteDamageReplayRequestV1),
+        alignof(AnomalyNteDamageReplayRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageReplayRequestV1, flags)},
+         {"damage_sequence", offsetof(AnomalyNteDamageReplayRequestV1, damage_sequence)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageReplayServiceV1",
+        sizeof(AnomalyNteDamageReplayServiceV1),
+        alignof(AnomalyNteDamageReplayServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageReplayServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageReplayServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageReplayServiceV1, user)},
+         {"replay_damage", offsetof(AnomalyNteDamageReplayServiceV1, replay_damage)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNteSkillFrameV1",
         sizeof(AnomalyNteSkillFrameV1),
         alignof(AnomalyNteSkillFrameV1),
@@ -2460,6 +2486,9 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION, "AnomalyNteActorsServiceV1", false);
     AppendService(output, ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION, "AnomalyNteCombatServiceV1", false);
+    AppendService(output, ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
+        "AnomalyNteDamageReplayServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION, "AnomalyNteSkillsServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
@@ -2469,8 +2498,6 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_METRICS_SERVICE_V1_VERSION, "AnomalyNteMetricsServiceV1", false);
     AppendService(output, ANOMALY_NTE_VEHICLE_SERVICE_V1_ID,
         ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION, "AnomalyNteVehicleServiceV1", false);
-    AppendService(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
-        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION, "AnomalyNteAttackInputServiceV1", false);
     AppendService(output, ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID,
         ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION,
         "AnomalyNteEscMenuButtonServiceV1", true);
@@ -2491,6 +2518,52 @@ bool ReadFile(const char* path, std::string& contents) {
     if (!stream) return false;
     contents.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
     return stream.good() || stream.eof();
+}
+
+// Windows checkout may use CRLF while BuildSnapshot emits LF. Normalize only the
+// line endings so the ABI comparison still verifies every JSON byte other than EOL style.
+std::string NormalizeLineEndings(const std::string_view input) {
+    std::string normalized;
+    normalized.reserve(input.size());
+    for (std::size_t index = 0; index < input.size(); ++index) {
+        if (input[index] == '\r') {
+            if (index + 1u < input.size() && input[index + 1u] == '\n') ++index;
+            normalized.push_back('\n');
+        } else {
+            normalized.push_back(input[index]);
+        }
+    }
+    return normalized;
+}
+
+// JSON whitespace outside string literals is insignificant. Keep every character
+// inside strings untouched so this remains a strict ABI-content comparison.
+std::string NormalizeJsonWhitespace(const std::string_view input) {
+    std::string normalized;
+    normalized.reserve(input.size());
+    bool in_string = false;
+    bool escaped = false;
+    for (const char character : input) {
+        if (in_string) {
+            normalized.push_back(character);
+            if (escaped) {
+                escaped = false;
+            } else if (character == '\\') {
+                escaped = true;
+            } else if (character == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (character == '"') {
+            in_string = true;
+            normalized.push_back(character);
+        } else if (character != ' ' && character != '\t' &&
+                   character != '\r' && character != '\n') {
+            normalized.push_back(character);
+        }
+    }
+    return normalized;
 }
 
 void PrintUsage(const char* executable) {
@@ -2528,10 +2601,15 @@ int main(const int argc, char* argv[]) {
             std::cerr << "Failed to read ABI snapshot: " << argv[2] << '\n';
             return 1;
         }
-        if (expected != snapshot) {
+        // Ignore platform EOL and JSON formatting differences, but compare all
+        // JSON tokens and string contents exactly.
+        expected = NormalizeJsonWhitespace(NormalizeLineEndings(expected));
+        const auto normalized_snapshot =
+            NormalizeJsonWhitespace(NormalizeLineEndings(snapshot));
+        if (expected != normalized_snapshot) {
             std::size_t offset = 0u;
-            while (offset < expected.size() && offset < snapshot.size() &&
-                   expected[offset] == snapshot[offset]) {
+            while (offset < expected.size() && offset < normalized_snapshot.size() &&
+                   expected[offset] == normalized_snapshot[offset]) {
                 ++offset;
             }
             std::cerr << "ABI snapshot mismatch at byte " << offset << ": " << argv[2] << '\n';

@@ -20,8 +20,9 @@ class Ue5ActorProcessEventHook::Impl final {
 public:
     using ProcessEventFunction = void(__fastcall*)(void*, void*, void*);
 
-    Impl(std::unique_ptr<HookBackend> backend, Callback callback)
-        : hooks_(std::move(backend)), callback_(std::move(callback)) {
+    Impl(std::unique_ptr<HookBackend> backend, Callback callback, PreCallback pre_callback)
+        : hooks_(std::move(backend)), callback_(std::move(callback)),
+          pre_callback_(std::move(pre_callback)) {
         if (!callback_) {
             throw std::invalid_argument(
                 "Ue5ActorProcessEventHook requires callback");
@@ -123,6 +124,17 @@ private:
         }
 
         if (original == nullptr) return;
+        // Capture before entering the native implementation. GameplayEffect fields and
+        // their tag-array pointers must be copied while this invocation's stack is alive.
+        if (self != nullptr && self->pre_callback_) {
+            try {
+                self->pre_callback_(
+                    reinterpret_cast<std::uintptr_t>(object),
+                    reinterpret_cast<std::uintptr_t>(function),
+                    parameters);
+            } catch (...) {
+            }
+        }
         original(object, function, parameters);
         if (self == nullptr) return;
         try {
@@ -136,6 +148,7 @@ private:
 
     HookManager hooks_;
     Callback callback_;
+    PreCallback pre_callback_;
     ProcessEventFunction original_{};
     void* target_{};
     std::atomic_bool started_{};
@@ -151,15 +164,16 @@ std::atomic<Ue5ActorProcessEventHook::Impl::ProcessEventFunction>
     Ue5ActorProcessEventHook::Impl::passthrough_{};
 std::mutex Ue5ActorProcessEventHook::Impl::process_mutex_;
 
-Ue5ActorProcessEventHook::Ue5ActorProcessEventHook(Callback callback)
+Ue5ActorProcessEventHook::Ue5ActorProcessEventHook(
+    Callback callback, PreCallback pre_callback)
     : Ue5ActorProcessEventHook(
-          CreateMinHookBackend(), std::move(callback)) {}
+          CreateMinHookBackend(), std::move(callback), std::move(pre_callback)) {}
 
 Ue5ActorProcessEventHook::Ue5ActorProcessEventHook(
     std::unique_ptr<HookBackend> backend,
-    Callback callback)
+    Callback callback, PreCallback pre_callback)
     : impl_(std::make_unique<Impl>(
-          std::move(backend), std::move(callback))) {}
+          std::move(backend), std::move(callback), std::move(pre_callback))) {}
 
 Ue5ActorProcessEventHook::~Ue5ActorProcessEventHook() {
     if (impl_ != nullptr && !impl_->Stop(std::chrono::milliseconds::zero())) {

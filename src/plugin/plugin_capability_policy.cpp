@@ -24,9 +24,9 @@ constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "memory-read",
     "memory-write",
     "nte-actor-snapshot",
-    "nte-attack-input",
     "nte-build",
     "nte-combat-read",
+    "nte-damage-replay",
     "nte-entity-snapshot",
     "nte-esc-menu-button",
     "nte-player-hold",
@@ -60,7 +60,7 @@ constexpr std::array<std::string_view, 46> kKnownCapabilities{
     "websocket",
 };
 
-constexpr std::array<ServiceCapabilityMapping, 46> kServiceCapabilities{{
+constexpr std::array<ServiceCapabilityMapping, 47> kServiceCapabilities{{
     {"anomaly.plugin-state", "configuration"},
     {"anomaly.config", "configuration"},
     {"anomaly.storage", "storage"},
@@ -101,12 +101,12 @@ constexpr std::array<ServiceCapabilityMapping, 46> kServiceCapabilities{{
     {"anomaly.nte.ui-buttons", "nte-ui-buttons"},
     {"anomaly.nte.entities", "nte-entity-snapshot"},
     {"anomaly.nte.combat", "nte-combat-read"},
+    {"anomaly.nte.damage-replay", "nte-damage-replay"},
     {"anomaly.nte.skills", "nte-skills-read"},
     {"anomaly.nte.skill-invocation", "nte-skill-invocation"},
     {"anomaly.nte.esc-menu-button", "nte-esc-menu-button"},
     {"anomaly.nte.actors", "nte-actor-snapshot"},
     {"anomaly.nte.vehicle", "nte-vehicle"},
-    {"anomaly.nte.attack-input", "nte-attack-input"},
 }};
 
 [[nodiscard]] bool IsKnownCapability(const std::string_view capability) noexcept {

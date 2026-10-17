@@ -1,0 +1,90 @@
+name: NTE damage-chain Runtime probe package
+
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'cmake/**'
+      - 'include/anomaly/**'
+      - 'src/**'
+      - 'sdk/**'
+      - 'plugins/NteAttackReplay/**'
+      - 'plugins/NteVehicle/**'
+      - 'profiles/nte/**'
+      - 'abi/**'
+      - 'Anomaly-2.0.0-sdk/**'
+      - 'tools/package_release.ps1'
+      - '.github/workflows/nte-damage-chain-runtime-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-probe:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout PR head (not synthetic merge tree)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Configure Runtime
+        shell: pwsh
+        run: |
+          cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
+
+      - name: Build Core, Runtime and supported plugin targets
+        run: cmake --build --preset windows-relwithdebinfo --parallel 4
+
+      - name: Stage and verify Runtime probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = Join-Path $env:GITHUB_WORKSPACE '.build/damage-chain-runtime-probe'
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $prefix --component GameRuntime
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime component install failed.' }
+
+          $runtimeRoot = Join-Path $prefix 'Anomaly'
+          $core = Join-Path $runtimeRoot 'Anomaly.Core.dll'
+          $pluginRoot = Join-Path $runtimeRoot 'plugins/NteAttackReplay'
+          $plugin = Join-Path $pluginRoot 'plugin.dll'
+          $manifestPath = Join-Path $pluginRoot 'manifest.json'
+          foreach ($required in @($core, $plugin, $manifestPath)) {
+            if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
+              throw "Runtime probe package is incomplete: $required"
+            }
+          }
+
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.id -ne 'anomaly.builtin.nte-attack-replay' -or
+              $manifest.version -ne '1.9.7' -or $manifest.entry -ne 'plugin.dll') {
+            throw 'Runtime probe Attack Replay manifest does not match the expected identity/version.'
+          }
+
+          $dumpPayload = @(Get-ChildItem -LiteralPath $runtimeRoot -Force -Recurse | Where-Object {
+            $relative = [IO.Path]::GetRelativePath($runtimeRoot, $_.FullName)
+            $relative -match '(?i)(5\.6\.1|CppSDK|(^|[/\\])dumps?([/\\]|$))'
+          })
+          if ($dumpPayload.Count -gt 0) {
+            $paths = $dumpPayload | ForEach-Object { [IO.Path]::GetRelativePath($runtimeRoot, $_.FullName) }
+            throw 'Dump content is forbidden in Runtime probe: ' + ($paths -join ', ')
+          }
+
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          $archive = Join-Path $dist 'NteDamageChainRuntimeProbe-windows-x64.zip'
+          Compress-Archive -Path $runtimeRoot -DestinationPath $archive -Force
+          if (!(Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw 'Runtime probe archive was not created.'
+          }
+
+      - name: Upload Runtime probe package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteDamageChainRuntimeProbe-windows-x64
+          path: dist/NteDamageChainRuntimeProbe-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 7
