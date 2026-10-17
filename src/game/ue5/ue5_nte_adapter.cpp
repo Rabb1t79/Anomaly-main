@@ -1280,6 +1280,9 @@ struct Ue5NteAdapter::State {
         std::uintptr_t replay_activate_by_actor{};
         std::uintptr_t replay_server_activate_by_actor{};
     };
+    // Counts are ingress observations, not deduplicated native calls: one invocation may
+    // be seen by ActorProcessEvent, UObject ProcessEvent and Native Exec independently.
+    std::array<std::atomic<std::uint64_t>, 4> replay_entrypoint_observation_counts{};
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
     std::array<CombatCaptureBindings, 2> combat_capture_binding_slots{};
@@ -19552,6 +19555,15 @@ void Ue5NteAdapter::OnCombatExecFunction(
         !is_buff_function) {
         return;
     }
+    if (function == bindings->replay_apply_by_actor) {
+        state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_apply_to_target) {
+        state->replay_entrypoint_observation_counts[1].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_activate_by_actor) {
+        state->replay_entrypoint_observation_counts[2].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_server_activate_by_actor) {
+        state->replay_entrypoint_observation_counts[3].fetch_add(1, std::memory_order_relaxed);
+    }
     state->EnqueueCombatProcessEvent(
         *bindings, receiver, function, reinterpret_cast<void*>(parameters),
         kCombatCaptureIngressNativeExec);
@@ -19582,6 +19594,15 @@ void Ue5NteAdapter::OnActorProcessEventPre(
     if (!PushActorReplayCaptureFrame(this, object, function, parameters)) {
         // A full nesting stack is an exceptional condition; preserve the capture even
         // though duplicate suppression for this invocation cannot be guaranteed.
+    }
+    if (function == bindings->replay_apply_by_actor) {
+        state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_apply_to_target) {
+        state->replay_entrypoint_observation_counts[1].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_activate_by_actor) {
+        state->replay_entrypoint_observation_counts[2].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_server_activate_by_actor) {
+        state->replay_entrypoint_observation_counts[3].fetch_add(1, std::memory_order_relaxed);
     }
     state->EnqueueCombatProcessEvent(
         *bindings, object, function, parameters,
@@ -19640,6 +19661,15 @@ void Ue5NteAdapter::OnProcessEventPre(
         state->combat_capture_bindings.load(std::memory_order_acquire);
     if (combat_bindings != nullptr &&
         !IsTopActorReplayCaptureFrame(this, object, function, parameters)) {
+        if (function == combat_bindings->replay_apply_by_actor) {
+            state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->replay_apply_to_target) {
+            state->replay_entrypoint_observation_counts[1].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->replay_activate_by_actor) {
+            state->replay_entrypoint_observation_counts[2].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->replay_server_activate_by_actor) {
+            state->replay_entrypoint_observation_counts[3].fetch_add(1, std::memory_order_relaxed);
+        }
         state->EnqueueCombatProcessEvent(
             *combat_bindings, object, function, parameters,
             kCombatCaptureIngressProcessEvent);
@@ -19851,6 +19881,14 @@ std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
             std::to_string(state->display_table_loaded_mask) +
             ",\"displayTablesComplete\":" +
             (state->display_table_scan_complete ? "true" : "false");
+        result += ",\"replayEntrypointObservations\":{\"ascByActor\":" +
+            std::to_string(state->replay_entrypoint_observation_counts[0].load(std::memory_order_relaxed)) +
+            ",\"ascToTarget\":" +
+            std::to_string(state->replay_entrypoint_observation_counts[1].load(std::memory_order_relaxed)) +
+            ",\"characterByActor\":" +
+            std::to_string(state->replay_entrypoint_observation_counts[2].load(std::memory_order_relaxed)) +
+            ",\"characterServerByActor\":" +
+            std::to_string(state->replay_entrypoint_observation_counts[3].load(std::memory_order_relaxed)) + "}";
         result += ",\"events\":[";
     bool first = true;
     for (std::size_t index{}; index < state->combat_event_count; ++index) {
