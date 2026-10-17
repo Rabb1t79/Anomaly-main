@@ -16059,6 +16059,37 @@ std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
             std::to_string(state->display_table_loaded_mask) +
             ",\"displayTablesComplete\":" +
             (state->display_table_scan_complete ? "true" : "false");
+        const auto* const effect_routes =
+            state->combat_capture_bindings.load(std::memory_order_acquire);
+        const auto route_bound = [effect_routes](const std::uintptr_t function) {
+            return effect_routes != nullptr && function != 0 ? "true" : "false";
+        };
+        result += ",\"gameplayEffectRoutes\":{";
+        result += "\"activateWithClassBound\":" +
+            std::string(route_bound(effect_routes ? effect_routes->game_effect_wrapper : 0));
+        result += ",\"activateWithClassCalls\":" +
+            std::to_string(state->game_effect_wrapper_call_count.load(std::memory_order_acquire));
+        result += ",\"activateByActorBound\":" +
+            std::string(route_bound(effect_routes ? effect_routes->game_effect_by_actor_wrapper : 0));
+        result += ",\"activateByActorCalls\":" +
+            std::to_string(state->game_effect_by_actor_wrapper_call_count.load(std::memory_order_acquire));
+        result += ",\"applyByActorBound\":" +
+            std::string(route_bound(effect_routes ? effect_routes->apply_game_effect_by_actor : 0));
+        result += ",\"applyByActorCalls\":" +
+            std::to_string(state->apply_game_effect_by_actor_call_count.load(std::memory_order_acquire));
+        result += ",\"applyToTargetBound\":" +
+            std::string(route_bound(effect_routes ? effect_routes->apply_gameplay_effect_to_target : 0));
+        result += ",\"applyToTargetCalls\":" +
+            std::to_string(state->apply_gameplay_effect_to_target_call_count.load(std::memory_order_acquire));
+        result += ",\"applyContainerSpecBound\":" +
+            std::string(route_bound(effect_routes ? effect_routes->apply_effect_container_spec : 0));
+        result += ",\"applyContainerSpecCalls\":" +
+            std::to_string(state->apply_effect_container_spec_call_count.load(std::memory_order_acquire));
+        result += ",\"applyExternalContainerSpecBound\":" +
+            std::string(route_bound(effect_routes ? effect_routes->apply_external_effect_container_spec : 0));
+        result += ",\"applyExternalContainerSpecCalls\":" +
+            std::to_string(state->apply_external_effect_container_spec_call_count.load(std::memory_order_acquire));
+        result += "}";
         result += ",\"events\":[";
     bool first = true;
     for (std::size_t index{}; index < state->combat_event_count; ++index) {
