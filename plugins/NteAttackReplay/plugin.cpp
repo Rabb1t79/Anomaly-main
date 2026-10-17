@@ -251,7 +251,7 @@ bool InitializeReplayDiagnosticLog(Context& context) noexcept {
         context.replay_log_path = directory + L"\\attack-replay.log";
         const std::string startup_line =
             "[" + ReplayLogTimestampUtc() + "] plugin=anomaly.builtin.nte-attack-replay "
-            "version=1.9.9 log=initialized\r\n";
+            "version=2.0.0-test1 log=initialized\r\n";
         if (!WriteReplayLogBytes(context, startup_line)) return false;
         return true;
     } catch (...) {
@@ -1165,7 +1165,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Damage Chain Reaction"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.9.9"),
+        anomaly::sdk::StringView("2.0.0-test1"),
         Load,
         Start,
         Stop,
