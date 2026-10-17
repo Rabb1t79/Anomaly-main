@@ -8474,7 +8474,10 @@ struct Ue5NteAdapter::State {
                     const std::string_view expected_meta_class =
                         kind == NteFunctionKind::ActivateAbilityByClass
                         ? std::string_view{"HTGameplayAbility"}
-                        : kind == NteFunctionKind::GetActiveEffectTimeRemainingAndDuration
+                        : (kind == NteFunctionKind::GetActiveEffectTimeRemainingAndDuration ||
+                           kind == NteFunctionKind::ActivateGameEffectsWithClass ||
+                           kind == NteFunctionKind::ActivateGameEffectsWithClassByActor ||
+                           kind == NteFunctionKind::ApplyGameEffectWithClassByActor)
                             ? std::string_view{"GameplayEffect"}
                             : std::string_view{};
                     if (!ReadPointerAt(
