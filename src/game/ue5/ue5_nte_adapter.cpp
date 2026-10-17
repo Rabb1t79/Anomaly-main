@@ -19939,7 +19939,7 @@ std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
             "bpApplyGameplayEffectSpecToTarget", "bpApplyGameplayEffectToSelf",
             "bpApplyGameplayEffectToTarget", "serverApplyTraceProjectileResults"
         };
-        result += ",\"observerOnlyProcessEventObservations\":{";
+        result += ",\"observerOnlyIngressObservations\":{";
         for (std::size_t index{}; index < observer_only_names.size(); ++index) {
             if (index != 0) result.push_back(',');
             result += "\"";
