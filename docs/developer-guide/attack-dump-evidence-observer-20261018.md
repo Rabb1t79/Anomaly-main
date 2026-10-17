@@ -70,7 +70,7 @@ Dump 还显示 `FHTGameplayEffectContainerSpec` 大小为 `0x38`，其中 `Targe
 ## 验证分层
 
 - Dump 声明/参数布局：8 个候选的声明和参数块大小已从 `5.6.1` 对应 `*_classes.hpp` / `*_parameters.hpp` 直接核验；尚未核验运行时反射布局是否一致。
-- `FHTDamageEvent` 大小、`DamageGEDef` 与 `DamageTags` 偏移已直接核验；基类 `Damage` 字段偏移仍沿用既有审计记录。
+- `FHTDamageEvent` 大小，以及 `Damage`、`DamageGEDef`、`DamageTags` 三个字段偏移均已从对应结构定义直接核验。
 - 当前源码路径：已读取分支文件。
 - 观测实现：候选先经过运行时 UFunction 布局校验，再只计数；不读候选参数、不增加回放白名单。最新 Core/Runtime/Windows CI 尚待结果。
 - 插件界面：已按旧插件方向重排为紧凑界面，移除单次路线验证控件和诊断详情展示；尚待构建验证与游戏内确认。
