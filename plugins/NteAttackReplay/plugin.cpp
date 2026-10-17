@@ -815,7 +815,6 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     context->enabled = false;
     context->replay_rate_per_second = 1;
     context->replay_done = 0;
-    context->replay_last_tick = 0;
     context->replaying = false;
     context->replay_requested.store(false, std::memory_order_release);
     context->stop_requested.store(false, std::memory_order_release);
