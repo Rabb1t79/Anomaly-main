@@ -19567,6 +19567,8 @@ void Ue5NteAdapter::OnCombatExecFunction(
         bindings->buffs, [function](const auto& buff) {
             return buff.function != 0 && buff.function == function;
         });
+    const bool is_observer_only_function = std::ranges::find(
+        bindings->observer_only_functions, function) != bindings->observer_only_functions.end();
     if (function != bindings->damage &&
         function != bindings->monster_damage &&
         function != bindings->player_damage_queue &&
@@ -19575,7 +19577,7 @@ void Ue5NteAdapter::OnCombatExecFunction(
         function != bindings->replay_apply_to_target &&
         function != bindings->replay_activate_by_actor &&
         function != bindings->replay_server_activate_by_actor &&
-        !is_buff_function) {
+        !is_buff_function && !is_observer_only_function) {
         return;
     }
     for (std::size_t index{}; index < bindings->observer_only_functions.size(); ++index) {
