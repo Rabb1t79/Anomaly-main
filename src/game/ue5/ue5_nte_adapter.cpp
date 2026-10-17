@@ -700,6 +700,7 @@ struct Ue5NteAdapter::State {
         AddMonsterBufferControl,
         GetMonsterStaticData,
         CurrentDamageIsCrit,
+        ActivateGameEffectsWithClass,
         Count,
     };
     static constexpr std::size_t kNteFunctionCount =
@@ -982,6 +983,7 @@ struct Ue5NteAdapter::State {
         std::uintptr_t player_damage_queue{};
         std::uint16_t player_damage_queue_offset{};
         std::uintptr_t damage_widget{};
+        std::uintptr_t game_effect_wrapper{};
         std::uint16_t damage_widget_info_offset{};
         struct Buff {
             std::uintptr_t function{};
@@ -1007,6 +1009,7 @@ struct Ue5NteAdapter::State {
     std::atomic<std::uint64_t> monster_damage_call_count{};
     std::atomic<std::uint64_t> player_damage_queue_call_count{};
     std::atomic<std::uint64_t> damage_widget_call_count{};
+    std::atomic<std::uint64_t> game_effect_wrapper_call_count{};
     std::atomic<std::uint64_t> buff_call_count{};
     std::atomic<std::uint64_t> crit_query_call_count{};
     std::atomic<std::uint64_t> crit_query_success_count{};
@@ -1321,6 +1324,10 @@ struct Ue5NteAdapter::State {
 
     [[nodiscard]] static NteFunctionSpec NteSpec(
         const NteFunctionKind kind) noexcept {
+        static constexpr std::array activate_game_effects_with_class{
+            NteFunctionParameterSpec{"WorldContextObject", "ObjectProperty", 8, false},
+            NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false}};
         static constexpr std::array get_ability_system{
             NteFunctionParameterSpec{"ReturnValue", "ObjectProperty", 8, true}};
         static constexpr std::array get_name{
@@ -1392,6 +1399,9 @@ struct Ue5NteAdapter::State {
             NteFunctionParameterSpec{"InOutMonsterStaticData", "StructProperty", 296, false},
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
         switch (kind) {
+        case NteFunctionKind::ActivateGameEffectsWithClass:
+            return {kind, "K2_ActivateGameEffectsWithClass", "HTAbilityCharacter", 104,
+                activate_game_effects_with_class};
         case NteFunctionKind::GetAbilitySystemComponent:
             return {kind, "K2_GetAbilitySystemComponent", "HTAbilityCharacter", 8,
                 get_ability_system};
@@ -5311,6 +5321,10 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t function,
         const void* const parameters) noexcept {
         if (parameters == nullptr) return;
+        if (function == bindings.game_effect_wrapper) {
+            game_effect_wrapper_call_count.fetch_add(1, std::memory_order_relaxed);
+            return; // Observation only: do not interpret or retain ModifyData for replay.
+        }
         if (function == bindings.damage) {
             damage_floaties_call_count.fetch_add(1, std::memory_order_relaxed);
         } else if (function == bindings.monster_damage) {
@@ -9012,6 +9026,9 @@ struct Ue5NteAdapter::State {
                         combat_skill_discovery.functions[NteIndex(kind)] = binding;
                         const auto address = binding.function;
                         switch (kind) {
+                        case NteFunctionKind::ActivateGameEffectsWithClass:
+                            next_capture_bindings.game_effect_wrapper = address;
+                            break;
                         case NteFunctionKind::ShowDamageFloaties:
                             next_capture_bindings.damage = address;
                             next_capture_bindings.damage_info_offset = binding.offsets[0];
@@ -9119,6 +9136,9 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::MulticastShowMonsterDamageInfo);
                     lookup_optional(NteFunctionKind::ClientShowPlayerDamageInfo);
                     lookup_optional(NteFunctionKind::SetDamageInfo);
+                    // Diagnostic-only candidate: the reflected layout is dump-validated,
+                    // but its lack of explicit Source/Target ASC means it is not a replay route.
+                    lookup_optional(NteFunctionKind::ActivateGameEffectsWithClass);
                     lookup_optional(NteFunctionKind::CurrentDamageIsCrit);
                     lookup_optional(NteFunctionKind::OnActiveGameplayEffectAdded);
                     lookup_optional(NteFunctionKind::OnAnyGameplayEffectRemoved);
@@ -15826,6 +15846,7 @@ NteCombatDiagnosticsSnapshot Ue5NteAdapter::CombatDiagnostics() const noexcept {
         if (bindings->monster_damage != 0) binding_mask |= 1U << 1U;
         if (bindings->player_damage_queue != 0) binding_mask |= 1U << 2U;
         if (bindings->damage_widget != 0) binding_mask |= 1U << 3U;
+        if (bindings->game_effect_wrapper != 0) binding_mask |= 1U << 6U;
         if (std::ranges::any_of(bindings->buffs,
                 [](const auto& buff) { return buff.function != 0; })) {
             binding_mask |= 1U << 5U;
@@ -15862,7 +15883,8 @@ NteCombatDiagnosticsSnapshot Ue5NteAdapter::CombatDiagnostics() const noexcept {
         state->combat_refresh_failure,
         state->reflection_fault_count,
         state->last_reflection_fault_function,
-        state->last_reflection_fault_code};
+        state->last_reflection_fault_code,
+        state->game_effect_wrapper_call_count.load(std::memory_order_acquire)};
 }
 
 std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
