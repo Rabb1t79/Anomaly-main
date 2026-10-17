@@ -19,7 +19,6 @@
 #include <atomic>
 #include <array>
 #include <chrono>
-#include <charconv>
 #include <cstdio>
 #include <cstddef>
 #include <cstdint>
@@ -94,10 +93,7 @@ struct Context final {
     std::atomic_bool stop_requested{false};
     // 连锁没有固定命中次数上限；该值仅控制两次 GameplayEffect 重放之间的 Game 帧间隔。
     uint32_t replay_interval_frames{1};
-    // Compact legacy-style UI setting. Initial value follows the user's recollection.
-    uint64_t repeat_count{1};
-    std::array<char, 32> repeat_count_text{ '1', '\0' };
-    bool repeat_count_input_valid{true};
+    // Follow-up branches are derived from observed damage events, not a fixed repeat count.
     uint64_t damage_count{};
     uint64_t failure_count{};
     uint64_t replay_count{};
@@ -827,10 +823,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
     context->replay_interval_frames = 1;
-    context->repeat_count = (std::max)(context->repeat_count, uint64_t{1});
-    std::snprintf(context->repeat_count_text.data(), context->repeat_count_text.size(), "%llu",
-        static_cast<unsigned long long>(context->repeat_count));
-    context->damage_count = 0;
+     context->damage_count = 0;
     context->failure_count = 0;
     context->replay_count = 0;
     context->replay_done = 0;
@@ -897,10 +890,11 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            // The original player hit seeds two child jobs. Every confirmed descendant
-            // adds two more jobs; requests reuse this chain's pinned native-effect root.
+            // The original player hit seeds two child jobs. Each confirmed descendant
+            // adds two more jobs, so the chain has no fixed total-hit limit.
+            // The single-shot proof intentionally remains isolated from fan-out.
             context->replay_pending_jobs = context->proof_single_replay
-                ? uint64_t{1} : (std::max)(context->repeat_count, uint64_t{1});
+                ? uint64_t{1} : uint64_t{2};
             context->replay_damage_cursor = context->captured_damage_sequence;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = context->proof_single_replay
@@ -998,11 +992,18 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             return;
         }
 
-        // Count confirmed matching damage separately. Requested replays are controlled
-        // by repeat_count; no binary fan-out is assumed by this experiment.
+        // Count each newly confirmed descendant once, using the monotonic event cursor.
         if (context->damage_count != (std::numeric_limits<uint64_t>::max)()) ++context->damage_count;
         if (context->replay_done != (std::numeric_limits<uint32_t>::max)()) {
             ++context->replay_done;
+        }
+        // Every confirmed descendant creates two follow-up attempts. Saturate rather than
+        // wrap if an extremely long chain approaches the uint64_t limit.
+        if (context->replay_pending_jobs <=
+            (std::numeric_limits<uint64_t>::max)() - uint64_t{2}) {
+            context->replay_pending_jobs += uint64_t{2};
+        } else {
+            context->replay_pending_jobs = (std::numeric_limits<uint64_t>::max)();
         }
         if (context->waiting_for_damage) {
             matching_damage_observed_while_waiting = true;
@@ -1132,23 +1133,8 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             }
         }
 
-        if (ui->input_text != nullptr) {
-            ui->input_text(ui->user, anomaly::sdk::StringView("伤害重复次数"),
-                context->repeat_count_text.data(), context->repeat_count_text.size(),
-                ANOMALY_UI_TEXT_INPUT_V1_DIGITS);
-            const char* begin = context->repeat_count_text.data();
-            const char* end = begin + std::strlen(begin);
-            uint64_t parsed{};
-            const auto result = std::from_chars(begin, end, parsed);
-            context->repeat_count_input_valid = begin != end &&
-                result.ec == std::errc{} && result.ptr == end && parsed > 0;
-            if (context->repeat_count_input_valid) {
-                context->repeat_count = parsed;
-            }
-        }
-        if (!context->repeat_count_input_valid) {
-            ui->text(ui->user, anomaly::sdk::StringView("次数请输入有效的正整数（最大值受64位计数范围限制）"));
-        }
+        ui->text(ui->user, anomaly::sdk::StringView(
+            "每个确认的新伤害节点新增两个后续分支；总次数无固定上限。"));
 
         const std::string binding = context->captured ? "绑定=就绪" : "绑定=等待";
         const std::string trigger = "触发=战斗中";
