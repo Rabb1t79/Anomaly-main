@@ -716,6 +716,8 @@ struct Ue5NteAdapter::State {
         std::string_view type;
         std::int32_t element_size{};
         bool return_value{};
+        // Optional exact UStruct object name (reflection name, without C++'s leading F).
+        std::string_view struct_type{};
     };
     struct NteFunctionSpec {
         NteFunctionKind kind{};
@@ -1342,30 +1344,30 @@ struct Ue5NteAdapter::State {
         static constexpr std::array activate_game_effects_with_class{
             NteFunctionParameterSpec{"WorldContextObject", "ObjectProperty", 8, false},
             NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
-            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false}};
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false, "BufferData"}};
         static constexpr std::array activate_game_effects_with_class_by_actor{
             NteFunctionParameterSpec{"WorldContextObject", "ObjectProperty", 8, false},
             NteFunctionParameterSpec{"SourceObj", "ObjectProperty", 8, false},
             NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
-            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false},
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false, "BufferData"},
             NteFunctionParameterSpec{"pTriggerAbilityComp", "ObjectProperty", 8, false},
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
         static constexpr std::array apply_game_effect_with_class_by_actor{
             NteFunctionParameterSpec{"SourceObj", "ObjectProperty", 8, false},
             NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
-            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false},
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false, "BufferData"},
             NteFunctionParameterSpec{"pTriggerAbilityComp", "ObjectProperty", 8, false},
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
         static constexpr std::array apply_effect_container_spec{
-            NteFunctionParameterSpec{"ContainerSpec", "StructProperty", 56, false},
+            NteFunctionParameterSpec{"ContainerSpec", "StructProperty", 56, false, "HTGameplayEffectContainerSpec"},
             NteFunctionParameterSpec{"ReturnValue", "ArrayProperty", 16, true}};
         static constexpr std::array apply_gameplay_effect_to_target{
             NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
             NteFunctionParameterSpec{"TargetAbilityCmp", "ObjectProperty", 8, false},
-            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false},
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false, "BufferData"},
             NteFunctionParameterSpec{"BuffEventType", "EnumProperty", 1, false},
             NteFunctionParameterSpec{"bUsePredictionKey", "BoolProperty", 1, false},
-            NteFunctionParameterSpec{"ReturnValue", "StructProperty", 8, true}};
+            NteFunctionParameterSpec{"ReturnValue", "StructProperty", 8, true, "ActiveGameplayEffectHandle"}};
         static constexpr std::array get_ability_system{
             NteFunctionParameterSpec{"ReturnValue", "ObjectProperty", 8, true}};
         static constexpr std::array get_name{
@@ -8477,6 +8479,14 @@ struct Ue5NteAdapter::State {
                     static_cast<std::uint64_t>(info.offset) >
                         (std::numeric_limits<std::uint16_t>::max)()) {
                     return false;
+                }
+                if (!expected.struct_type.empty()) {
+                    std::string reflected_struct_name;
+                    if (info.type != "StructProperty" || info.structure == 0 ||
+                        !ReadReflectedObjectNameLocked(info.structure, reflected_struct_name) ||
+                        reflected_struct_name != expected.struct_type) {
+                        return false;
+                    }
                 }
                 candidate.offsets[parameter_index] =
                     static_cast<std::uint16_t>(info.offset);
