@@ -703,6 +703,7 @@ struct Ue5NteAdapter::State {
         ActivateGameEffectsWithClass,
         ActivateGameEffectsWithClassByActor,
         ApplyGameEffectWithClassByActor,
+        ApplyGameplayEffectToTargetWithClass,
         ApplyEffectContainerSpec,
         ApplyExternalEffectContainerSpec,
         Count,
@@ -990,6 +991,7 @@ struct Ue5NteAdapter::State {
         std::uintptr_t game_effect_wrapper{};
         std::uintptr_t game_effect_by_actor_wrapper{};
         std::uintptr_t apply_game_effect_by_actor{};
+        std::uintptr_t apply_gameplay_effect_to_target{};
         std::uintptr_t apply_effect_container_spec{};
         std::uintptr_t apply_external_effect_container_spec{};
         std::uint16_t damage_widget_info_offset{};
@@ -1020,6 +1022,7 @@ struct Ue5NteAdapter::State {
     std::atomic<std::uint64_t> game_effect_wrapper_call_count{};
     std::atomic<std::uint64_t> game_effect_by_actor_wrapper_call_count{};
     std::atomic<std::uint64_t> apply_game_effect_by_actor_call_count{};
+    std::atomic<std::uint64_t> apply_gameplay_effect_to_target_call_count{};
     std::atomic<std::uint64_t> apply_effect_container_spec_call_count{};
     std::atomic<std::uint64_t> apply_external_effect_container_spec_call_count{};
     std::atomic<std::uint64_t> buff_call_count{};
@@ -1356,6 +1359,13 @@ struct Ue5NteAdapter::State {
         static constexpr std::array apply_effect_container_spec{
             NteFunctionParameterSpec{"ContainerSpec", "StructProperty", 56, false},
             NteFunctionParameterSpec{"ReturnValue", "ArrayProperty", 16, true}};
+        static constexpr std::array apply_gameplay_effect_to_target{
+            NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
+            NteFunctionParameterSpec{"TargetAbilityCmp", "ObjectProperty", 8, false},
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 88, false},
+            NteFunctionParameterSpec{"BuffEventType", "EnumProperty", 1, false},
+            NteFunctionParameterSpec{"bUsePredictionKey", "BoolProperty", 1, false},
+            NteFunctionParameterSpec{"ReturnValue", "StructProperty", 8, true}};
         static constexpr std::array get_ability_system{
             NteFunctionParameterSpec{"ReturnValue", "ObjectProperty", 8, true}};
         static constexpr std::array get_name{
@@ -1436,6 +1446,9 @@ struct Ue5NteAdapter::State {
         case NteFunctionKind::ApplyGameEffectWithClassByActor:
             return {kind, "K2_ApplyGameEffectWithClassByActor", "HTAbilitySystemComponent", 120,
                 apply_game_effect_with_class_by_actor};
+        case NteFunctionKind::ApplyGameplayEffectToTargetWithClass:
+            return {kind, "K2_ApplyGameplayEffectToTargetWithClass", "HTAbilitySystemComponent", 120,
+                apply_gameplay_effect_to_target};
         case NteFunctionKind::ApplyEffectContainerSpec:
             return {kind, "ApplyEffectContainerSpec", "HTAbilitySystemComponent", 72,
                 apply_effect_container_spec};
@@ -5373,6 +5386,10 @@ struct Ue5NteAdapter::State {
             apply_game_effect_by_actor_call_count.fetch_add(1, std::memory_order_relaxed);
             return;
         }
+        if (function == bindings.apply_gameplay_effect_to_target) {
+            apply_gameplay_effect_to_target_call_count.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
         if (function == bindings.apply_effect_container_spec) {
             apply_effect_container_spec_call_count.fetch_add(1, std::memory_order_relaxed);
             return; // ContainerSpec may contain pointer-backed data; count only.
@@ -8477,7 +8494,8 @@ struct Ue5NteAdapter::State {
                         : (kind == NteFunctionKind::GetActiveEffectTimeRemainingAndDuration ||
                            kind == NteFunctionKind::ActivateGameEffectsWithClass ||
                            kind == NteFunctionKind::ActivateGameEffectsWithClassByActor ||
-                           kind == NteFunctionKind::ApplyGameEffectWithClassByActor)
+                           kind == NteFunctionKind::ApplyGameEffectWithClassByActor ||
+                           kind == NteFunctionKind::ApplyGameplayEffectToTargetWithClass)
                             ? std::string_view{"GameplayEffect"}
                             : std::string_view{};
                     if (!ReadPointerAt(
@@ -9094,6 +9112,9 @@ struct Ue5NteAdapter::State {
                         case NteFunctionKind::ApplyGameEffectWithClassByActor:
                             next_capture_bindings.apply_game_effect_by_actor = address;
                             break;
+                        case NteFunctionKind::ApplyGameplayEffectToTargetWithClass:
+                            next_capture_bindings.apply_gameplay_effect_to_target = address;
+                            break;
                         case NteFunctionKind::ApplyEffectContainerSpec:
                             next_capture_bindings.apply_effect_container_spec = address;
                             break;
@@ -9212,6 +9233,7 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::ActivateGameEffectsWithClass);
                     lookup_optional(NteFunctionKind::ActivateGameEffectsWithClassByActor);
                     lookup_optional(NteFunctionKind::ApplyGameEffectWithClassByActor);
+                    lookup_optional(NteFunctionKind::ApplyGameplayEffectToTargetWithClass);
                     lookup_optional(NteFunctionKind::ApplyEffectContainerSpec);
                     lookup_optional(NteFunctionKind::ApplyExternalEffectContainerSpec);
                     lookup_optional(NteFunctionKind::CurrentDamageIsCrit);
@@ -15924,6 +15946,7 @@ NteCombatDiagnosticsSnapshot Ue5NteAdapter::CombatDiagnostics() const noexcept {
         if (bindings->game_effect_wrapper != 0) binding_mask |= 1U << 6U;
         if (bindings->game_effect_by_actor_wrapper != 0) binding_mask |= 1U << 7U;
         if (bindings->apply_game_effect_by_actor != 0) binding_mask |= 1U << 8U;
+        if (bindings->apply_gameplay_effect_to_target != 0) binding_mask |= 1U << 11U;
         if (bindings->apply_effect_container_spec != 0) binding_mask |= 1U << 9U;
         if (bindings->apply_external_effect_container_spec != 0) binding_mask |= 1U << 10U;
         if (std::ranges::any_of(bindings->buffs,
@@ -15967,7 +15990,8 @@ NteCombatDiagnosticsSnapshot Ue5NteAdapter::CombatDiagnostics() const noexcept {
         state->game_effect_by_actor_wrapper_call_count.load(std::memory_order_acquire),
         state->apply_game_effect_by_actor_call_count.load(std::memory_order_acquire),
         state->apply_effect_container_spec_call_count.load(std::memory_order_acquire),
-        state->apply_external_effect_container_spec_call_count.load(std::memory_order_acquire)};
+        state->apply_external_effect_container_spec_call_count.load(std::memory_order_acquire),
+        state->apply_gameplay_effect_to_target_call_count.load(std::memory_order_acquire)};
 }
 
 std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
