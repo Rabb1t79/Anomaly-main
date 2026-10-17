@@ -68,3 +68,6 @@ The read-only counters are now included in the existing combat diagnostics JSON 
 
 
 The reflected binding validator now also checks the exact UStruct object name for the candidate's pointer-backed struct parameters: `BufferData`, `HTGameplayEffectContainerSpec`, and `ActiveGameplayEffectHandle`. This avoids treating an arbitrary same-sized struct as equivalent. The enum parameter remains fail-closed on its expected reflected property type; if the live metadata uses a different property representation, that candidate will stay unbound rather than bypass validation.
+
+
+The same route binding flags and call counters are now also included in the runtime's UE diagnostics snapshot under `damageCapture.gameplayEffectRoutes`, so the existing read-only `ue` diagnostics output can expose them without adding a new public mutation service or ABI.
