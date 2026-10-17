@@ -12904,7 +12904,7 @@ struct Ue5NteAdapter::State {
                     };
                     for (std::size_t index{}; index < observer_only_paths.size(); ++index) {
                         std::uintptr_t candidate{};
-                        if (FindExactObjectLocked(observer_only_paths[index], candidate)) {
+                        if (FindExactObjectLocked(observer_only_paths[index].data(), candidate)) {
                             next_capture_bindings.observer_only_functions[index] = candidate;
                         }
                     }
