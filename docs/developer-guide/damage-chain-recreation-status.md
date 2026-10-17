@@ -83,3 +83,14 @@
 - 不把 Attack Replay 目前的 GameplayEffect 重放模型自动当作旧插件机制。
 - 不把 Dump 声明等同于实际调用路径，不把 ABI 可桥接等同于接口已实现。
 - 每轮先读本记录和 `AGENTS.md`，只报告新增证据、明确阻塞与下一项具体动作。
+
+
+## 2026-10-18 新增：Dump 知识索引与候选机制正文核验
+
+- 已读取当前分支完整递归 Git tree（tree commit `3054f3a21526211b453aedcdf39b1e98770fe3c8`），确认 `5.6.1/` 下共有 **6,861 个文件、5 个目录**。文件分布主要为 5,729 个 `.hpp`、1,121 个 `.cpp`、2 个 `.inl`、5 个 `.json`，另有 `.txt`、`.idmap`、`.usmap`。
+- 已在 `docs/knowledge-base/native-dump/` 建立分层文件索引：README + 14 个文件清单分片，覆盖该目录树中的全部 6,861 个文件，记录路径、字节数、Git blob SHA 和简要导航注释。**这是目录/文件级初始索引，不代表 6,861 份正文都已逐一阅读；注释已明确标记待正文核验。**
+- 已新增 `docs/knowledge-base/native-dump/damage-chain-candidates.md`，对 `ADamageTriggerActor`、`AHTAbilitySpawnActor`、`UHTAbilitySpawnDamageTriggerActor`、`FHTGameplayEffectContainer`、`FSpawnDamageTriggerActor`、`FSpawnDamageTriggerActorArray`、`FDamageTriggerActorStaticData` 的字段、偏移、大小、关联与证据限制做了正文级整理。
+- **直接证实（声明层）**：`ADamageTriggerActor` 有周期触发相关函数和 Runtime period/duration/count/max-count 字段；保存了 `TArray<AHTPlayerCharacter*>` 类型的 `OverlapTriggerLinkTimeCharacters`；`FSpawnDamageTriggerActor` 配置包含 Actor 子类、spawn condition/location/rotation/scale 对象、`DamageTriggerConfigID` 与 GameplayEffect 容器；`FDamageTriggerActorStaticData` 包含延迟、持续时间、周期和最大触发次数字段。
+- **重要限制**：`HTGame_functions.cpp` 中的生成函数包装通过反射 `ProcessEvent` 调用，不是原生业务实现体；目前不能由它证明周期计时的真实行为、原始受击目标绑定、自动启动关系或多目标独立性。候选机制仍是“有证据支持但未验证”，不是已确认的复现路线。
+- **第二套 Dump 阻塞已进一步核验**：当前分支树未出现 `5.6.1_new/`；在 `main`、`recreation/damage-chain-native-20261017`、`recovery/analyze-old-plugin-dll-20261017`、`experiment/damage-chain-legacy-ui-20261017`、`feat/damage-chain-reference-ui-20261017` 这五个相关分支/提交树中也未找到。此结论仅限这些已检查的仓库树，不推断其他仓库、用户本地或未检查来源不存在。
+- 本次只新增知识文档与状态记录，没有改插件/Core/ABI 源码；未构建、未加载、未做实机验证。
