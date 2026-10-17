@@ -1,0 +1,28 @@
+name: damage-chain-core-validation
+
+on:
+  push:
+    branches:
+      - recreation/damage-chain-native-20261017
+  pull_request:
+    branches:
+      - recreation/damage-chain-native-20261017
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Core
+        shell: pwsh
+        run: |
+          cmake --preset windows-vs2022 `
+            -DANOMALY_BUILD_TEST_FIXTURES=OFF `
+            -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF `
+            -DANOMALY_BUILD_TEST_PLUGINS=OFF
+      - name: Build Core
+        run: cmake --build --preset windows-relwithdebinfo --target anomaly_core --parallel
