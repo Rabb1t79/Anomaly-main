@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline triage for the repository's legacy plugin DLL. No external packages."""
+"""Offline triage for the repository's legacy plugin DLL. No external packages; revision 2."""
 import hashlib, json, math, re, struct
 from collections import Counter
 from pathlib import Path
