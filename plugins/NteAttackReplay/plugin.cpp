@@ -93,8 +93,13 @@ struct Context final {
     std::atomic_bool stop_requested{false};
     // 连锁没有固定命中次数上限；该值仅控制两次 GameplayEffect 重放之间的 Game 帧间隔。
     uint32_t replay_interval_frames{1};
+    // Compact legacy-style UI setting. Initial value follows the user's recollection.
+    uint32_t repeat_count{1};
+    uint64_t damage_count{};
+    uint64_t failure_count{};
+    uint64_t replay_count{};
     uint32_t replay_done{};
-    // Outstanding descendants created by the binary damage tree. This is not a hit cap.
+    // Remaining requested replay attempts for the current root damage event.
     uint64_t replay_pending_jobs{};
     uint64_t replay_last_tick{};
     std::string status{"自动等待玩家下一次攻击"};
@@ -585,6 +590,7 @@ bool CaptureNextAttack(Context& context) {
         }
 
         context.captured = true;
+        if (context.damage_count != (std::numeric_limits<uint64_t>::max)()) ++context.damage_count;
         context.replay_done = 0;
         context.proof_single_replay_completed = false;
         context.proof_single_replay_candidate_count_available = false;
@@ -815,6 +821,10 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
     context->replay_interval_frames = 1;
+    context->repeat_count = (std::max)(context->repeat_count, 1U);
+    context->damage_count = 0;
+    context->failure_count = 0;
+    context->replay_count = 0;
     context->replay_done = 0;
     context->replay_last_tick = 0;
     context->replaying = false;
@@ -881,7 +891,8 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             context->waiting_for_damage = false;
             // The original player hit seeds two child jobs. Every confirmed descendant
             // adds two more jobs; requests reuse this chain's pinned native-effect root.
-            context->replay_pending_jobs = context->proof_single_replay ? 1U : 2U;
+            context->replay_pending_jobs = context->proof_single_replay
+                ? 1U : static_cast<uint64_t>((std::max)(context->repeat_count, 1U));
             context->replay_damage_cursor = context->captured_damage_sequence;
             context->replay_last_tick = context->captured_tick_sequence;
             context->status = context->proof_single_replay
@@ -979,15 +990,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
             return;
         }
 
-        // Each real descendant creates two more pending native-effect replays. Use a
-        // saturating 64-bit work counter rather than imposing a fixed hit/time limit.
-        constexpr uint64_t kTwoChildren = 2U;
-        if (context->replay_pending_jobs >
-            (std::numeric_limits<uint64_t>::max)() - kTwoChildren) {
-            context->replay_pending_jobs = (std::numeric_limits<uint64_t>::max)();
-        } else {
-            context->replay_pending_jobs += kTwoChildren;
-        }
+        // Count confirmed matching damage separately. Requested replays are controlled
+        // by repeat_count; no binary fan-out is assumed by this experiment.
+        if (context->damage_count != (std::numeric_limits<uint64_t>::max)()) ++context->damage_count;
         if (context->replay_done != (std::numeric_limits<uint32_t>::max)()) {
             ++context->replay_done;
         }
@@ -1014,6 +1019,7 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     }
 
     if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
+        if (context->failure_count != (std::numeric_limits<uint64_t>::max)()) ++context->failure_count;
         const bool single_shot = context->proof_single_replay;
         context->replaying = false;
         context->waiting_for_damage = false;
@@ -1046,8 +1052,10 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     context->replay_damage_deadline = now + std::chrono::milliseconds(2000);
 
     AnomalyStatusV1 replay_status{};
+    if (context->replay_count != (std::numeric_limits<uint64_t>::max)()) ++context->replay_count;
     const ReplayCallResult replay_result = ReplayOnce(*context, &replay_status);
     if (replay_result != ReplayCallResult::Success) {
+        if (context->failure_count != (std::numeric_limits<uint64_t>::max)()) ++context->failure_count;
         std::string failure;
         if (replay_status.message.data != nullptr && replay_status.message.size != 0) {
             failure = "重放请求被 Core 拒绝：" +
@@ -1096,112 +1104,47 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     int open = 1;
     if (ui->set_next_window_size != nullptr) {
-        ui->set_next_window_size(ui->user, 430.0F, 0.0F, 4U);
+        ui->set_next_window_size(ui->user, 360.0F, 0.0F, 4U);
     }
-    // begin_window/end_window are always paired. The host UI follows ImGui's
-    // Begin/End rule: End is required even when Begin returns false.
     const int window_visible = ui->begin_window(
         ui->user, anomaly::sdk::StringView("伤害链式反应"), &open, 0);
     if (window_visible != 0) {
         int enabled = context->enabled ? 1 : 0;
-        if (ui->checkbox(ui->user, anomaly::sdk::StringView("启用伤害链式反应"), &enabled) != 0) {
+        if (ui->checkbox(ui->user, anomaly::sdk::StringView("启用"), &enabled) != 0) {
             const bool next_enabled = enabled != 0;
             if (next_enabled != context->enabled) {
                 context->enabled = next_enabled;
                 if (context->enabled) {
-                    // Enabling replay must not reset or interrupt the always-on recorder.
-                    context->status = context->captured
-                        ? "已启用：自动开始伤害链式反应"
-                        : "已启用：等待下一次真实伤害事件";
-                    if (context->captured) {
-                        context->replay_requested.store(true, std::memory_order_release);
-                    }
+                    context->status = context->captured ? "伤害链已启用" : "等待下一次有效伤害";
+                    if (context->captured) context->replay_requested.store(true, std::memory_order_release);
                 } else {
-                    // Disabling replay must not stop recording or discard a captured attack.
-                    // Draw is Render-domain code; disable replay through the Game-domain request.
                     context->stop_requested.store(true, std::memory_order_release);
-                    context->status = "已停用伤害链式反应；重新启用后等待下一次真实伤害事件";
+                    context->status = "伤害链已停用";
                 }
             }
         }
 
-        const bool proof_status =
-            context->status.rfind("单次验证", 0) == 0 ||
-            context->status.rfind("单次观察", 0) == 0 ||
-            context->status.rfind("单次实验", 0) == 0 ||
-            context->status.rfind("移植路径", 0) == 0;
-        ui->text(ui->user, anomaly::sdk::StringView(
-            context->enabled || proof_status
-                ? context->status : "持续监测真实伤害；伤害链式反应未启用"));
-
-        if (ui->separator != nullptr) ui->separator(ui->user);
-
-        int single_shot = context->proof_single_replay ? 1 : 0;
-        if (ui->checkbox(ui->user,
-                anomaly::sdk::StringView("单次路线验证（一次确认后自动停用）"),
-                &single_shot) != 0) {
-            context->proof_single_replay = single_shot != 0;
-        }
-        if (context->proof_single_replay) {
-            ui->text(ui->user, anomaly::sdk::StringView(
-                "验证模式：最多重放一次；成功、失败或超时后都会自动关闭重放。"));
+        if (ui->input_uint32 != nullptr) {
+            ui->input_uint32(ui->user, anomaly::sdk::StringView("伤害重复次数"),
+                &context->repeat_count, 1U, 10U);
+            if (context->repeat_count == 0) context->repeat_count = 1;
         }
 
-    if (ui->input_uint32 != nullptr) {
-        ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("链式伤害间隔（Game 帧；1=每帧一次）"),
-            &context->replay_interval_frames, 1, 10);
-        context->replay_interval_frames = std::clamp(context->replay_interval_frames, 1u, 10u);
-    }
+        const std::string binding = context->captured ? "绑定=就绪" : "绑定=等待";
+        const std::string trigger = context->enabled ? "触发=战斗中" : "触发=待机";
+        ui->text(ui->user, anomaly::sdk::StringView(binding + "    " + trigger));
+        const std::string counters =
+            "伤害=" + std::to_string(context->damage_count) +
+            "次  失败=" + std::to_string(context->failure_count) +
+            "次  重放=" + std::to_string(context->replay_count) + "次";
+        ui->text(ui->user, anomaly::sdk::StringView(counters));
 
-    if (context->captured) {
-        ui->text(ui->user, anomaly::sdk::StringView(
-            context->captured_ability_path.empty()
-                ? "已捕获玩家→目标的真实伤害事件"
-                : context->captured_ability_path));
-        if (!context->captured_damage_source_name.empty()) {
-            ui->text(ui->user, anomaly::sdk::StringView(
-                "DamageSource：" + context->captured_damage_source_name));
-        }
-        if (!context->captured_target_path.empty()) {
-            ui->text(ui->user, anomaly::sdk::StringView(
-                "目标：" + context->captured_target_path));
-        }
-        const std::string progress = context->proof_single_replay_completed
-            ? (context->proof_single_replay_candidate_count_available
-                ? "单次观测已结束；匹配候选数=" +
-                    std::to_string(context->proof_single_replay_candidate_count) +
-                    "；同步 HP 下降=" +
-                    (context->proof_single_replay_hp_result_available
-                        ? (context->proof_single_replay_hp_reduced ? "是" : "否")
-                        : "未测得") +
-                    "；Native Exec 命中=" +
-                    (context->proof_single_replay_native_exec_result_available
-                        ? (context->proof_single_replay_native_exec_seen ? "是" : "否")
-                        : "未测得")
-                : "单次观测已结束；缺少匹配候选数，路线仍未证实")
-            : "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
-                "；待执行分支：" + std::to_string(context->replay_pending_jobs) +
-                "（每个匹配节点派生两个）";
-        ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("根伤害来自玩家当前控制角色的真实命中。起始节点产生两个待执行分支；此后每个匹配的新伤害节点再增加两个分支，直到目标死亡或不再出现有效新伤害。整条链固定使用根事件的已验证原生 GameplayEffect 快照，因此切换角色不会把旧链改绑到新角色；不模拟按键、不重放技能或动画，也不直接写入 HP。间隔设为 1 时每个 Game 帧最多发起一次追加调用；若 2 秒内未确认新伤害，链条停止。"));
-    } else {
-        const std::string capture_monitor =
-            "Core 伤害事件序列：" +
-            std::to_string(context->latest_damage_sequence_snapshot) +
-            "；插件已扫描至：" + std::to_string(context->combat_cursor);
-        ui->text(ui->user, anomaly::sdk::StringView(capture_monitor));
-    }
-
-    // 不启用单次路线验证时，重放开关仍保持原有的连续连锁行为。
-
+        // Detailed route evidence and failure reasons remain in attack-replay.log.
         ui->end_window(ui->user);
     } else {
-        // end_window must also be called when begin_window returned false.
         ui->end_window(ui->user);
     }
 }
-
 }  // namespace
 
 ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
