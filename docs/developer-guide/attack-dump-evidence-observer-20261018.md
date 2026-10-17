@@ -69,7 +69,7 @@ Dump 还显示 `FHTGameplayEffectContainerSpec` 大小为 `0x38`，其中 `Targe
 
 ## 验证分层
 
-- Dump 声明/参数布局：8 个候选的声明和参数块大小已从 `5.6.1` 对应 `*_classes.hpp` / `*_parameters.hpp` 直接核验；尚未核验运行时反射布局是否一致。`
+- Dump 声明/参数布局：8 个候选的声明和参数块大小已从 `5.6.1` 对应 `*_classes.hpp` / `*_parameters.hpp` 直接核验；尚未核验运行时反射布局是否一致。
 - `FHTDamageEvent` 大小、`DamageGEDef` 与 `DamageTags` 偏移已直接核验；基类 `Damage` 字段偏移仍沿用既有审计记录。
 - 当前源码路径：已读取分支文件。
 - 观测实现：只计数，不读候选参数、不增加回放白名单；本轮新构建仍在 CI 运行。
