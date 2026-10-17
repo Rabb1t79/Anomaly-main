@@ -63,7 +63,7 @@ Dump 还显示 `FHTGameplayEffectContainerSpec` 大小为 `0x38`，其中 `Targe
 1. 已在 Core 反射发现阶段按完整路径解析上述候选，并增加有界入口计数。
 2. 当前计数只代表从已有 ProcessEvent/Native Exec 观测入口看到的次数；不同入口可能对同一逻辑调用重复计数。
 3. 已新增只读运行时布局核验：按 Dump 预期检查 UFunction owner/name、`NumParms`、`ParmsSize`、`ReturnValueOffset`、字段反射类型/大小/偏移、结构体身份、ClassProperty 的 meta-class、目标对象类型，以及数组元素结构类型/大小；只有全部通过的候选才进入计数绑定。验证失败原因附加到 Core 的入口诊断信息中。
-4. 该校验代码尚待 CI 构建验证。即使运行时布局通过，也只证明当前 UFunction 元数据与 Dump 对得上，不证明它实际走在攻击路径中。后续再把可验证的调用与同一伤害事件的 `DamageGEDef`、攻击者、目标、ASC 和 Tick 关联；不触发回放。
+4. 最新提交 `5fe56ac2c06b1096fd98f6e01244a294f241c70c` 的 Windows 构建、Core/ABI validation、Runtime probe package 三项 CI 均已成功。即使运行时布局通过，也只证明当前 UFunction 元数据与 Dump 对得上，不证明它实际走在攻击路径中。后续再把可验证的调用与同一伤害事件的 `DamageGEDef`、攻击者、目标、ASC 和 Tick 关联；不触发回放。
 5. 保持现有四类回放入口的校验不变。只有观测证据能证明具体路径、目标语义和安全参数重建方式后，才另行设计最小回放适配。
 6. 用当前 Anomaly 的 Core/SDK/ABI 构建与测试验证新增观测；构建成功只证明代码可构建。游戏内链式伤害仍须由运行日志与目标 HP/新 DamageEvent 实测确认。
 
@@ -82,8 +82,8 @@ Dump 还显示 `FHTGameplayEffectContainerSpec` 大小为 `0x38`，其中 `Targe
 - Dump 声明/参数布局：8 个候选的声明和参数块大小已从 `5.6.1` 对应 `*_classes.hpp` / `*_parameters.hpp` 直接核验；尚未核验运行时反射布局是否一致。
 - `FHTDamageEvent` 大小，以及 `Damage`、`DamageGEDef`、`DamageTags` 三个字段偏移均已从对应结构定义直接核验。
 - 当前源码路径：已读取分支文件。
-- 观测实现：候选先经过运行时 UFunction 布局校验，再只计数；不读取调用参数缓冲区、不增加回放白名单。最新 Core/Runtime/Windows CI 正在运行，尚无最终结果。
-- 插件界面：最终定板为版本 1.9.9、宽度 360 的紧凑面板。只显示“启用”复选框、“伤害重复次数”输入（初始值 1，范围 1–10）、绑定/触发状态，以及“伤害=次数、失败=次数、重放=次数”。主界面不显示日志、单次路线验证控件、目标路径或实验诊断；详细诊断写入插件目录的 `attack-replay.log`。源码已按此定板实现，仍待构建与实机视觉确认。
+- 观测实现：候选先经过运行时 UFunction 布局校验，再只计数；不读取调用参数缓冲区、不增加回放白名单。最新 Windows 构建、Core/ABI validation、Runtime probe package 三项 CI 均成功。此前针对旧提交 `6c9a91866b690a989a9cd08f5d4042b44ae11058` 的失败构建不能代表最新提交；最新 CI 只证明代码和 ABI 验证通过，不证明游戏内加载或功能生效。
+- 插件界面：最终定板为版本 1.9.9、宽度 360 的紧凑面板。已核对当前工作分支 `plugins/NteAttackReplay/plugin.cpp`：只显示“启用”复选框、“伤害重复次数”输入（初始值 1，范围 1–10）、绑定/触发状态，以及“伤害=次数、失败=次数、重放=次数”；不显示日志、单次路线验证控件、目标路径或实验诊断；详细诊断写入插件目录的 `attack-replay.log`。对应代码已包含在最新通过 CI 的提交中；界面定板锁定，不再随本轮技术观测改动。仍未完成游戏内实际显示验证。
 - 真实 GameplayEffect 追加伤害和多目标独立链：未验证。
 
 ## 约束
