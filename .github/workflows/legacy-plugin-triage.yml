@@ -27,6 +27,15 @@ jobs:
           python --version
           python tools/legacy-plugin-triage.py
 
+      - name: Upload original legacy DLL for offline analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-plugin-source-binary
+          path: plugins/TimeAccel/plugin_old.dll
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload static triage report
         if: always()
         uses: actions/upload-artifact@v4
