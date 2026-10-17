@@ -61,9 +61,9 @@ Dump 还显示 `FHTGameplayEffectContainerSpec` 大小为 `0x38`，其中 `Targe
 ## 下一项实现任务：只读观测，不扩展回放白名单
 
 1. 已在 Core 反射发现阶段按完整路径解析上述候选，并增加有界入口计数。
-2. 当前计数只代表从已有 ProcessEvent/Native Exec 观测入口看到的次数；不同入口可能对同一逻辑调用重复计数。候选路径尚未完成运行时 `ParmsSize`、`NumParms` 和属性类型与 Dump 的一致性验证。
-3. 下一步为每个候选添加只读的运行时布局核验结果；在布局核验通过前仍不读取参数，不安装候选专属 hook。
-4. 后续再把可验证的调用与同一伤害事件的 `DamageGEDef`、攻击者、目标、ASC 和 Tick 关联；不触发回放。
+2. 当前计数只代表从已有 ProcessEvent/Native Exec 观测入口看到的次数；不同入口可能对同一逻辑调用重复计数。
+3. 已新增只读运行时布局核验：按 Dump 预期检查 UFunction owner/name、`NumParms`、`ParmsSize`、`ReturnValueOffset` 和每个字段的反射类型/大小/偏移；只有全部通过的候选才进入计数绑定。验证失败原因附加到 Core 的入口诊断信息中。
+4. 该校验代码尚待 CI 构建验证。即使运行时布局通过，也只证明当前 UFunction 元数据与 Dump 对得上，不证明它实际走在攻击路径中。后续再把可验证的调用与同一伤害事件的 `DamageGEDef`、攻击者、目标、ASC 和 Tick 关联；不触发回放。
 5. 保持现有四类回放入口的校验不变。只有观测证据能证明具体路径、目标语义和安全参数重建方式后，才另行设计最小回放适配。
 6. 用当前 Anomaly 的 Core/SDK/ABI 构建与测试验证新增观测；构建成功只证明代码可构建。游戏内链式伤害仍须由运行日志与目标 HP/新 DamageEvent 实测确认。
 
@@ -72,7 +72,7 @@ Dump 还显示 `FHTGameplayEffectContainerSpec` 大小为 `0x38`，其中 `Targe
 - Dump 声明/参数布局：8 个候选的声明和参数块大小已从 `5.6.1` 对应 `*_classes.hpp` / `*_parameters.hpp` 直接核验；尚未核验运行时反射布局是否一致。
 - `FHTDamageEvent` 大小、`DamageGEDef` 与 `DamageTags` 偏移已直接核验；基类 `Damage` 字段偏移仍沿用既有审计记录。
 - 当前源码路径：已读取分支文件。
-- 观测实现：只计数，不读候选参数、不增加回放白名单；本轮新构建仍在 CI 运行。
+- 观测实现：候选先经过运行时 UFunction 布局校验，再只计数；不读候选参数、不增加回放白名单。最新 Core/Runtime/Windows CI 尚待结果。
 - 插件界面：已按旧插件方向重排为紧凑界面，移除单次路线验证控件和诊断详情展示；尚待构建验证与游戏内确认。
 - 真实 GameplayEffect 追加伤害和多目标独立链：未验证。
 
