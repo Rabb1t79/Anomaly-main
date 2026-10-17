@@ -73,7 +73,7 @@ Dump 还显示 `FHTGameplayEffectContainerSpec` 大小为 `0x38`，其中 `Targe
 - `FHTDamageEvent` 大小，以及 `Damage`、`DamageGEDef`、`DamageTags` 三个字段偏移均已从对应结构定义直接核验。
 - 当前源码路径：已读取分支文件。
 - 观测实现：候选先经过运行时 UFunction 布局校验，再只计数；不读候选参数、不增加回放白名单。最新 Core/Runtime/Windows CI 尚待结果。
-- 插件界面：已按旧插件方向重排为紧凑界面，移除单次路线验证控件和诊断详情展示；尚待构建验证与游戏内确认。
+- 插件界面：已按旧插件方向重排为紧凑界面，移除单次路线验证控件和诊断详情展示；源码界面已按最终定板结构实现；尚待构建验证与游戏内确认。
 - 真实 GameplayEffect 追加伤害和多目标独立链：未验证。
 
 ## 约束
