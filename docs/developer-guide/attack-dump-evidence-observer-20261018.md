@@ -13,7 +13,7 @@
 
 - 已读取仓库分支 `docs/developer-guide/attack-replay-legacy-port.md`、`profiles/nte/nte-current.json`、`src/game/ue5/ue5_nte_adapter.cpp`、`plugins/NteAttackReplay/plugin.cpp`。
 - 已读取项目 Library 中既有审计记录 `5.6.1-Native-SDK-Path-Audit.md` 和 `5.6.1全量遍历_内容核验进展_20261017.md`。既有审计记录声明输入 Dump SHA-256 为 `3fdcd63483cf40967dcb701d04f2c58bf6889cb4e5dd75c8e0cdbc55e407b779`。
-- 本轮已直接读取仓库 `5.6.1/CppSDK/SDK/HTGame_classes.hpp`、`HTGame_structs.hpp`、`HTGame_parameters.hpp`，以及 `GameplayAbilities_classes.hpp`、`GameplayAbilities_parameters.hpp`，逐项复核下列候选的声明和参数结构。当前仓库根目录中的第二个文件夹实际名为 `5.6.1-new`（连字符）；本轮读取到该目录内相关文件为 Git LFS 指针文本，而非完整 Dump 内容，因此没有把它当作可用的第二份 Dump。
+- 本轮已直接读取仓库 `5.6.1/CppSDK/SDK/HTGame_classes.hpp`、`HTGame_structs.hpp`、`HTGame_parameters.hpp`，以及 `GameplayAbilities_classes.hpp`、`GameplayAbilities_parameters.hpp`，逐项复核下列候选的声明和参数结构。PR 的基线分支与当前工作分支根目录均只有 `5.6.1`，未发现名为 `5.6.1_new` 的目录。默认分支 `main` 另有 `5.6.1-new`（连字符）目录，但本轮读取到其中相关文件是 Git LFS 指针文本，而非完整 Dump 内容，因此没有把它当作可用的第二份 Dump。
 - 当前源码可直接确认：Core 现有可重放捕获绑定只接受四类已验证入口；`CombatExecFunctionTargets()` 也只从这四个绑定中取 Native Exec 目标。其余候选路径目前没有进入这套捕获/回放绑定。
 - 既有审计记录确认：之前的实机日志曾出现候选调用无法同时匹配 `DamageGEDef`、攻击者/目标 ASC 与时间窗口的情况。它不能证明现有路径正确，也不能证明某个未观测候选就是正确路径。
 
