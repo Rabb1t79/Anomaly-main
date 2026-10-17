@@ -4,10 +4,10 @@
 用于检索仓库中的 NTE 原生 Dump。这里是源码导航与证据记录，不替代原始 Dump，也不把路径/命名推断当成已证实机制。
 
 ## 来源快照
-- 仓库：`Rabb1t79/Anomaly-main`
-- 当前 main 提交：`3da936234db490b88e2fe7a1529840a48136ba90`，新版目录以 Git LFS 指针形式存储。
-- 新版真实正文从同仓库 LFS 转换前提交 `5a16a377c2133428d4ccf6f9c0d8770455f9a588` 读取；未使用仓库外资料。
-- `5.6.1/`：6,861 个文件；`5.6.1-new/`：7,283 个文件。
+- 仓库：Rabb1t79/Anomaly-main
+- 当前 main 提交：3da936234db490b88e2fe7a1529840a48136ba90，新版目录以 Git LFS 指针存储。
+- 新版真实正文从同仓库 LFS 转换前提交 5a16a377c2133428d4ccf6f9c0d8770455f9a588 读取；未使用仓库外资料。
+- 5.6.1/：6,861 个文件；5.6.1-new/：7,283 个文件。
 
 ## 读取限制
 - 路径索引覆盖两个目录内全部 14,144 个文件，但通用条目是路径初注，不表示每个文件正文已逐句审阅。
@@ -22,10 +22,11 @@
 5. **运行时未证实**：Dump 声明存在不等于目标功能使用它，也不等于它是受支持插件接口。
 
 ## 导航
-- `work-state.md`：当前进度、证据状态与下一步。
-- `file-index-*.md`：全量路径索引，含扩展名、Git blob size、SHA 和路径初注。
-- `damage-chain-candidates.md`：周期伤害候选机制摘要。
-- `damage-trigger-source-notes.md`：DamageTrigger 类、结构、参数与生成包装的逐段注释。
-- `damage-event-candidates.md`：`AHTAbilityCharacter::OnDamaged` 事件与参数布局候选。
-- `related-spawn-modifiers.md`：生成 Actor、数值修改器和投射物/激光相关声明。
-- `version-diff.md`：两版对照结果与未决项。
+- work-state.md：当前进度、证据状态与下一步。
+- file-index-*.md：全量路径索引，含扩展名、Git blob size、SHA 和路径初注。
+- damage-chain-candidates.md：周期伤害候选机制摘要。
+- damage-trigger-source-notes.md：DamageTrigger 类、结构、参数与生成包装的逐段注释。
+- damage-event-candidates.md：OnDamaged 反射函数、CharacterOnDamaged 委托与内部广播 hook 的区别。
+- related-spawn-modifiers.md：生成 Actor、数值修改器和投射物/激光相关声明。
+- projectile-laser-trigger-path.md：Projectile/Laser 的重叠伤害间隔、逐目标间隔与最大次数字段。
+- version-diff.md：两版对照结果与未决项。
