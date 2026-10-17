@@ -22,7 +22,9 @@
 5. **运行时未证实**：Dump 声明存在不等于目标功能使用它，也不等于它是受支持插件接口。
 
 ## 导航
-- `file-index-*.md`：全量路径索引，含扩展名、Git blob size、SHA 和初注。
-- `damage-chain-candidates.md`：候选机制摘要。
+- `file-index-*.md`：全量路径索引，含扩展名、Git blob size、SHA 和路径初注。
+- `damage-chain-candidates.md`：周期伤害候选机制摘要。
 - `damage-trigger-source-notes.md`：DamageTrigger 类、结构、参数与生成包装的逐段注释。
+- `damage-event-candidates.md`：`AHTAbilityCharacter::OnDamaged` 事件与参数布局候选。
+- `related-spawn-modifiers.md`：生成 Actor、数值修改器和投射物/激光相关声明。
 - `version-diff.md`：两版对照结果与未决项。
