@@ -1863,7 +1863,33 @@ public:
         json += ",\"lastReflectionFaultFunction\":" +
             std::to_string(combat_diagnostics.last_reflection_fault_function);
         json += ",\"lastReflectionFaultCode\":" +
-            std::to_string(combat_diagnostics.last_reflection_fault_code) + "}";
+            std::to_string(combat_diagnostics.last_reflection_fault_code);
+        json += ",\"gameplayEffectRoutes\":{";
+        json += "\"activateWithClassBound\":" +
+            std::string((combat_diagnostics.process_event_binding_mask & (1U << 6U)) != 0 ? "true" : "false");
+        json += ",\"activateWithClassCalls\":" +
+            std::to_string(combat_diagnostics.game_effect_wrapper_call_count);
+        json += ",\"activateByActorBound\":" +
+            std::string((combat_diagnostics.process_event_binding_mask & (1U << 7U)) != 0 ? "true" : "false");
+        json += ",\"activateByActorCalls\":" +
+            std::to_string(combat_diagnostics.game_effect_by_actor_wrapper_call_count);
+        json += ",\"applyByActorBound\":" +
+            std::string((combat_diagnostics.process_event_binding_mask & (1U << 8U)) != 0 ? "true" : "false");
+        json += ",\"applyByActorCalls\":" +
+            std::to_string(combat_diagnostics.apply_game_effect_by_actor_call_count);
+        json += ",\"applyToTargetBound\":" +
+            std::string((combat_diagnostics.process_event_binding_mask & (1U << 11U)) != 0 ? "true" : "false");
+        json += ",\"applyToTargetCalls\":" +
+            std::to_string(combat_diagnostics.apply_gameplay_effect_to_target_call_count);
+        json += ",\"applyContainerSpecBound\":" +
+            std::string((combat_diagnostics.process_event_binding_mask & (1U << 9U)) != 0 ? "true" : "false");
+        json += ",\"applyContainerSpecCalls\":" +
+            std::to_string(combat_diagnostics.apply_effect_container_spec_call_count);
+        json += ",\"applyExternalContainerSpecBound\":" +
+            std::string((combat_diagnostics.process_event_binding_mask & (1U << 10U)) != 0 ? "true" : "false");
+        json += ",\"applyExternalContainerSpecCalls\":" +
+            std::to_string(combat_diagnostics.apply_external_effect_container_spec_call_count);
+        json += "}}";
         const bool player_service_published = adapter_ &&
             ProcessAdapterServices().Query(
                 ANOMALY_NTE_PLAYER_SERVICE_V1_ID,
