@@ -1286,6 +1286,7 @@ struct Ue5NteAdapter::State {
     // be seen by ActorProcessEvent, UObject ProcessEvent and Native Exec independently.
     std::array<std::atomic<std::uint64_t>, 4> replay_entrypoint_observation_counts{};
     std::array<std::atomic<std::uint64_t>, 8> observer_only_observation_counts{};
+    std::array<std::atomic<std::uint64_t>, 8> observer_only_last_tick{};
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
     std::array<CombatCaptureBindings, 2> combat_capture_binding_slots{};
@@ -19825,6 +19826,8 @@ void Ue5NteAdapter::OnCombatExecFunction(
     for (std::size_t index{}; index < bindings->observer_only_functions.size(); ++index) {
         if (bindings->observer_only_functions[index] == function && function != 0) {
             state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            state->observer_only_last_tick[index].store(
+                state->tick_sequence.load(std::memory_order_relaxed), std::memory_order_relaxed);
         }
     }
     if (function == bindings->replay_apply_by_actor) {
@@ -19859,6 +19862,8 @@ void Ue5NteAdapter::OnActorProcessEventPre(
     for (std::size_t index{}; index < bindings->observer_only_functions.size(); ++index) {
         if (bindings->observer_only_functions[index] == function && function != 0) {
             state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            state->observer_only_last_tick[index].store(
+                state->tick_sequence.load(std::memory_order_relaxed), std::memory_order_relaxed);
             return;
         }
     }
@@ -19945,6 +19950,8 @@ void Ue5NteAdapter::OnProcessEventPre(
         for (std::size_t index{}; index < combat_bindings->observer_only_functions.size(); ++index) {
             if (combat_bindings->observer_only_functions[index] == function && function != 0) {
                 state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            state->observer_only_last_tick[index].store(
+                state->tick_sequence.load(std::memory_order_relaxed), std::memory_order_relaxed);
             }
         }
         if (function == combat_bindings->replay_apply_by_actor) {
@@ -20188,6 +20195,16 @@ std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
             result += observer_only_names[index];
             result += "\":";
             result += std::to_string(state->observer_only_observation_counts[index].load(std::memory_order_relaxed));
+        }
+        result += "}";
+        result += ",\"observerOnlyLastSeenTick\":{";
+        for (std::size_t index{}; index < observer_only_names.size(); ++index) {
+            if (index != 0) result.push_back(',');
+            result += "\"";
+            result += observer_only_names[index];
+            result += "\":";
+            result += std::to_string(
+                state->observer_only_last_tick[index].load(std::memory_order_relaxed));
         }
         result += "}";
         result += ",\"events\":[";
