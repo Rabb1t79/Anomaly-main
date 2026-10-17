@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "anomaly.builtin.nte-attack-replay",
   "name": "NTE Damage Chain Reaction",
-  "description": "Experimental damage-chain test build with compact Chinese UI and a 64-bit repeat-count input. Native GameplayEffect replay remains unverified against the recovered legacy DLL mechanism; not a confirmed recreation.",
+  "description": "Experimental damage-chain test build with compact Chinese UI and unbounded fan-out from observed damage events. Native GameplayEffect replay remains unverified against the recovered legacy DLL mechanism; not a confirmed recreation.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "version": "2.0.0-test1",
