@@ -13,7 +13,7 @@
 
 - 已读取仓库分支 `docs/developer-guide/attack-replay-legacy-port.md`、`profiles/nte/nte-current.json`、`src/game/ue5/ue5_nte_adapter.cpp`、`plugins/NteAttackReplay/plugin.cpp`。
 - 已读取项目 Library 中既有审计记录 `5.6.1-Native-SDK-Path-Audit.md` 和 `5.6.1全量遍历_内容核验进展_20261017.md`。既有审计记录声明输入 Dump SHA-256 为 `3fdcd63483cf40967dcb701d04f2c58bf6889cb4e5dd75c8e0cdbc55e407b779`。
-- 本轮会话的文件挂载中没有原始 `5.6.1-0+UE5-HT.zip`；因此以下 Dump 结论继承既有审计记录，不声称本轮重新对 ZIP 原始字节做了哈希或逐行复核。
+- 原始 Dump 位于仓库目录 `5.6.1` 和 `5.6.1_new`。本轮尚未逐项重新核验这两个目录中的原始文件；因此以下 Dump 结论继承既有审计记录，不声称本轮已完成逐文件复核。
 - 当前源码可直接确认：Core 现有可重放捕获绑定只接受四类已验证入口；`CombatExecFunctionTargets()` 也只从这四个绑定中取 Native Exec 目标。其余候选路径目前没有进入这套捕获/回放绑定。
 - 既有审计记录确认：之前的实机日志曾出现候选调用无法同时匹配 `DamageGEDef`、攻击者/目标 ASC 与时间窗口的情况。它不能证明现有路径正确，也不能证明某个未观测候选就是正确路径。
 
@@ -43,7 +43,7 @@
 - `/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectToTarget`
 - `/Script/HTGame.HTAbilitySystemComponent.ServerApplyTraceProjectileResults`
 
-这些名称/签名来自既有 Dump 审计记录；本轮尚未从原始 ZIP 逐项复核。它们是观测候选，不是已确认的攻击调用路径。特别是 Effect Container、Spec Handle、Context Handle 可能包含间接数据或生命周期约束，不能把原始参数缓冲区当作可跨帧复制的安全对象。
+这些名称/签名来自既有 Dump 审计记录；本轮尚未从仓库目录 `5.6.1` 和 `5.6.1_new` 中逐项复核。它们是观测候选，不是已确认的攻击调用路径。特别是 Effect Container、Spec Handle、Context Handle 可能包含间接数据或生命周期约束，不能把原始参数缓冲区当作可跨帧复制的安全对象。
 
 ## 下一项实现任务：只读观测，不扩展回放白名单
 
@@ -56,7 +56,7 @@
 
 ## 验证分层
 
-- Dump 声明/布局：部分继承既有审计记录；本轮原始 ZIP 未挂载，需后续复核。
+- Dump 声明/布局：部分继承既有审计记录；仍需直接检查仓库目录 `5.6.1` 和 `5.6.1_new` 中对应的原始文件，逐项完成复核。
 - 当前源码路径：已读取分支文件。
 - 观测 hook 实现：已提交只计数的候选入口观测；尚未构建或实机验证。
 - Core/SDK/ABI 构建：本轮未运行。
