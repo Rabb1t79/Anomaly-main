@@ -4,7 +4,7 @@
 
 ## 更新规则
 
-- 每个工作日/工作段使用 `YYYY-MM-DD.md` 记录。
+- 每个工作日/工作段使用 \`YYYY-MM-DD.md\` 记录。
 - 每累计 4 项实质操作，或开始第 5 项实质操作前，写入一次进度检查点；构建、交付、切换分支或即将中断时提前记录。
 - 记录仓库/分支/提交、材料身份、已完成事项、证据状态、未决问题和下一步。
 - 明确区分“直接证实”“有证据支持但未验证”“未知”。
@@ -16,13 +16,21 @@
 
 - [2026-10-18：建立持续记录机制并登记伤害链测试状态](2026-10-18.md)
 - [2026-10-18：保存进度机制建立对话原文](conversations/2026-10-18-persistent-worklog-setup.md)
+- [2026-10-18：本地开发与 GitHub 双工作流接入核查](conversations/2026-10-18-local-and-github-workflow.md)
 
 ## 当前已知承接点（2026-10-18）
 
-- 仓库：`Rabb1t79/Anomaly-main`
-- 当前伤害链测试分支：`recreation/damage-chain-test-unbounded-ui-20261018`
-- 最近已知构建提交：`f05abf43d5883df2434130a43cba1b4f8a6b45ac`
-- 测试包：`NteDamageChain-2.0.0-test1-windows-x64.zip`
+- 仓库：\`Rabb1t79/Anomaly-main\`
+- 当前伤害链测试分支：\`recreation/damage-chain-test-unbounded-ui-20261018\`
+- 最近已知构建提交：\`f05abf43d5883df2434130a43cba1b4f8a6b45ac\`
+- 测试包：\`NteDamageChain-2.0.0-test1-windows-x64.zip\`
 - 状态：构建和包结构检查成功；游戏内加载、实际伤害行为、旧 DLL 机制一致性均未验证。
 - 具体证据、约束与下一步见日期记录。
-- 新对话承接时，请同时阅读最新日期记录与 `conversations/` 中相关对话记录。
+- 新对话承接时，请同时阅读最新日期记录与 \`conversations/\` 中相关对话记录。
+
+## 当前环境接入任务（2026-10-18）
+
+- A：Windows 本地项目操作。Codex 桌面端目前被手机号验证页阻塞；官方 CLI 是不同的受支持客户端，但尚未在用户设备验证登录是否可行。
+- B：GitHub 远程工作流。连接可读取 \`Rabb1t79/Anomaly-main\`，仓库返回权限包含 push/admin；本轮已通过连接向 main 写入对话记录，待重新读取验证该写入。
+- 构建偏好：继续优先使用 GitHub Actions 获取可验证产物，不要求用户先安装完整 VS2022 构建工具链。
+- 下一步：完成日志重新读取验证；再仅让用户检查 PowerShell 中 \`node -v\` 与 \`npm -v\`，决定是否以官方 Codex CLI 做一次最小登录尝试。若再遇到手机号验证，停止此路，不循环重试。
