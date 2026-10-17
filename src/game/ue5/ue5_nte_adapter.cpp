@@ -8254,7 +8254,7 @@ struct Ue5NteAdapter::State {
         const auto fail = [&](std::string reason) {
             failure_reason.assign(owners[index]);
             failure_reason.push_back('.');
-            failure_reason.append(names[index]);
+            failure_reason += names[index];
             failure_reason += ": ";
             failure_reason += reason;
             return false;
