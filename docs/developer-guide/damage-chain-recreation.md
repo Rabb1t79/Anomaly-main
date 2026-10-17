@@ -71,3 +71,6 @@ The reflected binding validator now also checks the exact UStruct object name fo
 
 
 The same route binding flags and call counters are now also included in the runtime's UE diagnostics snapshot under `damageCapture.gameplayEffectRoutes`, so the existing read-only `ue` diagnostics output can expose them without adding a new public mutation service or ABI.
+
+
+The first build after the missing-source guard compiled `ue5_nte_adapter.cpp`, `nte_profile_runtime.cpp`, and linked `Anomaly.Core.dll`, but the overall build then failed in the existing post-build staging step because the checkout lacked the empty `assets/images` directory (and also did not track `config/themes`). The branch now preserves both expected empty directories with `.gitkeep`; the next workflow run must confirm that staging completes.
