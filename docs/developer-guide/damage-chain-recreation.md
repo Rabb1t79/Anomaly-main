@@ -50,3 +50,10 @@ This is **observation only**. The implementation does not read or retain `Modify
 - In-game occurrence of this wrapper has not been observed yet.
 - A positive count would show only that the function executes; correlation with a specific `FHTDamageEvent` and its `DamageGEDef` remains required.
 - Zero calls would not prove the path is unused, because the call may be absent for the tested attack or may be dispatched through a different native route.
+
+
+## Additional diagnostic observations
+
+The isolated branch now observes five exact Dump-defined GameplayEffect-related paths. In addition to `HTAbilityCharacter.K2_ActivateGameEffectsWithClass`, it counts calls to `HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor`, `HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor`, `HTAbilitySystemComponent.ApplyEffectContainerSpec`, and `HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec`. These are read-only counters after exact-path and reflected-layout validation; no raw parameter buffer is retained, and none of these candidates is invoked by this change.
+
+The first CI attempt stopped during CMake configuration because `plugins/TimeAccel/plugin.cpp` is absent while the root build still declared it as a target. The branch now conditionally declares and stages that target only if its source exists. It does not restore unrelated historical source code. This is a build-check workaround for the missing file, not a claim that a full release package has been validated.
