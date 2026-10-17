@@ -18,7 +18,7 @@
   - `OverlapTriggerLinkTimeComp`，`UShapeComponent*`，offset `0x05C8`。
 - 相关函数声明：`K2_OnTriggerPeriodGamePlayEffect`、`OnCharacterDeadChanged`、`OnPlayerBeginOverlap`、`OnPlayerEndOverlap`、`StartTriggerGamePlayEffect`、`TriggerPeriodGamePlayEffectEvent`。
 - 生成包装函数位置：`HTGame_functions.cpp:63067`（周期触发事件）、`:63121`（死亡状态变化）、`:63146`（开始重叠）、`:63181`（结束重叠）、`:63212`（StartTriggerGamePlayEffect）、`:63271`（周期事件）。
-- 重要限制：这些 `*_functions.cpp` 方法是生成的反射调用包装，内部调用 `ProcessEvent`；它们不包含游戏原生函数的真实业务实现。因此不能从包装器推导真实定时器如何启动、命中时怎样选目标、何时停止。
+- 重要限制：这些 `*_functions.cpp` 方法是生成的反射调用包装，内部调用 `ProcessEvent`；它们不包含游戏原生函数的真实业务实现。因此不能从包装器推导真实定时器如何启动、命中时怎样选目标、何时停止。`OverlapTriggerLinkTimeCharacters` 的元素类型是 `AHTPlayerCharacter*`，可能表示进入触发区域的玩家角色；不能将它直接解释成“原始受击敌人列表”。这使候选 A 更像具备周期/区域触发能力的 Actor，而不是已证实的伤害后续链式机制。
 
 **候选 B：`UHTAbilitySpawnDamageTriggerActor` 与配置数组组合。**
 
@@ -72,3 +72,20 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 3. 查找是否存在可读的蓝图资产/配置表或其他随 Dump 提供的元数据，确认静态数据实际如何被消费；若当前仓库不含实现体，明确列为证据缺口。
 4. 检查 `5.6.1_new/` 的实际来源。当前指定分支递归树没有此目录；也在 `main`、`recreation/damage-chain-native-20261017`、`recovery/analyze-old-plugin-dll-20261017`、`experiment/damage-chain-legacy-ui-20261017` 与 `feat/damage-chain-reference-ui-20261017` 的树中未找到它。不能因此推断用户本地或其他来源不存在。
 5. 在两套版本的代码与配置都核验之前，不开始改实现。
+
+
+## 参数布局补充（5.6.1）
+
+来源文件：`5.6.1/CppSDK/SDK/HTGame_parameters.hpp`。
+
+- `DamageTriggerActor_OnCharacterDeadChanged`：起始行 20415，参数结构大小 `0x1`；`IsDead` 位于 offset `0x0`，类型 `bool`。
+- `DamageTriggerActor_OnPlayerBeginOverlap`：起始行 20424，参数结构大小 `0x128`；`OverlappedComponent` offset `0x0`、`OtherActor` offset `0x8`、`OtherComp` offset `0x10`、`OtherBodyIndex` offset `0x18`、`bFromSweep` offset `0x1C`、`SweepResult` offset `0x20`（大小 `0x108`）。
+- `DamageTriggerActor_OnPlayerEndOverlap`：起始行 20439，参数结构大小 `0x20`；包含 OverlappedComponent、OtherActor、OtherComp、OtherBodyIndex。
+- `StartTriggerGamePlayEffect`、`K2_OnTriggerPeriodGamePlayEffect` 与 `TriggerPeriodGamePlayEffectEvent` 的类声明为无显式参数函数；声明本身不能证明函数由何种事件调用。
+- `FHTAbilityActorFun_SpawnActors` 位于 `HTGame_structs.hpp:39191`，大小 `0x80`（含基类部分），包含 `SpawnCmdScheduler`、`SpawnActorClass`、`DamageTriggerConfigID`、`EventTag`、`EffectContainer`、`bIsRelateToAbility`。这是另一条“技能扩展结构配置生成 Actor”的结构线索，尚未证明它与 `UHTAbilitySpawnDamageTriggerActor` 在实际调用路径上相连。
+
+## 候选等级调整
+
+- **候选 B（生成配置结构）**：与“生成 Actor + 目标类型 + GameplayEffect 容器 + 配置 ID”的结构对应更直接；目前属于**有证据支持但未验证**。
+- **候选 A（周期/区域触发 Actor）**：周期字段与目标表现有部分对应，但 overlap 跟踪字段保存的是 `AHTPlayerCharacter*`，且没有原生实现体证明它绑定最初受击的敌人；当前应视为**待验证的邻近机制**，不能优先当作最终方案。
+- 要把任一候选提升为实现路线，仍需查清配置数据的实际消费者、目标选取实现与 Actor 创建/销毁生命周期。Dump 的生成函数包装不能替代这些证据。
