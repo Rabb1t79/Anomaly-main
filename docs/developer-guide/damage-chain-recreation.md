@@ -74,3 +74,18 @@ The same route binding flags and call counters are now also included in the runt
 
 
 The first build after the missing-source guard compiled `ue5_nte_adapter.cpp`, `nte_profile_runtime.cpp`, and linked `Anomaly.Core.dll`, but the overall build then failed in the existing post-build staging step because the checkout lacked the empty `assets/images` directory (and also did not track `config/themes`). The branch now preserves both expected empty directories with `.gitkeep`; the next workflow run must confirm that staging completes.
+
+## Dump-verified application entry point
+
+The repository's `5.6.1/CppSDK/SDK/HTGame_classes.hpp` and `HTGame_parameters.hpp` directly define the following candidate entry points:
+
+- `HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass`: reflected parameter buffer size `0x78`. Parameters are `GameplayEffect` (class, 8 bytes), `TargetAbilityCmp` (object, 8), `ModifyData` (`FBufferData`, 0x58), `BuffEventType` (enum, 1), `bUsePredictionKey` (bool, 1), and `ReturnValue` (`FActiveGameplayEffectHandle`, 8).
+- `HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor`: reflected parameter buffer size `0x78`; includes `SourceObj`, `GameplayEffect`, `ModifyData` (`FBufferData`, 0x58), `pTriggerAbilityComp`, and a bool return.
+- `HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor`: reflected parameter buffer size `0x80`; includes explicit world context, source actor, effect class, `FBufferData`, trigger ASC, and bool return.
+- `HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec`: reflected parameter buffer size `0x48`; its `FHTGameplayEffectContainerSpec` is 0x38 and the return `TArray<FActiveGameplayEffectHandle>` is 0x10.
+
+These signatures are directly supported by the checked-in 5.6.1 Dump. They identify possible native application routes, but do not establish which one the original plugin used or that any route is safe to call from the plugin layer. The current implementation only validates and counts reflected calls; it does not invoke them.
+
+## Build verification update
+
+The GitHub Actions Windows job compiled `anomaly_core` and `anomaly_test_host` successfully before failing in its separate legacy plugin-packaging step. The failure is specifically that this branch checkout does not contain `plugins/NteVehicle/plugin.cpp`, while the existing workflow unconditionally tries to compile it. This is a workflow/repository-content mismatch, not evidence that the native route probe compiled successfully in-game or that the plugin works. A dedicated Core-only build workflow is being added so the isolated branch can validate its Core changes without inheriting the unrelated legacy plugin packaging step.
