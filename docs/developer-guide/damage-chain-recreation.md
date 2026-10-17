@@ -89,3 +89,7 @@ These signatures are directly supported by the checked-in 5.6.1 Dump. They ident
 ## Build verification update
 
 The GitHub Actions Windows job compiled `anomaly_core` and `anomaly_test_host` successfully before failing in its separate legacy plugin-packaging step. The failure is specifically that this branch checkout does not contain `plugins/NteVehicle/plugin.cpp`, while the existing workflow unconditionally tries to compile it. This is a workflow/repository-content mismatch, not evidence that the native route probe compiled successfully in-game or that the plugin works. A dedicated Core-only build workflow is being added so the isolated branch can validate its Core changes without inheriting the unrelated legacy plugin packaging step.
+
+## Diagnostic interpretation limits
+
+The new route counters are incremented in the existing ProcessEvent-pre observation path after exact reflected-function validation. They are not native-entry detours. Therefore a positive count confirms that the reflected call passed through ProcessEvent; a zero count means only that no such ProcessEvent call was observed during the sample. It does not exclude direct native calls or another entry point. The counters intentionally do not retain raw `FBufferData` or `FHTGameplayEffectContainerSpec` memory, whose nested engine containers can contain pointer-backed state.
