@@ -35,3 +35,18 @@ The target is the user's old-plugin damage-chain behavior. It is not defined as 
 - `src/game/ue5/ue5_damage_function_hook.cpp` implements the `anomaly.nte.damage-native / character-on-damaged` hook. It observes and forwards the original call; it does not itself establish a supported GameplayEffect re-application route.
 - `profiles/nte/nte-current.json` declares `nte.HTAbilityCharacter.BroadcastCharacterOnDamaged` and layout values including `damageEvent.size = 368` and `damageEvent.damageGEDef = 312`. These are current repository Profile values; they must still be checked against the user's authoritative 5.6.1 Dump before being treated as sufficient for a new invocation path.
 - The current Profile does not, in the inspected function entries, provide a verified GameplayEffect apply entry point for the chain. The next implementation gate is to validate such an entry point and full reflected signature from the provided Dump and the current Anomaly reflection/hook code. Until then, implementing a call based only on the old Replay branch would repeat an unverified assumption.
+
+## First code change: diagnostic-only wrapper observation
+
+Commit `a1b5aa49e516275b37c267edb864c7f9a4591174` adds optional exact-path discovery and a call counter for `/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClass`.
+
+The discovery gate checks the reflected function against the Dump-derived expected signature: parameter buffer size `0x68`, `WorldContextObject` (`ObjectProperty`, 8 bytes), `GameplayEffect` (`ClassProperty`, 8 bytes), and `ModifyData` (`StructProperty`, 0x58 bytes). The new counter records calls only when the exact reflected function binding passes the existing metadata validator.
+
+This is **observation only**. The implementation does not read or retain `ModifyData`, does not call the function, does not add it to any replay whitelist, and does not claim the wrapper carries attacker/target identity. The diagnostic binding-mask bit is `1 << 6`; the call counter is exposed through the internal `NteCombatDiagnosticsSnapshot`.
+
+### Validation still required
+
+- Windows Core build and tests have not yet completed for this commit.
+- In-game occurrence of this wrapper has not been observed yet.
+- A positive count would show only that the function executes; correlation with a specific `FHTDamageEvent` and its `DamageGEDef` remains required.
+- Zero calls would not prove the path is unused, because the call may be absent for the tested attack or may be dispatched through a different native route.
