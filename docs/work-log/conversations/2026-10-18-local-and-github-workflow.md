@@ -188,3 +188,19 @@ Anomaly 主仓库自身规定的完整本机构建需要 Visual Studio 2022 C++ 
 - ZIP 只包含 manifest.json 和 plugin.dll。Manifest 版本 2.0.0-test1；DLL 为 x64 PE/AMD64，大小 71168 bytes；DLL SHA-256：8e173504456c4f7063d2ef3079dd2223b1e49ab5014e75a523903afce9cdcb57。
 - DLL 字符串核验：包含两处 2.0.0-test1，不再包含 1.9.9。包结构及版本标记检查通过。
 - 全框架 Windows run 39080707148 在此记录时仍为 in_progress。旧提交的全框架工作流在 staging guard 处因为实验 Manifest 2.0.0-test1 与正式包固定版本 1.9.8 不一致而失败；当前提交结果尚待确认。
+
+### 助手公开交付答复（最终正文）
+
+已经直接在 GitHub 仓库执行了修改和构建，测试插件包可以先交给你：
+
+[下载修正后的伤害链测试插件 ZIP](sandbox:/mnt/data/NteAttackReplay-cc4b47ab-windows-x64.zip)
+
+本次操作在 `recreation/damage-chain-test-unbounded-ui-20261018` 分支提交 `cc4b47ab16b4fa9f17f756003816609e379ffe0b`，只修正插件启动日志和 ABI 描述符中的版本字符串，让它们与 Manifest 的 `2.0.0-test1` 一致，没有改动伤害链调用逻辑。GitHub Actions 插件构建通过：`39080707154`。
+
+我已重新核验 ZIP：里面只有 `manifest.json` 与 `plugin.dll`；DLL 是 AMD64/x64 PE，两个版本标记是 `2.0.0-test1`，不再含旧版本 `1.9.9`。ZIP SHA-256：`01d519863e5c4e624a7ebd78df6104cd52f3106e047ac911af1a143b755f5bfc`。
+
+整套 Windows/Core/Runtime 工作流 `39080707148` 在最后一次检查时仍处于 `Build` 阶段，暂时没有最终结果。此前相邻版本的工作流确实因正式 Runtime 的版本保护规则拒绝实验版 Manifest 而失败；我没有为了让 CI 变绿而把实验插件塞进正式 Runtime。这个包的游戏内加载、实际伤害行为和与旧 DLL 的机制一致性仍未验证。
+
+相关提交： https://github.com/Rabb1t79/Anomaly-main/commit/cc4b47ab16b4fa9f17f756003816609e379ffe0b
+插件构建： https://github.com/Rabb1t79/Anomaly-main/actions/runs/39080707154
+完整 Windows 构建： https://github.com/Rabb1t79/Anomaly-main/actions/runs/39080707148
