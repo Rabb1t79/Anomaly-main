@@ -91,3 +91,34 @@ Codex 桌面端可能要求额外验证手机号；这项要求与普通 ChatGPT
 3. 若 CLI 仍受验证阻塞，则评估以 GitHub Actions + Windows self-hosted runner 作为本地执行/构建的替代方案；要明确它提供的是本地执行能力，不等同于 ChatGPT 任意访问用户硬盘。
 4. 暂不修改任何插件源代码；当前工作只针对协作环境和可持续交付流程。
 
+
+
+## 补录：本次公开进度消息
+
+### 助手公开消息 A
+
+那就先把 Codex 桌面端这条路标记为“被手机号验证拦住”，不再让你反复点进去试。我们保留已经连通的 GitHub 路线，另找不依赖这个网页验证的本地开发办法；我先核实官方目前支持哪些替代入口，以及手机号提示到底意味着什么。
+
+### 助手公开消息 B
+
+记得，而且这次我会按你已经定下的方式执行：以 Rabb1t79/Anomaly-main 为当前仓库；优先用 GitHub Actions 构建并给你可验证的产物；不假称我能直接访问你的 Windows 硬盘；NTE 功能实现仍严格遵守你限定的 Anomaly、DUMP 5.6.1 和你明确提供的资料，不拿通用 UE5 说法补空白。我先核实仓库现有自动构建能力，再确认不依赖这次手机号验证的本地工作替代路径。
+
+## 本轮最终答复（完整正文）
+
+我已经实际开始了，不只是给方案。
+
+**B 已经通过一次真实写入测试。** 我在 Rabb1t79/Anomaly-main 的 main 分支新建了本段对话记录，更新了工作记录索引和 2026-10-18 日期进度，并重新读取三个文件核验内容存在。当前文件包括：
+
+- 本次对话记录： https://github.com/Rabb1t79/Anomaly-main/blob/main/docs/work-log/conversations/2026-10-18-local-and-github-workflow.md
+- 工作记录索引： https://github.com/Rabb1t79/Anomaly-main/blob/main/docs/work-log/README.md
+- 日期进度： https://github.com/Rabb1t79/Anomaly-main/blob/main/docs/work-log/2026-10-18.md
+
+这证明当前 GitHub 连接至少可以完成受控的仓库写入和读取核验。后续代码改动、分支、提交和 PR 仍会逐项核实；本轮没有改动插件源代码。
+
+**A 的下一步只做一个很小的本地检查。** OpenAI 官方 Codex CLI 文档说明，CLI 可以在本地项目目录读取/修改文件并运行已有开发工具，且支持选择 ChatGPT 登录；但官方资料没有保证 CLI 一定不会遇到相同手机号验证。因此我们只尝试一次，不重复走桌面端入口。如果 CLI 也被同一验证拦住，就停止该路线。
+
+请在 Windows PowerShell 中运行： node -v; npm -v
+
+这只是查看 Node.js 和 npm 是否已经存在，不会修改项目文件，也不需要 Visual Studio 构建工具。把输出原样发我，我再根据实际结果给你下一步；如果这两条命令不存在，也不用自行搜索安装步骤。
+
+Anomaly 主仓库自身规定的完整本机构建需要 Visual Studio 2022 C++ 生成工具、Windows SDK、CMake 和 PowerShell 7+。考虑到你此前说明的本地空间和工具链限制，框架构建仍优先采用 GitHub Actions，不要求你为了 A 先装完整 VS2022 环境。
