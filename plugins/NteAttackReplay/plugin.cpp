@@ -273,8 +273,8 @@ void AppendReplayDiagnosticLog(
         line += std::to_string(status_code);
         line += " damage_sequence=";
         line += std::to_string(context.captured_damage_sequence);
-        line += " interval_frames=";
-        line += std::to_string(context.replay_interval_frames);
+        line += " rate_per_second=";
+        line += std::to_string(context.replay_rate_per_second);
         line += " target=";
         line += context.captured_target_path.empty()
             ? "(unknown)" : context.captured_target_path;
@@ -526,7 +526,6 @@ void ArmForNextAttack(Context& context) {
     context.captured_damage_source_name.clear();
     context.replay_damage_cursor = 0;
     context.replay_damage_deadline = {};
-    context.replay_last_tick = 0;
     context.waiting_for_damage = false;
     context.status = context.enabled
         ? "自动等待玩家下一次攻击"
@@ -814,7 +813,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
-    context->replay_interval_frames = 1;
+    context->replay_rate_per_second = 1;
     context->replay_done = 0;
     context->replay_last_tick = 0;
     context->replaying = false;
@@ -886,8 +885,6 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         }
     }
 
-    const uint64_t current_tick = context->framework->tick_sequence(
-        context->framework->user);
     if (!context->replaying) return;
 
     const auto now = std::chrono::steady_clock::now();
