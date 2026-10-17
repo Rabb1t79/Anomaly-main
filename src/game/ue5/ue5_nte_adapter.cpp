@@ -1279,10 +1279,17 @@ struct Ue5NteAdapter::State {
         std::uintptr_t replay_apply_to_target{};
         std::uintptr_t replay_activate_by_actor{};
         std::uintptr_t replay_server_activate_by_actor{};
+        // Observation-only routes from the native Dump. They are never replayed.
+        std::uintptr_t observe_activate_game_effects{};
+        std::uintptr_t observe_apply_effect_container_spec{};
+        std::uintptr_t observe_apply_external_effect_container_spec{};
+        std::uintptr_t observe_server_apply_trace_projectile_results{};
     };
     // Counts are ingress observations, not deduplicated native calls: one invocation may
     // be seen by ActorProcessEvent, UObject ProcessEvent and Native Exec independently.
     std::array<std::atomic<std::uint64_t>, 4> replay_entrypoint_observation_counts{};
+    // Observation-only UFunction ProcessEvent counts; no arguments are read or replayed.
+    std::array<std::atomic<std::uint64_t>, 4> replay_candidate_observation_counts{};
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
     std::array<CombatCaptureBindings, 2> combat_capture_binding_slots{};
@@ -6944,9 +6951,19 @@ struct Ue5NteAdapter::State {
                  bindings->replay_activate_by_actor != 0);
             if (replay_effect_call_count != 0) {
                 try {
+                    const std::string observation_summary =
+                        "observation_counts={K2_ActivateGameEffectsWithClass=" +
+                        std::to_string(replay_candidate_observation_counts[0].load(std::memory_order_relaxed)) +
+                        ",HTGameplayAbility.ApplyEffectContainerSpec=" +
+                        std::to_string(replay_candidate_observation_counts[1].load(std::memory_order_relaxed)) +
+                        ",HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec=" +
+                        std::to_string(replay_candidate_observation_counts[2].load(std::memory_order_relaxed)) +
+                        ",HTAbilitySystemComponent.ServerApplyTraceProjectileResults=" +
+                        std::to_string(replay_candidate_observation_counts[3].load(std::memory_order_relaxed)) +
+                        "}; observer_validation={" + replay_entrypoint_diagnostics + "}";
                     const std::string diagnostic =
                         "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and bounded past Game-Tick window; match diagnostics: " +
-                        replay_match_diagnostics.Summary();
+                        replay_match_diagnostics.Summary() + "; " + observation_summary;
                     return Status(ANOMALY_STATUS_V1_UNAVAILABLE, diagnostic.c_str());
                 } catch (...) {
                     return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
@@ -12900,6 +12917,65 @@ struct Ue5NteAdapter::State {
                         "; Character server RPC: " +
                         (next_capture_bindings.replay_server_activate_by_actor != 0
                             ? std::string("validated") : replay_server_character_failure);
+
+                    // These routes are observed only to test whether the current four-route
+                    // replay matcher is missing a real damage-application path. We require
+                    // exact Dump path, live Function class/owner/name and ParmsSize. No
+                    // candidate parameters are read, and none of these routes is replayed.
+                    const auto bind_observation_only = [&](const wchar_t* const path,
+                        const std::string_view expected_owner,
+                        const std::string_view expected_name,
+                        const std::uint16_t expected_parms_size,
+                        std::uintptr_t& destination) {
+                        destination = 0;
+                        std::uintptr_t candidate{}, function_class{}, outer{};
+                        std::string class_name, outer_name, function_name;
+                        std::uint16_t parms_size{};
+                        if (!FindExactObjectLocked(path, candidate) ||
+                            !ReadPointerAt(*memory, candidate, Layout(profile, "object.class"),
+                                function_class) ||
+                            !ReadPointerAt(*memory, candidate, Layout(profile, "object.outer"), outer) ||
+                            !ReadReflectedObjectNameLocked(function_class, class_name) ||
+                            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+                            !ReadReflectedObjectNameLocked(candidate, function_name) ||
+                            !ReadValue(*memory, candidate + Layout(profile, "ufunction.parmsSize"),
+                                parms_size) ||
+                            class_name != "Function" || outer_name != expected_owner ||
+                            function_name != expected_name || parms_size != expected_parms_size) {
+                            return false;
+                        }
+                        destination = candidate;
+                        return true;
+                    };
+                    const bool observe_activate_game_effects_valid =
+                        bind_observation_only(
+                            L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClass",
+                            "HTAbilityCharacter", "K2_ActivateGameEffectsWithClass", 0x68U,
+                            next_capture_bindings.observe_activate_game_effects);
+                    const bool observe_apply_effect_container_valid =
+                        bind_observation_only(
+                            L"/Script/HTGame.HTGameplayAbility.ApplyEffectContainerSpec",
+                            "HTGameplayAbility", "ApplyEffectContainerSpec", 0x48U,
+                            next_capture_bindings.observe_apply_effect_container_spec);
+                    const bool observe_external_effect_container_valid =
+                        bind_observation_only(
+                            L"/Script/HTGame.HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec",
+                            "HTAbilitySystemBlueprintLibrary", "ApplyExternalEffectContainerSpec", 0x48U,
+                            next_capture_bindings.observe_apply_external_effect_container_spec);
+                    const bool observe_trace_projectile_results_valid =
+                        bind_observation_only(
+                            L"/Script/HTGame.HTAbilitySystemComponent.ServerApplyTraceProjectileResults",
+                            "HTAbilitySystemComponent", "ServerApplyTraceProjectileResults", 0xE8U,
+                            next_capture_bindings.observe_server_apply_trace_projectile_results);
+                    replay_entrypoint_diagnostics +=
+                        "; observation-only routes: K2_ActivateGameEffectsWithClass=" +
+                        std::string(observe_activate_game_effects_valid ? "validated" : "unavailable/signature-mismatch") +
+                        ", HTGameplayAbility.ApplyEffectContainerSpec=" +
+                        (observe_apply_effect_container_valid ? "validated" : "unavailable/signature-mismatch") +
+                        ", HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec=" +
+                        (observe_external_effect_container_valid ? "validated" : "unavailable/signature-mismatch") +
+                        ", HTAbilitySystemComponent.ServerApplyTraceProjectileResults=" +
+                        (observe_trace_projectile_results_valid ? "validated" : "unavailable/signature-mismatch");
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
@@ -19673,6 +19749,15 @@ void Ue5NteAdapter::OnProcessEventPre(
         state->EnqueueCombatProcessEvent(
             *combat_bindings, object, function, parameters,
             kCombatCaptureIngressProcessEvent);
+        if (function == combat_bindings->observe_activate_game_effects) {
+            state->replay_candidate_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->observe_apply_effect_container_spec) {
+            state->replay_candidate_observation_counts[1].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->observe_apply_external_effect_container_spec) {
+            state->replay_candidate_observation_counts[2].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->observe_server_apply_trace_projectile_results) {
+            state->replay_candidate_observation_counts[3].fetch_add(1, std::memory_order_relaxed);
+        }
     }
     const auto endpoint = state->process_event_endpoint.load(std::memory_order_acquire);
     if (endpoint) endpoint->Dispatch(object, function, parameters);
