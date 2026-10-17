@@ -143,10 +143,10 @@
 | `5.6.1/CppSDK/UtfN.hpp` | .hpp | 52907 | `4ca886f6196280d4ccfc218f3611560562471b65` | 正文尚未逐句审阅；C/C++ 头文件，职责待正文确认。 |
 | `5.6.1/Dumpspace/ClassesInfo.json` | .json | 6828863 | `534c6416093b538190ce939e3b28dc886fdec7f3` | 正文尚未逐句审阅；Dumpspace 类元数据，schema 待核验。 |
 | `5.6.1/Dumpspace/EnumsInfo.json` | .json | 778763 | `f3e2ca708aea1e918f6d65f0b6e528b7fc91408b` | 正文尚未逐句审阅；Dumpspace 枚举元数据，枚举项和值待核验。 |
-| `5.6.1/Dumpspace/FunctionsInfo.json` | .json | 7278008 | `77f814d20c38455538d2ae3224a02a023c353e7e` | 正文尚未逐句审阅；Dumpspace 函数元数据，owner/参数字段待核验。 |
+| `5.6.1/Dumpspace/FunctionsInfo.json` | .json | 7278008 | `77f814d20c38455538d2ae3224a02a023c353e7e` | 正文已读：已核验 ADamageTriggerActor 17 个函数元数据及 AHTAbilityCharacter::OnDamaged 的 owner/签名/flags。 |
 | `5.6.1/Dumpspace/OffsetsInfo.json` | .json | 327 | `32f04a7dc01a06eef454e11c0e53bea286c70446` | 正文尚未逐句审阅；Dumpspace 偏移元数据，覆盖范围待核验。 |
 | `5.6.1/Dumpspace/StructsInfo.json` | .json | 4133541 | `3655aa097cb8619db5bf6fff58abfbc3e6258fcb` | 正文尚未逐句审阅；Dumpspace 结构元数据，成员布局待核验。 |
 | `5.6.1/GObjects-Dump-WithProperties.txt` | .txt | 67918366 | `e6298c731030c224e7eea5e4014b8183769f7e9d` | 正文尚未逐句审阅；对象/属性转储文本，应按类名、属性名和路径分段检索。 |
-| `5.6.1/GObjects-Dump.txt` | .txt | 54503682 | `4ea559ff564c3c68bcba226368e8839b4dee0034` | 正文尚未逐句审阅；对象/属性转储文本，应按类名、属性名和路径分段检索。 |
+| `5.6.1/GObjects-Dump.txt` | .txt | 54503682 | `4ea559ff564c3c68bcba226368e8839b4dee0034` | 正文已读：已逐行检索 DamageTriggerActorDataTable、HTAbilitySpawnDamageTriggerActor、相关能力资产路径与 OnDamaged 反射对象。 |
 | `5.6.1/IDAMappings/5.6.1-0+UE5-HT.idmap` | .idmap | 15143755 | `eed04d9e92d427fceea645f6e680bc11bda4376b` | 正文尚未逐句审阅；IDA 映射材料，地址/符号含义待核验。 |
 | `5.6.1/Mappings/5.6.1-0+UE5-HT.usmap` | .usmap | 1357493 | `8466ba4efe8a9ada68ddee9b31aa34c366c62df9` | 正文尚未逐句审阅；Mappings 目录映射材料，映射规则待核验。 |

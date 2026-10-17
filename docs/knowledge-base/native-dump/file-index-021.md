@@ -114,10 +114,10 @@
 | `5.6.1-new/CppSDK/SDK/HTFish_AnimInterface_classes.hpp` | .hpp | 129 | `1b030c7f716ed5903071c67e5f89f9ac045ae750` | Git LFS 指针，真实正文未读取；类声明、继承、属性及函数声明；需读正文确认。 |
 | `5.6.1-new/CppSDK/SDK/HTFish_AnimInterface_functions.cpp` | .cpp | 129 | `e4a5dccec019cd131c68bb779960939ed848d129` | Git LFS 指针，真实正文未读取；函数包装/调用实现；实际目标和参数传递需核验。 |
 | `5.6.1-new/CppSDK/SDK/HTFish_AnimInterface_parameters.hpp` | .hpp | 129 | `e5eaa46e0c0e1b82e0a599369e3107dad5504586` | Git LFS 指针，真实正文未读取；函数参数结构；顺序、大小及返回值布局需核验。 |
-| `5.6.1-new/CppSDK/SDK/HTGame_classes.hpp` | .hpp | 133 | `e04306bb8fb17517ef60947051d9ef95df00f46c` | Git LFS 指针，真实正文未读取；类声明、继承、属性及函数声明；需读正文确认。 |
-| `5.6.1-new/CppSDK/SDK/HTGame_functions.cpp` | .cpp | 133 | `3300204a7945a42ea19305ec61661457d391774d` | Git LFS 指针，真实正文未读取；函数包装/调用实现；实际目标和参数传递需核验。 |
-| `5.6.1-new/CppSDK/SDK/HTGame_parameters.hpp` | .hpp | 133 | `224ee64172d9c08cbae0ebdd08348579ca30ec5c` | Git LFS 指针，真实正文未读取；函数参数结构；顺序、大小及返回值布局需核验。 |
-| `5.6.1-new/CppSDK/SDK/HTGame_structs.hpp` | .hpp | 132 | `ae2ff2efcf38a7a0111a690a2aea02fd8f131370` | Git LFS 指针，真实正文未读取；结构体/枚举布局；成员和偏移需读正文确认。 |
+| `5.6.1-new/CppSDK/SDK/HTGame_classes.hpp` | .hpp | 133 | `e04306bb8fb17517ef60947051d9ef95df00f46c` | Git LFS 指针仍位于当前 main；已读取同仓库 LFS 转换前历史实体 blob，候选类段对照见 version-diff.md。 |
+| `5.6.1-new/CppSDK/SDK/HTGame_functions.cpp` | .cpp | 133 | `3300204a7945a42ea19305ec61661457d391774d` | Git LFS 指针仍位于当前 main；历史实体 blob 已读，且与 5.6.1 包装文件 SHA 相同。 |
+| `5.6.1-new/CppSDK/SDK/HTGame_parameters.hpp` | .hpp | 133 | `224ee64172d9c08cbae0ebdd08348579ca30ec5c` | Git LFS 指针仍位于当前 main；历史实体 blob 已读，且与 5.6.1 参数文件 SHA 相同。 |
+| `5.6.1-new/CppSDK/SDK/HTGame_structs.hpp` | .hpp | 132 | `ae2ff2efcf38a7a0111a690a2aea02fd8f131370` | Git LFS 指针仍位于当前 main；已读取同仓库 LFS 转换前历史实体 blob，候选结构段对照见 version-diff.md。 |
 | `5.6.1-new/CppSDK/SDK/HTMonsterAnimLayerInterface_classes.hpp` | .hpp | 129 | `ba34cedb22dca83c932e4d3c9139c203a922e734` | Git LFS 指针，真实正文未读取；类声明、继承、属性及函数声明；需读正文确认。 |
 | `5.6.1-new/CppSDK/SDK/HTMonsterAnimLayerInterface_functions.cpp` | .cpp | 129 | `ee58c9ec6e58d7628ca6fe25834d470100551ddf` | Git LFS 指针，真实正文未读取；函数包装/调用实现；实际目标和参数传递需核验。 |
 | `5.6.1-new/CppSDK/SDK/HTMonsterAnimLayerInterface_parameters.hpp` | .hpp | 128 | `fc37f82a923b633e3b1159e77be9fb3661aa59f8` | Git LFS 指针，真实正文未读取；函数参数结构；顺序、大小及返回值布局需核验。 |

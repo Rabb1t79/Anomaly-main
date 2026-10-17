@@ -32,7 +32,7 @@
 | `5.6.1-new/CppSDK/UtfN.hpp` | .hpp | 130 | `fb5024870527cda6a3548b612fcb70c5e15cecda` | Git LFS 指针，真实正文未读取；C/C++ 头文件，职责待正文确认。 |
 | `5.6.1-new/Dumpspace/ClassesInfo.json` | .json | 132 | `0ae51b580424610873c1da94a8ca3557658a0aa0` | Git LFS 指针，真实正文未读取；Dumpspace 类元数据，schema 待核验。 |
 | `5.6.1-new/Dumpspace/EnumsInfo.json` | .json | 131 | `ac2e566138c3254501cc797b49e014e4bcf2ef9f` | Git LFS 指针，真实正文未读取；Dumpspace 枚举元数据，枚举项和值待核验。 |
-| `5.6.1-new/Dumpspace/FunctionsInfo.json` | .json | 132 | `f370e71f8cbbb5ee37e5d67ec9714c11b5831f15` | Git LFS 指针，真实正文未读取；Dumpspace 函数元数据，owner/参数字段待核验。 |
+| `5.6.1-new/Dumpspace/FunctionsInfo.json` | .json | 132 | `f370e71f8cbbb5ee37e5d67ec9714c11b5831f15` | Git LFS 指针仍位于当前 main；已读取同仓库历史实体 blob，并对 ADamageTriggerActor 函数元数据做了规范化比较。 |
 | `5.6.1-new/Dumpspace/OffsetsInfo.json` | .json | 128 | `6242e83534a0befd70c18e02c522492bed1bf17f` | Git LFS 指针，真实正文未读取；Dumpspace 偏移元数据，覆盖范围待核验。 |
 | `5.6.1-new/Dumpspace/StructsInfo.json` | .json | 132 | `ee35c1d3977be98a085f859dc40b79decce7bfed` | Git LFS 指针，真实正文未读取；Dumpspace 结构元数据，成员布局待核验。 |
 | `5.6.1-new/GObjects-Dump-WithProperties.txt` | .txt | 133 | `1a162860eb5a3da878d0246699f7eb511e43ccb8` | Git LFS 指针，真实正文未读取；对象/属性转储文本，应按类名、属性名和路径分段检索。 |

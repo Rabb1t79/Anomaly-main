@@ -147,10 +147,10 @@
 | `5.6.1/CppSDK/SDK/HTFish_AnimInterface_classes.hpp` | .hpp | 1079 | `0f7af4d3d6b25b5097618e9294be8aa2e9792019` | 正文尚未逐句审阅；类声明、继承、属性及函数声明；需读正文确认。 |
 | `5.6.1/CppSDK/SDK/HTFish_AnimInterface_functions.cpp` | .cpp | 2137 | `5c11d0a9fe6ee6badac3e4823f5d9ca3ae099c40` | 正文尚未逐句审阅；函数包装/调用实现；实际目标和参数传递需核验。 |
 | `5.6.1/CppSDK/SDK/HTFish_AnimInterface_parameters.hpp` | .hpp | 1353 | `7d995c06d6a53009a30dea6e3e171754e8bde00d` | 正文尚未逐句审阅；函数参数结构；顺序、大小及返回值布局需核验。 |
-| `5.6.1/CppSDK/SDK/HTGame_classes.hpp` | .hpp | 15272896 | `526091ab6679ac6833634e5a6d08d807e90dbf0c` | 正文尚未逐句审阅；类声明、继承、属性及函数声明；需读正文确认。 |
-| `5.6.1/CppSDK/SDK/HTGame_functions.cpp` | .cpp | 18023451 | `c0a5f1dfa3540ab656d18578950d02e4de522ef2` | 正文尚未逐句审阅；函数包装/调用实现；实际目标和参数传递需核验。 |
-| `5.6.1/CppSDK/SDK/HTGame_parameters.hpp` | .hpp | 10586234 | `b839b1a326e90ad3ac1c598f6bbca6b6eee465e1` | 正文尚未逐句审阅；函数参数结构；顺序、大小及返回值布局需核验。 |
-| `5.6.1/CppSDK/SDK/HTGame_structs.hpp` | .hpp | 6879049 | `cc6781d70b782a0e3ec6cf06dfbd75f323f04a53` | 正文尚未逐句审阅；结构体/枚举布局；成员和偏移需读正文确认。 |
+| `5.6.1/CppSDK/SDK/HTGame_classes.hpp` | .hpp | 15272896 | `526091ab6679ac6833634e5a6d08d807e90dbf0c` | 正文已读：已逐段核验 ADamageTriggerActor、UHTAbilitySpawnDamageTriggerActor、UFindSpawnLocationObj_Target、AHTAbilityCharacter；详见专题注释。 |
+| `5.6.1/CppSDK/SDK/HTGame_functions.cpp` | .cpp | 18023451 | `c0a5f1dfa3540ab656d18578950d02e4de522ef2` | 正文已读：已核验 StartTriggerGamePlayEffect 与 OnDamaged 的生成 ProcessEvent 包装；包装不是原生函数体。 |
+| `5.6.1/CppSDK/SDK/HTGame_parameters.hpp` | .hpp | 10586234 | `b839b1a326e90ad3ac1c598f6bbca6b6eee465e1` | 正文已读：已核验 DamageTriggerActor 重叠/死亡/吸收函数与 HTAbilityCharacter_OnDamaged 参数结构。 |
+| `5.6.1/CppSDK/SDK/HTGame_structs.hpp` | .hpp | 6879049 | `cc6781d70b782a0e3ec6cf06dfbd75f323f04a53` | 正文已读：已核验 FHTGameplayEffectContainer、FSpawnDamageTriggerActor、FSpawnDamageTriggerActorArray、FDamageTriggerActorStaticData、FHTDamageEvent、FHTGameplayEffectContext。 |
 | `5.6.1/CppSDK/SDK/HTMonsterAnimLayerInterface_classes.hpp` | .hpp | 1056 | `fd18c90dde8bd1b28f51621cada74b24aa007bfb` | 正文尚未逐句审阅；类声明、继承、属性及函数声明；需读正文确认。 |
 | `5.6.1/CppSDK/SDK/HTMonsterAnimLayerInterface_functions.cpp` | .cpp | 1290 | `4868d4588be8ac3de6322f6ecada42f7194de129` | 正文尚未逐句审阅；函数包装/调用实现；实际目标和参数传递需核验。 |
 | `5.6.1/CppSDK/SDK/HTMonsterAnimLayerInterface_parameters.hpp` | .hpp | 857 | `e92d44294858b3fe8323ba19a1216ab1ed3ef514` | 正文尚未逐句审阅；函数参数结构；顺序、大小及返回值布局需核验。 |
