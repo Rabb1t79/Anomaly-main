@@ -19931,9 +19931,9 @@ std::string Ue5NteAdapter::CombatEventsJson(const bool buffs_only) const {
         result += ",\"observerOnlyProcessEventObservations\":{";
         for (std::size_t index{}; index < observer_only_names.size(); ++index) {
             if (index != 0) result.push_back(',');
-            result += "\\"";
+            result += "\"";
             result += observer_only_names[index];
-            result += "\\":";
+            result += "\":";
             result += std::to_string(state->observer_only_observation_counts[index].load(std::memory_order_relaxed));
         }
         result += "}";
