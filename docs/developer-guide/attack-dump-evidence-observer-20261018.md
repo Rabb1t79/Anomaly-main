@@ -21,7 +21,7 @@
 
 ### 伤害事件
 
-`5.6.1/CppSDK/SDK/HTGame_structs.hpp` 直接显示 `FHTDamageEvent` 总大小为 `0x170`，基类为 `FPointDamageEvent`，`DamageGEDef` 位于 `0x138`（大小 `0x8`），`DamageTags` 位于 `0x148`（大小 `0x20`）。`Damage` 的 `0x10` 偏移仍沿用既有审计记录，本轮尚未在对应引擎结构定义中单独复核。`HTAbilityCharacter.OnDamaged` 的声明包含 `DamageAmount`、`HitInfo`、`DamageTags`、`DamageGameplayEffect`、`InstigatorCharacter` 和 `DamageCauser`。同一类声明中还存在 `CharacterOnDamaged` 多播委托；它与反射函数 `OnDamaged` 是不同载体，不能混为同一接口。
+`5.6.1/CppSDK/SDK/HTGame_structs.hpp` 直接显示 `FHTDamageEvent` 总大小为 `0x170`，基类为 `FPointDamageEvent`，`DamageGEDef` 位于 `0x138`（大小 `0x8`），`DamageTags` 位于 `0x148`（大小 `0x20`）。`5.6.1/CppSDK/SDK/Engine_structs.hpp` 直接显示基类 `FPointDamageEvent::Damage` 位于 `0x10`（大小 `0x4`），因此 `Damage`、`DamageGEDef`、`DamageTags` 三个字段的偏移本轮均已直接核验。`5.6.1/CppSDK/SDK/HTGame_parameters.hpp` 直接显示 `HTAbilityCharacter.OnDamaged` 参数块大小为 `0x148`：`DamageAmount` `0x00/0x04`、`HitInfo` `0x08/0x108`、`DamageTags` `0x110/0x20`、`DamageGameplayEffect` `0x130/0x08`、`InstigatorCharacter` `0x138/0x08`、`DamageCauser` `0x140/0x08`。同一类声明中还存在 `CharacterOnDamaged` 多播委托；它与反射函数 `OnDamaged` 是不同载体，不能混为同一接口。
 
 ### 当前已绑定的四类 GameplayEffect 入口
 
