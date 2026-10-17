@@ -19608,11 +19608,20 @@ void Ue5NteAdapter::OnActorProcessEventPre(
         return;
     }
     const auto* const bindings = state->combat_capture_bindings.load(std::memory_order_acquire);
-    if (bindings == nullptr ||
-        (function != bindings->replay_apply_by_actor &&
-         function != bindings->replay_apply_to_target &&
-         function != bindings->replay_activate_by_actor &&
-         function != bindings->replay_server_activate_by_actor)) {
+    if (bindings == nullptr) return;
+
+    // Candidate functions are count-only observations. Do not read their parameter
+    // buffers or install replay-capture suppression frames without layout validation.
+    for (std::size_t index{}; index < bindings->observer_only_functions.size(); ++index) {
+        if (bindings->observer_only_functions[index] == function && function != 0) {
+            state->observer_only_observation_counts[index].fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    if (function != bindings->replay_apply_by_actor &&
+        function != bindings->replay_apply_to_target &&
+        function != bindings->replay_activate_by_actor &&
+        function != bindings->replay_server_activate_by_actor) {
         return;
     }
 
