@@ -124,3 +124,13 @@
 - **下一步：** 继续核对可读的原生类、配置/资产引用和 Anomaly 当前合法桥接边界；在新版 LFS 正文未可读前，不宣称完成版本差异对照，不改实现源码，不新增 ABI。
 
 - 协作规则清理：已从 `AGENTS.md` 的活动规则中移除 Vehicle 载具实现要求，仅保留“Vehicle 已完结、除非用户重新提出否则不重开”的状态说明。
+
+
+### Anomaly 合法桥接路径复核（本轮新增）
+
+- `include/anomaly/sdk/services/ue5.h`，Blob SHA `8ed83052b06928ae584a684060e7520d1c95c6ea`：公开 `anomaly.ue5.process-event` 服务只提供订阅/取消订阅；`anomaly.ue5.objects` 提供对象快照与 `find_exact`；Framework 服务提供 Game 线程 ID、Tick 序号与线程检查。这里没有公开通用 `ProcessEvent` 调用或 Actor 创建函数。
+- `include/anomaly/sdk/services/nte.h`，Blob SHA `0833833bcb4b1d5ce9dc2ac8bbf8a4c49908e22a`：NTE Actors 服务提供缓存帧、快照和受限属性读取；Combat 服务提供伤害事件读取。现有 `anomaly.nte.damage-replay` 明确属于已捕获 GameplayEffect 调用的重放服务，本任务不把它预设为实现路线。
+- `src/game/ue5/ue5_process_event.cpp`，Blob SHA `5d7a0a1025b55360fd4b26f7ebd52ef37595e643`：Core 内部存在 `CreateUe5ProcessEventInvoker`，前置条件包括 `ValidateProcessEventAbi`。
+- `src/game/ue5/ue5_nte_adapter.cpp`，Blob SHA `a7c0c7158f15d2cfa8e1d986a35933da5d00f001`，第 11,547 行附近：Core 内部存在经过反射参数布局校验的 `GameplayStatics.BeginDeferredActorSpawnFromClass` / `FinishSpawningActor` 调用路径；该具体函数最终要求 spawned object 通过 Vehicle 类型和 Owner 后置条件。它证明 Core 内部有受约束的原生反射调用/延迟生成先例，但不等于插件已有可调用的通用 Actor spawn ABI，也不证明可直接用于 `ADamageTriggerActor`。
+- **当前桥接结论：** 公开 ABI 没有现成的通用 Actor 创建/函数调用入口；Core 内部有经过 Profile/反射 ABI 校验的调用原语与专用生成实现。若 Dump 后续足以证实 DamageTriggerActor 路线，应优先评估新增窄范围、具名、capability 受限的 Core/ABI 服务，逐项验证类/函数 owner、参数布局、SpawnConfigID/数据表读取、目标绑定、Game 线程、对象代际、生命周期和失败后置条件；不开放无约束的通用反射调用，不新增 ABI，直到上述路线证据充分。
+- 本轮只核验并记录接口，不改 Core/ABI/插件源码，不构建。Vehicle 已完结；其既有内部代码只作为 Core 结构证据，不重新开启 Vehicle 任务。
