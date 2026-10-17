@@ -8335,10 +8335,12 @@ struct Ue5NteAdapter::State {
         const auto array_struct_field = [&](const std::string_view field_name,
                                             const std::uint16_t size,
                                             const std::uint16_t offset,
+                                            const std::uint16_t expected_element_size,
                                             const std::string_view expected_structure) {
             if (!field(field_name, "ArrayProperty", size, offset)) return false;
             ReflectedPropertyInfo property;
             std::uintptr_t inner{}, inner_structure{};
+            std::int32_t inner_element_size{};
             std::string inner_type, structure_name;
             if (!FindReflectedPropertyLocked(function, field_name, property, false) ||
                 !ReadPointerAt(*memory, property.property,
@@ -8346,14 +8348,56 @@ struct Ue5NteAdapter::State {
                 inner == 0 ||
                 !ReadReflectedFieldClassNameLocked(inner, inner_type) ||
                 inner_type != "StructProperty" ||
+                !ReadValue(*memory, inner + Layout(profile, "fproperty.elementSize"),
+                    inner_element_size) ||
+                inner_element_size != expected_element_size ||
                 !ReadPointerAt(*memory, inner,
                     Layout(profile, "fstructProperty.struct"), inner_structure) ||
                 inner_structure == 0 ||
                 !ReadReflectedObjectNameLocked(inner_structure, structure_name) ||
                 structure_name != expected_structure) {
                 return fail("array field " + std::string(field_name) +
-                    " has unexpected or unreadable inner struct type; expected " +
-                    std::string(expected_structure));
+                    " has unexpected or unreadable inner struct type/size; expected " +
+                    std::string(expected_structure) + " size=" +
+                    std::to_string(expected_element_size));
+            }
+            return true;
+        };
+        const auto class_field = [&](const std::string_view field_name,
+                                     const std::uint16_t offset,
+                                     const std::string_view expected_meta_class) {
+            if (!field(field_name, "ClassProperty", 0x08, offset)) return false;
+            ReflectedPropertyInfo property;
+            std::uintptr_t meta_class{};
+            std::string meta_class_name;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false) ||
+                !ReadPointerAt(*memory, property.property,
+                    Layout(profile, "fclassProperty.metaClass"), meta_class) ||
+                meta_class == 0 ||
+                !ReadReflectedObjectNameLocked(meta_class, meta_class_name) ||
+                meta_class_name != expected_meta_class) {
+                return fail("class field " + std::string(field_name) +
+                    " has unexpected or unreadable meta-class; expected " +
+                    std::string(expected_meta_class));
+            }
+            return true;
+        };
+        const auto object_field = [&](const std::string_view field_name,
+                                      const std::uint16_t offset,
+                                      const std::string_view expected_class) {
+            if (!field(field_name, "ObjectProperty", 0x08, offset)) return false;
+            ReflectedPropertyInfo property;
+            std::uintptr_t property_class{};
+            std::string property_class_name;
+            if (!FindReflectedPropertyLocked(function, field_name, property, false) ||
+                !ReadPointerAt(*memory, property.property,
+                    Layout(profile, "fobjectProperty.propertyClass"), property_class) ||
+                property_class == 0 ||
+                !ReadReflectedObjectNameLocked(property_class, property_class_name) ||
+                property_class_name != expected_class) {
+                return fail("object field " + std::string(field_name) +
+                    " has unexpected or unreadable object class; expected " +
+                    std::string(expected_class));
             }
             return true;
         };
@@ -8361,27 +8405,27 @@ struct Ue5NteAdapter::State {
         switch (index) {
         case 0:
             return field("WorldContextObject", "ObjectProperty", 8, 0x00) &&
-                field("GameplayEffect", "ClassProperty", 8, 0x08) &&
+                class_field("GameplayEffect", 0x08, "GameplayEffect") &&
                 struct_field("ModifyData", 0x58, 0x10, "BufferData");
         case 1:
         case 2:
             return struct_field("ContainerSpec", 0x38, 0x00, "HTGameplayEffectContainerSpec") &&
-                array_struct_field("ReturnValue", 0x10, 0x38, "ActiveGameplayEffectHandle");
+                array_struct_field("ReturnValue", 0x10, 0x38, 0x08, "ActiveGameplayEffectHandle");
         case 3:
             return struct_field("SpecHandle", 0x10, 0x00, "GameplayEffectSpecHandle") &&
                 struct_field("ReturnValue", 0x08, 0x10, "ActiveGameplayEffectHandle");
         case 4:
             return struct_field("SpecHandle", 0x10, 0x00, "GameplayEffectSpecHandle") &&
-                field("Target", "ObjectProperty", 0x08, 0x10) &&
+                object_field("Target", 0x10, "AbilitySystemComponent") &&
                 struct_field("ReturnValue", 0x08, 0x18, "ActiveGameplayEffectHandle");
         case 5:
-            return field("GameplayEffectClass", "ClassProperty", 0x08, 0x00) &&
+            return class_field("GameplayEffectClass", 0x00, "GameplayEffect") &&
                 field("Level", "FloatProperty", 0x04, 0x08) &&
                 struct_field("EffectContext", 0x18, 0x10, "GameplayEffectContextHandle") &&
                 struct_field("ReturnValue", 0x08, 0x28, "ActiveGameplayEffectHandle");
         case 6:
             return field("GameplayEffectClass", "ClassProperty", 0x08, 0x00) &&
-                field("Target", "ObjectProperty", 0x08, 0x08) &&
+                object_field("Target", 0x08, "AbilitySystemComponent") &&
                 field("Level", "FloatProperty", 0x04, 0x10) &&
                 struct_field("Context", 0x18, 0x18, "GameplayEffectContextHandle") &&
                 struct_field("ReturnValue", 0x08, 0x30, "ActiveGameplayEffectHandle");
@@ -8391,7 +8435,7 @@ struct Ue5NteAdapter::State {
                 struct_field("EventData", 0xB0, 0x10, "GameplayEventData") &&
                 field("ShotID", "UInt32Property", 0x04, 0xC0) &&
                 field("RandomSeed", "IntProperty", 0x04, 0xC4) &&
-                array_struct_field("TraceResults", 0x10, 0xC8, "ClientTraceProjectileResult") &&
+                array_struct_field("TraceResults", 0x10, 0xC8, 0x48, "ClientTraceProjectileResult") &&
                 struct_field("PredictionKey", 0x10, 0xD8, "PredictionKey");
         default:
             return fail("unknown observer-only candidate index");
