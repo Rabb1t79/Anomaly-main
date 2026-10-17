@@ -35,7 +35,7 @@
 ### 值得优先只读观测、但尚未获准作为回放根的候选
 
 - `/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClass`
-- `/Script/HTGame.HTAbilitySystemComponent.ApplyEffectContainerSpec`
+- `/Script/HTGame.HTGameplayAbility.ApplyEffectContainerSpec`
 - `/Script/HTGame.HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec`
 - `/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToSelf`
 - `/Script/GameplayAbilities.AbilitySystemComponent.BP_ApplyGameplayEffectSpecToTarget`
@@ -48,7 +48,7 @@
 | 候选函数 | Dump 参数块大小 | 关键参数布局（偏移相对参数块） |
 |---|---:|---|
 | `HTAbilityCharacter.K2_ActivateGameEffectsWithClass` | `0x68` | `WorldContextObject` `0x00/0x08`；`GameplayEffect` 类引用 `0x08/0x08`；`FBufferData ModifyData` `0x10/0x58` |
-| `HTAbilitySystemComponent.ApplyEffectContainerSpec` | `0x48` | `FHTGameplayEffectContainerSpec ContainerSpec` `0x00/0x38`；返回 `TArray<FActiveGameplayEffectHandle>` `0x38/0x10` |
+| `HTGameplayAbility.ApplyEffectContainerSpec` | `0x48` | `FHTGameplayEffectContainerSpec ContainerSpec` `0x00/0x38`；返回 `TArray<FActiveGameplayEffectHandle>` `0x38/0x10` |
 | `HTAbilitySystemBlueprintLibrary.ApplyExternalEffectContainerSpec` | `0x48` | 同为 `ContainerSpec` `0x00/0x38` 和返回数组 `0x38/0x10` |
 | `AbilitySystemComponent.BP_ApplyGameplayEffectSpecToSelf` | `0x18` | `FGameplayEffectSpecHandle` `0x00/0x10`；返回句柄 `0x10/0x08` |
 | `AbilitySystemComponent.BP_ApplyGameplayEffectSpecToTarget` | `0x20` | Spec Handle `0x00/0x10`；目标 ASC 指针 `0x10/0x08`；返回句柄 `0x18/0x08` |
