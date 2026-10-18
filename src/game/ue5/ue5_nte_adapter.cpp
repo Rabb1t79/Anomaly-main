@@ -6977,6 +6977,11 @@ struct Ue5NteAdapter::State {
     // If a chain DamageEvent notification arrives beyond the standard replay-correlation
     // window, use a chain-tagged exact GEDef/ASC/source/target match only to recover the
     // chain identity. Ordinary root-hit matching above keeps its strict eight-tick bound.
+    // A delayed native damage callback can outlive the ordinary eight-tick event
+    // correlation window. Use the chain-tagged effect identity only while that chain
+    // still has dispatched applications lacking observed damage callbacks. Once all
+    // dispatched applications have been observed, stale contexts must not label a later
+    // independent attack on the same target as chain-generated.
     [[nodiscard]] bool FindDelayedChainIdentityForDamageLocked(
         const std::uintptr_t attacker, const std::uintptr_t victim,
         const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
@@ -6989,6 +6994,11 @@ struct Ue5NteAdapter::State {
             const auto& candidate = replay_effect_calls[index];
             if (!candidate.valid || candidate.damage_chain_id == 0 ||
                 candidate.tick_sequence > capture_tick_sequence) {
+                continue;
+            }
+            const auto* const chain = FindDamageChainLocked(candidate.damage_chain_id);
+            if (chain == nullptr ||
+                chain->observed_chain_damage_count >= chain->dispatched_repeat_count) {
                 continue;
             }
             if (!ReplayContextMatchesDamageLocked(
