@@ -59,3 +59,43 @@ The repaired source now:
 - Flat package SHA-256: `09a69b67f2999f73d1391e5b6e273d96ec538b341ecd9f5502e9556d7f720290`.
 - DLL SHA-256: `cdaf1142c976a8a95d5885cc753e74154f5dd1bfdf6a402e4af91161fda77310`.
 - No in-game test has been run; the entry guard intentionally prevents the chain-damage loop from starting.
+
+
+## 2026-10-18 深入核验：DamageTriggerActor 配置链与受支持调用边界
+
+### Dump 直接证据
+
+来源：当前分支 `5.6.1/CppSDK/SDK/` 中实际读取的 Dump 文件。此处结论只涉及类型、字段与包装声明，不等同于旧插件实际使用该路线。
+
+- `HTGame_classes.hpp`：`ADamageTriggerActor : public AHTAbilitySpawnActor`，类大小 `0x618`。重要字段包括：
+  - `SpawnConfigID` 位于 `0x4D0`，`fTriggerEffectRadius` 位于 `0x4E0`。
+  - `OverlapTriggerLinkTimeCharacters` 位于 `0x5A8`，类型为 `TArray<AHTPlayerCharacter*>`。
+  - `RuntimeTriggerPeriod`、`RuntimeTriggerDuration`、`RuntimeTriggerCountPerPeriod`、`RuntimeMaxTriggerCount` 分别位于 `0x5E8`、`0x5EC`、`0x5F0`、`0x5F4`。
+  - 声明 `OnPlayerBeginOverlap`、`OnPlayerEndOverlap`、`StartTriggerGamePlayEffect`、`K2_OnTriggerPeriodGamePlayEffect` 与 `TriggerPeriodGamePlayEffectEvent`。
+- 同一文件：父类 `AHTAbilitySpawnActor` 持有 `EffectContainer`（`0x3A8`）、`EventTag`（`0x3D0`）、`EventData`（`0x3D8`）、`TriggerAbilityHandle`（`0x488`）和能力相关缓存。触发器的生效配置因此不能只根据周期字段推断。
+- 同一文件：`UHTAbilitySpawnDamageTriggerActor` 继承 `UHTAbilitySpawnActorEffect`，其中 `SpawnDamageTriggerActorsInfo` 是 `FSpawnDamageTriggerActorArray`。该结构包含 spawn array、随机生成数量以及主/次目标类型。
+- `HTGame_structs.hpp`：`FSpawnDamageTriggerActor` 包含 Actor 子类、生成条件、位置/旋转/缩放对象、`bForceSpawn`、`bClientPredictionSpawn`、`DamageTriggerConfigID`、随机半径、GameplayEffect 容器和随机数量曲线。关联的 `FDamageTriggerActorStaticData` 包含 `DelaySpawnTime`、`duration`、`DelayDestoryTime`、`TriggerOnSpawn`、`DelayTriggerTime`、`TriggerLinkTimeDuration`、`Period`、`MaxTriggerCount`。
+- `BP_DamageTriggerActorBase_classes.hpp` 中的 `ABP_DamageTriggerActorBase_C` 只声明继承自 `ADamageTriggerActor`，未增加成员或方法。此头文件并未提供蓝图资产的默认属性值或事件图实现。
+- `HTGame_functions.cpp` 中 `StartTriggerGamePlayEffect`、`K2_OnTriggerPeriodGamePlayEffect` 等生成包装使用反射 `ProcessEvent`；这些包装没有显示周期触发的实际业务实现、具体效果容器、目标选择或目标丢失后的行为。
+
+### 对目标效果的判定
+
+| 项目 | 证据级别 | 结论 |
+|---|---|---|
+| 原生类具备周期 GameplayEffect 相关状态和方法 | 直接证实（声明层） | 是可继续研究的候选 |
+| 原生体系存在数据驱动的生成配置、目标类型和效果容器 | 直接证实（声明层） | 不能把它简化为只创建 Actor 并填写计时字段 |
+| 一个实例可以重复命中初次受伤的同一目标 | 未证实 | 需要确认目标选择类、生成位置策略和触发事件实现 |
+| 每个受击目标拥有独立计时/计数，互不重置 | 未证实 | Actor 有实例级字段不等于已证明其计时/多目标语义 |
+| 旧插件确实通过此原生路径实现视频中的效果 | 未知 | 需要与目标 DLL 控制流或实机调用记录交叉验证 |
+
+### ABI/Core 桥接判定
+
+- `include/anomaly/sdk/services/ue5.h` 中公开的 `anomaly.ue5.process-event` 是订阅/取消订阅接口；`anomaly.ue5.objects` 是快照和精确查找接口。它们没有向插件开放通用反射调用或 Actor 创建。
+- `src/game/ue5/ue5_process_event.cpp` 中的 `CreateUe5ProcessEventInvoker` 依赖 `ValidateProcessEventAbi`，说明 Core 有已校验的内部调用原语；但这个内部函数本身不是可由插件直接调用的 ABI。
+- 仓库其他 Core 路径中的延迟 Actor 生成是带类型和后置条件的专用调用实例，不应被视为任意 Actor 都能安全生成的通用入口。
+
+### 实现门禁
+
+在继续启用功能前，至少需要有证据确定：要生成的准确类及其配置 ID、`EffectContainer` 和 TargetType 的来源、如何把初次受击目标传给原生触发器、生成/周期回调的 Game 线程和对象生命周期，以及关闭/死亡/离开目标范围后的停止规则。随后才能设计窄范围、具名且有 capability 的 Core/ABI 桥接。
+
+当前插件继续保持 Entry Guarded：不启用 `HTGame.exe + 0x42D5E50`，不通过手写偏移改写 Runtime 计时字段，也不因发现 `ADamageTriggerActor` 就直接创建实例或调用其周期方法。此决定不否定原生候选，只避免在类配置和目标语义未验证时制造伪实现。
