@@ -4262,6 +4262,15 @@ struct Ue5NteAdapter::State {
         return nullptr;
     }
 
+    [[nodiscard]] const DamageChainRecord* FindDamageChainLocked(
+        const std::uint64_t chain_id) const noexcept {
+        if (chain_id == 0) return nullptr;
+        for (const auto& chain : damage_chains) {
+            if (chain.id == chain_id) return &chain;
+        }
+        return nullptr;
+    }
+
     [[nodiscard]] bool IsActiveDamageChainRootLocked(
         const std::uint64_t damage_sequence) const noexcept {
         if (damage_sequence == 0) return false;
