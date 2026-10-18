@@ -6954,11 +6954,7 @@ struct Ue5NteAdapter::State {
                 delta < diagnostics->nearest_exact_match_tick_delta) {
                 diagnostics->nearest_exact_match_tick_delta = delta;
             }
-            // A chain-created effect keeps its opaque dispatch identity until its
-            // corresponding real CharacterOnDamaged event is correlated. Unlike ordinary
-            // capture discovery, this association does not expire by Tick age; the chain
-            // itself has a count-based lifetime. Original calls still use the strict age cap.
-            if (delta > kReplayCorrelationMaxTickAge && candidate.damage_chain_id == 0) {
+            if (delta > kReplayCorrelationMaxTickAge) {
                 if (diagnostics != nullptr) ++diagnostics->tick_delta_too_large;
                 continue;
             }
@@ -6976,6 +6972,36 @@ struct Ue5NteAdapter::State {
         closest_match.matching_candidate_count = matching_candidates;
         result = closest_match;
         return true;
+    }
+
+    // If a chain DamageEvent notification arrives beyond the standard replay-correlation
+    // window, use a chain-tagged exact GEDef/ASC/source/target match only to recover the
+    // chain identity. Ordinary root-hit matching above keeps its strict eight-tick bound.
+    [[nodiscard]] bool FindDelayedChainIdentityForDamageLocked(
+        const std::uintptr_t attacker, const std::uintptr_t victim,
+        const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
+        std::uint64_t& chain_id) const noexcept {
+        chain_id = 0;
+        std::uint64_t closest_tick_delta = (std::numeric_limits<std::uint64_t>::max)();
+        for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+            const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                reverse) % kReplayEffectCallCapacity;
+            const auto& candidate = replay_effect_calls[index];
+            if (!candidate.valid || candidate.damage_chain_id == 0 ||
+                candidate.tick_sequence > capture_tick_sequence) {
+                continue;
+            }
+            if (!ReplayContextMatchesDamageLocked(
+                    candidate, attacker, victim, source_id, nullptr)) {
+                continue;
+            }
+            const auto delta = capture_tick_sequence - candidate.tick_sequence;
+            if (chain_id == 0 || delta < closest_tick_delta) {
+                chain_id = candidate.damage_chain_id;
+                closest_tick_delta = delta;
+            }
+        }
+        return chain_id != 0;
     }
 
     AnomalyStatusV1 ReplayDamage(
@@ -7545,9 +7571,14 @@ struct Ue5NteAdapter::State {
             // Prefer the synchronous TLS identity. If the native damage broadcast arrives
             // later, reuse only the chain id carried by the exact validated GameplayEffect
             // invocation selected by the existing GEDef/ASC/source/target correlation.
-            const std::uint64_t correlated_chain_id = damage_chain_id != 0
+            std::uint64_t correlated_chain_id = damage_chain_id != 0
                 ? damage_chain_id
                 : (has_replay_context ? replay_context.damage_chain_id : 0U);
+            if (correlated_chain_id == 0 && !has_replay_context) {
+                static_cast<void>(FindDelayedChainIdentityForDamageLocked(
+                    attacker, victim, event.source_id, capture_tick_sequence,
+                    correlated_chain_id));
+            }
             if (correlated_chain_id != 0) {
                 event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
                 if (auto* chain = FindDamageChainLocked(correlated_chain_id);
