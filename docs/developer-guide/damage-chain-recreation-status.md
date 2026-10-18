@@ -194,3 +194,7 @@
 - 临时 chain provenance 在直接调用 `K2_OnTriggerPeriodGamePlayEffect` 前设置、作用域结束后恢复；这结构上允许同步嵌套伤害回调，但是否在捕获回调时把 chain ID 正确写入事件，仍需运行时确认。
 - **新识别的生命周期风险，尚未修复：** `SpawnNativeDamageTriggerActorLocked` 先调用 `FinishSpawningActor`，然后 `ConfigureNativeDamageTriggerActorLocked` 才设置 `EventData`、`EffectContainer` 和运行期周期/次数字段。当前 Dump 只证明反射声明，不证明完成生成时是否自动启动计时触发。插件明确会为每个队列项直接调用 `K2_OnTriggerPeriodGamePlayEffect`，没有显式调用 `StartTriggerGamePlayEffect` / `TriggerPeriodGamePlayEffectEvent`，但这不足以证明 Actor 不会自行产生额外伤害。
 - 目前不凭一般 UE5 经验或猜测更改 spawn 生命周期/周期字段。下一步需要用项目证据或只读运行时诊断确认 actor 的启动语义和事件是否每次恰好产生一次伤害，再作最小修复。当前 18 块 Dump 对照、CI 和 RateQueue 测试均不能替代实机伤害验证。
+### Runtime Probe 工作流错配修正（2026-10-18）
+- 发现旧 `.github/workflows/nte-damage-chain-runtime-probe.yml` 实际构建完整 Runtime 后，却校验/打包 `plugins/NteAttackReplay` v1.9.7；并且它没有 `push` 触发器，独立工作分支的更新不会自动触发该探针。这与当前目标链式反应插件不一致。
+- 已把探针切换到 `plugins/DamageChainReaction`，验证 manifest ID `anomaly.builtin.nte-damage-chain-reaction`、版本 `0.1.0`，产物命名改为 `DamageChainReactionRuntimeProbe-windows-x64.zip`，并在相关分支 push 时触发。
+- 本次修改和进度记录在同一 Git 提交。工作流结果仍只证明 Runtime/Core/插件的构建与打包；不证明游戏中每次周期调用恰好产生一次额外伤害。
