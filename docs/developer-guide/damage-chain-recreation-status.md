@@ -134,3 +134,18 @@
 - `src/game/ue5/ue5_nte_adapter.cpp`，Blob SHA `a7c0c7158f15d2cfa8e1d986a35933da5d00f001`，第 11,547 行附近：Core 内部存在经过反射参数布局校验的 `GameplayStatics.BeginDeferredActorSpawnFromClass` / `FinishSpawningActor` 调用路径；该具体函数最终要求 spawned object 通过 Vehicle 类型和 Owner 后置条件。它证明 Core 内部有受约束的原生反射调用/延迟生成先例，但不等于插件已有可调用的通用 Actor spawn ABI，也不证明可直接用于 `ADamageTriggerActor`。
 - **当前桥接结论：** 公开 ABI 没有现成的通用 Actor 创建/函数调用入口；Core 内部有经过 Profile/反射 ABI 校验的调用原语与专用生成实现。若 Dump 后续足以证实 DamageTriggerActor 路线，应优先评估新增窄范围、具名、capability 受限的 Core/ABI 服务，逐项验证类/函数 owner、参数布局、SpawnConfigID/数据表读取、目标绑定、Game 线程、对象代际、生命周期和失败后置条件；不开放无约束的通用反射调用，不新增 ABI，直到上述路线证据充分。
 - 本轮只核验并记录接口，不改 Core/ABI/插件源码，不构建。Vehicle 已完结；其既有内部代码只作为 Core 结构证据，不重新开启 Vehicle 任务。
+
+## 2026-10-18 当前工作分支同步（以本节覆盖较早的路径/验证状态记录）
+
+### 当前分支与 Dump 证据
+- 当前工作分支：`work/nte-damage-chain-reaction-independent-20261018`；本轮开始时 head 为 `2e073e95d1a27d9d8aeec610b3975482a1746a0f`。所有本轮修改仍只提交到该工作分支。
+- 已纠正此前的 LFS 判断：`main` 上的 `5.6.1-new/` 使用 Git LFS，但工作流 `nte-dump-native-evidence.yml`（运行 [39117662599](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39117662599)）已成功物化所选文件并生成 `nte-native-damage-dump-evidence` 报告。
+- 报告记录 `HTGame_parameters.hpp` 的 SHA-256 在两版相同；`HTGame_classes.hpp`、`HTGame_structs.hpp` 和 `GObjects-Dump.txt` 的版本哈希不同。聚焦声明 diff 对 `FHTDamageEvent`、`FBufferData`、`UHTAbilitySystemComponent`、`AHTAbilityCharacter`、`UHTAbilitySpawnDamageTriggerActor`、两个 ASC GameplayEffect 应用入口及 `OnDamaged` 参数块均报告 “No textual difference in extracted block”。这不是全文件完全相同的证明，也不是运行时安全调用的证明。
+- 报告只作仓库证据记录；它不会自动被复制进运行时包，也不应把其中的 GObjects 运行时地址当成固定 RVA。
+
+### 当前实现与验证边界
+- Core 当前 `anomaly.nte.damage-chain-reaction` 的 `apply_next` 走 `DamageTriggerActor` 周期事件，不再把捕获的 ASC 参数缓冲区作为后续伤害调用。该路由仍需实机证明每次调用是否产生一条匹配的真实伤害。
+- 最近一次已完成的 Core ABI 校验：运行 [39124127839](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39124127839)，结果成功。相同 head 的完整 Windows 工作流 [39124127821](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39124127821) 在最近一次读取时仍为运行中；不得把较早提交的通过结果当作该 head 的结果。
+- 发现独立构建工作流之前指向旧的 `plugins/NteDamageChainReaction`，不是当前目标 `plugins/DamageChainReaction`。本次同步修正了工作流源文件、包含目录、manifest/产物名称，并加入 `RateQueue` 确定性测试。待新工作流运行成功后才记录为构建验证通过。
+- `RateQueue` 修正只影响调度安全性：非有限速率值回退到 100 次/秒；时间间隔向上取整，避免因时钟精度截断而让调度快于设定速率。没有改变“首次原生命中不计数、每次额外真实命中逐一确认、停顿后不突发补发、成功数以真实伤害事件为准”的行为合同。
+- 尚未完成：实机确认 1 次正常攻击 + N 次额外伤害严格成立；确认原生 Actor 的周期事件对原目标真实结算；确认无递归扩增、多目标独立、长时间停顿后继续完成队列。不得把 ABI 编译通过称为功能已生效。

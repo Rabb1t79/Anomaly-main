@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
-#include <limits>
 
 namespace anomaly::damage_chain {
 
@@ -22,9 +22,14 @@ public:
 
     void Start(const Config config, const TimePoint now) noexcept {
         remaining_ = config.extra_count;
-        const double rate = std::clamp(
-            config.applications_per_second, 0.1, 1000.0);
-        interval_ = std::chrono::duration_cast<Clock::duration>(
+        // NaN survives std::clamp() and can make floating-to-duration conversion
+        // undefined. Treat any non-finite UI/config value as the documented default.
+        const double requested_rate = std::isfinite(config.applications_per_second)
+            ? config.applications_per_second
+            : 100.0;
+        const double rate = std::clamp(requested_rate, 0.1, 1000.0);
+        // Round up so scheduling cannot exceed the configured applications/second.
+        interval_ = std::chrono::ceil<Clock::duration>(
             std::chrono::duration<double>(1.0 / rate));
         if (interval_ <= Clock::duration::zero()) {
             interval_ = Clock::duration{1};
