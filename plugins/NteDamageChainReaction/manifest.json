@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "id": "anomaly.tools.nte-damage-chain-reaction",
   "name": "NTE Damage Chain Reaction",
-  "description": "Creates independent chains per real player-to-target CharacterOnDamaged event by replaying only the exact Core-validated native GameplayEffect against the original target. Stops each chain after inactivity or if a replay is not confirmed by a newer matching damage event. Does not simulate input or directly modify HP.",
+  "description": "Creates independent native damage-trigger chains from real player-to-target CharacterOnDamaged events. Core uses only the validated DamageTriggerActor trigger path and binds each chain to the original target. No captured GameplayEffect call replay, simulated input, skill activation, animation replay, or direct HP writes. A chain ends when repeated damage cannot be confirmed or the feature is stopped.",
   "author": "Rabb1t79",
   "license": "AGPL-3.0-only",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -29,13 +29,13 @@
       "minVersion": 1
     },
     {
-      "id": "anomaly.nte.damage-replay",
+      "id": "anomaly.nte.damage-chain",
       "minVersion": 1
     }
   ],
   "capabilities": [
     "ui",
     "nte-combat-read",
-    "nte-damage-replay"
+    "nte-damage-chain"
   ]
 }
