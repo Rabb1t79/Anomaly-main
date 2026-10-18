@@ -100,3 +100,8 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 
 - 当前 Core 适配器还会验证 `AHTAbilitySpawnActor.EventData` 的内层结构：`FGameplayEventData` 总大小 `0xB0`，`Instigator` offset `0x08`，`Target` offset `0x10`。这些值可在 `5.6.1/CppSDK/SDK/GameplayAbilities_structs.hpp` 中找到，但之前自动化双版本报告没有包含该头文件。
 - 已将旧版与新版 `GameplayAbilities_structs.hpp` 一并纳入 LFS 取证，并将 `FGameplayEventData` 加入 focused block 对照。新报告返回后需核对提取成功与字段布局差异，不能只依靠旧版声明决定适配器兼容性。
+## 最新补充核验结果：FGameplayEventData（2026-10-18）
+
+- 双版本证据任务 [39126184168](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126184168) 成功；最新版报告共有 16 个聚焦块，16 个全部成功提取且文本一致，零缺失标记。
+- `FGameplayEventData` 在两版均为 `0xB0`，`Instigator` offset `0x08`，`Target` offset `0x10`；对应 `GameplayAbilities_structs.hpp` 文件大小及 SHA-256 也完全相同。
+- 这些结果支持 Core 当前的内层字段布局检查，但不证明 `K2_OnTriggerPeriodGamePlayEffect` 的运行时业务语义，也不证明其调用一次就会对原始受击目标造成一次真实伤害。

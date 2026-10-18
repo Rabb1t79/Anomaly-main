@@ -176,3 +176,7 @@
 - 继续审查 Core 的原生触发适配器时，发现还需要对照 `GameplayAbilities` 包内的 `FGameplayEventData` 声明：适配器验证外层 `AHTAbilitySpawnActor.EventData` 大小为 `0xB0`，并要求内层 `Instigator` / `Target` 两个对象属性分别位于 `0x08` / `0x10`。旧版 Dump 声明支持这些值，但之前自动报告没有包含这个单独的结构头文件，因此不能说这一处已完成双版本核验。
 - 本轮把 `5.6.1/CppSDK/SDK/GameplayAbilities_structs.hpp` 与 `5.6.1-new/CppSDK/SDK/GameplayAbilities_structs.hpp` 纳入 LFS 取证输入，并新增 `FGameplayEventData` 聚焦块。工作流在脚本或自身改动时会自动运行。
 - 本次只增加证据覆盖，没有更改 Core 的硬编码布局或调用逻辑。需等待新报告确认两版的 `FGameplayEventData` 块是否一致，再决定后续实现动作。
+### 最新证据任务结果（2026-10-18）
+- `FGameplayEventData` 双版本取证运行 [39126184168](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126184168) 已完成且成功。两份 `GameplayAbilities_structs.hpp` 均由 Git LFS 成功物化，文件大小 150,574 bytes、SHA-256 同为 `992b87956ae12d195bb8d1a3b492e4b9c5ef520b5bf5acedadcff6496fa6a556`。
+- 最新聚焦报告共 16 个声明块：16/16 成功提取、缺失标记 0、不可用 diff 0、16/16 块文本一致。`FGameplayEventData` 布局为大小 `0xB0`、`Instigator` offset `0x08`（8 字节对象属性）、`Target` offset `0x10`（8 字节对象属性），与当前适配器布局验证条件一致。
+- 最新报告位置 `/mnt/data/NTE-damage-Dump-evidence-5.6.1-vs-5.6.1-new.md`，SHA-256 `4c74d25bc53d3ccf2e3574aeb65011c3d2735f8eae3c5878654c61f802eb57e2`。两版本的完整 HTGame classes、HTGame structs 和 GObjects 文件仍存在哈希差异；聚焦声明一致不能代替原生调用的实机伤害验证。
