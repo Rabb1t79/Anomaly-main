@@ -20,7 +20,7 @@ No ProcessEvent caller is exposed or used. No raw address is hooked or invoked; 
 
 The log can show whether DamageTriggerActor-like actors are present or appear/disappear during the same observation window as captured character damage events. Each damage entry records sequence, tick, attacker/victim generation handles, source ID/name, final damage, and flags.
 
-This does not prove the old DLL created those actors, that an actor periodically targets the first damaged enemy, or that an actor corresponds one-to-one with a damage event. Actor snapshots are sampled and paged. An incomplete sweep is discarded if the snapshot generation changes; a missing actor can also mean incomplete service coverage or a class-name filter miss.
+This does not prove the old DLL created those actors, that an actor periodically targets the first damaged enemy, or that an actor corresponds one-to-one with a damage event. Actor snapshots are sampled and paged. The probe requests no more than one Host-capped maximum-size page per Update callback. An incomplete sweep is discarded if the snapshot generation changes; a missing actor can also mean incomplete service coverage or a class-name filter miss.
 
 ## Suggested test matrix
 
