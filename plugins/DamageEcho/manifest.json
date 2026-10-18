@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "id": "com.rabb1t79.damage-echo",
+  "name": "伤害回响",
+  "description": "对命中目标创建持续伤害回响任务，可在界面调整触发频率并清空当前任务。",
+  "author": "Rabb1t79",
+  "license": "AGPL-3.0-only",
+  "audience": "developer",
+  "version": "1.0.0",
+  "entry": "plugin.dll",
+  "api": {
+    "major": 1,
+    "minMinor": 0,
+    "maxMinor": 0
+  },
+  "games": [
+    "nte"
+  ],
+  "builds": [
+    "nte-*"
+  ],
+  "loadPhase": "game-ready",
+  "services": [
+    {
+      "id": "anomaly.ui",
+      "minVersion": 1
+    }
+  ],
+  "capabilities": [
+    "ui"
+  ]
+}
