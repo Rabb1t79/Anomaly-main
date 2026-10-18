@@ -56,3 +56,10 @@ With the feature disabled, one native attack produces one ordinary damage result
 
 - The extra-count control now uses the plugin's declared bounds: default `1`, minimum `1`, maximum `1,000,000`. The previous hard-coded UI maximum `10` contradicted the Core and plugin count limits and blocked the required 100-extra-hit acceptance case.
 - UI and manifest descriptions now name the current native `DamageTriggerActor` / `EffectContainer` route instead of describing a direct ASC GameplayEffect replay route. This is a description and input-range correction, not proof the native period event produces the intended damage in game.
+
+## CI update — 2026-10-18, source commit `9a53edc3b398e559ca469bdd55c507b74216d3e2`
+
+- The corrected standalone workflow [39125202472](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202472) passed on this source commit: independent plugin build succeeded, deterministic RateQueue test passed (`1/1`, `100% tests passed`), and the package upload succeeded.
+- Artifact: `DamageChainReaction-windows-x64`, SHA-256 `9e08a8a74ebc3489a6d9efd48c3ffc6767dacd8263fe461492196dfb9564d06a`. This is a **test package**, not a runtime-verified release.
+- At the time of this update, full Windows workflow [39125202479](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202479) and Core/ABI workflow [39125202470](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202470) were still in progress. Their results must be checked separately.
+- In-game damage behavior remains unverified: a green build/queue test proves compilation and scheduler behavior only, not that the DamageTriggerActor event creates exactly one additional real damage result each time.
