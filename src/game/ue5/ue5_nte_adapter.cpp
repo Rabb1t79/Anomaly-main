@@ -7569,6 +7569,10 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "all 32 independent damage-chain slots are occupied");
         }
+        // Pin the validated root before any replay dispatch. The ordinary event ring may
+        // rotate while other independent chains produce events, but this chain must retain
+        // its original captured effect context until every additional application finishes.
+        RetainPinnedDamageReplayLocked(*root);
 
         std::uint64_t chain_id = damage_chain_next_id++;
         if (chain_id == 0) chain_id = damage_chain_next_id++;
