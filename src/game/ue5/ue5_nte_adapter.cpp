@@ -40,6 +40,7 @@ constexpr std::uint8_t kCombatCaptureIngressNativeExec = 1U << 2U;
 ThreadLocalScalar<const void*> g_active_tick_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_subscription_state;
+ThreadLocalScalar<std::uint64_t> g_active_damage_chain_reaction_id;
 
 // AActor::ProcessEvent can delegate the same invocation through UObject::ProcessEvent.
 // Record the active replay capture on this thread so the shared pre-hook can avoid
@@ -1082,6 +1083,33 @@ struct Ue5NteAdapter::State {
     static constexpr std::size_t kNativeDamageChainHistoryLimit = 96;
     std::vector<NativeDamageChainRecord> native_damage_chains;
     std::uint64_t next_native_damage_chain_id{1};
+
+    struct DamageChainReactionRecord {
+        AnomalyGenerationHandleV1 handle{};
+        AnomalyGenerationHandleV1 world{};
+        AnomalyGenerationHandleV1 attacker{};
+        AnomalyGenerationHandleV1 target{};
+        std::uint64_t damage_sequence{};
+        std::uint64_t source_id{};
+        std::uint64_t object_generation{};
+        std::uint64_t pending_after_sequence{};
+        std::uint64_t last_confirmed_damage_sequence{};
+        std::uintptr_t root_replay_receiver{};
+        std::uintptr_t root_replay_function{};
+        std::uint32_t root_replay_kind{};
+        std::uint32_t requested_extra_count{};
+        std::uint32_t rate_milli{};
+        std::uint32_t dispatch_attempt_count{};
+        std::uint32_t confirmed_extra_count{};
+        std::uint32_t state{ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_UNKNOWN};
+        std::uint32_t flags{};
+        bool awaiting_confirmation{};
+        bool stop_requested{};
+    };
+    static constexpr std::size_t kDamageChainReactionActiveLimit = 32;
+    static constexpr std::size_t kDamageChainReactionHistoryLimit = 96;
+    std::vector<DamageChainReactionRecord> damage_chain_reactions;
+    std::uint64_t next_damage_chain_reaction_id{1};
 
     static constexpr std::size_t kReplayEffectCallCapacity = 32;
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
@@ -2610,11 +2638,13 @@ struct Ue5NteAdapter::State {
         if (id == ANOMALY_NTE_COMBAT_SERVICE_V1_ID) {
             return framework_hook_ready && NteCombatProfileAvailable();
         }
-        if (id == ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID) {
-            // Legacy compatibility only. The new chain service has its own native trigger route.
-            return framework_hook_ready && NteCombatProfileAvailable();
+        if (id == ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID ||
+            id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
+            // Legacy mutation routes are deliberately no longer exposed. The new
+            // chain-reaction service validates the captured GE context and confirms actual hits.
+            return false;
         }
-        if (id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
+        if (id == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_ID) {
             return framework_hook_ready && NteCombatProfileAvailable() && ObjectFindAvailable();
         }
         if (id == ANOMALY_NTE_SKILLS_SERVICE_V1_ID) {
@@ -6130,6 +6160,7 @@ struct Ue5NteAdapter::State {
         damage.victim = victim;
         damage.attacker = attacker;
         damage.critical = synchronous_critical;
+        damage.damage_chain_reaction_id = g_active_damage_chain_reaction_id.Get();
         std::uintptr_t saved_skill_cdo{};
         std::int32_t active_spec_handle{};
         const auto trigger_handle_offset = Layout(
@@ -6576,6 +6607,28 @@ struct Ue5NteAdapter::State {
             return summary;
         }
     };
+
+    [[nodiscard]] DamageChainReactionRecord* FindDamageChainReactionLocked(
+        const AnomalyGenerationHandleV1 handle) noexcept {
+        if (handle.id == 0 || handle.generation == 0) return nullptr;
+        const auto found = std::ranges::find_if(damage_chain_reactions,
+            [&](const DamageChainReactionRecord& chain) {
+                return chain.handle.id == handle.id &&
+                    chain.handle.generation == handle.generation;
+            });
+        return found == damage_chain_reactions.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] DamageChainReactionRecord* FindDamageChainReactionByIdLocked(
+        const std::uint64_t id) noexcept {
+        if (id == 0) return nullptr;
+        const auto found = std::ranges::find_if(damage_chain_reactions,
+            [&](const DamageChainReactionRecord& chain) {
+                return chain.handle.id == id &&
+                    chain.object_generation == object_generation;
+            });
+        return found == damage_chain_reactions.end() ? nullptr : &*found;
+    }
 
     [[nodiscard]] bool ReplayContextMatchesDamageLocked(
         const ReplayEffectContext& context, const std::uintptr_t attacker,
@@ -7767,12 +7820,13 @@ struct Ue5NteAdapter::State {
     }
 
 
-    AnomalyStatusV1 ReplayDamage(
-        const AnomalyNteDamageReplayRequestV1* request) noexcept {
-        if (request == nullptr || request->struct_size < sizeof(*request) ||
-            request->flags != 0 || request->damage_sequence == 0) {
+    AnomalyStatusV1 ApplyCapturedDamage(
+        const std::uint64_t damage_sequence,
+        bool* const native_dispatch_attempted = nullptr) noexcept {
+        if (native_dispatch_attempted != nullptr) *native_dispatch_attempted = false;
+        if (damage_sequence == 0) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
-                "invalid damage replay request");
+                "invalid captured native damage sequence");
         }
         if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
             return Status(ANOMALY_STATUS_V1_FAILED,
@@ -7793,14 +7847,14 @@ struct Ue5NteAdapter::State {
         for (std::size_t index{}; index < damage_event_count; ++index) {
             const auto& candidate = damage_events[
                 (damage_event_start + index) % kDamageEventCapacity];
-            if (candidate.event.sequence == request->damage_sequence) {
+            if (candidate.event.sequence == damage_sequence) {
                 record = const_cast<DamageRecord*>(&candidate);
                 break;
             }
         }
         // Prefer the live ring, but continue from the pinned validated snapshot when a
         // chain has itself pushed the original DamageEvent out of the 512-entry ring.
-        if (record == nullptr) record = FindPinnedDamageReplayLocked(request->damage_sequence);
+        if (record == nullptr) record = FindPinnedDamageReplayLocked(damage_sequence);
         if (record == nullptr) {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND,
                 "original damage sequence expired or was not found in the live or pinned replay records");
@@ -7978,6 +8032,7 @@ struct Ue5NteAdapter::State {
         // Native dispatch can enqueue a new hit that later rotates the rolling ring.
         // Snapshot the root before dispatch, then pin only after the validated call succeeds.
         const DamageRecord replay_root = *record;
+        if (native_dispatch_attempted != nullptr) *native_dispatch_attempted = true;
         if (!InvokeNativeProcessEventLocked(
                 replay_receiver, record->replay.function,
                 parameters.data(), record->replay.parameter_size)) {
@@ -8056,6 +8111,354 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    AnomalyStatusV1 StartDamageChainReaction(
+        const AnomalyNteDamageChainReactionRequestV1* request,
+        AnomalyGenerationHandleV1* out_chain) noexcept {
+        if (out_chain != nullptr) *out_chain = {};
+        if (request == nullptr || out_chain == nullptr ||
+            request->struct_size < sizeof(*request) || request->flags != 0 ||
+            request->damage_sequence == 0 || request->extra_count == 0 ||
+            request->extra_count > 1000000U ||
+            request->rate_milli < 100U || request->rate_milli > 1000000U) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid chain-reaction request; extra_count must be 1-1000000 and rate must be 0.1-1000 applications/second");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "damage-chain reaction creation must run on the Game thread");
+        }
+
+        std::scoped_lock lock(mutex);
+        try {
+            DrainCombatCaptureQueueLocked();
+            DamageRecord* root = FindDamageRecordBySequenceLocked(request->damage_sequence);
+            if (root == nullptr) root = FindPinnedDamageReplayLocked(request->damage_sequence);
+            if (root == nullptr) {
+                return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                    "original CharacterOnDamaged event is no longer available");
+            }
+            const auto& hit = root->event;
+            if (hit.struct_size < sizeof(hit) ||
+                (hit.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
+                (hit.flags & ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED) != 0 ||
+                hit.sequence == 0 || hit.final_damage <= 0 || hit.source_id == 0 ||
+                hit.attacker.id == 0 || hit.victim.id == 0 ||
+                hit.attacker.id == hit.victim.id) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "chain root is not an ordinary positive CharacterOnDamaged event");
+            }
+            if (!root->attacker_was_local_player_pawn) {
+                return Status(ANOMALY_STATUS_V1_PERMISSION_DENIED,
+                    "chain root was not captured from the local player-controlled character");
+            }
+            if (hit.world.generation != world_generation ||
+                hit.attacker.generation != object_generation ||
+                hit.victim.generation != object_generation) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "chain root belongs to a stale World or UObject generation");
+            }
+
+            if (!root->replay.valid) {
+                std::uintptr_t delayed_attacker{}, delayed_victim{};
+                ReplayEffectContext delayed_replay{};
+                if (ResolveObjectHandleLocked(hit.attacker, delayed_attacker) &&
+                    ResolveObjectHandleLocked(hit.victim, delayed_victim) &&
+                    FindReplayContextForDamageLocked(
+                        delayed_attacker, delayed_victim, hit.source_id,
+                        hit.tick_sequence, delayed_replay)) {
+                    root->replay = delayed_replay;
+                }
+            }
+            if (!root->replay.valid || !root->replay.tag_arrays_valid) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "the original hit has no safe, dump-validated GameplayEffect context; no substitute was guessed");
+            }
+            if (root->replay.object_generation != object_generation) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "the original GameplayEffect context belongs to a stale UObject generation");
+            }
+
+            std::uintptr_t attacker{}, victim{};
+            if (!ResolveObjectHandleLocked(hit.attacker, attacker) ||
+                !ResolveObjectHandleLocked(hit.victim, victim) ||
+                attacker == 0 || victim == 0 || attacker == victim) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "the captured attacker or target is no longer a valid UE object");
+            }
+            std::uintptr_t attacker_class{}, victim_class{}, ability_character_class{};
+            if (!ReadPointerAt(*memory, attacker, Layout(profile, "object.class"), attacker_class) ||
+                !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
+                !FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter", ability_character_class) ||
+                !IsClassDerivedFromLocked(attacker_class, ability_character_class) ||
+                !IsClassDerivedFromLocked(victim_class, ability_character_class)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "the captured attacker/target did not validate as HTAbilityCharacter objects; vehicles and non-character targets are excluded");
+            }
+            bool friendly{};
+            if (!IsFriendlyTargetLocked(attacker, victim, friendly)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "dump-validated HTAbilityCharacter.IsFriendlyTarget is unavailable");
+            }
+            if (friendly) {
+                return Status(ANOMALY_STATUS_V1_PERMISSION_DENIED,
+                    "chain reaction is restricted to non-friendly targets");
+            }
+            if (!ReplayContextMatchesDamageLocked(
+                    root->replay, attacker, victim, hit.source_id)) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "the captured GameplayEffect receiver/source/target no longer matches the original hit");
+            }
+
+            std::size_t active_count{};
+            for (const auto& chain : damage_chain_reactions) {
+                if ((chain.state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE ||
+                     chain.state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION) &&
+                    chain.object_generation == object_generation &&
+                    chain.world.generation == world_generation) {
+                    ++active_count;
+                }
+            }
+            if (active_count >= kDamageChainReactionActiveLimit) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "damage-chain reaction active capacity reached (32 chains); no existing chain was reset");
+            }
+            if (damage_chain_reactions.size() >= kDamageChainReactionHistoryLimit) {
+                std::erase_if(damage_chain_reactions, [](const DamageChainReactionRecord& chain) {
+                    return chain.state != ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE &&
+                        chain.state != ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION &&
+                        !chain.awaiting_confirmation;
+                });
+                if (damage_chain_reactions.size() >= kDamageChainReactionHistoryLimit) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "damage-chain reaction history is full; safely stop an old chain before creating another");
+                }
+            }
+
+            RetainPinnedDamageReplayLocked(*root);
+            DamageChainReactionRecord chain{};
+            chain.handle.id = next_damage_chain_reaction_id++;
+            if (chain.handle.id == 0) chain.handle.id = next_damage_chain_reaction_id++;
+            chain.handle.generation = object_generation;
+            chain.world = hit.world;
+            chain.attacker = hit.attacker;
+            chain.target = hit.victim;
+            chain.damage_sequence = hit.sequence;
+            chain.source_id = hit.source_id;
+            chain.object_generation = object_generation;
+            chain.root_replay_receiver = root->replay.receiver;
+            chain.root_replay_function = root->replay.function;
+            chain.root_replay_kind = root->replay.kind;
+            chain.requested_extra_count = request->extra_count;
+            chain.rate_milli = request->rate_milli;
+            chain.state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE;
+            chain.flags = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_VALID |
+                ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_TARGET_BOUND;
+            damage_chain_reactions.push_back(chain);
+            *out_chain = chain.handle;
+            return Status(ANOMALY_STATUS_V1_OK,
+                "native chain context validated and pinned; the initial damage is excluded from extra_count");
+        } catch (...) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "could not allocate validated damage-chain reaction context");
+        }
+    }
+
+    AnomalyStatusV1 ApplyNextDamageChainReaction(
+        const AnomalyGenerationHandleV1 handle) noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "native chain-reaction application must run on the Game thread");
+        }
+
+        std::uint64_t root_sequence{};
+        std::uint64_t chain_id{};
+        {
+            std::scoped_lock lock(mutex);
+            auto* chain = FindDamageChainReactionLocked(handle);
+            if (chain == nullptr) {
+                return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                    "damage-chain reaction handle is not available in the current generation");
+            }
+            if (chain->awaiting_confirmation ||
+                chain->state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "the previous native application is still awaiting its actual damage event");
+            }
+            if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED ||
+                chain->state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED ||
+                chain->state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_COMPLETED) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "damage-chain reaction is already in a terminal state");
+            }
+            if (chain->confirmed_extra_count >= chain->requested_extra_count) {
+                chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_COMPLETED;
+                return Status(ANOMALY_STATUS_V1_OK, "all requested extra damage events are confirmed");
+            }
+            if (chain->dispatch_attempt_count >= chain->requested_extra_count) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "all requested applications were dispatched but at least one lacks a damage-event confirmation");
+            }
+            if (chain->world.generation != world_generation ||
+                chain->object_generation != object_generation ||
+                chain->attacker.generation != object_generation ||
+                chain->target.generation != object_generation) {
+                chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED;
+                chain->flags |= ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_STALE;
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "World/UObject generation changed; stale chain cancelled without dereferencing old objects");
+            }
+
+            // Serialize only indistinguishable in-flight contexts. Chains for different
+            // targets remain independent, and a new root never resets an existing queue.
+            for (const auto& other : damage_chain_reactions) {
+                if (other.handle.id == chain->handle.id || !other.awaiting_confirmation) continue;
+                if (other.object_generation == chain->object_generation &&
+                    other.world.id == chain->world.id &&
+                    other.world.generation == chain->world.generation &&
+                    other.attacker.id == chain->attacker.id &&
+                    other.target.id == chain->target.id &&
+                    other.source_id == chain->source_id &&
+                    other.root_replay_function == chain->root_replay_function) {
+                    return Status(ANOMALY_STATUS_V1_CONFLICT,
+                        "another independent chain for this same attacker/target/effect is awaiting confirmation; this chain remains queued");
+                }
+            }
+
+            std::uintptr_t attacker{}, victim{};
+            if (!ResolveObjectHandleLocked(chain->attacker, attacker) ||
+                !ResolveObjectHandleLocked(chain->target, victim) ||
+                attacker == 0 || victim == 0 || attacker == victim) {
+                chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED;
+                chain->flags |= ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_STALE;
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "attacker or target handle became invalid; stale pointers were not dereferenced");
+            }
+            bool friendly{};
+            if (!IsFriendlyTargetLocked(attacker, victim, friendly) || friendly) {
+                chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED;
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "target faction validation failed or the target is now friendly");
+            }
+            auto* root = FindDamageRecordBySequenceLocked(chain->damage_sequence);
+            if (root == nullptr) root = FindPinnedDamageReplayLocked(chain->damage_sequence);
+            if (root == nullptr || !root->replay.valid || !root->replay.tag_arrays_valid ||
+                root->event.world.generation != world_generation ||
+                root->replay.object_generation != object_generation) {
+                chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED;
+                chain->flags |= ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_STALE;
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "pinned original GameplayEffect context is unavailable or stale");
+            }
+            if (!ReplayContextMatchesDamageLocked(root->replay, attacker, victim, chain->source_id)) {
+                chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED;
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "pinned native GameplayEffect context failed current receiver/source/target validation");
+            }
+            root_sequence = chain->damage_sequence;
+            chain_id = chain->handle.id;
+            chain->pending_after_sequence = damage_event_sequence;
+            chain->awaiting_confirmation = true;
+            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION;
+            chain->flags |= ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_AWAITING_CONFIRMATION;
+        }
+
+        bool native_dispatch_attempted{};
+        const std::uint64_t previous_provenance = g_active_damage_chain_reaction_id.Get();
+        g_active_damage_chain_reaction_id.Set(chain_id);
+        struct ProvenanceRestore final {
+            std::uint64_t previous;
+            ~ProvenanceRestore() noexcept { g_active_damage_chain_reaction_id.Set(previous); }
+        } provenance_restore{previous_provenance};
+        const auto apply_status = ApplyCapturedDamage(root_sequence, &native_dispatch_attempted);
+
+        std::scoped_lock lock(mutex);
+        auto* chain = FindDamageChainReactionLocked(handle);
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "chain generation changed during native application");
+        }
+        DrainCombatCaptureQueueLocked();
+        if (!native_dispatch_attempted) {
+            if (chain->awaiting_confirmation) {
+                chain->awaiting_confirmation = false;
+                chain->flags &= ~ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_AWAITING_CONFIRMATION;
+                if (!chain->stop_requested) chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE;
+            }
+            return apply_status;
+        }
+        if (chain->dispatch_attempt_count < chain->requested_extra_count) {
+            ++chain->dispatch_attempt_count;
+        }
+        if (!chain->awaiting_confirmation) {
+            return Status(ANOMALY_STATUS_V1_OK,
+                "native application produced a matching CharacterOnDamaged confirmation");
+        }
+        if (apply_status.code != ANOMALY_STATUS_V1_OK) {
+            // Do not retry after entering a call whose return status became uncertain:
+            // that could create a duplicate hit.
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "native application was entered but its return was uncertain; retained as pending and will not be retried automatically");
+        }
+        return Status(ANOMALY_STATUS_V1_OK,
+            "native GameplayEffect application was dispatched; waiting for a matching actual damage event");
+    }
+
+    AnomalyStatusV1 SnapshotDamageChainReaction(
+        const AnomalyGenerationHandleV1 handle,
+        AnomalyNteDamageChainReactionSnapshotV1* snapshot) noexcept {
+        if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid damage-chain reaction snapshot buffer");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "damage-chain reaction snapshots must be read on the Game thread");
+        }
+        std::scoped_lock lock(mutex);
+        DrainCombatCaptureQueueLocked();
+        auto* chain = FindDamageChainReactionLocked(handle);
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "damage-chain reaction handle is not available in the current generation");
+        }
+        if (!chain->awaiting_confirmation &&
+            chain->confirmed_extra_count >= chain->requested_extra_count &&
+            chain->state != ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED) {
+            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_COMPLETED;
+        }
+        AnomalyNteDamageChainReactionSnapshotV1 result{};
+        result.struct_size = sizeof(result);
+        result.flags = chain->flags;
+        result.chain = chain->handle;
+        result.damage_sequence = chain->damage_sequence;
+        result.last_confirmed_damage_sequence = chain->last_confirmed_damage_sequence;
+        result.requested_extra_count = chain->requested_extra_count;
+        result.dispatch_attempt_count = chain->dispatch_attempt_count;
+        result.confirmed_extra_count = chain->confirmed_extra_count;
+        result.state = chain->state;
+        result.rate_milli = chain->rate_milli;
+        *snapshot = result;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 StopDamageChainReaction(
+        const AnomalyGenerationHandleV1 handle) noexcept {
+        std::scoped_lock lock(mutex);
+        auto* chain = FindDamageChainReactionLocked(handle);
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "damage-chain reaction handle is not available in the current generation");
+        }
+        chain->stop_requested = true;
+        chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED;
+        // Keep an in-flight provenance lease until its eventual hit is tagged/confirmed.
+        if (!chain->awaiting_confirmation) {
+            chain->flags &= ~ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_AWAITING_CONFIRMATION;
+        }
+        return Status(ANOMALY_STATUS_V1_OK,
+            "chain stopped; an already-entered native application will not be retried");
+    }
+
     void ProcessCharacterDamageLocked(
         const float damage,
         const std::int32_t source_index,
@@ -8067,7 +8470,8 @@ struct Ue5NteAdapter::State {
         const bool critical,
         const bool critical_valid,
         const bool partial,
-        const std::uint64_t capture_tick_sequence) noexcept {
+        const std::uint64_t capture_tick_sequence,
+        const std::uint64_t damage_chain_reaction_id) noexcept {
         const auto drop = [this]() noexcept {
             ++damage_dropped_count;
             damage_capture_drop_count.fetch_add(1, std::memory_order_relaxed);
@@ -8083,6 +8487,9 @@ struct Ue5NteAdapter::State {
             bool is_critical = critical;
             AnomalyNteDamageEventV1 event{};
             event.flags = ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT;
+            if (damage_chain_reaction_id != 0) {
+                event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
+            }
             if (is_critical) event.flags |= ANOMALY_NTE_DAMAGE_V1_CRITICAL;
             if (critical_valid) event.flags |= ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID;
             event.tick_sequence = capture_tick_sequence;
@@ -8123,9 +8530,41 @@ struct Ue5NteAdapter::State {
                         Layout(profile, "object.class"), attacker_class) &&
                     IsClassDerivedFromLocked(attacker_class, get_hp->outer_class);
             }
+            DamageChainReactionRecord* confirmed_chain{};
+            if (damage_chain_reaction_id != 0 && has_replay_context) {
+                auto* candidate_chain = FindDamageChainReactionByIdLocked(damage_chain_reaction_id);
+                if (candidate_chain != nullptr && candidate_chain->awaiting_confirmation &&
+                    candidate_chain->object_generation == object_generation &&
+                    candidate_chain->world.generation == world_generation &&
+                    event.attacker.id == candidate_chain->attacker.id &&
+                    event.attacker.generation == candidate_chain->attacker.generation &&
+                    event.victim.id == candidate_chain->target.id &&
+                    event.victim.generation == candidate_chain->target.generation &&
+                    replay_context.kind == candidate_chain->root_replay_kind &&
+                    replay_context.function == candidate_chain->root_replay_function &&
+                    ReplayContextMatchesDamageLocked(
+                        replay_context, attacker, victim, candidate_chain->source_id)) {
+                    confirmed_chain = candidate_chain;
+                }
+            }
             RecordDamageEventLocked(event, damage,
                 has_replay_context ? &replay_context : nullptr,
                 attacker_was_local_player_character);
+            if (confirmed_chain != nullptr) {
+                confirmed_chain->awaiting_confirmation = false;
+                confirmed_chain->last_confirmed_damage_sequence = damage_event_sequence;
+                if (confirmed_chain->confirmed_extra_count < confirmed_chain->requested_extra_count) {
+                    ++confirmed_chain->confirmed_extra_count;
+                }
+                confirmed_chain->flags &= ~ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_AWAITING_CONFIRMATION;
+                if (confirmed_chain->confirmed_extra_count >= confirmed_chain->requested_extra_count) {
+                    confirmed_chain->state = confirmed_chain->stop_requested
+                        ? ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED
+                        : ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_COMPLETED;
+                } else if (!confirmed_chain->stop_requested) {
+                    confirmed_chain->state = ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE;
+                }
+            }
             AnomalyNteCombatEventV1 combat_event{};
             combat_event.kind = ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE;
             combat_event.tick_sequence = event.tick_sequence;
@@ -8169,7 +8608,7 @@ struct Ue5NteAdapter::State {
             damage.damage, damage.source_index, damage.source_serial,
             damage.victim, damage.attacker, damage.saved_skill_cdo, damage.active_spec_handle,
             critical, critical_valid, damage.tags.partial || !critical_valid,
-            capture_tick_sequence);
+            capture_tick_sequence, damage.damage_chain_reaction_id);
     }
 
     void RefreshEntityCache(
@@ -18171,6 +18610,11 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteDamageChainServiceV1),
             ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
             this, DamageChainStartThunk, DamageChainStopThunk, DamageChainSnapshotThunk};
+        damage_chain_reaction_service = {
+            sizeof(AnomalyNteDamageChainReactionServiceV1),
+            ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_VERSION,
+            this, DamageChainReactionStartThunk, DamageChainReactionApplyThunk,
+            DamageChainReactionSnapshotThunk, DamageChainReactionStopThunk};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
@@ -18221,8 +18665,9 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteEntitiesServiceV1 entities_service{};
     AnomalyNteActorsServiceV1 actors_service{};
     AnomalyNteCombatServiceV1 combat_service{};
-    AnomalyNteDamageReplayServiceV1 damage_replay_service{}; // deprecated legacy API
-    AnomalyNteDamageChainServiceV1 damage_chain_service{};
+    AnomalyNteDamageReplayServiceV1 damage_replay_service{}; // no longer published
+    AnomalyNteDamageChainServiceV1 damage_chain_service{}; // legacy route, no longer published
+    AnomalyNteDamageChainReactionServiceV1 damage_chain_reaction_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
     AnomalyNteMetricsServiceV1 metrics_service{};
@@ -18835,10 +19280,42 @@ private:
     }
 
     static AnomalyStatusV1 ANOMALY_CALL DamageReplayThunk(
-        void* user, const AnomalyNteDamageReplayRequestV1* request) noexcept {
+        void*, const AnomalyNteDamageReplayRequestV1*) noexcept {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+            "anomaly.nte.damage-replay is deprecated and no longer published; use anomaly.nte.damage-chain-reaction");
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainReactionStartThunk(
+        void* user, const AnomalyNteDamageChainReactionRequestV1* request,
+        AnomalyGenerationHandleV1* chain) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
-            ? static_cast<State*>(lease.User())->ReplayDamage(request)
+            ? static_cast<State*>(lease.User())->StartDamageChainReaction(request, chain)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainReactionApplyThunk(
+        void* user, AnomalyGenerationHandleV1 chain) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->ApplyNextDamageChainReaction(chain)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainReactionSnapshotThunk(
+        void* user, AnomalyGenerationHandleV1 chain,
+        AnomalyNteDamageChainReactionSnapshotV1* snapshot) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->SnapshotDamageChainReaction(chain, snapshot)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainReactionStopThunk(
+        void* user, AnomalyGenerationHandleV1 chain) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->StopDamageChainReaction(chain)
             : StoppedStatus();
     }
 
@@ -19900,35 +20377,14 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             semantic_lifetime)) {
         return false;
     }
-    const bool publish_damage_replay_service = framework_hook_ready &&
-        NteCombatProfileAvailable() &&
-        !IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
-    if (publish_damage_replay_service &&
-        !Publish(
-            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
-            ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
-            &endpoint->damage_replay_service,
-            [self, observer_endpoint] {
-                const auto locked = self.lock();
-                const auto observed = observer_endpoint.lock();
-                if (!locked || !observed ||
-                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) {
-                    return;
-                }
-                locked->player_demand.store(true, std::memory_order_release);
-                locked->combat_demand.store(true, std::memory_order_release);
-            },
-            semantic_lifetime)) {
-        return false;
-    }
-    const bool publish_damage_chain_service = framework_hook_ready &&
+    const bool publish_damage_chain_reaction_service = framework_hook_ready &&
         NteCombatProfileAvailable() && ObjectFindAvailable() &&
-        !IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
-    if (publish_damage_chain_service &&
+        !IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_ID);
+    if (publish_damage_chain_reaction_service &&
         !Publish(
-            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
-            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
-            &endpoint->damage_chain_service,
+            ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_VERSION,
+            &endpoint->damage_chain_reaction_service,
             [self, observer_endpoint] {
                 const auto locked = self.lock();
                 const auto observed = observer_endpoint.lock();
@@ -20355,14 +20811,11 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         const bool invocation_service_ready =
             state->SemanticFeatureAvailable("nte.skill-invocation") &&
             !state->IsPublished(ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID);
-        const bool damage_replay_service_ready =
-            state->NteCombatProfileAvailable() &&
-            !state->IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
-        const bool damage_chain_service_ready =
+        const bool damage_chain_reaction_service_ready =
             state->NteCombatProfileAvailable() && state->ObjectFindAvailable() &&
-            !state->IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
+            !state->IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_ID);
         if (combat_service_ready || skills_service_ready || invocation_service_ready ||
-            damage_replay_service_ready || damage_chain_service_ready) {
+            damage_chain_reaction_service_ready) {
             static_cast<void>(state->PublishAvailableServices(state));
         }
         state->RefreshPickupConfirmationLocked();
