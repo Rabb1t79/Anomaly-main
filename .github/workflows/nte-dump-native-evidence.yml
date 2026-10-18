@@ -19,7 +19,7 @@ jobs:
       - name: Checkout branch extractor only
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           path: repo
           fetch-depth: 1
           sparse-checkout: |
