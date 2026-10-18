@@ -189,3 +189,8 @@
 - `UHTGATargetType` 声明 `GetTargets(OwningActor, TargetingActor, FGameplayEventData&, OutTargetData, OutHitResults, OutActors) const`；`UHTGATargetType_UseEventData` 的类大小与父类相同，没有额外字段，继承 `GetTargets`。这证明该目标解析接口接收 `FGameplayEventData` 并可输出目标 Actor/TargetData。
 - 这仍不能证明具体实现一定返回 `EventData.Target`，也不能证明调用 `K2_OnTriggerPeriodGamePlayEffect` 必然造成一次真实伤害。下一步需要针对当前游戏版本的只读运行时目标解析探针/事件追踪，或实机伤害确认。
 - 最新报告 `/mnt/data/NTE-damage-Dump-evidence-5.6.1-vs-5.6.1-new.md`，SHA-256 `2b7b9b5657b00571dced930f5dfe0a7f2f5e759cc4259421514700efa0ccdc8f`。
+### 原生调用嵌套与 Actor 生命周期审查（2026-10-18）
+- 静态检查发现，没有明显的同线程重复获取状态主锁的路径：Core 在持状态锁时设置 awaiting-confirmation，随后释放锁调用反射周期事件，调用结束后再重新上锁并排空伤害捕获队列。伤害钩子释放自身短暂管理锁后才调用原始处理函数和回调。因此当前源码没有显示出显而易见的这一路径死锁。
+- 临时 chain provenance 在直接调用 `K2_OnTriggerPeriodGamePlayEffect` 前设置、作用域结束后恢复；这结构上允许同步嵌套伤害回调，但是否在捕获回调时把 chain ID 正确写入事件，仍需运行时确认。
+- **新识别的生命周期风险，尚未修复：** `SpawnNativeDamageTriggerActorLocked` 先调用 `FinishSpawningActor`，然后 `ConfigureNativeDamageTriggerActorLocked` 才设置 `EventData`、`EffectContainer` 和运行期周期/次数字段。当前 Dump 只证明反射声明，不证明完成生成时是否自动启动计时触发。插件明确会为每个队列项直接调用 `K2_OnTriggerPeriodGamePlayEffect`，没有显式调用 `StartTriggerGamePlayEffect` / `TriggerPeriodGamePlayEffectEvent`，但这不足以证明 Actor 不会自行产生额外伤害。
+- 目前不凭一般 UE5 经验或猜测更改 spawn 生命周期/周期字段。下一步需要用项目证据或只读运行时诊断确认 actor 的启动语义和事件是否每次恰好产生一次伤害，再作最小修复。当前 18 块 Dump 对照、CI 和 RateQueue 测试均不能替代实机伤害验证。

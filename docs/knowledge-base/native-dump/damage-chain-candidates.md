@@ -114,3 +114,8 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 - 双版本报告 [39126720146](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126720146) 已成功：18/18 个聚焦块可提取且文本一致，缺失标记为 0。
 - `UHTGATargetType` 有 `GetTargets` 反射声明，输入包含 `const FGameplayEventData&`，输出包括 `OutTargetData`、`OutHitResults` 与 `OutActors`；`UHTGATargetType_UseEventData` 没有附加字段并继承它。这加强了“使用事件数据进行目标解析”的声明层依据。
 - 但 Dump 仅显示函数声明，不包含实际函数逻辑；仍需运行时确认这个类型确实选择原始受击目标，再确认每次周期触发造成一次真实伤害。
+## 2026-10-18 补充审查：Actor 生命周期与嵌套伤害确认
+
+- Core 的调用顺序：在状态锁内将当前链置为等待确认，释放锁后设置临时 provenance 并调用 `K2_OnTriggerPeriodGamePlayEffect`，返回后重新上锁并排空捕获队列。DamageHook 的管理锁也在调用原始处理函数及回调前释放。静态代码中未发现明显的同线程重复锁定死锁。
+- 生成路径中，`BeginDeferredActorSpawnFromClass`/`FinishSpawningActor` 组成的生成 helper 会在独立配置函数写入 `EventData`、EffectContainer 与周期字段之前完成 spawn。这是应检查的生命周期时序风险，但 Dump 声明不提供 BeginPlay/定时器内部行为，尚不能断言一定会自动多触发。
+- 现有手动路径每个队列项调用 `K2_OnTriggerPeriodGamePlayEffect`；当前代码没有显式调用 `StartTriggerGamePlayEffect` 或 `TriggerPeriodGamePlayEffectEvent`。仍需确认真实运行时行为，不能仅凭函数名假设它只造成一次伤害或完全不会后台调度。
