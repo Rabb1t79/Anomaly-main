@@ -1044,6 +1044,8 @@ struct Ue5NteAdapter::State {
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
         std::uint64_t tick_sequence{};
+        // Non-zero only when this native GameplayEffect invocation was dispatched by a chain.
+        std::uint64_t damage_chain_id{};
         // Count unique captured invocations after coalescing the same call observed at both
         // ProcessEvent and Native Exec ingress points.
         std::uint32_t matching_candidate_count{};
@@ -1277,6 +1279,7 @@ struct Ue5NteAdapter::State {
         std::uintptr_t receiver{};
         std::uintptr_t function{};
         std::uintptr_t source_parameter_address{};
+        std::uint64_t damage_chain_id{};
         std::uint8_t ingress_mask{};
         bool replay_tag_arrays_valid{};
         CapturedGameplayTagArrays replay_gameplay_tags{};
@@ -5701,7 +5704,8 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t source_parameter_address,
         const std::uint8_t ingress_mask,
         const CapturedGameplayTagArrays& gameplay_tags,
-        const bool tag_arrays_valid) noexcept {
+        const bool tag_arrays_valid,
+        const std::uint64_t damage_chain_id) noexcept {
         const bool character_by_actor_wrapper =
             kind == CombatCaptureKind::GameplayEffectByActorFromCharacter;
         const bool server_character_by_actor =
@@ -5737,6 +5741,7 @@ struct Ue5NteAdapter::State {
                         : kGameplayEffectReplayToTargetFunctionParmsSize)));
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
+        captured.damage_chain_id = damage_chain_id;
         captured.source_parameter_address = source_parameter_address;
         captured.ingress_mask = ingress_mask;
         captured.duplicate_observation_count = 0;
@@ -5760,6 +5765,7 @@ struct Ue5NteAdapter::State {
                 if (!previous.valid ||
                     previous.object_generation != captured.object_generation ||
                     previous.tick_sequence != captured.tick_sequence ||
+                    previous.damage_chain_id != captured.damage_chain_id ||
                     previous.source_parameter_address != captured.source_parameter_address ||
                     previous.receiver != captured.receiver ||
                     previous.function != captured.function ||
@@ -5823,7 +5829,8 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t source_parameter_address,
         const std::uint8_t ingress_mask,
         const CapturedGameplayTagArrays& gameplay_tags,
-        const bool tag_arrays_valid) noexcept {
+        const bool tag_arrays_valid,
+        const std::uint64_t damage_chain_id) noexcept {
         switch (kind) {
         case CombatCaptureKind::CharacterDamage:
             CaptureCharacterDamageBytesLocked(parameters, capture_tick_sequence);
@@ -5841,7 +5848,8 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::GameplayEffectByActorFromServer:
             CaptureReplayEffectInvocationLocked(
                 kind, receiver, function, parameters, capture_tick_sequence,
-                source_parameter_address, ingress_mask, gameplay_tags, tag_arrays_valid);
+                source_parameter_address, ingress_mask, gameplay_tags, tag_arrays_valid,
+                damage_chain_id);
             break;
         }
     }
@@ -5859,7 +5867,8 @@ struct Ue5NteAdapter::State {
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
                 capture.info_offset, capture.tick_sequence, capture.receiver, capture.function,
                 capture.source_parameter_address, capture.ingress_mask,
-                capture.replay_gameplay_tags, capture.replay_tag_arrays_valid);
+                capture.replay_gameplay_tags, capture.replay_tag_arrays_valid,
+                capture.damage_chain_id);
             ++read;
             ++drained;
         }
@@ -6091,6 +6100,7 @@ struct Ue5NteAdapter::State {
         capture.receiver = receiver;
         capture.function = function;
         capture.source_parameter_address = reinterpret_cast<std::uintptr_t>(parameters);
+        capture.damage_chain_id = g_current_damage_chain_id;
         capture.ingress_mask = ingress_mask;
         capture.replay_gameplay_tags = {};
         capture.replay_tag_arrays_valid = true;
@@ -7536,14 +7546,6 @@ struct Ue5NteAdapter::State {
             bool is_critical = critical;
             AnomalyNteDamageEventV1 event{};
             event.flags = ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT;
-            if (damage_chain_id != 0) {
-                event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
-                if (auto* chain = FindDamageChainLocked(damage_chain_id);
-                    chain != nullptr && chain->observed_chain_damage_count !=
-                        (std::numeric_limits<std::uint32_t>::max)()) {
-                    ++chain->observed_chain_damage_count;
-                }
-            }
             if (is_critical) event.flags |= ANOMALY_NTE_DAMAGE_V1_CRITICAL;
             if (critical_valid) event.flags |= ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID;
             event.tick_sequence = capture_tick_sequence;
@@ -7571,6 +7573,20 @@ struct Ue5NteAdapter::State {
             ReplayEffectContext replay_context{};
             const bool has_replay_context = FindReplayContextForDamageLocked(
                 attacker, victim, event.source_id, capture_tick_sequence, replay_context);
+            // Prefer the synchronous TLS identity. If the native damage broadcast arrives
+            // later, reuse only the chain id carried by the exact validated GameplayEffect
+            // invocation selected by the existing GEDef/ASC/source/target correlation.
+            const std::uint64_t correlated_chain_id = damage_chain_id != 0
+                ? damage_chain_id
+                : (has_replay_context ? replay_context.damage_chain_id : 0U);
+            if (correlated_chain_id != 0) {
+                event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
+                if (auto* chain = FindDamageChainLocked(correlated_chain_id);
+                    chain != nullptr && chain->observed_chain_damage_count !=
+                        (std::numeric_limits<std::uint32_t>::max)()) {
+                    ++chain->observed_chain_damage_count;
+                }
+            }
             bool attacker_was_local_player_character =
                 attacker != 0 && attacker == player_pawn;
             if (attacker_was_local_player_character) {
