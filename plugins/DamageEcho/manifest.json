@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "id": "com.rabb1t79.damage-echo",
+  "name": "伤害回响 (Damage Echo)",
+  "description": "为已登记的受伤目标持续触发伤害回响，可调整每秒触发次数。",
+  "author": "Rabb1t79",
+  "license": "AGPL-3.0-only",
+  "version": "1.0.0",
+  "entry": "plugin.dll",
+  "api": {
+    "major": 1,
+    "minMinor": 0,
+    "maxMinor": 0
+  },
+  "games": [
+    "nte"
+  ],
+  "builds": [
+    "nte-*"
+  ],
+  "loadPhase": "game-ready",
+  "services": [
+    {
+      "id": "anomaly.ui",
+      "minVersion": 1
+    }
+  ],
+  "capabilities": [
+    "ui",
+    "memory-write"
+  ]
+}

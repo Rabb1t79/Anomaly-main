@@ -1,0 +1,63 @@
+name: Build Damage Echo MSVC
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'plugins/DamageEcho/**'
+      - '.github/workflows/build-damage-echo.yml'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Damage Echo
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $src = Join-Path $env:GITHUB_WORKSPACE '.build/damage-echo-src'
+          $b = Join-Path $env:GITHUB_WORKSPACE '.build/damage-echo'
+          New-Item -ItemType Directory -Path $src -Force | Out-Null
+          @"
+          cmake_minimum_required(VERSION 3.22)
+          project(DamageEchoStandalone LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(damage_echo SHARED "$root/plugins/DamageEcho/plugin.cpp")
+          target_include_directories(damage_echo PRIVATE "$root/include")
+          target_compile_definitions(damage_echo PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          set_target_properties(damage_echo PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
+          cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
+
+      - name: Build and package plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $b = Join-Path $env:GITHUB_WORKSPACE '.build/damage-echo'
+          cmake --build $b --config Release --parallel
+          $dll = Join-Path $b 'Release/plugin.dll'
+          if (!(Test-Path $dll)) { throw 'plugin.dll was not produced' }
+          $pkg = Join-Path $env:GITHUB_WORKSPACE 'dist/DamageEcho-windows-x64'
+          New-Item -ItemType Directory -Path $pkg -Force | Out-Null
+          Copy-Item $dll (Join-Path $pkg 'plugin.dll')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/DamageEcho/manifest.json') (Join-Path $pkg 'manifest.json')
+          Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/DamageEcho-windows-x64.zip') -Force
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DamageEcho-windows-x64
+          path: dist/DamageEcho-windows-x64.zip
+          if-no-files-found: error
