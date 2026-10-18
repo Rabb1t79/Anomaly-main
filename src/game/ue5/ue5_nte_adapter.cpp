@@ -7437,7 +7437,10 @@ struct Ue5NteAdapter::State {
             GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
             return;
         }
-        constexpr std::size_t kMaximumDamageChainDispatchesPerTick = 4;
+        constexpr std::size_t kMaximumDispatchesPerChainPerTick = 4;
+        constexpr std::size_t kMaximumDamageChainDispatchesPerTick =
+            kDamageChainCapacity * kMaximumDispatchesPerChainPerTick;
+        std::array<std::size_t, kDamageChainCapacity> dispatches_this_tick{};
         for (std::size_t dispatched_this_tick{};
              dispatched_this_tick < kMaximumDamageChainDispatchesPerTick;
              ++dispatched_this_tick) {
@@ -7451,7 +7454,9 @@ struct Ue5NteAdapter::State {
                     const auto index = (damage_chain_scheduler_cursor + offset) %
                         kDamageChainCapacity;
                     const auto& candidate = damage_chains[index];
-                    if (candidate.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                    if (dispatches_this_tick[index] >=
+                            kMaximumDispatchesPerChainPerTick ||
+                        candidate.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
                         candidate.in_flight || candidate.next_due > now) {
                         continue;
                     }
@@ -7461,6 +7466,7 @@ struct Ue5NteAdapter::State {
                 if (due_slot == kDamageChainCapacity) return;
                 auto& due_chain = damage_chains[due_slot];
                 due_chain.in_flight = true;
+                ++dispatches_this_tick[due_slot];
                 damage_chain_scheduler_cursor = (due_slot + 1U) % kDamageChainCapacity;
                 chain_id = due_chain.id;
                 root_sequence = due_chain.root_damage_sequence;
