@@ -1504,10 +1504,16 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteAttackReplay/manifest.json
         PACKAGE_NAME NteAttackReplay
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteAttackReplay")
+    anomaly_add_plugin(anomaly_builtin_damage_chain_reaction
+        SOURCES plugins/DamageChainReaction/plugin.cpp
+        MANIFEST plugins/DamageChainReaction/manifest.json
+        PACKAGE_NAME DamageChainReaction
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/DamageChainReaction")
     # Force MSVC to read these plugins’ Chinese UI strings as UTF-8.
     target_compile_options(anomaly_builtin_auto_fish PRIVATE /utf-8)
     target_compile_options(anomaly_builtin_nte_vehicle PRIVATE /utf-8)
     target_compile_options(anomaly_builtin_nte_attack_replay PRIVATE /utf-8)
+    target_compile_options(anomaly_builtin_damage_chain_reaction PRIVATE /utf-8)
     # 插件源码把中文直接写在字符串字面量里（非 locale），MSVC 需按 UTF-8 读源码并编码窄字符串。
     target_compile_options(anomaly_builtin_time_accel PRIVATE /utf-8)
     target_link_libraries(anomaly_builtin_fake_uid PRIVATE nlohmann_json::nlohmann_json)
@@ -1546,7 +1552,8 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
         anomaly_builtin_model_scale anomaly_builtin_auto_fish
-        anomaly_builtin_nte_vehicle anomaly_builtin_nte_attack_replay)
+        anomaly_builtin_nte_vehicle anomaly_builtin_nte_attack_replay
+        anomaly_builtin_damage_chain_reaction)
     if(ANOMALY_BUILD_TEST_PLUGINS)
         list(APPEND ANOMALY_BUILTIN_PLUGIN_TARGETS
             anomaly_builtin_nte_movement_hold
@@ -1600,6 +1607,8 @@ anomaly_stage_platform_preview_plugin(anomaly_example_reliable_config ReliableCo
 anomaly_stage_platform_preview_plugin(anomaly_example_nte_inspector NteInspector)
 anomaly_stage_platform_preview_plugin(anomaly_example_nte_combat_demo NteCombatDemo)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_position NtePosition)
+anomaly_stage_platform_preview_plugin(
+    anomaly_builtin_damage_chain_reaction DamageChainReaction)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_teleport NteTeleport)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_navigation NteNavmeshDemo)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_pickup_demo NtePickupDemo)
