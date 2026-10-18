@@ -863,11 +863,76 @@ typedef struct AnomalyNteDamageReplayRequestV1 {
     uint32_t flags;
     uint64_t damage_sequence;
 } AnomalyNteDamageReplayRequestV1;
+/* Deprecated for new damage-chain features. Kept for legacy clients only. */
 typedef struct AnomalyNteDamageReplayServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     AnomalyStatusV1 (ANOMALY_CALL *replay_damage)(
         void* user, const AnomalyNteDamageReplayRequestV1* request);
 } AnomalyNteDamageReplayServiceV1;
+
+/*
+ * Native damage-chain interface.
+ *
+ * The caller supplies a sequence from anomaly.nte.combat; Core must resolve the captured
+ * player->target event and its dump-validated native trigger configuration. This service
+ * must not invoke AnomalyNteDamageReplayServiceV1, replay a saved GameplayEffect call,
+ * emulate input, activate a skill, replay animation, or write HP directly.
+ *
+ * A successful start means Core accepted and created a validated native chain instance.
+ * It does not mean a follow-up hit has already occurred; snapshot.confirmed_repeat_count
+ * changes only after Core observes a newer matching native damage event for the same target.
+ * If the active Profile cannot prove one unique native trigger configuration and original
+ * target binding, start_chain must return UNAVAILABLE and must not fall back to another route.
+ */
+#define ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID "anomaly.nte.damage-chain"
+#define ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION 1u
+
+typedef enum AnomalyNteDamageChainStateV1 {
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_UNKNOWN = 0,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_PENDING = 1,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE = 2,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED = 3,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED = 4,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED = 5
+} AnomalyNteDamageChainStateV1;
+
+#define ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_STALE (1u << 1u)
+#define ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_TARGET_BOUND (1u << 2u)
+#define ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_NATIVE_TRIGGER_STARTED (1u << 3u)
+
+typedef struct AnomalyNteDamageChainRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t damage_sequence;
+    uint32_t repeat_count;
+    uint32_t reserved;
+} AnomalyNteDamageChainRequestV1;
+
+typedef struct AnomalyNteDamageChainSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    AnomalyGenerationHandleV1 chain;
+    uint64_t damage_sequence;
+    uint32_t requested_repeat_count;
+    uint32_t confirmed_repeat_count;
+    uint32_t state;
+    uint32_t reserved;
+} AnomalyNteDamageChainSnapshotV1;
+
+typedef struct AnomalyNteDamageChainServiceV1 {
+    uint32_t struct_size;
+    uint32_t service_version;
+    void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *start_chain)(
+        void* user, const AnomalyNteDamageChainRequestV1* request,
+        AnomalyGenerationHandleV1* chain);
+    AnomalyStatusV1 (ANOMALY_CALL *stop_chain)(
+        void* user, AnomalyGenerationHandleV1 chain);
+    AnomalyStatusV1 (ANOMALY_CALL *snapshot)(
+        void* user, AnomalyGenerationHandleV1 chain,
+        AnomalyNteDamageChainSnapshotV1* snapshot);
+} AnomalyNteDamageChainServiceV1;
 
 typedef struct AnomalyNteSkillFrameV1 {
     uint32_t struct_size; uint32_t flags;
