@@ -1085,7 +1085,7 @@ struct Ue5NteAdapter::State {
         ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS;
     std::array<DamageChainRecord, kDamageChainCapacity> damage_chains{};
     std::uint64_t damage_chain_next_id{1};
-    static constexpr std::size_t kReplayEffectCallCapacity = 32;
+    static constexpr std::size_t kReplayEffectCallCapacity = 256;
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
     std::size_t replay_effect_call_start{};
     std::size_t replay_effect_call_count{};
@@ -6953,7 +6953,11 @@ struct Ue5NteAdapter::State {
                 delta < diagnostics->nearest_exact_match_tick_delta) {
                 diagnostics->nearest_exact_match_tick_delta = delta;
             }
-            if (delta > kReplayCorrelationMaxTickAge) {
+            // A chain-created effect keeps its opaque dispatch identity until its
+            // corresponding real CharacterOnDamaged event is correlated. Unlike ordinary
+            // capture discovery, this association does not expire by Tick age; the chain
+            // itself has a count-based lifetime. Original calls still use the strict age cap.
+            if (delta > kReplayCorrelationMaxTickAge && candidate.damage_chain_id == 0) {
                 if (diagnostics != nullptr) ++diagnostics->tick_delta_too_large;
                 continue;
             }
