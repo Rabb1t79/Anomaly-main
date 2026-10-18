@@ -93,6 +93,8 @@ jobs:
           $generated = Join-Path $env:RUNNER_TEMP 'anomaly-sdk-v1-windows-x64.generated.json'
           & $snapshotTool --write $generated
           if ($LASTEXITCODE -ne 0) { throw 'Failed to generate ABI snapshot from the built SDK headers.' }
+          # Validate JSON syntax as well as the snapshot tool's strict token comparison.
+          Get-Content -LiteralPath $generated -Raw | ConvertFrom-Json | Out-Null
           # Validate the generated ABI document and installed SDK headers from this exact build.
           & $snapshotTool --check $generated
           if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
