@@ -105,3 +105,7 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 - 双版本证据任务 [39126184168](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126184168) 成功；最新版报告共有 16 个聚焦块，16 个全部成功提取且文本一致，零缺失标记。
 - `FGameplayEventData` 在两版均为 `0xB0`，`Instigator` offset `0x08`，`Target` offset `0x10`；对应 `GameplayAbilities_structs.hpp` 文件大小及 SHA-256 也完全相同。
 - 这些结果支持 Core 当前的内层字段布局检查，但不证明 `K2_OnTriggerPeriodGamePlayEffect` 的运行时业务语义，也不证明其调用一次就会对原始受击目标造成一次真实伤害。
+## 2026-10-18 目标类型声明补充
+
+- 当前适配器选择 `HTGATargetType_UseEventData` 作为 GameplayEffect 容器目标类型，且通过反射验证其父类为 `HTGATargetType`。这两个类声明尚未列入前一轮聚焦对照。
+- 新增两版 Dump 的目标类型类块提取项；需等后续报告验证它们是否存在以及声明是否相同，再提升对应证据等级。

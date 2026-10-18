@@ -180,3 +180,7 @@
 - `FGameplayEventData` 双版本取证运行 [39126184168](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126184168) 已完成且成功。两份 `GameplayAbilities_structs.hpp` 均由 Git LFS 成功物化，文件大小 150,574 bytes、SHA-256 同为 `992b87956ae12d195bb8d1a3b492e4b9c5ef520b5bf5acedadcff6496fa6a556`。
 - 最新聚焦报告共 16 个声明块：16/16 成功提取、缺失标记 0、不可用 diff 0、16/16 块文本一致。`FGameplayEventData` 布局为大小 `0xB0`、`Instigator` offset `0x08`（8 字节对象属性）、`Target` offset `0x10`（8 字节对象属性），与当前适配器布局验证条件一致。
 - 最新报告位置 `/mnt/data/NTE-damage-Dump-evidence-5.6.1-vs-5.6.1-new.md`，SHA-256 `4c74d25bc53d3ccf2e3574aeb65011c3d2735f8eae3c5878654c61f802eb57e2`。两版本的完整 HTGame classes、HTGame structs 和 GObjects 文件仍存在哈希差异；聚焦声明一致不能代替原生调用的实机伤害验证。
+
+### 目标选择类型证据补齐（2026-10-18）
+- 当前 Core 会把 `HTGATargetType_UseEventData` 设置为 `FHTGameplayEffectContainer.TargetType`，并验证它属于 `HTGATargetType` 子类。上一份 16 块报告覆盖了容器和内层 `FGameplayEventData`，但没有独立提取这两个目标类型类声明。
+- 本次扩展双版本 LFS 取证脚本：增加 `UHTGATargetType` 与 `UHTGATargetType_UseEventData` 聚焦类块，并在 GObjects 搜索中加入基类名称。等待下一次报告确认两版都能提取且布局一致；类型名本身不证明目标解析的运行语义。

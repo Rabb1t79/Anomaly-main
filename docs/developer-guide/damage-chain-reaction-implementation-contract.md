@@ -88,3 +88,8 @@ With the feature disabled, one native attack produces one ordinary damage result
 - The latest report contains **16 focused declaration blocks**: all 16 extracted successfully, zero missing markers, zero unavailable diffs, and all 16 report `No textual difference in extracted block.`
 - `FGameplayEventData` matches in both versions: size `0xB0`, `Instigator` at `0x08` (8-byte object property), `Target` at `0x10` (8-byte object property). `GameplayAbilities_structs.hpp` is 150,574 bytes in both versions with SHA-256 `992b87956ae12d195bb8d1a3b492e4b9c5ef520b5bf5acedadcff6496fa6a556`.
 - The refreshed evidence report at `/mnt/data/NTE-damage-Dump-evidence-5.6.1-vs-5.6.1-new.md` has SHA-256 `4c74d25bc53d3ccf2e3574aeb65011c3d2735f8eae3c5878654c61f802eb57e2`. The HTGame classes, HTGame structs, and GObjects full-file hashes still differ between versions. This closes the nested declaration-layout gap but still does not prove the period event results in real damage in game.
+
+## Target-selection type evidence coverage — 2026-10-18
+
+- Core configures the native container with `HTGATargetType_UseEventData` and validates it as a child of `HTGATargetType`. The prior 16-block report covered the container and nested `FGameplayEventData` layouts, but did not extract the target-type class blocks themselves.
+- This revision adds both `UHTGATargetType` and `UHTGATargetType_UseEventData` to the paired LFS evidence extractor and adds the base type to the GObjects query. Wait for the new report to confirm these class blocks exist and match in both Dump versions; do not infer the target-type behavior from its name alone.
