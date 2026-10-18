@@ -12,8 +12,7 @@ on:
       - 'src/plugin/**'
       - 'plugins/DamageChain/**'
       - 'docs/api-reference/manifest-and-capabilities.md'
-      - 'CMakeLists.txt'
-      - '.github/workflows/nte-damage-chain-core.yml'
+      - 'docs/developer-guide/damage-chain-queued-service.md'
       - 'profiles/nte/**'
       - 'abi/**'
       - 'Anomaly-2.0.0-sdk/**'
@@ -84,7 +83,7 @@ jobs:
         with:
           name: nte-damage-chain-core-validation
           path: |
-            .build/windows-vs2022/bin/RelWithDebInfo/Anomaly.Core.dll
+            .build/windows-vs2022/bin/RelWithDebInfo/Anomaly/Anomaly.Core.dll
             .build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe
             dist/DamageChain-windows-x64.zip
           if-no-files-found: error
