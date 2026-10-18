@@ -4426,6 +4426,19 @@ struct Ue5NteAdapter::State {
         return false;
     }
 
+    [[nodiscard]] bool IsKnownDamageChainRootLocked(
+        const std::uint64_t damage_sequence) const noexcept {
+        if (damage_sequence == 0) return false;
+        for (const auto& chain : damage_chains) {
+            if (chain.root_damage_sequence == damage_sequence &&
+                chain.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY &&
+                !chain.context_invalidated) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static void SetDamageChainMessage(
         DamageChainRecord& chain, const std::string_view message) noexcept {
         chain.status_message.fill('\0');
@@ -7542,7 +7555,18 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "damage chain requires an original CharacterOnDamaged event, not a chain-generated event");
         }
-        if (IsActiveDamageChainRootLocked(request->damage_sequence)) {
+        if (root->event.world.id == 0 ||
+            root->event.world.generation != world_generation ||
+            root->event.attacker.id == 0 ||
+            root->event.attacker.generation != object_generation ||
+            root->event.victim.id == 0 ||
+            root->event.victim.generation != object_generation ||
+            root->event.source_id == 0 ||
+            (root->replay.valid && root->replay.object_generation != object_generation)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "root damage lacks current world/object identity or a resolved DamageGEDef source");
+        }
+        if (IsKnownDamageChainRootLocked(request->damage_sequence)) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "this root damage event already has an active chain");
         }
