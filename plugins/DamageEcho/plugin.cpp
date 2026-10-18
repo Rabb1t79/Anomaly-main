@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -317,6 +318,19 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
 
     ui->end_window(ui->user);
 }
+
+
+using BeginWindowSignature =
+    int (ANOMALY_CALL *)(void*, AnomalyStringViewV1, int*, std::uint32_t);
+static_assert(std::is_same_v<decltype(AnomalyUiServiceV1::begin_window),
+                             BeginWindowSignature>,
+              "Damage Echo must match the current Anomaly UI ABI");
+static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_load), decltype(&Load)>);
+static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_start), decltype(&Start)>);
+static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_stop), decltype(&Stop)>);
+static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_unload), decltype(&Unload)>);
+static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_update), decltype(&Update)>);
+static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_draw), decltype(&Draw)>);
 
 }  // namespace
 
