@@ -4366,22 +4366,31 @@ struct Ue5NteAdapter::State {
         return nullptr;
     }
 
-    [[nodiscard]] bool DamageEventMatchesChainRootLocked(
+    [[nodiscard]] bool DamageEventMatchesChainParticipantsLocked(
         const std::uint64_t chain_id,
         const AnomalyNteDamageEventV1& event) noexcept {
         const auto* const chain = FindDamageChainLocked(chain_id);
         return chain != nullptr &&
             !chain->context_invalidated &&
-            chain->root_source_id != 0 &&
             chain->world_generation == world_generation &&
             chain->object_generation == object_generation &&
+            event.world.id != 0 &&
             event.world.generation == chain->world_generation &&
             event.attacker.id != 0 &&
             event.attacker.id == chain->root_attacker.id &&
             event.attacker.generation == chain->root_attacker.generation &&
             event.victim.id != 0 &&
             event.victim.id == chain->root_victim.id &&
-            event.victim.generation == chain->root_victim.generation &&
+            event.victim.generation == chain->root_victim.generation;
+    }
+
+    [[nodiscard]] bool DamageEventMatchesChainRootLocked(
+        const std::uint64_t chain_id,
+        const AnomalyNteDamageEventV1& event) noexcept {
+        const auto* const chain = FindDamageChainLocked(chain_id);
+        return DamageEventMatchesChainParticipantsLocked(chain_id, event) &&
+            chain != nullptr &&
+            chain->root_source_id != 0 &&
             event.source_id == chain->root_source_id;
     }
 
@@ -7928,7 +7937,15 @@ struct Ue5NteAdapter::State {
 
             std::uint64_t correlated_chain_id{};
             bool chain_damage_callback_correlated{};
-            if (damage_chain_id != 0 && DamageEventMatchesChainRootLocked(damage_chain_id, event)) {
+            // A synchronous callback captured inside the exact replay invocation carries a
+            // trusted chain id and participant pair. Preserve that origin marker even if the
+            // emitted DamageGEDef representation cannot be matched to the root; do not count
+            // it as a completed repeat unless the strict source identity and token also match.
+            const bool synchronous_chain_origin =
+                damage_chain_id != 0 &&
+                DamageEventMatchesChainParticipantsLocked(damage_chain_id, event);
+            if (synchronous_chain_origin &&
+                DamageEventMatchesChainRootLocked(damage_chain_id, event)) {
                 correlated_chain_id = damage_chain_id;
                 std::uint64_t consumed_chain_id{};
                 chain_damage_callback_correlated = ConsumeDamageChainDispatchTokenForDamageLocked(
@@ -7949,10 +7966,12 @@ struct Ue5NteAdapter::State {
                 replay_context_slot < kReplayEffectCallCapacity) {
                 replay_effect_calls[replay_context_slot].damage_callback_correlated = true;
             }
-            if (correlated_chain_id != 0) {
-                // The validated TLS identity blocks recursion even if a callback cannot be
-                // counted; the persistent token, when matched, is the one-to-one counter.
+            if (synchronous_chain_origin || correlated_chain_id != 0) {
+                // Provenance prevents recursive queue creation; only a one-to-one token
+                // match after strict root-effect validation increments observed count.
                 event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
+            }
+            if (correlated_chain_id != 0) {
                 if (chain_damage_callback_correlated) {
                     if (auto* chain = FindDamageChainLocked(correlated_chain_id);
                         chain != nullptr && chain->observed_chain_damage_count !=
