@@ -12,7 +12,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
 #include <cstring>
+#include <iterator>
 #include <filesystem>
 #include <mutex>
 #include <new>
@@ -427,6 +429,8 @@ void ProcessDamageEvent(
             existing->next_trigger_at =
                 now + std::chrono::milliseconds(context.interval_ms);
             existing->consecutive_failures = 0;
+            context.status = "伤害链运行中";
+            context.last_error.clear();
             ++existing->confirmed_echoes;
             ++context.confirmed_echoes;
             if (context.confirmed_echoes == 1 ||
@@ -577,13 +581,16 @@ void UpdateChains(Context& context, const Clock::time_point now) {
         request.damage_sequence = it->root_damage_sequence;
 
         ++context.replay_attempts;
+        // The cursor floor is sampled immediately before dispatch so a queued hit that
+        // predates this invocation cannot be mistaken for its confirmation.
+        it->last_seen_damage_sequence = context.combat->latest_damage_sequence(
+            context.combat->user);
         const auto replay_status = context.damage_replay->replay_damage(
             context.damage_replay->user, &request);
         if (replay_status.code == ANOMALY_STATUS_V1_OK) {
             // Do not count the call return as a hit. The task pauses until a newer
             // matching CharacterOnDamaged event confirms actual additional damage.
             it->waiting_for_confirmation = true;
-            it->last_seen_damage_sequence = context.damage_cursor;
             it->confirmation_deadline = now + kConfirmationTimeout;
             ++it;
             continue;
