@@ -898,8 +898,10 @@ typedef struct AnomalyNteDamageChainRequestV1 {
     uint32_t struct_size;
     uint32_t flags;
     uint64_t damage_sequence;
+    /* Zero means continue until stopped or an unconfirmed trigger ends the chain. */
     uint32_t repeat_count;
-    uint32_t reserved;
+    /* Native trigger interval; accepted range is 100-1000 ms. */
+    uint32_t interval_milliseconds;
 } AnomalyNteDamageChainRequestV1;
 
 typedef struct AnomalyNteDamageChainSnapshotV1 {
@@ -910,7 +912,7 @@ typedef struct AnomalyNteDamageChainSnapshotV1 {
     uint32_t requested_repeat_count;
     uint32_t confirmed_repeat_count;
     uint32_t state;
-    uint32_t reserved;
+    uint32_t interval_milliseconds;
 } AnomalyNteDamageChainSnapshotV1;
 
 typedef struct AnomalyNteDamageChainServiceV1 {
