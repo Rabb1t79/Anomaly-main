@@ -7724,38 +7724,50 @@ struct Ue5NteAdapter::State {
             // matches the root chain's attacker, victim, DamageGEDef identity and world.
             // Delayed callbacks use a one-to-one match against an exact captured invocation.
             std::uint64_t correlated_chain_id{};
+            bool chain_damage_callback_correlated{};
             if (damage_chain_id != 0 &&
                 DamageEventMatchesChainRootLocked(damage_chain_id, event)) {
+                // Preserve the chain tag to prevent recursion, but count an observed hit
+                // only if one still-unclaimed exact native invocation correlates to it.
+                // Multiple callbacks cannot inflate the completed-repeat counter for one dispatch.
                 correlated_chain_id = damage_chain_id;
                 std::uint64_t claimed_chain_id{};
-                static_cast<void>(FindDelayedChainIdentityForDamageLocked(
+                chain_damage_callback_correlated = FindDelayedChainIdentityForDamageLocked(
                     attacker, victim, event.source_id, capture_tick_sequence,
-                    claimed_chain_id, correlated_chain_id));
-            }
-            if (correlated_chain_id == 0) {
+                    claimed_chain_id, correlated_chain_id);
+                if (chain_damage_callback_correlated) {
+                    correlated_chain_id = claimed_chain_id;
+                }
+            } else {
                 // Root replay-context matching deliberately excludes chain-tagged calls.
                 // Also attempt delayed correlation when an unrelated ordinary effect context
                 // matched this event, so unrelated effects do not block a valid chain match.
-                static_cast<void>(FindDelayedChainIdentityForDamageLocked(
+                chain_damage_callback_correlated = FindDelayedChainIdentityForDamageLocked(
                     attacker, victim, event.source_id, capture_tick_sequence,
-                    correlated_chain_id));
+                    correlated_chain_id);
             }
             if (correlated_chain_id != 0 &&
                 !DamageEventMatchesChainRootLocked(correlated_chain_id, event)) {
                 correlated_chain_id = 0;
+                chain_damage_callback_correlated = false;
             }
             if (correlated_chain_id != 0) {
+                // A validated synchronous chain scope may mark the event as generated even
+                // when its native invocation was not capturable; that prevents recursion.
+                // It deliberately does not increment observed-chain counts without one-to-one evidence.
                 event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
-                if (auto* chain = FindDamageChainLocked(correlated_chain_id);
-                    chain != nullptr && chain->observed_chain_damage_count !=
-                        (std::numeric_limits<std::uint32_t>::max)()) {
-                    ++chain->observed_chain_damage_count;
-                    if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING &&
-                        chain->dispatched_repeat_count >= chain->requested_repeat_count &&
-                        chain->observed_chain_damage_count >= chain->requested_repeat_count) {
-                        chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED;
-                        SetDamageChainMessage(*chain,
-                            "已观察到全部请求次数对应的真实伤害事件；队列完成");
+                if (chain_damage_callback_correlated) {
+                    if (auto* chain = FindDamageChainLocked(correlated_chain_id);
+                        chain != nullptr && chain->observed_chain_damage_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->observed_chain_damage_count;
+                        if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING &&
+                            chain->dispatched_repeat_count >= chain->requested_repeat_count &&
+                            chain->observed_chain_damage_count >= chain->requested_repeat_count) {
+                            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED;
+                            SetDamageChainMessage(*chain,
+                                "已观察到全部请求次数对应的真实伤害事件；队列完成");
+                        }
                     }
                 }
             }
