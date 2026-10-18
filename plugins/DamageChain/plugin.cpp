@@ -454,6 +454,9 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     if (context->combat->latest_damage_sequence != nullptr) {
         context->latest_sequence = context->combat->latest_damage_sequence(context->combat->user);
     }
+    // Refresh terminal rows before consuming new native events so a completed chain's
+    // diagnostic slot can be reused immediately rather than dropping the next root hit.
+    RefreshChainRows(*context);
     if (context->was_enabled && !context->enabled) {
         CancelRunningChains(*context);
         context->status = "链式反应已停用：现有队列已取消，伤害监测继续";
@@ -557,7 +560,6 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         context->last_start_failure_code = ANOMALY_STATUS_V1_OK;
     }
 
-    RefreshChainRows(*context);
 }
 
 void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
