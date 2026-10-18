@@ -71,6 +71,8 @@ struct NteCharacterDamageCapture {
     std::int32_t active_spec_handle{};
     NteDamageCriticalState critical;
     NteDamageTags tags;
+    // Set only when this capture is synchronously produced by the chain-reaction adapter.
+    std::uint64_t damage_chain_reaction_id{};
 };
 static_assert(std::is_trivially_copyable_v<NteCharacterDamageCapture>);
 
