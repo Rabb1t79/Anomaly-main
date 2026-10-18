@@ -142,10 +142,17 @@ jobs:
           $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly'
           if (!(Test-Path $runtimeRoot)) { throw 'Runtime staging root did not contain the expected Anomaly directory.' }
           if (!(Test-Path (Join-Path $runtimeRoot 'Anomaly.Core.dll'))) { throw 'Runtime staging is missing the Core built from this commit.' }
+          # Keep production/release validation strict. Only this dedicated non-tag experiment branch
+          # may stage its separately versioned test plugin beside the Core built from the same commit.
+          $expectedAttackReplayVersion = '1.9.8'
+          if ($env:GITHUB_REF_TYPE -eq 'branch' -and
+              $env:GITHUB_REF -eq 'refs/heads/recreation/damage-chain-test-unbounded-ui-20261018') {
+            $expectedAttackReplayVersion = '2.0.0-test1'
+          }
           $expectedPlugins = @(
             @{ Name = 'AutoFish'; Id = 'b1ank.autofish'; Version = '0.1.15' },
             @{ Name = 'NteVehicle'; Id = 'anomaly.local.nte-vehicle'; Version = '0.9.9' },
-            @{ Name = 'NteAttackReplay'; Id = 'anomaly.builtin.nte-attack-replay'; Version = '1.9.8' }
+            @{ Name = 'NteAttackReplay'; Id = 'anomaly.builtin.nte-attack-replay'; Version = $expectedAttackReplayVersion }
           )
           foreach ($plugin in $expectedPlugins) {
             $pluginRoot = Join-Path $runtimeRoot ("plugins/" + $plugin.Name)
