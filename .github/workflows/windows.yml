@@ -30,14 +30,15 @@ jobs:
         shell: pwsh
         env:
           # Fixtures, diagnostic probes and test plugin packages are opt-in; a normal run
-          # builds Runtime, Tools, SDK, and the two supported NTE plugin packages.
+          # builds Runtime, Tools, SDK, supported NTE plugins and bundled plugins.
           ANOMALY_BUILD_OPTIONAL: ${{ inputs.fixtures == true && 'ON' || 'OFF' }}
         run: |
           $arguments = @(
             '--preset', 'windows-vs2022',
             "-DANOMALY_BUILD_TEST_FIXTURES=$env:ANOMALY_BUILD_OPTIONAL",
             "-DANOMALY_BUILD_DIAGNOSTIC_PROBES=$env:ANOMALY_BUILD_OPTIONAL",
-            "-DANOMALY_BUILD_TEST_PLUGINS=$env:ANOMALY_BUILD_OPTIONAL"
+            "-DANOMALY_BUILD_TEST_PLUGINS=$env:ANOMALY_BUILD_OPTIONAL",
+            '-DANOMALY_BUILD_BUILTIN_PLUGINS=ON'
           )
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $arguments += "-DANOMALY_RELEASE_VERSION=$env:GITHUB_REF_NAME"
@@ -134,7 +135,8 @@ jobs:
           $expectedPlugins = @(
             @{ Name = 'AutoFish'; Id = 'b1ank.autofish'; Version = '0.1.15' },
             @{ Name = 'NteVehicle'; Id = 'anomaly.local.nte-vehicle'; Version = '0.9.9' },
-            @{ Name = 'NteAttackReplay'; Id = 'anomaly.builtin.nte-attack-replay'; Version = '1.9.7' }
+            @{ Name = 'NteAttackReplay'; Id = 'anomaly.builtin.nte-attack-replay'; Version = '1.9.7' },
+            @{ Name = 'DamageChain'; Id = 'anomaly.builtin.damage-chain'; Version = '1.0.0' }
           )
           foreach ($plugin in $expectedPlugins) {
             $pluginRoot = Join-Path $runtimeRoot ("plugins/" + $plugin.Name)

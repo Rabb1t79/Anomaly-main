@@ -11,6 +11,7 @@ on:
       - 'sdk/**'
       - 'plugins/NteAttackReplay/**'
       - 'plugins/NteVehicle/**'
+      - 'plugins/DamageChain/**'
       - 'profiles/nte/**'
       - 'abi/**'
       - 'Anomaly-2.0.0-sdk/**'
@@ -34,7 +35,7 @@ jobs:
       - name: Configure Runtime
         shell: pwsh
         run: |
-          cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
+          cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF -DANOMALY_BUILD_BUILTIN_PLUGINS=ON
 
       - name: Build Core, Runtime and supported plugin targets
         run: cmake --build --preset windows-relwithdebinfo --parallel 4
@@ -52,7 +53,10 @@ jobs:
           $pluginRoot = Join-Path $runtimeRoot 'plugins/NteAttackReplay'
           $plugin = Join-Path $pluginRoot 'plugin.dll'
           $manifestPath = Join-Path $pluginRoot 'manifest.json'
-          foreach ($required in @($core, $plugin, $manifestPath)) {
+          $chainRoot = Join-Path $runtimeRoot 'plugins/DamageChain'
+          $chainPlugin = Join-Path $chainRoot 'plugin.dll'
+          $chainManifestPath = Join-Path $chainRoot 'manifest.json'
+          foreach ($required in @($core, $plugin, $manifestPath, $chainPlugin, $chainManifestPath)) {
             if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
               throw "Runtime probe package is incomplete: $required"
             }
@@ -62,6 +66,12 @@ jobs:
           if ($manifest.id -ne 'anomaly.builtin.nte-attack-replay' -or
               $manifest.version -ne '1.9.7' -or $manifest.entry -ne 'plugin.dll') {
             throw 'Runtime probe Attack Replay manifest does not match the expected identity/version.'
+          }
+          $chainManifest = Get-Content -LiteralPath $chainManifestPath -Raw | ConvertFrom-Json
+          if ($chainManifest.id -ne 'anomaly.builtin.damage-chain' -or
+              $chainManifest.version -ne '1.0.0' -or $chainManifest.entry -ne 'plugin.dll' -or
+              !($chainManifest.services.id -contains 'anomaly.nte.damage-chain')) {
+            throw 'Runtime probe Damage Chain manifest does not match the expected identity/version/service.'
           }
 
           $dumpPayload = @(Get-ChildItem -LiteralPath $runtimeRoot -Force -Recurse | Where-Object {
