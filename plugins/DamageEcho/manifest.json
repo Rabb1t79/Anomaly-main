@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "com.rabb1t79.damage-echo",
   "name": "Damage Echo (Native)",
-  "description": "伤害链实验插件：独立目标调度、游戏线程门控与诊断日志导出。伤害入口仍需 Dump/ABI 签名验证。","
+  "description": "伤害链实验插件：独立目标调度、游戏线程门控与诊断日志导出。伤害入口仍需 Dump/ABI 签名验证.",
   "author": "Rabb1t79",
   "license": "AGPL-3.0-only",
   "version": "1.4.0",
