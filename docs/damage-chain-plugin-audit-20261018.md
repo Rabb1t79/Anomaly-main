@@ -99,3 +99,38 @@ The repaired source now:
 在继续启用功能前，至少需要有证据确定：要生成的准确类及其配置 ID、`EffectContainer` 和 TargetType 的来源、如何把初次受击目标传给原生触发器、生成/周期回调的 Game 线程和对象生命周期，以及关闭/死亡/离开目标范围后的停止规则。随后才能设计窄范围、具名且有 capability 的 Core/ABI 桥接。
 
 当前插件继续保持 Entry Guarded：不启用 `HTGame.exe + 0x42D5E50`，不通过手写偏移改写 Runtime 计时字段，也不因发现 `ADamageTriggerActor` 就直接创建实例或调用其周期方法。此决定不否定原生候选，只避免在类配置和目标语义未验证时制造伪实现。
+
+
+## 2026-10-18 原生能力生成链候选：EventData 与 SpawnActorMaps
+
+本节在上一节的 `ADamageTriggerActor` 声明检查之上，补充更具体的“能力配置 → 生成 Actor 效果 → 目标 EventData”候选连接。仍然是 Dump/对象清单证据，不证明旧插件使用该路径。
+
+### 直接可核验的连接
+
+- `HTGame_classes.hpp`（`UHTGameplayAbility`，约第 33584 行）声明 `SpawnActorMaps: TMap<FGameplayTag, UHTAbilitySpawnActorEffect*>`，字段偏移 `0x5A0`；另有 `EffectContainerMap: TMap<FGameplayTag, FHTGameplayEffectContainer>`，偏移 `0x5F0`。这为按 GameplayTag 索引能力的 Actor 生成效果及 GameplayEffect 容器提供了直接类型证据。
+- 同类声明 `K2_SpawnAbilityActorsEffect(const FGameplayTag& ContainerTag, const FGameplayEventData& EventData)`（约第 33695 行）。`HTGame_functions.cpp` 中有对应的反射包装器，使用 `GetFunction("HTGameplayAbility", "K2_SpawnAbilityActorsEffect")` 和 `ProcessEvent`；它是调用包装，不是实际生成逻辑实现。
+- `HTGame_parameters.hpp` 为该调用给出 `HTGameplayAbility_K2_SpawnAbilityActorsEffect` 参数结构，总大小 `0xB8`：`ContainerTag` 在 `0x0`，`FGameplayEventData` 在 `0x8`。
+- `GameplayAbilities_structs.hpp` 中 `FGameplayEventData` 大小为 `0xB0`，包含 `EventTag`（`0x0`）、`Instigator`（`0x8`）、`Target`（`0x10`）、`ContextHandle`（`0x28`）和 `TargetData`（`0x88`）。因此，该原生 API 的数据模型能够携带目标/攻击者及 TargetData；这并不证明运行时调用会把受伤目标填入这些字段。
+- `HTGame_classes.hpp` 中 `UHTGATargetType::GetTargets(OwningActor, TargetingActor, EventData, ...)` 接收 EventData；Dump 还声明 `UHTGATargetType_UseEventData`、`UHTGATargetType_UseOwner`、`UHTGATargetType_AimingResult` 等目标类型，以及 `UFindSpawnLocationObj_Target` 的 `TargetLocationOffset`、`UseToTargetDirection`、`IncludeTargetCapsule` 和 `PreLocationTime`。这是“目标数据参与原生目标解析/生成定位”的直接声明证据，不足以证明它会锁定初次命中的同一目标。
+- `GObjects-Dump.txt` 中有实际对象路径证据：`DataTable DamageTriggerActorDataTable.DamageTriggerActorDataTable`（第 199415 行）；`HTAbilitySpawnDamageTriggerActor` 被挂在 `GA_Lacrimosa_MeleeModA`、`GA_Lacrimosa_PerfectEvade`、`GA_Shinku_Skill_Rage`、`GA_Female051_Melee`、`GA_Trigger_Kill_50/100/150` 等能力资产下。部分实例具有 `FindSpawnLocationObj_Target`，部分则是 `FindSpawnLocationObj_Owner`。对象清单只列对象类型和路径，不包含组件属性值、DataTable 行内容或 Blueprint 事件图。
+
+### 这条路径为什么还不能直接执行
+
+`K2_SpawnAbilityActorsEffect` 是能力对象上的可变更调用，按 `ContainerTag` 读取该能力自身的 `SpawnActorMaps`，可能生成不同类型的 Actor。直接调用它不是“只生成 DamageTriggerActor”的保证，更不是普通伤害事件的等价替代。如果容器 Tag 不正确、能力对象不是正确的活动实例、EffectData/TargetData 不完整或其 Owner/World 生命周期已结束，结果都未被当前 Dump 声明所解决。
+
+### 下一步验证方案
+
+在增加任何会生成 Actor 或触发效果的 Core/ABI 之前，先做**只读运行时观测**，用正常战斗观察以下反射函数是否出现、调用顺序和目标数据是否吻合：
+
+1. `HTGameplayAbility.K2_SpawnAbilityActorsEffect`
+2. `DamageTriggerActor.StartTriggerGamePlayEffect`
+3. `DamageTriggerActor.K2_OnTriggerPeriodGamePlayEffect` / `TriggerPeriodGamePlayEffectEvent`
+
+现有 `anomaly.ue5.process-event` 订阅回调只向插件提供原始 UObject/UFunction 指针和临时参数缓冲，并不提供已解析的函数路径或安全的目标对象句柄；仅在插件内猜读 UObject 内存不是合规替代。因此，观测工具若需要对这些函数按名称筛选并解码 EventData.Target，应新增**只读、具名、白名单式的反射事件观测能力**，由 Core 使用其已具备的 Profile/ABI 校验和对象/属性解析能力完成路径匹配与必要字段解析；不要新增无约束反射调用器。先验证观察到的原生路线，再决定是否有必要建立单独的具名生成桥接。
+
+证据状态更新：
+- `HTGameplayAbility` 存在按 Tag 配置的 Actor Effect 与 `K2_SpawnAbilityActorsEffect`：直接证实（声明/包装层）。
+- `FGameplayEventData` 能携带 Instigator/Target/TargetData：直接证实（布局层）。
+- 普通伤害事件之后旧游戏逻辑会调用该方法，且会选择 `ADamageTriggerActor`：未知。
+- 用该方法能实现持续命中同一受击目标并让多目标独立：未知。
+- 本轮仍未修改插件/Core/ABI 实现、未构建或实机测试；只在证据文档中进一步收窄了下一步观测路径。
