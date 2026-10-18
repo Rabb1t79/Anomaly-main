@@ -7651,7 +7651,7 @@ struct Ue5NteAdapter::State {
             native_damage_chains.push_back(chain);
             *out_chain = chain.handle;
             trigger_actor = 0; // ownership has transferred to the chain record
-            return anomaly::sdk::Ok();
+            return Status(ANOMALY_STATUS_V1_OK);
         } catch (...) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "exception while creating the native DamageTriggerActor chain; legacy replay was not attempted");
@@ -7672,7 +7672,7 @@ struct Ue5NteAdapter::State {
         }
         if (chain->state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE &&
             chain->trigger_actor.id == 0) {
-            return anomaly::sdk::Ok();
+            return Status(ANOMALY_STATUS_V1_OK);
         }
         if (GetCurrentThreadId() == game_thread_id.load(std::memory_order_acquire)) {
             StopNativeDamageChainLocked(
@@ -7682,7 +7682,7 @@ struct Ue5NteAdapter::State {
             chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED;
             chain->awaiting_confirmation = false;
         }
-        return anomaly::sdk::Ok();
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 SnapshotNativeDamageChain(
@@ -7716,7 +7716,7 @@ struct Ue5NteAdapter::State {
             }
         }
         *snapshot = result;
-        return anomaly::sdk::Ok();
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     void AdvanceNativeDamageChainsLocked(
