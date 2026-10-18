@@ -33,6 +33,73 @@
 namespace anomaly {
 namespace {
 
+// The native damage callback executes synchronously during a queued GameplayEffect dispatch.
+// Carry only an opaque chain id across that re-entrant callback; no UObject pointer is stored.
+thread_local std::uint64_t g_current_damage_chain_id{};
+thread_local std::uintptr_t g_damage_chain_expected_receiver{};
+thread_local std::uintptr_t g_damage_chain_expected_function{};
+thread_local std::uintptr_t g_damage_chain_expected_attacker{};
+thread_local std::uintptr_t g_damage_chain_expected_victim{};
+
+struct DamageChainDispatchScope final {
+    std::uint64_t previous{};
+    explicit DamageChainDispatchScope(const std::uint64_t chain_id) noexcept
+        : previous(g_current_damage_chain_id) {
+        g_current_damage_chain_id = chain_id;
+    }
+    ~DamageChainDispatchScope() { g_current_damage_chain_id = previous; }
+};
+
+// Narrow the chain identity to the exact validated native GameplayEffect invocation.
+// Nested ProcessEvent/damage callbacks must not inherit it merely because they happen
+// while ReplayDamage is on the stack.
+struct DamageChainInvocationScope final {
+    std::uintptr_t previous_receiver{};
+    std::uintptr_t previous_function{};
+    std::uintptr_t previous_attacker{};
+    std::uintptr_t previous_victim{};
+
+    DamageChainInvocationScope(
+        const std::uintptr_t receiver, const std::uintptr_t function,
+        const std::uintptr_t attacker, const std::uintptr_t victim) noexcept
+        : previous_receiver(g_damage_chain_expected_receiver),
+          previous_function(g_damage_chain_expected_function),
+          previous_attacker(g_damage_chain_expected_attacker),
+          previous_victim(g_damage_chain_expected_victim) {
+        g_damage_chain_expected_receiver = receiver;
+        g_damage_chain_expected_function = function;
+        g_damage_chain_expected_attacker = attacker;
+        g_damage_chain_expected_victim = victim;
+    }
+
+    ~DamageChainInvocationScope() {
+        g_damage_chain_expected_receiver = previous_receiver;
+        g_damage_chain_expected_function = previous_function;
+        g_damage_chain_expected_attacker = previous_attacker;
+        g_damage_chain_expected_victim = previous_victim;
+    }
+};
+
+[[nodiscard]] bool CurrentDamageChainInvocationMatches(
+    const std::uintptr_t receiver, const std::uintptr_t function) noexcept {
+    return g_current_damage_chain_id != 0 &&
+        receiver != 0 && function != 0 &&
+        receiver == g_damage_chain_expected_receiver &&
+        function == g_damage_chain_expected_function;
+}
+
+[[nodiscard]] bool CurrentDamageChainParticipantsMatch(
+    const std::uintptr_t attacker, const std::uintptr_t victim) noexcept {
+    return g_current_damage_chain_id != 0 &&
+        attacker != 0 && victim != 0 &&
+        attacker == g_damage_chain_expected_attacker &&
+        victim == g_damage_chain_expected_victim;
+}
+
+constexpr std::uint8_t kCombatCaptureIngressProcessEvent = 1U << 0U;
+constexpr std::uint8_t kCombatCaptureIngressActorProcessEvent = 1U << 1U;
+constexpr std::uint8_t kCombatCaptureIngressNativeExec = 1U << 2U;
+
 ThreadLocalScalar<const void*> g_active_tick_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_callback_state;
 ThreadLocalScalar<const void*> g_active_ahud_subscription_state;
@@ -796,12 +863,126 @@ struct Ue5NteAdapter::State {
 
     static constexpr std::size_t kDamageEventCapacity = 512;
     static constexpr std::uint64_t kDamageSourceBase = 0x8000000000000000ULL;
+    // Dump-generated parameter structs use aligned storage sizes 0x78 / 0x78 / 0x80 / 0x80.
+    // Live HTGame UFunctions end at the final reflected property: 0x71 / 0x74 / 0x79 / 0x7C.
+    // Keep reflected capture lengths separate from the zero-initialized, aligned replay buffers.
+    static constexpr std::size_t kGameplayEffectReplayWrapperParameterBytes = 0x80;
+    static constexpr std::size_t kGameplayEffectReplayByActorParmsSize = 0x71;
+    static constexpr std::size_t kGameplayEffectReplayToTargetParmsSize = 0x74;
+    static constexpr std::size_t kGameplayEffectReplayWrapperParmsSize = 0x79;
+    static constexpr std::size_t kGameplayEffectReplayServerCharacterParmsSize = 0x7C;
+    static constexpr std::uint16_t kGameplayEffectReplayByActorFunctionParmsSize = 0x78;
+    static constexpr std::uint16_t kGameplayEffectReplayToTargetFunctionParmsSize = 0x78;
+    static constexpr std::uint16_t kGameplayEffectReplayWrapperFunctionParmsSize = 0x80;
+    static constexpr std::uint16_t kGameplayEffectReplayServerCharacterFunctionParmsSize = 0x80;
+    static constexpr std::size_t kGameplayEffectReplayTagArraysEnd = 0x38;
+    static_assert(kGameplayEffectReplayByActorParmsSize == 0x70U + sizeof(std::uint8_t));
+    static_assert(kGameplayEffectReplayToTargetParmsSize == 0x6CU + sizeof(std::uint64_t));
+    static_assert(kGameplayEffectReplayWrapperParmsSize == 0x78U + sizeof(std::uint8_t));
+    static constexpr std::size_t kGameplayEffectReplayMaxParameterBytes =
+        kGameplayEffectReplayWrapperParameterBytes;
+    // HTGame dump: for ASC methods ModifyData@0x10 places its two tag arrays at 0x18/0x28;
+    // the HTAbilityCharacter wrapper adds WorldContextObject@0x00, shifting them to 0x20/0x30.
+    // Own the tag values because the original ProcessEvent parameter buffer and its
+    // temporary TArray allocations may be destroyed after the call returns.
+    static constexpr std::size_t kReplayGameplayTagCapacity = 64;
+    struct CapturedGameplayTagArray {
+        std::uint32_t count{};
+        std::array<std::uint64_t, kReplayGameplayTagCapacity> values{};
+    };
+    using CapturedGameplayTagArrays = std::array<CapturedGameplayTagArray, 2>;
+    struct ReplayEffectContext {
+        bool valid{};
+        bool tag_arrays_valid{};
+        std::uint8_t kind{}; // 1 = ASC ByActor, 2 = ASC ToTarget, 3 = Character wrapper, 4 = server RPC.
+        std::uint16_t parameter_size{};
+        std::uint64_t object_generation{};
+        std::uint64_t tick_sequence{};
+        // Non-zero only when this native GameplayEffect invocation was dispatched by a chain.
+        std::uint64_t damage_chain_id{};
+        // One native GameplayEffect invocation may confirm at most one delayed DamageEvent.
+        // Synchronous chain identity is tracked by TLS; this bit prevents stale delayed
+        // captures from being reused to label multiple unrelated same-target attacks.
+        bool damage_callback_correlated{};
+        // Count unique captured invocations after coalescing the same call observed at both
+        // ProcessEvent and Native Exec ingress points.
+        std::uint32_t matching_candidate_count{};
+        std::uintptr_t source_parameter_address{};
+        std::uint8_t ingress_mask{};
+        std::uint16_t duplicate_observation_count{};
+        std::uintptr_t receiver{};
+        std::uintptr_t function{};
+        std::array<std::uint8_t, kGameplayEffectReplayMaxParameterBytes> parameters{};
+        CapturedGameplayTagArrays gameplay_tags{};
+    };
     struct DamageRecord {
         AnomalyNteDamageEventV1 event{};
+        float raw_damage{};
+        // Freeze local-player possession evidence at hit time; do not bind a chain root
+        // to whichever playable character happens to be active when Replay is requested.
+        bool attacker_was_local_player_pawn{};
+        ReplayEffectContext replay{};
     };
+    struct DamageChainEffectDispatchRequest {
+        std::uint32_t struct_size{};
+        std::uint32_t flags{};
+        std::uint64_t damage_sequence{};
+    };
+    struct DamageChainRecord {
+        std::uint64_t id{};
+        std::uint64_t root_damage_sequence{};
+        std::uint64_t world_generation{};
+        std::uint64_t object_generation{};
+        AnomalyGenerationHandleV1 root_attacker{};
+        AnomalyGenerationHandleV1 root_victim{};
+        std::uint64_t root_source_id{};
+        std::uint32_t state{ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY};
+        std::uint32_t requested_repeat_count{};
+        std::uint32_t dispatched_repeat_count{};
+        std::uint32_t observed_chain_damage_count{};
+        std::uint32_t rate_per_second{};
+        std::uint32_t last_status_code{ANOMALY_STATUS_V1_OK};
+        bool in_flight{};
+        bool context_invalidated{};
+        std::chrono::steady_clock::duration interval{};
+        std::chrono::steady_clock::time_point next_due{};
+        std::array<char, ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY> status_message{};
+    };
+    struct DamageChainDispatchToken {
+        bool occupied{};
+        bool pending{};
+        std::uint64_t sequence{};
+        std::uint64_t chain_id{};
+        std::uint64_t root_damage_sequence{};
+        std::uint64_t tick_sequence{};
+    };
+    static constexpr std::size_t kDamageChainCapacity =
+        ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS;
+    // At most one native application per chain can await confirmation, so the ledger
+    // capacity equals the maximum number of independently active chains.
+    static constexpr std::size_t kDamageChainDispatchTokenCapacity = kDamageChainCapacity;
+    std::array<DamageChainRecord, kDamageChainCapacity> damage_chains{};
+    std::array<DamageChainDispatchToken, kDamageChainDispatchTokenCapacity> damage_chain_dispatch_tokens{};
+    std::uint64_t damage_chain_dispatch_token_next_sequence{1};
+    std::uint64_t damage_chain_next_id{1};
+    std::size_t damage_chain_scheduler_cursor{};
+    static constexpr std::size_t kReplayEffectCallCapacity = 256;
+    std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
+    std::size_t replay_effect_call_start{};
+    std::size_t replay_effect_call_count{};
+    // Last exact-name lookup and native-dump ABI check result for each candidate.
+    std::string replay_entrypoint_diagnostics{"GameplayEffect entry-point discovery has not run"};
+    std::string replay_status_message;
     std::array<DamageRecord, kDamageEventCapacity> damage_events{};
     std::size_t damage_event_start{};
     std::size_t damage_event_count{};
+    // Keep a bounded set of validated chain roots independently from the rolling
+    // diagnostic event ring. A long chain may generate more than 512 hits; its original
+    // replay request must not expire solely because newer DamageEvents rotate the ring.
+    static constexpr std::size_t kPinnedDamageReplayCapacity = 32;
+    std::array<DamageRecord, kPinnedDamageReplayCapacity> pinned_damage_replays{};
+    std::size_t pinned_damage_replay_start{};
+    std::size_t pinned_damage_replay_count{};
     std::uint64_t damage_event_sequence{};
     std::uint64_t damage_world_sequence_base{};
     std::uint64_t damage_dropped_count{};
@@ -958,18 +1139,31 @@ struct Ue5NteAdapter::State {
     // queue payload bounded to the largest useful value avoids copying the
     // 0x298-byte FGameplayEffectSpec for every buff notification.
     static constexpr std::size_t kCombatCapturePayloadBytes =
-        (std::max)(std::size_t{96}, sizeof(NteCharacterDamageCapture));
+        (std::max)((std::max)(std::size_t{kGameplayEffectReplayWrapperParameterBytes}, std::size_t{96}),
+            sizeof(NteCharacterDamageCapture));
     enum class CombatCaptureKind : std::uint8_t {
         CharacterDamage,
         Damage,
         BuffAdd,
         BuffRemove,
+        GameplayEffectByActor,
+        GameplayEffectToTarget,
+        // Normalized capture of the dump-declared HTAbilityCharacter actor-effect wrapper.
+        GameplayEffectByActorFromCharacter,
+        GameplayEffectByActorFromServer,
     };
     struct PendingCombatCapture {
         CombatCaptureKind kind{};
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
         std::uint64_t tick_sequence{};
+        std::uintptr_t receiver{};
+        std::uintptr_t function{};
+        std::uintptr_t source_parameter_address{};
+        std::uint64_t damage_chain_id{};
+        std::uint8_t ingress_mask{};
+        bool replay_tag_arrays_valid{};
+        CapturedGameplayTagArrays replay_gameplay_tags{};
         std::array<std::uint8_t, kCombatCapturePayloadBytes> payload{};
     };
     std::array<PendingCombatCapture, kCombatCaptureQueueCapacity> combat_capture_queue{};
@@ -997,7 +1191,14 @@ struct Ue5NteAdapter::State {
         std::uint16_t damage_value_offset{0xFFFFU};
         std::uint16_t damage_source_offset{0xFFFFU};
         std::uint16_t damage_tags_offset{0xFFFFU};
+        std::uintptr_t replay_apply_by_actor{};
+        std::uintptr_t replay_apply_to_target{};
+        std::uintptr_t replay_activate_by_actor{};
+        std::uintptr_t replay_server_activate_by_actor{};
     };
+    // Counts are ingress observations, not deduplicated native calls: one invocation may
+    // be seen by ActorProcessEvent, UObject ProcessEvent and Native Exec independently.
+    std::array<std::atomic<std::uint64_t>, 4> replay_entrypoint_observation_counts{};
     // Slots are generation-local and never freed. Publish a fully populated
     // slot with one acquire/release pointer load in the ProcessEvent hook.
     std::array<CombatCaptureBindings, 2> combat_capture_binding_slots{};
@@ -2435,6 +2636,21 @@ struct Ue5NteAdapter::State {
         damage_event_start = 0;
         damage_event_count = 0;
         damage_events = {};
+        pinned_damage_replays = {};
+        pinned_damage_replay_start = 0;
+        pinned_damage_replay_count = 0;
+        damage_chain_dispatch_tokens = {};
+        for (auto& chain : damage_chains) {
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY) continue;
+            chain.context_invalidated = true;
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                chain.observed_chain_damage_count < chain.dispatched_repeat_count) {
+                chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+                chain.last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+                SetDamageChainMessage(chain,
+                    "世界/对象代次已变化；旧上下文与待确认项已失效，未确认事件不会再关联到新世界");
+            }
+        }
         damage_dropped_count = 0;
         damage_next_source_id = kDamageSourceBase;
         damage_source_object_ids.clear();
@@ -3821,18 +4037,206 @@ struct Ue5NteAdapter::State {
         return ResolveObjectHandleLocked(handle, object) && object != 0;
     }
 
-    void RecordDamageEventLocked(AnomalyNteDamageEventV1 event) noexcept {
+    void RecordDamageEventLocked(
+        AnomalyNteDamageEventV1 event, const float raw_damage = 0.0F,
+        const ReplayEffectContext* replay_context = nullptr,
+        const bool attacker_was_local_player_pawn = false) noexcept {
         event.struct_size = sizeof(event);
         event.sequence = ++damage_event_sequence;
+        DamageRecord record{};
+        record.event = event;
+        record.raw_damage = raw_damage;
+        record.attacker_was_local_player_pawn = attacker_was_local_player_pawn;
+        if (replay_context != nullptr) record.replay = *replay_context;
         if (damage_event_count == kDamageEventCapacity) {
-            damage_events[damage_event_start].event = event;
+            damage_events[damage_event_start] = record;
             damage_event_start = (damage_event_start + 1U) % kDamageEventCapacity;
             return;
         }
         const std::size_t slot =
             (damage_event_start + damage_event_count) % kDamageEventCapacity;
-        damage_events[slot].event = event;
+        damage_events[slot] = record;
         ++damage_event_count;
+    }
+
+    // A chain's original sequence is reused for every GameplayEffect replay. Keep its
+    // validated snapshot outside the bounded DamageEvent ring so the chain can continue
+    // past the ring's retention window. The cache is fixed-size and reset on world change.
+    void RetainPinnedDamageReplayLocked(const DamageRecord& record) noexcept {
+        if (record.event.sequence == 0 || !record.replay.valid ||
+            record.replay.object_generation != object_generation ||
+            record.event.world.generation != world_generation) {
+            return;
+        }
+        for (std::size_t index{}; index < pinned_damage_replay_count; ++index) {
+            const auto slot = (pinned_damage_replay_start + index) %
+                kPinnedDamageReplayCapacity;
+            if (pinned_damage_replays[slot].event.sequence == record.event.sequence) {
+                pinned_damage_replays[slot] = record;
+                return;
+            }
+        }
+        if (pinned_damage_replay_count == kPinnedDamageReplayCapacity) {
+            // Never evict a root belonging to a still-running chain. Reuse a completed
+            // or unrelated diagnostic entry instead. Active chains are capped to the
+            // same count as this pin cache, so a free-to-reuse entry must exist.
+            std::size_t replacement = kPinnedDamageReplayCapacity;
+            for (std::size_t index{}; index < pinned_damage_replay_count; ++index) {
+                const auto candidate_slot =
+                    (pinned_damage_replay_start + index) % kPinnedDamageReplayCapacity;
+                if (!IsActiveDamageChainRootLocked(
+                        pinned_damage_replays[candidate_slot].event.sequence)) {
+                    replacement = candidate_slot;
+                    break;
+                }
+            }
+            if (replacement == kPinnedDamageReplayCapacity) return;
+            pinned_damage_replays[replacement] = record;
+            return;
+        }
+        const auto slot = (pinned_damage_replay_start + pinned_damage_replay_count) %
+            kPinnedDamageReplayCapacity;
+        pinned_damage_replays[slot] = record;
+        ++pinned_damage_replay_count;
+    }
+
+    DamageRecord* FindPinnedDamageReplayLocked(const std::uint64_t sequence) noexcept {
+        if (sequence == 0) return nullptr;
+        for (std::size_t index{}; index < pinned_damage_replay_count; ++index) {
+            const auto slot = (pinned_damage_replay_start + index) %
+                kPinnedDamageReplayCapacity;
+            auto& candidate = pinned_damage_replays[slot];
+            if (candidate.event.sequence == sequence &&
+                candidate.replay.valid &&
+                candidate.replay.object_generation == object_generation &&
+                candidate.event.world.generation == world_generation) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] DamageChainRecord* FindDamageChainLocked(
+        const std::uint64_t chain_id) noexcept {
+        if (chain_id == 0) return nullptr;
+        for (auto& chain : damage_chains) {
+            if (chain.id == chain_id) return &chain;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] bool DamageEventMatchesChainParticipantsLocked(
+        const std::uint64_t chain_id,
+        const AnomalyNteDamageEventV1& event) noexcept {
+        const auto* const chain = FindDamageChainLocked(chain_id);
+        return chain != nullptr &&
+            !chain->context_invalidated &&
+            chain->world_generation == world_generation &&
+            chain->object_generation == object_generation &&
+            event.world.id != 0 &&
+            event.world.generation == chain->world_generation &&
+            event.attacker.id != 0 &&
+            event.attacker.id == chain->root_attacker.id &&
+            event.attacker.generation == chain->root_attacker.generation &&
+            event.victim.id != 0 &&
+            event.victim.id == chain->root_victim.id &&
+            event.victim.generation == chain->root_victim.generation;
+    }
+
+    [[nodiscard]] bool DamageEventMatchesChainRootLocked(
+        const std::uint64_t chain_id,
+        const AnomalyNteDamageEventV1& event) noexcept {
+        const auto* const chain = FindDamageChainLocked(chain_id);
+        return DamageEventMatchesChainParticipantsLocked(chain_id, event) &&
+            chain != nullptr &&
+            chain->root_source_id != 0 &&
+            event.source_id == chain->root_source_id;
+    }
+
+    [[nodiscard]] bool HasDamageChainDispatchTokensLocked(
+        const std::uint64_t chain_id) const noexcept {
+        if (chain_id == 0) return false;
+        for (const auto& token : damage_chain_dispatch_tokens) {
+            if (token.occupied && token.chain_id == chain_id) return true;
+        }
+        return false;
+    }
+
+    // One token represents one successful native application awaiting its real DamageEvent.
+    // Tokens do not expire by wall time; a full ledger backpressures dispatch.
+    [[nodiscard]] bool ConsumeDamageChainDispatchTokenForDamageLocked(
+        const std::uintptr_t attacker, const std::uintptr_t victim,
+        const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
+        const ReplayEffectContext* const ordinary_context,
+        std::uint64_t& chain_id,
+        const std::uint64_t expected_chain_id = 0) noexcept {
+        chain_id = 0;
+        std::size_t best_slot = kDamageChainDispatchTokenCapacity;
+        std::uint64_t best_sequence = (std::numeric_limits<std::uint64_t>::max)();
+        for (std::size_t index{}; index < damage_chain_dispatch_tokens.size(); ++index) {
+            const auto& token = damage_chain_dispatch_tokens[index];
+            if (!token.occupied || !token.pending || token.chain_id == 0 ||
+                token.tick_sequence > capture_tick_sequence ||
+                (expected_chain_id != 0 && token.chain_id != expected_chain_id)) continue;
+            const auto* const chain = FindDamageChainLocked(token.chain_id);
+            if (chain == nullptr || chain->context_invalidated || source_id == 0 ||
+                chain->root_source_id == 0 || chain->root_source_id != source_id) continue;
+            // Both synchronous and delayed paths must prove the same attacker and victim
+            // before consuming a token. The expected TLS chain id narrows the candidate;
+            // it does not waive source or participant identity validation.
+            std::uintptr_t root_attacker{}, root_victim{};
+            if (!ResolveObjectHandleLocked(chain->root_attacker, root_attacker) ||
+                !ResolveObjectHandleLocked(chain->root_victim, root_victim) ||
+                root_attacker != attacker || root_victim != victim) continue;
+            if (expected_chain_id == 0 && ordinary_context != nullptr &&
+                ordinary_context->tick_sequence >= token.tick_sequence) {
+                // Don't classify a fresh natural attack as an old chain callback.
+                continue;
+            }
+            if (token.sequence < best_sequence) {
+                best_sequence = token.sequence;
+                best_slot = index;
+            }
+        }
+        if (best_slot == kDamageChainDispatchTokenCapacity) return false;
+        chain_id = damage_chain_dispatch_tokens[best_slot].chain_id;
+        damage_chain_dispatch_tokens[best_slot] = {};
+        return chain_id != 0;
+    }
+
+    [[nodiscard]] bool IsActiveDamageChainRootLocked(
+        const std::uint64_t damage_sequence) const noexcept {
+        if (damage_sequence == 0) return false;
+        for (const auto& chain : damage_chains) {
+            if (chain.root_damage_sequence == damage_sequence &&
+                chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool IsKnownDamageChainRootLocked(
+        const std::uint64_t damage_sequence) const noexcept {
+        if (damage_sequence == 0) return false;
+        for (const auto& chain : damage_chains) {
+            if (chain.root_damage_sequence == damage_sequence &&
+                chain.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY &&
+                !chain.context_invalidated) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static void SetDamageChainMessage(
+        DamageChainRecord& chain, const std::string_view message) noexcept {
+        chain.status_message.fill('\0');
+        const auto count = (std::min)(
+            message.size(), chain.status_message.size() - 1U);
+        if (count != 0) {
+            std::memcpy(chain.status_message.data(), message.data(), count);
+        }
     }
 
     void RecordCombatEventLocked(AnomalyNteCombatEventV1 event) noexcept {
@@ -5253,7 +5657,14 @@ struct Ue5NteAdapter::State {
         const CombatCaptureKind kind,
         const std::span<const std::uint8_t> parameters,
         const std::uint16_t info_offset,
-        const std::uint64_t capture_tick_sequence) noexcept {
+        const std::uint64_t capture_tick_sequence,
+        const std::uintptr_t receiver,
+        const std::uintptr_t function,
+        const std::uintptr_t source_parameter_address,
+        const std::uint8_t ingress_mask,
+        const CapturedGameplayTagArrays& gameplay_tags,
+        const bool tag_arrays_valid,
+        const std::uint64_t damage_chain_id) noexcept {
         switch (kind) {
         case CombatCaptureKind::CharacterDamage:
             CaptureCharacterDamageBytesLocked(parameters, capture_tick_sequence);
@@ -5264,6 +5675,15 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::BuffAdd:
         case CombatCaptureKind::BuffRemove:
             CaptureBuffBytesLocked(parameters, capture_tick_sequence);
+            break;
+        case CombatCaptureKind::GameplayEffectByActor:
+        case CombatCaptureKind::GameplayEffectToTarget:
+        case CombatCaptureKind::GameplayEffectByActorFromCharacter:
+        case CombatCaptureKind::GameplayEffectByActorFromServer:
+            CaptureReplayEffectInvocationLocked(
+                kind, receiver, function, parameters, capture_tick_sequence,
+                source_parameter_address, ingress_mask, gameplay_tags, tag_arrays_valid,
+                damage_chain_id);
             break;
         }
     }
@@ -5279,7 +5699,10 @@ struct Ue5NteAdapter::State {
             CaptureCombatProcessEventLocked(
                 capture.kind,
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
-                capture.info_offset, capture.tick_sequence);
+                capture.info_offset, capture.tick_sequence, capture.receiver, capture.function,
+                capture.source_parameter_address, capture.ingress_mask,
+                capture.replay_gameplay_tags, capture.replay_tag_arrays_valid,
+                capture.damage_chain_id);
             ++read;
             ++drained;
         }
@@ -5306,10 +5729,167 @@ struct Ue5NteAdapter::State {
         return true;
     }
 
+    void CaptureReplayEffectInvocationLocked(
+        const CombatCaptureKind kind, const std::uintptr_t receiver,
+        const std::uintptr_t function, const std::span<const std::uint8_t> parameters,
+        const std::uint64_t capture_tick_sequence,
+        const std::uintptr_t source_parameter_address,
+        const std::uint8_t ingress_mask,
+        const CapturedGameplayTagArrays& gameplay_tags,
+        const bool tag_arrays_valid,
+        const std::uint64_t damage_chain_id) noexcept {
+        const bool character_by_actor_wrapper =
+            kind == CombatCaptureKind::GameplayEffectByActorFromCharacter;
+        const bool server_character_by_actor =
+            kind == CombatCaptureKind::GameplayEffectByActorFromServer;
+        const bool by_actor = kind == CombatCaptureKind::GameplayEffectByActor ||
+            character_by_actor_wrapper || server_character_by_actor;
+        const std::size_t expected_parameter_size = character_by_actor_wrapper
+            ? kGameplayEffectReplayWrapperParmsSize
+            : (server_character_by_actor
+                ? kGameplayEffectReplayServerCharacterParmsSize
+                : (kind == CombatCaptureKind::GameplayEffectByActor
+                    ? kGameplayEffectReplayByActorParmsSize
+                    : kGameplayEffectReplayToTargetParmsSize));
+        if ((!by_actor && kind != CombatCaptureKind::GameplayEffectToTarget) ||
+            receiver == 0 || function == 0 ||
+            parameters.size() != expected_parameter_size) return;
+
+        // Copy only meaningful reflected bytes from the original call. The remainder of
+        // ReplayEffectContext::parameters stays zero-initialized; parameter_size separately
+        // records the complete aligned UFunction buffer size required for native replay.
+        ReplayEffectContext captured{};
+        captured.valid = true;
+        captured.tag_arrays_valid = tag_arrays_valid;
+        captured.kind = server_character_by_actor ? 4U :
+            (character_by_actor_wrapper ? 3U : (by_actor ? 1U : 2U));
+        captured.parameter_size = static_cast<std::uint16_t>(
+            server_character_by_actor
+                ? kGameplayEffectReplayServerCharacterFunctionParmsSize
+                : (character_by_actor_wrapper
+                    ? kGameplayEffectReplayWrapperFunctionParmsSize
+                    : (kind == CombatCaptureKind::GameplayEffectByActor
+                        ? kGameplayEffectReplayByActorFunctionParmsSize
+                        : kGameplayEffectReplayToTargetFunctionParmsSize)));
+        captured.object_generation = object_generation;
+        captured.tick_sequence = capture_tick_sequence;
+        captured.damage_chain_id = damage_chain_id;
+        captured.source_parameter_address = source_parameter_address;
+        captured.ingress_mask = ingress_mask;
+        captured.duplicate_observation_count = 0;
+        captured.receiver = receiver;
+        captured.function = function;
+        captured.gameplay_tags = gameplay_tags;
+        std::memcpy(captured.parameters.data(), parameters.data(), parameters.size());
+
+        // The old runtime observes the same native call at both AActor/UObject
+        // ProcessEvent and the UFunction Native Exec thunk. Coalesce only a pair with
+        // the same live parameter-buffer address, receiver, function, tick, kind, and
+        // byte-identical parameters. Different ingress of the same class is not merged,
+        // so two genuine same-frame identical effects remain separate invocations.
+        const bool captured_has_native_exec =
+            (ingress_mask & kCombatCaptureIngressNativeExec) != 0;
+        if (source_parameter_address != 0 && ingress_mask != 0) {
+            for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+                const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                    reverse) % kReplayEffectCallCapacity;
+                auto& previous = replay_effect_calls[index];
+                if (!previous.valid ||
+                    previous.object_generation != captured.object_generation ||
+                    previous.tick_sequence != captured.tick_sequence ||
+                    previous.damage_chain_id != captured.damage_chain_id ||
+                    previous.source_parameter_address != captured.source_parameter_address ||
+                    previous.receiver != captured.receiver ||
+                    previous.function != captured.function ||
+                    previous.kind != captured.kind ||
+                    previous.parameter_size != captured.parameter_size ||
+                    previous.tag_arrays_valid != captured.tag_arrays_valid ||
+                    (previous.ingress_mask & captured.ingress_mask) != 0) {
+                    continue;
+                }
+                const bool previous_has_native_exec =
+                    (previous.ingress_mask & kCombatCaptureIngressNativeExec) != 0;
+                if (previous_has_native_exec == captured_has_native_exec ||
+                    std::memcmp(previous.parameters.data(), captured.parameters.data(),
+                        parameters.size()) != 0) {
+                    continue;
+                }
+                bool tags_equal = true;
+                for (std::size_t tag_index{}; tag_index < previous.gameplay_tags.size();
+                     ++tag_index) {
+                    const auto& lhs = previous.gameplay_tags[tag_index];
+                    const auto& rhs = captured.gameplay_tags[tag_index];
+                    if (lhs.count != rhs.count ||
+                        lhs.count > kReplayGameplayTagCapacity ||
+                        std::memcmp(lhs.values.data(), rhs.values.data(),
+                            static_cast<std::size_t>(lhs.count) * sizeof(std::uint64_t)) != 0) {
+                        tags_equal = false;
+                        break;
+                    }
+                }
+                if (!tags_equal) continue;
+
+                previous.ingress_mask |= captured.ingress_mask;
+                if (previous.duplicate_observation_count !=
+                    (std::numeric_limits<std::uint16_t>::max)()) {
+                    ++previous.duplicate_observation_count;
+                }
+                return;
+            }
+        }
+
+        std::size_t slot{};
+        if (replay_effect_call_count == kReplayEffectCallCapacity) {
+            slot = replay_effect_call_start;
+            replay_effect_call_start = (replay_effect_call_start + 1U) %
+                kReplayEffectCallCapacity;
+        } else {
+            slot = (replay_effect_call_start + replay_effect_call_count) %
+                kReplayEffectCallCapacity;
+            ++replay_effect_call_count;
+        }
+        replay_effect_calls[slot] = captured;
+    }
+
+    [[nodiscard]] bool CaptureReplayGameplayTagsLocked(
+        const void* const parameters,
+        CapturedGameplayTagArrays& captured) const noexcept {
+        if (parameters == nullptr) return false;
+        const auto base = reinterpret_cast<std::uintptr_t>(parameters);
+        // FGameplayTagContainer TArray headers end at offset 0x38. Validate only the bytes
+        // actually needed here; live ParmsSize may be smaller than the padded C++ struct.
+        if (!ReadableRange(*memory, base, kGameplayEffectReplayTagArraysEnd)) return false;
+        struct TArrayView {
+            std::uintptr_t data{};
+            std::int32_t num{};
+            std::int32_t max{};
+        };
+        for (std::size_t index{}; index < captured.size(); ++index) {
+            const std::uintptr_t offset = 0x18U + static_cast<std::uintptr_t>(index) * 0x10U;
+            TArrayView view{};
+            if (!ReadValue(*memory, base + offset, view) ||
+                view.num < 0 || view.num > static_cast<std::int32_t>(kReplayGameplayTagCapacity) ||
+                view.max < view.num) {
+                return false;
+            }
+            captured[index] = {};
+            captured[index].count = static_cast<std::uint32_t>(view.num);
+            if (view.num == 0) continue;
+            const auto bytes = static_cast<std::size_t>(view.num) * sizeof(std::uint64_t);
+            if (view.data == 0 || !ReadableRange(*memory, view.data, bytes) ||
+                !memory->Read(view.data, captured[index].values.data(), bytes)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void EnqueueCombatProcessEvent(
         const CombatCaptureBindings& bindings,
+        const std::uintptr_t receiver,
         const std::uintptr_t function,
-        const void* const parameters) noexcept {
+        const void* const parameters,
+        const std::uint8_t ingress_mask) noexcept {
         if (parameters == nullptr) return;
         if (function == bindings.damage) {
             damage_floaties_call_count.fetch_add(1, std::memory_order_relaxed);
@@ -5319,6 +5899,11 @@ struct Ue5NteAdapter::State {
             player_damage_queue_call_count.fetch_add(1, std::memory_order_relaxed);
         } else if (function == bindings.damage_widget) {
             damage_widget_call_count.fetch_add(1, std::memory_order_relaxed);
+        } else if (function == bindings.replay_apply_by_actor ||
+                   function == bindings.replay_apply_to_target ||
+                   function == bindings.replay_activate_by_actor ||
+                   function == bindings.replay_server_activate_by_actor) {
+            // These are dump-validated ASC calls or the validated character wrapper.
         } else if (std::ranges::any_of(
                        bindings.buffs, [function](const auto& buff) {
                            return buff.function != 0 && buff.function == function;
@@ -5363,7 +5948,24 @@ struct Ue5NteAdapter::State {
         CombatCaptureKind kind{};
         std::uint16_t payload_size{};
         std::uint16_t info_offset{};
-        if (function == bindings.damage || function == bindings.monster_damage) {
+        if (function == bindings.replay_activate_by_actor) {
+            // Capture only the wrapper's reflected fields; replay uses the separate full size.
+            kind = CombatCaptureKind::GameplayEffectByActorFromCharacter;
+            info_offset = 0;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
+        } else if (function == bindings.replay_server_activate_by_actor) {
+            // Preserve the server RPC's full FBufferData and PredictionKey while capturing
+            // only its live reflected endpoint (0x7C bytes); replay uses the aligned 0x80 buffer.
+            kind = CombatCaptureKind::GameplayEffectByActorFromServer;
+            info_offset = 0;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayServerCharacterParmsSize);
+        } else if (function == bindings.replay_apply_by_actor) {
+            kind = CombatCaptureKind::GameplayEffectByActor;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayByActorParmsSize);
+        } else if (function == bindings.replay_apply_to_target) {
+            kind = CombatCaptureKind::GameplayEffectToTarget;
+            payload_size = static_cast<std::uint16_t>(kGameplayEffectReplayToTargetParmsSize);
+        } else if (function == bindings.damage || function == bindings.monster_damage) {
             kind = CombatCaptureKind::Damage;
             info_offset = bindings.damage_info_offset;
             payload_size = 72;
@@ -5448,8 +6050,30 @@ struct Ue5NteAdapter::State {
         capture.payload_size = payload_size;
         capture.info_offset = 0;
         capture.tick_sequence = tick_sequence.load(std::memory_order_relaxed);
+        capture.receiver = receiver;
+        capture.function = function;
+        capture.source_parameter_address = reinterpret_cast<std::uintptr_t>(parameters);
+        capture.damage_chain_id =
+            CurrentDamageChainInvocationMatches(receiver, function)
+                ? g_current_damage_chain_id : 0U;
+        capture.ingress_mask = ingress_mask;
+        capture.replay_gameplay_tags = {};
+        capture.replay_tag_arrays_valid = true;
         const auto* const source = static_cast<const std::uint8_t*>(parameters);
         std::memcpy(capture.payload.data(), source + info_offset, payload_size);
+        if (kind == CombatCaptureKind::GameplayEffectByActor ||
+            kind == CombatCaptureKind::GameplayEffectToTarget ||
+            kind == CombatCaptureKind::GameplayEffectByActorFromCharacter ||
+            kind == CombatCaptureKind::GameplayEffectByActorFromServer) {
+            // The character wrapper adds WorldContextObject@0x00; pass SourceObj@0x08
+            // as the canonical base. The server RPC has the same ModifyData@0x10/tag
+            // array offsets as the ASC calls, so its owned arrays must also be captured
+            // before the original ProcessEvent parameter storage expires.
+            const std::size_t tag_parameter_base =
+                kind == CombatCaptureKind::GameplayEffectByActorFromCharacter ? 0x08U : info_offset;
+            capture.replay_tag_arrays_valid =
+                CaptureReplayGameplayTagsLocked(source + tag_parameter_base, capture.replay_gameplay_tags);
+        }
         combat_capture_write.store(write + 1U, std::memory_order_release);
     }
 
@@ -5517,6 +6141,9 @@ struct Ue5NteAdapter::State {
         std::memcpy(&damage.source_serial, source + bindings.damage_source_offset + 4, 4);
         damage.victim = victim;
         damage.attacker = attacker;
+        damage.damage_chain_id =
+            CurrentDamageChainParticipantsMatch(attacker, victim)
+                ? g_current_damage_chain_id : 0U;
         damage.critical = synchronous_critical;
         std::uintptr_t saved_skill_cdo{};
         std::int32_t active_spec_handle{};
@@ -5874,6 +6501,1140 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    enum class ReplayMatchFailure : std::uint8_t {
+        None,
+        InvalidContext,
+        MissingBindings,
+        MissingDamageSource,
+        InvalidEffectIdentity,
+        DamageEffectMismatch,
+        AbilitySystemUnavailable,
+        FunctionMismatch,
+        ReceiverMismatch,
+        SourceActorMismatch,
+        TriggerAbilitySystemMismatch,
+        TargetAbilitySystemMismatch,
+        UnsupportedCallKind,
+        Exception,
+    };
+
+    // 中文说明：保存每类匹配失败的次数，在拒绝 Replay 时输出具体原因，避免只留下笼统的校验失败信息。
+    struct ReplayMatchDiagnostics {
+        std::uint32_t candidates{};
+        std::uint32_t invalid_context{};
+        std::uint32_t tick_delta_too_large{};
+        std::uint32_t future_tick{};
+        std::uint64_t nearest_exact_match_tick_delta{
+            (std::numeric_limits<std::uint64_t>::max)()};
+        // 中文诊断：记录少量原始槽位与 Effect identity 路径，避免在证据不足时放宽关联条件。
+        std::string invalid_context_detail;
+        std::string damage_effect_mismatch_detail;
+        std::uint32_t missing_bindings{};
+        std::uint32_t missing_damage_source{};
+        std::uint32_t invalid_effect_identity{};
+        std::uint32_t damage_effect_mismatch{};
+        std::uint32_t ability_system_unavailable{};
+        std::uint32_t function_mismatch{};
+        std::uint32_t receiver_mismatch{};
+        std::uint32_t source_actor_mismatch{};
+        std::uint32_t trigger_ability_system_mismatch{};
+        std::uint32_t target_ability_system_mismatch{};
+        std::uint32_t unsupported_call_kind{};
+        std::uint32_t exceptions{};
+
+        void Record(ReplayMatchFailure failure) noexcept {
+            switch (failure) {
+            case ReplayMatchFailure::None: break;
+            case ReplayMatchFailure::InvalidContext: ++invalid_context; break;
+            case ReplayMatchFailure::MissingBindings: ++missing_bindings; break;
+            case ReplayMatchFailure::MissingDamageSource: ++missing_damage_source; break;
+            case ReplayMatchFailure::InvalidEffectIdentity: ++invalid_effect_identity; break;
+            case ReplayMatchFailure::DamageEffectMismatch: ++damage_effect_mismatch; break;
+            case ReplayMatchFailure::AbilitySystemUnavailable: ++ability_system_unavailable; break;
+            case ReplayMatchFailure::FunctionMismatch: ++function_mismatch; break;
+            case ReplayMatchFailure::ReceiverMismatch: ++receiver_mismatch; break;
+            case ReplayMatchFailure::SourceActorMismatch: ++source_actor_mismatch; break;
+            case ReplayMatchFailure::TriggerAbilitySystemMismatch: ++trigger_ability_system_mismatch; break;
+            case ReplayMatchFailure::TargetAbilitySystemMismatch: ++target_ability_system_mismatch; break;
+            case ReplayMatchFailure::UnsupportedCallKind: ++unsupported_call_kind; break;
+            case ReplayMatchFailure::Exception: ++exceptions; break;
+            }
+        }
+
+        [[nodiscard]] std::string Summary() const {
+            const auto nearest_delta_text =
+                nearest_exact_match_tick_delta ==
+                        (std::numeric_limits<std::uint64_t>::max)()
+                    ? std::string("none")
+                    : std::to_string(nearest_exact_match_tick_delta);
+            std::string summary = "candidates=" + std::to_string(candidates) +
+                ",invalid=" + std::to_string(invalid_context) +
+                ",tick_delta_gt_8=" + std::to_string(tick_delta_too_large) +
+                ",future_tick=" + std::to_string(future_tick) +
+                ",nearest_exact_tick_delta=" + nearest_delta_text +
+                ",effect_mismatch=" + std::to_string(damage_effect_mismatch) +
+                ",asc_unavailable=" + std::to_string(ability_system_unavailable) +
+                ",function_mismatch=" + std::to_string(function_mismatch) +
+                ",receiver_mismatch=" + std::to_string(receiver_mismatch) +
+                ",source_actor_mismatch=" + std::to_string(source_actor_mismatch) +
+                ",trigger_asc_mismatch=" + std::to_string(trigger_ability_system_mismatch) +
+                ",target_asc_mismatch=" + std::to_string(target_ability_system_mismatch) +
+                ",source_missing=" + std::to_string(missing_damage_source) +
+                ",other=" + std::to_string(
+                    missing_bindings + invalid_effect_identity + unsupported_call_kind + exceptions);
+            if (!invalid_context_detail.empty()) {
+                summary += ",invalid_detail=" + invalid_context_detail;
+            }
+            if (!damage_effect_mismatch_detail.empty()) {
+                summary += ",effect_detail=" + damage_effect_mismatch_detail;
+            }
+            return summary;
+        }
+    };
+
+    [[nodiscard]] bool ReplayContextMatchesDamageLocked(
+        const ReplayEffectContext& context, const std::uintptr_t attacker,
+        const std::uintptr_t victim, const std::uint64_t source_id,
+        ReplayMatchFailure* const failure = nullptr) const noexcept {
+        const auto reject = [failure](const ReplayMatchFailure reason) noexcept {
+            if (failure != nullptr) *failure = reason;
+            return false;
+        };
+        if (failure != nullptr) *failure = ReplayMatchFailure::None;
+        try {
+            const bool character_wrapper = context.kind == 3U;
+            const bool server_character_wrapper = context.kind == 4U;
+            const bool by_actor = context.kind == 1U ||
+                character_wrapper || server_character_wrapper;
+            const std::size_t expected_parameter_size = character_wrapper
+                ? kGameplayEffectReplayWrapperFunctionParmsSize
+                : (server_character_wrapper
+                    ? kGameplayEffectReplayServerCharacterFunctionParmsSize
+                    : (context.kind == 1U
+                        ? kGameplayEffectReplayByActorFunctionParmsSize
+                        : kGameplayEffectReplayToTargetFunctionParmsSize));
+            if (!context.valid || context.parameter_size != expected_parameter_size ||
+                context.object_generation != object_generation || attacker == 0 || victim == 0 ||
+                source_id == 0 || context.receiver == 0 || context.function == 0 ||
+                !ReadableRange(*memory, context.receiver, 0x20U) ||
+                !ReadableRange(*memory, context.function, 0x20U)) {
+                return reject(ReplayMatchFailure::InvalidContext);
+            }
+            const auto* const bindings =
+                combat_capture_bindings.load(std::memory_order_acquire);
+            if (bindings == nullptr) return reject(ReplayMatchFailure::MissingBindings);
+            const auto source_it = damage_source_objects.find(source_id);
+            if (source_it == damage_source_objects.end() || source_it->second == 0) {
+                return reject(ReplayMatchFailure::MissingDamageSource);
+            }
+            const std::uintptr_t damage_source_object = source_it->second;
+
+            // HTDamageEvent::DamageGEDef is a weak UHTGamePlayEffect object.
+            // Dump-validated ASC "WithClass" entries expose GameplayEffect as ClassProperty,
+            // whereas ServerActivateGameEffectsWithClassByActor exposes an ObjectProperty.
+            const std::size_t effect_offset = character_wrapper ? 0x10U
+                : ((context.kind == 1U || server_character_wrapper) ? 0x08U : 0x00U);
+            std::uintptr_t gameplay_effect_identity{};
+            std::memcpy(&gameplay_effect_identity,
+                context.parameters.data() + effect_offset, sizeof(gameplay_effect_identity));
+            if (gameplay_effect_identity == 0 ||
+                !ReadableRange(*memory, gameplay_effect_identity, 0x20U)) {
+                return reject(ReplayMatchFailure::InvalidEffectIdentity);
+            }
+
+            bool source_matches_effect{};
+            if (server_character_wrapper) {
+                // The reflected server-RPC field is an effect UObject. Match either the exact
+                // DamageGEDef object or the same UClass, covering CDO/instance representations.
+                std::uintptr_t source_class{}, observed_effect_class{};
+                source_matches_effect = damage_source_object == gameplay_effect_identity;
+                if (!source_matches_effect &&
+                    ReadPointerAt(*memory, damage_source_object,
+                        Layout(profile, "object.class"), source_class) &&
+                    ReadPointerAt(*memory, gameplay_effect_identity,
+                        Layout(profile, "object.class"), observed_effect_class) &&
+                    source_class != 0 && source_class == observed_effect_class) {
+                    source_matches_effect = true;
+                }
+            } else {
+                // The other validated entry points pass a UClass. Match DamageGEDef against
+                // that class, its CDO, or the CDO's class identity.
+                std::uintptr_t class_default_object{};
+                const bool class_default_object_available = ReadPointerAt(
+                    *memory, gameplay_effect_identity,
+                    Layout(profile, "uclass.classDefaultObject"), class_default_object);
+                source_matches_effect =
+                    damage_source_object == gameplay_effect_identity ||
+                    (class_default_object_available &&
+                        damage_source_object == class_default_object);
+                if (!source_matches_effect) {
+                    std::uintptr_t source_class{};
+                    source_matches_effect =
+                        ReadPointerAt(*memory, damage_source_object,
+                            Layout(profile, "object.class"), source_class) &&
+                        source_class == gameplay_effect_identity;
+                }
+            }
+            if (!source_matches_effect) {
+                return reject(ReplayMatchFailure::DamageEffectMismatch);
+            }
+
+            std::uintptr_t attacker_ability_system{}, victim_ability_system{};
+            if (!CurrentAbilitySystemLocked(attacker, attacker_ability_system) ||
+                !CurrentAbilitySystemLocked(victim, victim_ability_system)) {
+                return reject(ReplayMatchFailure::AbilitySystemUnavailable);
+            }
+            if (server_character_wrapper) {
+                // The server RPC has no trigger-ASC or return field; keep its dump-validated
+                // receiver/source relationship explicit rather than weakening the match.
+                std::uintptr_t source_actor{};
+                std::memcpy(&source_actor, context.parameters.data(), sizeof(source_actor));
+                if (bindings->replay_server_activate_by_actor == 0 ||
+                    context.function != bindings->replay_server_activate_by_actor) {
+                    return reject(ReplayMatchFailure::FunctionMismatch);
+                }
+                if (context.receiver != victim) {
+                    return reject(ReplayMatchFailure::ReceiverMismatch);
+                }
+                if (source_actor == 0 || source_actor != attacker ||
+                    !ReadableRange(*memory, source_actor, 0x20U)) {
+                    return reject(ReplayMatchFailure::SourceActorMismatch);
+                }
+                return true;
+            }
+            if (by_actor) {
+                std::uintptr_t source_actor{}, trigger_ability_system{};
+                const std::size_t source_actor_offset = character_wrapper ? 0x08U : 0x00U;
+                const std::size_t trigger_ability_system_offset = character_wrapper ? 0x70U : 0x68U;
+                std::memcpy(&source_actor,
+                    context.parameters.data() + source_actor_offset, sizeof(source_actor));
+                std::memcpy(&trigger_ability_system,
+                    context.parameters.data() + trigger_ability_system_offset,
+                    sizeof(trigger_ability_system));
+                const bool trigger_is_attacker =
+                    trigger_ability_system != 0 &&
+                    trigger_ability_system == attacker_ability_system;
+                // 中文说明：触发 ASC 已经与当前玩家的已验证 ASC 一致时，优先采用这个强身份依据。
+                // 此时 SourceObj 仅保留原生调用参数，不再要求它也必须是攻击者对象；
+                // 只有触发 ASC 无法证明攻击者身份时，才要求 SourceObj 明确匹配攻击者。
+                const bool source_actor_is_attacker =
+                    source_actor != 0 && source_actor == attacker &&
+                    ReadableRange(*memory, source_actor, 0x20U);
+                const std::uintptr_t expected_function = character_wrapper
+                    ? bindings->replay_activate_by_actor
+                    : bindings->replay_apply_by_actor;
+                if (expected_function == 0 || context.function != expected_function) {
+                    return reject(ReplayMatchFailure::FunctionMismatch);
+                }
+                const bool receiver_matches_target = character_wrapper
+                    ? (context.receiver == victim)
+                    : (context.receiver == victim_ability_system);
+                if (!receiver_matches_target) {
+                    return reject(ReplayMatchFailure::ReceiverMismatch);
+                }
+                if (!trigger_is_attacker && !source_actor_is_attacker) {
+                    return reject(trigger_ability_system != 0
+                        ? ReplayMatchFailure::TriggerAbilitySystemMismatch
+                        : ReplayMatchFailure::SourceActorMismatch);
+                }
+                return true;
+            }
+            if (context.kind == 2U) {
+                std::uintptr_t target_ability_system{};
+                std::memcpy(&target_ability_system,
+                    context.parameters.data() + 0x08U, sizeof(target_ability_system));
+                if (bindings->replay_apply_to_target == 0 ||
+                    context.function != bindings->replay_apply_to_target) {
+                    return reject(ReplayMatchFailure::FunctionMismatch);
+                }
+                if (context.receiver != attacker_ability_system) {
+                    return reject(ReplayMatchFailure::ReceiverMismatch);
+                }
+                if (target_ability_system != victim_ability_system) {
+                    return reject(ReplayMatchFailure::TargetAbilitySystemMismatch);
+                }
+                return true;
+            }
+            return reject(ReplayMatchFailure::UnsupportedCallKind);
+        } catch (...) {
+            return reject(ReplayMatchFailure::Exception);
+        }
+    }
+
+    [[nodiscard]] bool FindReplayContextForDamageLocked(
+        const std::uintptr_t attacker, const std::uintptr_t victim,
+        const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
+        ReplayEffectContext& result,
+        ReplayMatchDiagnostics* const diagnostics = nullptr,
+        std::size_t* const matched_slot = nullptr) const noexcept {
+        if (matched_slot != nullptr) *matched_slot = kReplayEffectCallCapacity;
+        if (diagnostics != nullptr) diagnostics->candidates = static_cast<std::uint32_t>(
+            (std::min)(replay_effect_call_count,
+                static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())));
+        if (replay_effect_call_count == 0) return false;
+
+        // 中文说明：CharacterOnDamaged 通知可能比原生 GameplayEffect 入口晚数个 Game Tick 到达。
+        // 时间容差必须有上限；应用时间条件前，先完整校验 DamageGEDef、ASC、函数路由与来源关系。
+        constexpr std::uint64_t kReplayCorrelationMaxTickAge = 8U;
+        ReplayEffectContext closest_match{};
+        std::size_t closest_slot = kReplayEffectCallCapacity;
+        std::uint64_t closest_tick_delta = (std::numeric_limits<std::uint64_t>::max)();
+        std::uint32_t matching_candidates{};
+        for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+            const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                reverse) % kReplayEffectCallCapacity;
+            const auto& candidate = replay_effect_calls[index];
+            if (!candidate.valid) {
+                if (diagnostics != nullptr) {
+                    ++diagnostics->invalid_context;
+                    // 中文诊断：无效槽位不解引用其中的对象指针，只输出原始标量以定位缓存状态。
+                    if (diagnostics->invalid_context <= 3U) {
+                        try {
+                            if (!diagnostics->invalid_context_detail.empty()) {
+                                diagnostics->invalid_context_detail += "|";
+                            }
+                            diagnostics->invalid_context_detail +=
+                                "slot=" + std::to_string(index) +
+                                ";kind=" + std::to_string(candidate.kind) +
+                                ";generation=" + std::to_string(candidate.object_generation) +
+                                ";tick=" + std::to_string(candidate.tick_sequence) +
+                                ";size=" + std::to_string(candidate.parameter_size) +
+                                ";receiver=" + std::to_string(candidate.receiver) +
+                                ";function=" + std::to_string(candidate.function);
+                        } catch (...) {
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Chain-dispatched invocations are replay seeds, not valid roots for a new chain.
+            // They are correlated independently below, one invocation per observed event.
+            if (candidate.damage_chain_id != 0 || candidate.damage_callback_correlated) continue;
+
+            ReplayMatchFailure failure = ReplayMatchFailure::None;
+            if (!ReplayContextMatchesDamageLocked(
+                    candidate, attacker, victim, source_id, &failure)) {
+                if (diagnostics != nullptr) {
+                    diagnostics->Record(failure);
+                    // 中文诊断：Effect mismatch 是首个失败条件；此时不能假设 ASC/receiver 也已匹配。
+                    // 输出 Dump 路由、DamageGEDef、实参及关键对象路径，下一次实测据此修复字段/路由。
+                    if (failure == ReplayMatchFailure::DamageEffectMismatch &&
+                        diagnostics->damage_effect_mismatch <= 2U) {
+                        try {
+                            const bool character_wrapper = candidate.kind == 3U;
+                            const bool server_character_wrapper = candidate.kind == 4U;
+                            const std::size_t effect_offset = character_wrapper ? 0x10U
+                                : ((candidate.kind == 1U || server_character_wrapper)
+                                    ? 0x08U : 0x00U);
+                            std::uintptr_t effect_argument{};
+                            std::memcpy(&effect_argument,
+                                candidate.parameters.data() + effect_offset,
+                                sizeof(effect_argument));
+                            const auto source = damage_source_objects.find(source_id);
+                            const std::uintptr_t damage_object =
+                                source == damage_source_objects.end() ? 0U : source->second;
+                            std::uintptr_t damage_class{}, argument_class{}, argument_cdo{};
+                            const auto object_class_offset = Layout(profile, "object.class");
+                            if (damage_object != 0) {
+                                static_cast<void>(ReadPointerAt(*memory, damage_object,
+                                    object_class_offset, damage_class));
+                            }
+                            if (effect_argument != 0) {
+                                static_cast<void>(ReadPointerAt(*memory, effect_argument,
+                                    object_class_offset, argument_class));
+                                if (!server_character_wrapper) {
+                                    static_cast<void>(ReadPointerAt(*memory, effect_argument,
+                                        Layout(profile, "uclass.classDefaultObject"), argument_cdo));
+                                }
+                            }
+                            const auto object_label = [this](const std::uintptr_t object) {
+                                if (object == 0) return std::string("null");
+                                try {
+                                    const std::string path = ObjectPathLocked(object);
+                                    if (!path.empty()) return path;
+                                } catch (...) {
+                                }
+                                return std::string("ptr:") + std::to_string(object);
+                            };
+                            std::uintptr_t source_actor{}, trigger_asc{}, target_asc{};
+                            if (candidate.kind == 1U || candidate.kind == 3U ||
+                                candidate.kind == 4U) {
+                                const std::size_t source_actor_offset =
+                                    candidate.kind == 3U ? 0x08U : 0x00U;
+                                std::memcpy(&source_actor,
+                                    candidate.parameters.data() + source_actor_offset,
+                                    sizeof(source_actor));
+                            }
+                            if (candidate.kind == 1U || candidate.kind == 3U) {
+                                const std::size_t trigger_offset =
+                                    candidate.kind == 3U ? 0x70U : 0x68U;
+                                std::memcpy(&trigger_asc,
+                                    candidate.parameters.data() + trigger_offset,
+                                    sizeof(trigger_asc));
+                            } else if (candidate.kind == 2U) {
+                                std::memcpy(&target_asc,
+                                    candidate.parameters.data() + 0x08U,
+                                    sizeof(target_asc));
+                            }
+                            std::uintptr_t attacker_asc{}, victim_asc{};
+                            static_cast<void>(CurrentAbilitySystemLocked(attacker, attacker_asc));
+                            static_cast<void>(CurrentAbilitySystemLocked(victim, victim_asc));
+                            std::string detail =
+                                "kind=" + std::to_string(candidate.kind) +
+                                ";tick=" + std::to_string(candidate.tick_sequence) +
+                                ";fn=" + object_label(candidate.function) +
+                                ";receiver=" + object_label(candidate.receiver) +
+                                ";damage=" + object_label(damage_object) +
+                                ";damage_class=" + object_label(damage_class) +
+                                ";arg=" + object_label(effect_argument) +
+                                ";arg_class=" + object_label(argument_class) +
+                                ";arg_cdo=" + object_label(argument_cdo) +
+                                ";source_actor=" + object_label(source_actor) +
+                                ";trigger_asc=" + object_label(trigger_asc) +
+                                ";target_asc=" + object_label(target_asc) +
+                                ";attacker_asc=" + object_label(attacker_asc) +
+                                ";victim_asc=" + object_label(victim_asc);
+                            if (!diagnostics->damage_effect_mismatch_detail.empty()) {
+                                diagnostics->damage_effect_mismatch_detail += " || ";
+                            }
+                            diagnostics->damage_effect_mismatch_detail += detail;
+                        } catch (...) {
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // 中文说明：后续 Tick 中的调用不可能导致更早发生的 CharacterOnDamaged 事件。
+            // 仅关联过去或同一 Tick 的精确匹配，并优先选择时间最近的一条。
+            if (candidate.tick_sequence > capture_tick_sequence) {
+                if (diagnostics != nullptr) ++diagnostics->future_tick;
+                continue;
+            }
+            const auto delta = capture_tick_sequence - candidate.tick_sequence;
+            if (diagnostics != nullptr &&
+                delta < diagnostics->nearest_exact_match_tick_delta) {
+                diagnostics->nearest_exact_match_tick_delta = delta;
+            }
+            if (delta > kReplayCorrelationMaxTickAge) {
+                if (diagnostics != nullptr) ++diagnostics->tick_delta_too_large;
+                continue;
+            }
+
+            // 中文说明：优先选择时间差最小的精确调用；反向遍历保证同 Tick 多条调用时优先取最新捕获项。
+            if (matching_candidates == 0 || delta < closest_tick_delta) {
+                closest_match = candidate;
+                closest_slot = index;
+                closest_tick_delta = delta;
+            }
+            if (matching_candidates != (std::numeric_limits<std::uint32_t>::max)()) {
+                ++matching_candidates;
+            }
+        }
+        if (matching_candidates == 0) return false;
+        closest_match.matching_candidate_count = matching_candidates;
+        result = closest_match;
+        if (matched_slot != nullptr) *matched_slot = closest_slot;
+        return true;
+    }
+
+    // If a chain DamageEvent notification arrives beyond the standard replay-correlation
+    // window, use a chain-tagged exact GEDef/ASC/source/target match only to recover the
+    // chain identity. Ordinary root-hit matching above keeps its strict eight-tick bound.
+    // A delayed native damage callback can outlive the ordinary eight-tick event
+    // correlation window. Use the chain-tagged effect identity only while that chain
+    // still has dispatched applications lacking observed damage callbacks. Once all
+    // dispatched applications have been observed, stale contexts must not label a later
+    // independent attack on the same target as chain-generated.
+    // Match delayed damage callbacks to one exact, unconsumed chain-tagged invocation.
+    // This correlation has no wall-clock expiry: an outstanding native application may
+    // report its real DamageEvent later. However, each captured invocation can account for
+    // at most one callback, and only while the chain has dispatched-but-unobserved work.
+    [[nodiscard]] bool FindDelayedChainIdentityForDamageLocked(
+        const std::uintptr_t attacker, const std::uintptr_t victim,
+        const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
+        std::uint64_t& chain_id,
+        const std::uint64_t expected_chain_id = 0) noexcept {
+        chain_id = 0;
+        std::size_t best_slot = kReplayEffectCallCapacity;
+        std::uint64_t best_chain_id{};
+        std::uint64_t closest_tick_delta = (std::numeric_limits<std::uint64_t>::max)();
+        for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+            const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                reverse) % kReplayEffectCallCapacity;
+            auto& candidate = replay_effect_calls[index];
+            if (!candidate.valid || candidate.damage_chain_id == 0 ||
+                candidate.damage_callback_correlated ||
+                candidate.tick_sequence > capture_tick_sequence ||
+                (expected_chain_id != 0 && candidate.damage_chain_id != expected_chain_id)) {
+                continue;
+            }
+            const auto* const chain = FindDamageChainLocked(candidate.damage_chain_id);
+            if (chain == nullptr ||
+                chain->observed_chain_damage_count >= chain->dispatched_repeat_count ||
+                chain->root_source_id == 0 || chain->root_source_id != source_id) {
+                continue;
+            }
+            std::uintptr_t root_attacker{};
+            std::uintptr_t root_victim{};
+            if (!ResolveObjectHandleLocked(chain->root_attacker, root_attacker) ||
+                !ResolveObjectHandleLocked(chain->root_victim, root_victim) ||
+                root_attacker != attacker || root_victim != victim) {
+                continue;
+            }
+            if (!ReplayContextMatchesDamageLocked(
+                    candidate, attacker, victim, source_id, nullptr)) {
+                continue;
+            }
+            const auto delta = capture_tick_sequence - candidate.tick_sequence;
+            if (best_slot == kReplayEffectCallCapacity || delta < closest_tick_delta) {
+                best_slot = index;
+                best_chain_id = candidate.damage_chain_id;
+                closest_tick_delta = delta;
+            }
+        }
+        if (best_slot == kReplayEffectCallCapacity) return false;
+        replay_effect_calls[best_slot].damage_callback_correlated = true;
+        chain_id = best_chain_id;
+        return chain_id != 0;
+    }
+
+    AnomalyStatusV1 DispatchDamageChainEffect(
+        const DamageChainEffectDispatchRequest* request) noexcept {
+        if (request == nullptr || request->struct_size < sizeof(*request) ||
+            request->flags != 0 || request->damage_sequence == 0) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid damage replay request");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "damage replay must run on the Game thread");
+        }
+        std::scoped_lock lock(mutex);
+
+        // GameplayEffect ProcessEvent/Native-Exec callbacks enqueue their immutable
+        // parameter snapshots before the resulting CharacterOnDamaged callback.
+        // That damage callback can publish the damage event before the next tick drains
+        // the queue, so flush pending captures here before deciding replay is unavailable.
+        const std::uint32_t pending_capture_count_before_drain =
+            combat_capture_write.load(std::memory_order_acquire) -
+            combat_capture_read.load(std::memory_order_acquire);
+        DrainCombatCaptureQueueLocked();
+
+        DamageRecord* record = nullptr;
+        for (std::size_t index{}; index < damage_event_count; ++index) {
+            const auto& candidate = damage_events[
+                (damage_event_start + index) % kDamageEventCapacity];
+            if (candidate.event.sequence == request->damage_sequence) {
+                record = const_cast<DamageRecord*>(&candidate);
+                break;
+            }
+        }
+        // Prefer the live ring, but continue from the pinned validated snapshot when a
+        // chain has itself pushed the original DamageEvent out of the 512-entry ring.
+        if (record == nullptr) record = FindPinnedDamageReplayLocked(request->damage_sequence);
+        if (record == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "original damage sequence expired or was not found in the live or pinned replay records");
+        }
+        ReplayMatchDiagnostics replay_match_diagnostics{};
+        if (!record->replay.valid) {
+            // If the native effect invocation was drained after the damage notification,
+            // associate it lazily now. DamageRecord keeps generation-checked handles, so
+            // resolve them again rather than retaining raw UObject pointers across ticks.
+            std::uintptr_t delayed_attacker{};
+            std::uintptr_t delayed_victim{};
+            ReplayEffectContext delayed_replay{};
+            std::size_t delayed_replay_slot = kReplayEffectCallCapacity;
+            const bool replay_context_found =
+                ResolveObjectHandleLocked(record->event.attacker, delayed_attacker) &&
+                ResolveObjectHandleLocked(record->event.victim, delayed_victim) &&
+                FindReplayContextForDamageLocked(
+                    delayed_attacker, delayed_victim, record->event.source_id,
+                    record->event.tick_sequence, delayed_replay, &replay_match_diagnostics,
+                    &delayed_replay_slot);
+            if (replay_context_found) {
+                record->replay = delayed_replay;
+                if (delayed_replay_slot < kReplayEffectCallCapacity) {
+                    replay_effect_calls[delayed_replay_slot].damage_callback_correlated = true;
+                }
+            }
+        }
+        if (!record->replay.valid) {
+            const auto* const bindings = combat_capture_bindings.load(
+                std::memory_order_acquire);
+            const bool has_validated_gameplay_effect_entry = bindings != nullptr &&
+                (bindings->replay_apply_by_actor != 0 ||
+                 bindings->replay_apply_to_target != 0 ||
+                 bindings->replay_activate_by_actor != 0);
+            if (replay_effect_call_count != 0) {
+                try {
+                    const std::string diagnostic =
+                        "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and bounded past Game-Tick window; match diagnostics: " +
+                        replay_match_diagnostics.Summary();
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE, diagnostic.c_str());
+                } catch (...) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "validated GameplayEffect calls were captured, but none matched this hit; match-diagnostic allocation failed");
+                }
+            }
+            if (!has_validated_gameplay_effect_entry) {
+                try {
+                    replay_status_message =
+                        "Core has not validated any dump-defined GameplayEffect entry point";
+                    if (!replay_entrypoint_diagnostics.empty()) {
+                        replay_status_message += "; live validation: ";
+                        replay_status_message += replay_entrypoint_diagnostics;
+                    } else {
+                        replay_status_message +=
+                            "; live validation has not run for the current object generation";
+                    }
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        replay_status_message.c_str());
+                } catch (...) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "Core has not validated any dump-defined GameplayEffect entry point; diagnostic allocation failed");
+                }
+            }
+            if (pending_capture_count_before_drain != 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Core had pending combat-capture records before replay, but draining them produced no validated GameplayEffect invocation; the entry calls may not match the dump-validated parameter ABI");
+            }
+            try {
+                replay_status_message =
+                    "dump-validated GameplayEffect entry points exist, but neither ProcessEvent nor Native Exec capture observed a call for this hit";
+                if (!replay_entrypoint_diagnostics.empty()) {
+                    replay_status_message += "; live entry points: ";
+                    replay_status_message += replay_entrypoint_diagnostics;
+                }
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE, replay_status_message.c_str());
+            } catch (...) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "dump-validated GameplayEffect entry points exist, but neither ProcessEvent nor Native Exec capture observed a call for this hit");
+            }
+        }
+        if (!record->replay.tag_arrays_valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "original FBufferData tag arrays were not safely captured; refusing stale TArray replay");
+        }
+        if (record->event.world.generation != world_generation ||
+            record->replay.object_generation != object_generation) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "original damage belongs to a stale world/object generation");
+        }
+        if (!record->attacker_was_local_player_pawn) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured damage attacker was not the local player-controlled character when the hit occurred");
+        }
+        std::uintptr_t attacker{}, victim{};
+        if (!ResolveObjectHandleLocked(record->event.attacker, attacker) ||
+            !ResolveObjectHandleLocked(record->event.victim, victim) ||
+            attacker == 0 || victim == 0 || attacker == victim) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured player-controlled attacker or target is no longer valid");
+        }
+        bool victim_is_friendly{};
+        if (!IsFriendlyTargetLocked(attacker, victim, victim_is_friendly)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "dump-validated HTAbilityCharacter.IsFriendlyTarget is unavailable; refusing to replay without the target-faction check");
+        }
+        if (victim_is_friendly) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured target is friendly according to HTAbilityCharacter.IsFriendlyTarget; damage replay is restricted to non-friendly targets");
+        }
+        if (!ReplayContextMatchesDamageLocked(
+                record->replay, attacker, victim, record->event.source_id)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured GameplayEffect receiver/source/target no longer matches the captured player-controlled character and victim");
+        }
+
+        // The recorded receiver/function pair is kept from the exact validated native
+        // entry point: ASC methods receive an ASC, the character wrapper receives its actor.
+        const std::uintptr_t replay_receiver = record->replay.receiver;
+        auto parameters = record->replay.parameters;
+        // Rebuild the dump-declared FGameplayTagContainer TArrays with call-scoped,
+        // owned storage. Never pass the original invocation's potentially freed pointers.
+        std::array<std::array<std::uint64_t, kReplayGameplayTagCapacity>, 2> replay_tag_storage{};
+        for (std::size_t index{}; index < record->replay.gameplay_tags.size(); ++index) {
+            const auto& source = record->replay.gameplay_tags[index];
+            if (source.count > kReplayGameplayTagCapacity) {
+                return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                    "captured FGameplayTagContainer exceeded its validated tag capacity");
+            }
+            if (source.count != 0) {
+                std::memcpy(replay_tag_storage[index].data(), source.values.data(),
+                    static_cast<std::size_t>(source.count) * sizeof(std::uint64_t));
+            }
+            const std::uintptr_t array_data = source.count != 0
+                ? reinterpret_cast<std::uintptr_t>(replay_tag_storage[index].data()) : 0;
+            const std::int32_t array_count = static_cast<std::int32_t>(source.count);
+            const std::uintptr_t array_offset =
+                (record->replay.kind == 3U ? 0x20U : 0x18U) +
+                static_cast<std::uintptr_t>(index) * 0x10U;
+            std::memcpy(parameters.data() + array_offset, &array_data, sizeof(array_data));
+            std::memcpy(parameters.data() + array_offset + 8U,
+                &array_count, sizeof(array_count));
+            std::memcpy(parameters.data() + array_offset + 12U,
+                &array_count, sizeof(array_count));
+        }
+
+        // Clear only dump-verified out/return fields, and rebind only the dump-defined
+        // triggering ASC to the current player. The character wrapper uses its original 0x80 ABI.
+        if (record->replay.kind == 1U || record->replay.kind == 3U) {
+            std::uintptr_t replay_attacker_ability_system{};
+            if (!CurrentAbilitySystemLocked(attacker, replay_attacker_ability_system) ||
+                replay_attacker_ability_system == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "current player AbilitySystemComponent is unavailable for actor-effect replay");
+            }
+            const std::size_t trigger_offset = record->replay.kind == 3U ? 0x70U : 0x68U;
+            const std::size_t return_offset = record->replay.kind == 3U ? 0x78U : 0x70U;
+            std::memcpy(parameters.data() + trigger_offset, &replay_attacker_ability_system,
+                sizeof(replay_attacker_ability_system));
+            parameters[return_offset] = 0;
+        } else if (record->replay.kind == 4U) {
+            // The validated ServerActivate RPC has no return/out field. Preserve the captured
+            // FBufferData scalars, BuffEventType, source actor, and PredictionKey; only the
+            // call-scoped GameplayTag TArray storage above is rebound.
+        } else if (record->replay.kind == 2U) {
+            parameters[0x69U] = 0;
+            std::memset(parameters.data() + 0x6CU, 0, sizeof(std::uint64_t));
+        } else {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "unsupported captured GameplayEffect call kind");
+        }
+        // Read the target's dump-bound GetHP result immediately before dispatch. This is
+        // diagnostic-only: it does not modify HP and cannot by itself distinguish HP damage
+        // from shield damage or a later asynchronous server update.
+        float target_hp_before{};
+        float target_hp_after{};
+        const bool target_hp_before_valid =
+            NteFunctionReady(NteFunctionKind::GetHp) &&
+            InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, target_hp_before) &&
+            std::isfinite(target_hp_before);
+        // Native dispatch can enqueue a new hit that later rotates the rolling ring.
+        // Snapshot the root before dispatch, then pin only after the validated call succeeds.
+        const DamageRecord replay_root = *record;
+        bool native_dispatch_succeeded{};
+        {
+            DamageChainInvocationScope invocation_scope(
+                replay_receiver, record->replay.function, attacker, victim);
+            native_dispatch_succeeded = InvokeNativeProcessEventLocked(
+                replay_receiver, record->replay.function,
+                parameters.data(), record->replay.parameter_size);
+        }
+        if (!native_dispatch_succeeded) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "validated native GameplayEffect call failed");
+        }
+        const bool target_hp_after_valid =
+            NteFunctionReady(NteFunctionKind::GetHp) &&
+            InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, target_hp_after) &&
+            std::isfinite(target_hp_after);
+        const bool target_hp_probe_valid =
+            target_hp_before_valid && target_hp_after_valid;
+        const float target_hp_delta = target_hp_probe_valid
+            ? target_hp_before - target_hp_after : 0.0F;
+        const bool target_hp_reduced = target_hp_probe_valid && target_hp_delta > 0.0001F;
+        RetainPinnedDamageReplayLocked(replay_root);
+        // Report the actual selected route and how many captured calls matched this hit.
+        // The count includes possible duplicate observations, so it is evidence to inspect,
+        // not by itself proof that there was one unique native invocation.
+        try {
+            std::string route;
+            switch (replay_root.replay.kind) {
+            case 1U:
+                route = "HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor";
+                break;
+            case 2U:
+                route = "HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass";
+                break;
+            case 3U:
+                route = "HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor";
+                break;
+            case 4U:
+                route = "HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor";
+                break;
+            default:
+                route = "unknown validated GameplayEffect entry";
+                break;
+            }
+            std::string capture_ingress;
+            if ((replay_root.replay.ingress_mask & kCombatCaptureIngressActorProcessEvent) != 0) {
+                capture_ingress += "actor-process-event";
+            }
+            if ((replay_root.replay.ingress_mask & kCombatCaptureIngressProcessEvent) != 0) {
+                if (!capture_ingress.empty()) capture_ingress += "+";
+                capture_ingress += "process-event";
+            }
+            const bool native_exec_observed =
+                (replay_root.replay.ingress_mask & kCombatCaptureIngressNativeExec) != 0;
+            if (native_exec_observed) {
+                if (!capture_ingress.empty()) capture_ingress += "+";
+                capture_ingress += "native-exec";
+            }
+            if (capture_ingress.empty()) capture_ingress = "unknown";
+            replay_status_message = "ProcessEvent dispatch returned; route=" + route +
+                "; capture_ingress=" + capture_ingress +
+                "; native_exec_seen=" + (native_exec_observed ? "1" : "0") +
+                "; duplicate_ingress_observations=" +
+                std::to_string(replay_root.replay.duplicate_observation_count) +
+                "; matching_candidates=" +
+                std::to_string(replay_root.replay.matching_candidate_count) +
+                "; selection=closest-prior-tick; seed_final_damage=" +
+                std::to_string(replay_root.event.final_damage) +
+                "; target_hp_probe=" + (target_hp_probe_valid ? "valid" : "unavailable") +
+                "; target_hp_before=" + (target_hp_before_valid
+                    ? std::to_string(target_hp_before) : "unknown") +
+                "; target_hp_after=" + (target_hp_after_valid
+                    ? std::to_string(target_hp_after) : "unknown") +
+                "; target_hp_delta=" + (target_hp_probe_valid
+                    ? std::to_string(target_hp_delta) : "unknown") +
+                "; target_hp_reduced=" + (target_hp_probe_valid
+                    ? (target_hp_reduced ? "1" : "0") : "unknown");
+            return Status(ANOMALY_STATUS_V1_OK, replay_status_message.c_str());
+        } catch (...) {
+            return Status(ANOMALY_STATUS_V1_OK,
+                "ProcessEvent dispatch returned; route details unavailable after allocation failure");
+        }
+    }
+
+    AnomalyStatusV1 StartDamageChain(
+        const AnomalyNteDamageChainRequestV1* request,
+        std::uint64_t* chain_id_out) noexcept {
+        if (chain_id_out != nullptr) *chain_id_out = 0;
+        if (request == nullptr || chain_id_out == nullptr ||
+            request->struct_size < sizeof(*request) || request->flags != 0 ||
+            request->damage_sequence == 0 || request->repeat_count == 0 ||
+            request->repeat_count > ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT ||
+            request->rate_per_second == 0 ||
+            request->rate_per_second > ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid damage-chain request; count/rate outside the declared limits");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "starting a damage chain must run on the Game thread");
+        }
+
+        const auto interval = (std::max)(
+            std::chrono::steady_clock::duration{1},
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(1.0 / request->rate_per_second)));
+        std::scoped_lock lock(mutex);
+        DamageRecord* root = nullptr;
+        for (std::size_t index{}; index < damage_event_count; ++index) {
+            auto& candidate = damage_events[
+                (damage_event_start + index) % kDamageEventCapacity];
+            if (candidate.event.sequence == request->damage_sequence) {
+                root = &candidate;
+                break;
+            }
+        }
+        if (root == nullptr) root = FindPinnedDamageReplayLocked(request->damage_sequence);
+        if (root == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "root CharacterOnDamaged event is no longer present in the validated cache");
+        }
+        if ((root->event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
+            (root->event.flags & ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED) != 0) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "damage chain requires an original CharacterOnDamaged event, not a chain-generated event");
+        }
+        if (root->event.world.id == 0 ||
+            root->event.world.generation != world_generation ||
+            root->event.attacker.id == 0 ||
+            root->event.attacker.generation != object_generation ||
+            root->event.victim.id == 0 ||
+            root->event.victim.generation != object_generation ||
+            root->event.source_id == 0 ||
+            (root->replay.valid && root->replay.object_generation != object_generation)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "root damage lacks current world/object identity or a resolved DamageGEDef source");
+        }
+        if (IsKnownDamageChainRootLocked(request->damage_sequence)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "this root damage event already has an active chain");
+        }
+
+        DamageChainRecord* slot = nullptr;
+        for (auto& candidate : damage_chains) {
+            const bool empty = candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY;
+            const bool terminal =
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED ||
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED ||
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED;
+            const bool confirmations_resolved =
+                candidate.context_invalidated ||
+                candidate.observed_chain_damage_count >= candidate.dispatched_repeat_count;
+            const bool reusable_terminal =
+                !candidate.in_flight && terminal && confirmations_resolved &&
+                !HasDamageChainDispatchTokensLocked(candidate.id);
+            if (empty || reusable_terminal) {
+                slot = &candidate;
+                break;
+            }
+        }
+        if (slot == nullptr) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "all 32 independent damage-chain slots are occupied");
+        }
+        // Pin the validated root before any replay dispatch. The ordinary event ring may
+        // rotate while other independent chains produce events, but this chain must retain
+        // its original captured effect context until every additional application finishes.
+        RetainPinnedDamageReplayLocked(*root);
+
+        std::uint64_t chain_id = damage_chain_next_id++;
+        if (chain_id == 0) chain_id = damage_chain_next_id++;
+        *slot = {};
+        slot->id = chain_id;
+        slot->root_damage_sequence = request->damage_sequence;
+        slot->world_generation = world_generation;
+        slot->object_generation = object_generation;
+        slot->root_attacker = root->event.attacker;
+        slot->root_victim = root->event.victim;
+        slot->root_source_id = root->event.source_id;
+        slot->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING;
+        slot->requested_repeat_count = request->repeat_count;
+        slot->rate_per_second = request->rate_per_second;
+        slot->interval = interval;
+        slot->last_status_code = ANOMALY_STATUS_V1_OK;
+        // Make the first extra application due immediately, but dispatch it only from
+        // ProcessDamageChains after the host tick callback finishes. This keeps all roots
+        // created in one callback under the same bounded, fair scheduler.
+        slot->next_due = std::chrono::steady_clock::now();
+        SetDamageChainMessage(*slot,
+            "原生伤害已捕获；后续应用已排队，首个调用将在当前 Game tick 的队列阶段派发");
+        *chain_id_out = chain_id;
+        return Status(ANOMALY_STATUS_V1_OK,
+            "damage chain queued; repeat count controls total additions, rate controls cadence, and there is no wall-clock expiry");
+    }
+
+    AnomalyStatusV1 DamageChainSnapshot(
+        const std::uint64_t chain_id,
+        AnomalyNteDamageChainSnapshotV1* snapshot) noexcept {
+        if (snapshot == nullptr ||
+            snapshot->struct_size < sizeof(AnomalyNteDamageChainSnapshotV1)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid damage-chain snapshot");
+        }
+        std::scoped_lock lock(mutex);
+        const auto* chain = [&]() -> const DamageChainRecord* {
+            for (const auto& candidate : damage_chains) {
+                if (candidate.id == chain_id && chain_id != 0) return &candidate;
+            }
+            return nullptr;
+        }();
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "damage-chain id is not in the retained status window");
+        }
+        snapshot->struct_size = sizeof(*snapshot);
+        snapshot->state = chain->state;
+        snapshot->chain_id = chain->id;
+        snapshot->root_damage_sequence = chain->root_damage_sequence;
+        snapshot->requested_repeat_count = chain->requested_repeat_count;
+        snapshot->dispatched_repeat_count = chain->dispatched_repeat_count;
+        snapshot->observed_chain_damage_count = chain->observed_chain_damage_count;
+        snapshot->rate_per_second = chain->rate_per_second;
+        snapshot->last_status_code = chain->last_status_code;
+        snapshot->reserved = 0;
+        std::memcpy(snapshot->status_message, chain->status_message.data(),
+            sizeof(snapshot->status_message));
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 CancelDamageChain(const std::uint64_t chain_id) noexcept {
+        if (chain_id == 0) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "chain id is zero");
+        }
+        std::scoped_lock lock(mutex);
+        auto* chain = FindDamageChainLocked(chain_id);
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "damage-chain id is not in the retained status window");
+        }
+        if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED;
+            chain->last_status_code = ANOMALY_STATUS_V1_CANCELLED;
+            SetDamageChainMessage(*chain,
+                "用户已取消剩余队列；已派发的伤害不会回滚");
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    void ProcessDamageChains() noexcept {
+        if (!started.load(std::memory_order_acquire) ||
+            GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return;
+        }
+        // A due backlog may continue on later Game ticks, but never emits a same-tick
+        // catch-up burst for one chain.
+        constexpr std::size_t kMaximumDispatchesPerChainPerTick = 1;
+        constexpr std::size_t kMaximumDamageChainDispatchesPerTick =
+            kDamageChainCapacity * kMaximumDispatchesPerChainPerTick;
+        std::array<std::size_t, kDamageChainCapacity> dispatches_this_tick{};
+        for (std::size_t dispatched_this_tick{};
+             dispatched_this_tick < kMaximumDamageChainDispatchesPerTick;
+             ++dispatched_this_tick) {
+            std::uint64_t chain_id{};
+            std::uint64_t root_sequence{};
+            std::size_t token_slot = kDamageChainDispatchTokenCapacity;
+            std::uint64_t reserved_token_sequence{};
+            {
+                std::scoped_lock lock(mutex);
+                const auto now = std::chrono::steady_clock::now();
+                std::size_t due_slot = kDamageChainCapacity;
+                for (std::size_t offset{}; offset < kDamageChainCapacity; ++offset) {
+                    const auto index = (damage_chain_scheduler_cursor + offset) %
+                        kDamageChainCapacity;
+                    const auto& candidate = damage_chains[index];
+                    if (dispatches_this_tick[index] >=
+                            kMaximumDispatchesPerChainPerTick ||
+                        candidate.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                        candidate.dispatched_repeat_count >= candidate.requested_repeat_count ||
+                        candidate.dispatched_repeat_count > candidate.observed_chain_damage_count ||
+                        candidate.in_flight || candidate.next_due > now) {
+                        continue;
+                    }
+                    due_slot = index;
+                    break;
+                }
+                if (due_slot == kDamageChainCapacity) return;
+                std::size_t free_token_slot = kDamageChainDispatchTokenCapacity;
+                for (std::size_t index{}; index < damage_chain_dispatch_tokens.size(); ++index) {
+                    if (!damage_chain_dispatch_tokens[index].occupied) { free_token_slot = index; break; }
+                }
+                auto& due_chain = damage_chains[due_slot];
+                if (free_token_slot == kDamageChainDispatchTokenCapacity) {
+                    SetDamageChainMessage(due_chain,
+                        "待确认账本已满；派发暂缓，剩余次数保留且无过期时间");
+                    return;
+                }
+                auto& token = damage_chain_dispatch_tokens[free_token_slot];
+                token = {};
+                token.occupied = true;
+                token.sequence = damage_chain_dispatch_token_next_sequence++;
+                if (token.sequence == 0) token.sequence = damage_chain_dispatch_token_next_sequence++;
+                token.chain_id = due_chain.id;
+                token.root_damage_sequence = due_chain.root_damage_sequence;
+                token.tick_sequence = tick_sequence.load(std::memory_order_acquire);
+                token_slot = free_token_slot;
+                reserved_token_sequence = token.sequence;
+                due_chain.in_flight = true;
+                ++dispatches_this_tick[due_slot];
+                damage_chain_scheduler_cursor = (due_slot + 1U) % kDamageChainCapacity;
+                chain_id = due_chain.id;
+                root_sequence = due_chain.root_damage_sequence;
+            }
+
+            DamageChainEffectDispatchRequest replay_request{};
+            replay_request.struct_size = sizeof(replay_request);
+            replay_request.damage_sequence = root_sequence;
+            AnomalyStatusV1 dispatch_status{};
+            {
+                DamageChainDispatchScope chain_scope(chain_id);
+                dispatch_status = DispatchDamageChainEffect(&replay_request);
+            }
+            std::array<char, ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY> detail{};
+            if (dispatch_status.message.data != nullptr && dispatch_status.message.size != 0) {
+                const auto copied = (std::min)(
+                    dispatch_status.message.size, detail.size() - 1U);
+                std::memcpy(detail.data(), dispatch_status.message.data, copied);
+            }
+
+            {
+                std::scoped_lock lock(mutex);
+                auto* chain = FindDamageChainLocked(chain_id);
+                auto& token = damage_chain_dispatch_tokens[token_slot];
+                const bool token_matches = token.occupied && token.sequence == reserved_token_sequence &&
+                    token.chain_id == chain_id;
+                if (chain == nullptr) { if (token_matches) token = {}; continue; }
+                chain->in_flight = false;
+                if (chain->world_generation != world_generation || chain->object_generation != object_generation) {
+                    if (token_matches) token = {};
+                    if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                        chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+                        chain->last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+                        SetDamageChainMessage(*chain,
+                            "世界或对象代次变化，原生上下文已失效；旧链终止");
+                    }
+                    continue;
+                }
+                if (chain->context_invalidated) {
+                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK &&
+                        chain->dispatched_repeat_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->dispatched_repeat_count;
+                    }
+                    if (token_matches) token = {};
+                    chain->last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+                    SetDamageChainMessage(*chain,
+                        "原生绑定/世界代次已失效；在途调用已返回但不能再安全确认，剩余队列已停止");
+                    continue;
+                }
+                chain->last_status_code = dispatch_status.code;
+                if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED) {
+                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
+                        if (token_matches) token.pending = true;
+                        if (chain->dispatched_repeat_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                            ++chain->dispatched_repeat_count;
+                        }
+                    } else if (token_matches) {
+                        token = {};
+                    }
+                    SetDamageChainMessage(*chain,
+                        dispatch_status.code == ANOMALY_STATUS_V1_OK
+                            ? "队列已取消；在途原生调用已返回，仍保留其真实伤害确认项"
+                            : "队列已取消；在途调用失败，确认项已清除");
+                    continue;
+                }
+                if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
+                    if (token_matches) token.pending = true;
+                    if (chain->dispatched_repeat_count !=
+                        (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->dispatched_repeat_count;
+                    }
+                    if (chain->state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) continue;
+                    if (chain->dispatched_repeat_count >= chain->requested_repeat_count) {
+                        if (chain->observed_chain_damage_count >= chain->requested_repeat_count) {
+                            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED;
+                            SetDamageChainMessage(*chain,
+                                "已观察到全部请求次数对应的真实伤害事件；队列完成");
+                        } else {
+                            // Native calls have all been dispatched, but the requested
+                            // number of real damage callbacks has not yet been observed.
+                            // Keep the chain alive without re-dispatching or expiring it.
+                            SetDamageChainMessage(*chain,
+                                "全部次数已派发，仍在等待真实伤害事件确认；无时间期限");
+                        }
+                    } else {
+                        // Advance the cadence slot, not the remaining count. A stall leaves
+                        // due work queued; the scheduler can send at most one application per
+                        // chain per Game tick, and it waits for the prior real damage callback.
+                        chain->next_due += chain->interval;
+                        SetDamageChainMessage(*chain,
+                            chain->observed_chain_damage_count < chain->dispatched_repeat_count
+                                ? "已派发当前次数，等待对应的真实伤害事件；确认后继续，无时间期限"
+                                : "队列运行中：按请求速率排队；延迟不会丢弃剩余次数");
+                    }
+                } else {
+                    if (token_matches) token = {};
+                    if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                        chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+                        SetDamageChainMessage(*chain, detail[0] != '\0'
+                            ? std::string_view(detail.data())
+                            : std::string_view("后续原生 GameplayEffect 派发失败"));
+                    }
+                }
+            }
+        }
+    }
+
+
+
     void ProcessCharacterDamageLocked(
         const float damage,
         const std::int32_t source_index,
@@ -5885,7 +7646,8 @@ struct Ue5NteAdapter::State {
         const bool critical,
         const bool critical_valid,
         const bool partial,
-        const std::uint64_t capture_tick_sequence) noexcept {
+        const std::uint64_t capture_tick_sequence,
+        const std::uint64_t damage_chain_id) noexcept {
         const auto drop = [this]() noexcept {
             ++damage_dropped_count;
             damage_capture_drop_count.fetch_add(1, std::memory_order_relaxed);
@@ -5925,7 +7687,80 @@ struct Ue5NteAdapter::State {
                     attacker == player_pawn);
             }
             event.final_damage = static_cast<std::int64_t>(std::llround(damage));
-            RecordDamageEventLocked(event);
+            ReplayEffectContext replay_context{};
+            std::size_t replay_context_slot = kReplayEffectCallCapacity;
+            const bool has_replay_context = FindReplayContextForDamageLocked(
+                attacker, victim, event.source_id, capture_tick_sequence, replay_context,
+                nullptr, &replay_context_slot);
+
+            std::uint64_t correlated_chain_id{};
+            bool chain_damage_callback_correlated{};
+            // A synchronous callback captured inside the exact replay invocation carries a
+            // trusted chain id and participant pair. Preserve that origin marker even if the
+            // emitted DamageGEDef representation cannot be matched to the root; do not count
+            // it as a completed repeat unless the strict source identity and token also match.
+            const bool synchronous_chain_origin =
+                damage_chain_id != 0 &&
+                DamageEventMatchesChainParticipantsLocked(damage_chain_id, event);
+            if (synchronous_chain_origin &&
+                DamageEventMatchesChainRootLocked(damage_chain_id, event)) {
+                correlated_chain_id = damage_chain_id;
+                std::uint64_t consumed_chain_id{};
+                chain_damage_callback_correlated = ConsumeDamageChainDispatchTokenForDamageLocked(
+                    attacker, victim, event.source_id, capture_tick_sequence,
+                    has_replay_context ? &replay_context : nullptr, consumed_chain_id,
+                    correlated_chain_id);
+            } else {
+                chain_damage_callback_correlated = ConsumeDamageChainDispatchTokenForDamageLocked(
+                    attacker, victim, event.source_id, capture_tick_sequence,
+                    has_replay_context ? &replay_context : nullptr, correlated_chain_id);
+            }
+            if (correlated_chain_id != 0 &&
+                !DamageEventMatchesChainRootLocked(correlated_chain_id, event)) {
+                correlated_chain_id = 0;
+                chain_damage_callback_correlated = false;
+            }
+            if (correlated_chain_id == 0 && has_replay_context &&
+                replay_context_slot < kReplayEffectCallCapacity) {
+                replay_effect_calls[replay_context_slot].damage_callback_correlated = true;
+            }
+            if (synchronous_chain_origin || correlated_chain_id != 0) {
+                // Provenance prevents recursive queue creation; only a one-to-one token
+                // match after strict root-effect validation increments observed count.
+                event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
+            }
+            if (correlated_chain_id != 0) {
+                if (chain_damage_callback_correlated) {
+                    if (auto* chain = FindDamageChainLocked(correlated_chain_id);
+                        chain != nullptr && chain->observed_chain_damage_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->observed_chain_damage_count;
+                        if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING &&
+                            chain->dispatched_repeat_count >= chain->requested_repeat_count &&
+                            chain->observed_chain_damage_count >= chain->requested_repeat_count) {
+                            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED;
+                            SetDamageChainMessage(*chain,
+                                "已观察到全部请求次数对应的真实伤害事件；队列完成");
+                        }
+                    }
+                }
+            }
+            bool attacker_was_local_player_character =
+                attacker != 0 && attacker == player_pawn;
+            if (attacker_was_local_player_character) {
+                // 中文说明：不仅核验玩家当前 Pawn，还核验其角色类继承自 dump 校验过的 GetHP 所属类；
+                // 这样即使载具临时成为 Controller.Pawn，也不能被登记为可重放的玩家角色伤害源。
+                const auto& get_hp = combat_skill_discovery.functions[
+                    NteIndex(NteFunctionKind::GetHp)];
+                std::uintptr_t attacker_class{};
+                attacker_was_local_player_character = get_hp &&
+                    ReadPointerAt(*memory, attacker,
+                        Layout(profile, "object.class"), attacker_class) &&
+                    IsClassDerivedFromLocked(attacker_class, get_hp->outer_class);
+            }
+            RecordDamageEventLocked(event, damage,
+                has_replay_context ? &replay_context : nullptr,
+                attacker_was_local_player_character);
             AnomalyNteCombatEventV1 combat_event{};
             combat_event.kind = ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE;
             combat_event.tick_sequence = event.tick_sequence;
@@ -5969,7 +7804,7 @@ struct Ue5NteAdapter::State {
             damage.damage, damage.source_index, damage.source_serial,
             damage.victim, damage.attacker, damage.saved_skill_cdo, damage.active_spec_handle,
             critical, critical_valid, damage.tags.partial || !critical_valid,
-            capture_tick_sequence);
+            capture_tick_sequence, damage.damage_chain_id);
     }
 
     void RefreshEntityCache(
@@ -8547,6 +10382,278 @@ struct Ue5NteAdapter::State {
         return true;
     }
 
+    [[nodiscard]] bool ValidateReplayEffectFunctionLocked(
+        const std::uintptr_t function, const bool by_actor,
+        std::string& failure_reason) const {
+        const std::string_view entry_name = by_actor
+            ? "HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor"
+            : "HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass";
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(entry_name);
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (function == 0) return fail("function pointer is null");
+
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
+        }
+        if (function_class_name != "Function") {
+            return fail("expected class Function, observed " + function_class_name);
+        }
+        if (outer_name != "HTAbilitySystemComponent") {
+            return fail("expected owner HTAbilitySystemComponent, observed " + outer_name);
+        }
+        const std::string_view expected_name = by_actor
+            ? "K2_ApplyGameEffectWithClassByActor"
+            : "K2_ApplyGameplayEffectToTargetWithClass";
+        if (function_name != expected_name) {
+            return fail("expected function " + std::string(expected_name) +
+                ", observed " + function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        const std::uint8_t expected_num_parms = by_actor ? 5U : 6U;
+        // UFunction::ParmsSize is the end of the final reflected property in the live
+        // HTGame reflection metadata (0x71 / 0x74), not sizeof the aligned dump C++ struct
+        // (0x78). Validate those reflected boundaries separately from replay buffer storage.
+        const std::uint16_t expected_parms_size = static_cast<std::uint16_t>(by_actor
+            ? kGameplayEffectReplayByActorParmsSize
+            : kGameplayEffectReplayToTargetParmsSize);
+        const std::uint16_t expected_return_offset = by_actor ? 0x70U : 0x6CU;
+        if (parms_size != expected_parms_size || num_parms != expected_num_parms ||
+            return_offset != expected_return_offset) {
+            return fail("UFunction header mismatch: expected NumParms=" +
+                std::to_string(expected_num_parms) + ", ParmsSize=" +
+                std::to_string(expected_parms_size) + ", ReturnValueOffset=" +
+                std::to_string(expected_return_offset) + "; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
+        const auto field = [&](const std::string_view name, const std::string_view type,
+                               const std::uint16_t size, const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            if (!FindReflectedPropertyLocked(function, name, property, false)) {
+                return fail("could not find reflected field " + std::string(name) +
+                    " in the UFunction PropertyLink");
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
+        };
+        if (by_actor) {
+            return field("SourceObj", "ObjectProperty", 8, 0x00) &&
+                field("GameplayEffect", "ClassProperty", 8, 0x08) &&
+                field("ModifyData", "StructProperty", 0x58, 0x10) &&
+                field("pTriggerAbilityComp", "ObjectProperty", 8, 0x68) &&
+                field("ReturnValue", "BoolProperty", 1, 0x70);
+        }
+
+        ReflectedPropertyInfo buff_event_type;
+        if (!field("GameplayEffect", "ClassProperty", 8, 0x00) ||
+            !field("TargetAbilityCmp", "ObjectProperty", 8, 0x08) ||
+            !field("ModifyData", "StructProperty", 0x58, 0x10)) {
+            return false;
+        }
+        if (!FindReflectedPropertyLocked(function, "BuffEventType", buff_event_type, false)) {
+            return fail("could not find reflected field BuffEventType in the UFunction PropertyLink");
+        }
+        if ((buff_event_type.type != "ByteProperty" && buff_event_type.type != "EnumProperty") ||
+            buff_event_type.element_size != 1 || buff_event_type.offset != 0x68 ||
+            buff_event_type.array_dim != 1) {
+            return fail("field BuffEventType expected ByteProperty/EnumProperty, size=1, offset=104, arrayDim=1; observed type=" +
+                buff_event_type.type + ", size=" + std::to_string(buff_event_type.element_size) +
+                ", offset=" + std::to_string(buff_event_type.offset) +
+                ", arrayDim=" + std::to_string(buff_event_type.array_dim));
+        }
+        return field("bUsePredictionKey", "BoolProperty", 1, 0x69) &&
+            field("ReturnValue", "StructProperty", 8, 0x6C);
+    }
+
+    [[nodiscard]] bool ValidateReplayActivateByActorFunctionLocked(
+        const std::uintptr_t function, std::string& failure_reason) const {
+        constexpr std::string_view entry_name =
+            "HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor";
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(entry_name);
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (function == 0) return fail("function pointer is null");
+
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
+        }
+        if (function_class_name != "Function") {
+            return fail("expected class Function, observed " + function_class_name);
+        }
+        if (outer_name != "HTAbilityCharacter") {
+            return fail("expected owner HTAbilityCharacter, observed " + outer_name);
+        }
+        if (function_name != "K2_ActivateGameEffectsWithClassByActor") {
+            return fail("expected function K2_ActivateGameEffectsWithClassByActor, observed " +
+                function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        // The dump-generated wrapper struct uses 0x80-byte aligned storage, while the
+        // live UFunction::ParmsSize is the final reflected property boundary (0x79).
+        // Capture/replay still uses the separate 0x80-byte zero-initialized buffer.
+        constexpr std::uint16_t kExpectedWrapperParmsSize =
+            static_cast<std::uint16_t>(kGameplayEffectReplayWrapperParmsSize);
+        if (parms_size != kExpectedWrapperParmsSize || num_parms != 6U || return_offset != 0x78U) {
+            return fail("UFunction header mismatch: expected NumParms=6, ParmsSize=" +
+                std::to_string(kExpectedWrapperParmsSize) +
+                ", ReturnValueOffset=120; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
+        const auto field = [&](const std::string_view name, const std::string_view type,
+                               const std::uint16_t size, const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            if (!FindReflectedPropertyLocked(function, name, property, false)) {
+                return fail("could not find reflected field " + std::string(name) +
+                    " in the UFunction PropertyLink");
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
+        };
+        return field("WorldContextObject", "ObjectProperty", 8, 0x00) &&
+            field("SourceObj", "ObjectProperty", 8, 0x08) &&
+            field("GameplayEffect", "ClassProperty", 8, 0x10) &&
+            field("ModifyData", "StructProperty", 0x58, 0x18) &&
+            field("pTriggerAbilityComp", "ObjectProperty", 8, 0x70) &&
+            field("ReturnValue", "BoolProperty", 1, 0x78);
+    }
+
+    [[nodiscard]] bool ValidateReplayServerActivateByActorFunctionLocked(
+        const std::uintptr_t function, std::string& failure_reason) const {
+        constexpr std::string_view entry_name =
+            "HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor";
+        const auto fail = [&](std::string reason) {
+            failure_reason.assign(entry_name);
+            failure_reason += ": ";
+            failure_reason += reason;
+            return false;
+        };
+        if (function == 0) return fail("function pointer is null");
+
+        std::uintptr_t function_class{}, outer{};
+        std::string function_class_name, outer_name, function_name;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+            !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), outer) ||
+            !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+            !ReadReflectedObjectNameLocked(outer, outer_name) ||
+            !ReadReflectedObjectNameLocked(function, function_name)) {
+            return fail("could not read UFunction class, owner, or name using the active Profile layout");
+        }
+        if (function_class_name != "Function") {
+            return fail("expected class Function, observed " + function_class_name);
+        }
+        if (outer_name != "HTAbilityCharacter") {
+            return fail("expected owner HTAbilityCharacter, observed " + outer_name);
+        }
+        if (function_name != "ServerActivateGameEffectsWithClassByActor") {
+            return fail("expected function ServerActivateGameEffectsWithClassByActor, observed " +
+                function_name);
+        }
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset)) {
+            return fail("could not read NumParms, ParmsSize, or ReturnValueOffset");
+        }
+        constexpr std::uint8_t kExpectedServerNumParms = 5U;
+        constexpr std::uint16_t kExpectedServerReturnOffset = 0xFFFFU;
+        if (parms_size != kGameplayEffectReplayServerCharacterParmsSize ||
+            num_parms != kExpectedServerNumParms ||
+            return_offset != kExpectedServerReturnOffset) {
+            return fail("UFunction header mismatch: expected NumParms=5, ParmsSize=124, ReturnValueOffset=65535; observed NumParms=" +
+                std::to_string(num_parms) + ", ParmsSize=" + std::to_string(parms_size) +
+                ", ReturnValueOffset=" + std::to_string(return_offset));
+        }
+
+        const auto field = [&](const std::string_view name, const std::string_view type,
+                               const std::uint16_t size, const std::uint16_t offset) {
+            ReflectedPropertyInfo property;
+            if (!FindReflectedPropertyLocked(function, name, property, false)) {
+                return fail("could not find reflected field " + std::string(name) +
+                    " in the UFunction PropertyLink");
+            }
+            if (property.type != type || property.element_size != size ||
+                property.offset != offset || property.array_dim != 1) {
+                return fail("field " + std::string(name) + " expected type=" +
+                    std::string(type) + ", size=" + std::to_string(size) +
+                    ", offset=" + std::to_string(offset) + ", arrayDim=1; observed type=" +
+                    property.type + ", size=" + std::to_string(property.element_size) +
+                    ", offset=" + std::to_string(property.offset) +
+                    ", arrayDim=" + std::to_string(property.array_dim));
+            }
+            return true;
+        };
+
+        ReflectedPropertyInfo buff_event_type;
+        if (!field("SourceObj", "ObjectProperty", 8, 0x00) ||
+            !field("GameplayEffect", "ObjectProperty", 8, 0x08) ||
+            !field("ModifyData", "StructProperty", 0x58, 0x10)) {
+            return false;
+        }
+        if (!FindReflectedPropertyLocked(function, "BuffEventType", buff_event_type, false)) {
+            return fail("could not find reflected field BuffEventType in the UFunction PropertyLink");
+        }
+        if ((buff_event_type.type != "ByteProperty" && buff_event_type.type != "EnumProperty") ||
+            buff_event_type.element_size != 1 || buff_event_type.offset != 0x68 ||
+            buff_event_type.array_dim != 1) {
+            return fail("field BuffEventType expected ByteProperty/EnumProperty, size=1, offset=104, arrayDim=1; observed type=" +
+                buff_event_type.type + ", size=" + std::to_string(buff_event_type.element_size) +
+                ", offset=" + std::to_string(buff_event_type.offset) +
+                ", arrayDim=" + std::to_string(buff_event_type.array_dim));
+        }
+        return field("PredictionKey", "StructProperty", 0x10, 0x6C);
+    }
+
     [[nodiscard]] bool ValidateDamageEventLayoutLocked(
         const std::uintptr_t damage_event_structure) const {
         try {
@@ -9129,6 +11236,41 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::RemoveHeadUpBattleMarkBuffControl);
                     lookup_optional(NteFunctionKind::AddMonsterBufferControl);
                     lookup_optional(NteFunctionKind::GetMonsterStaticData);
+                    // Bind only exact Dump-defined functions whose live reflected parameter layouts validate.
+                    std::string replay_by_actor_failure, replay_to_target_failure;
+                    std::string replay_character_failure, replay_server_character_failure;
+                    std::uintptr_t replay_apply_by_actor{};
+                    if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameEffectWithClassByActor", replay_apply_by_actor)) {
+                        replay_by_actor_failure = "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayEffectFunctionLocked(replay_apply_by_actor, true, replay_by_actor_failure)) {
+                        next_capture_bindings.replay_apply_by_actor = replay_apply_by_actor;
+                    }
+                    std::uintptr_t replay_apply_to_target{};
+                    if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass", replay_apply_to_target)) {
+                        replay_to_target_failure = "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayEffectFunctionLocked(replay_apply_to_target, false, replay_to_target_failure)) {
+                        next_capture_bindings.replay_apply_to_target = replay_apply_to_target;
+                    }
+                    std::uintptr_t replay_activate_by_actor{};
+                    if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter.K2_ActivateGameEffectsWithClassByActor", replay_activate_by_actor)) {
+                        replay_character_failure = "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayActivateByActorFunctionLocked(replay_activate_by_actor, replay_character_failure)) {
+                        next_capture_bindings.replay_activate_by_actor = replay_activate_by_actor;
+                    }
+                    std::uintptr_t replay_server_activate_by_actor{};
+                    if (!FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor", replay_server_activate_by_actor)) {
+                        replay_server_character_failure = "path lookup did not resolve a live registered UFunction";
+                    } else if (ValidateReplayServerActivateByActorFunctionLocked(replay_server_activate_by_actor, replay_server_character_failure)) {
+                        next_capture_bindings.replay_server_activate_by_actor = replay_server_activate_by_actor;
+                    }
+                    replay_entrypoint_diagnostics =
+                        "ASC ByActor: " + (next_capture_bindings.replay_apply_by_actor != 0 ? std::string("validated") : replay_by_actor_failure) +
+                        "; ASC ToTarget: " + (next_capture_bindings.replay_apply_to_target != 0 ? std::string("validated") : replay_to_target_failure) +
+                        "; Character wrapper: " + (next_capture_bindings.replay_activate_by_actor != 0 ? std::string("validated") : replay_character_failure) +
+                        "; Character server RPC: " + (next_capture_bindings.replay_server_activate_by_actor != 0 ? std::string("validated") : replay_server_character_failure);
+                    if (next_capture_bindings.replay_apply_by_actor == 0 || next_capture_bindings.replay_apply_to_target == 0) {
+                        direct_lookup_succeeded = false;
+                    }
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
@@ -13498,6 +15640,10 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             NextDamageEventThunk, CombatStatisticsThunk, DamageSourceNameThunk,
             DamageParticipantPathThunk, LatestCombatEventSequenceThunk,
             NextCombatEventThunk, CombatEventNameThunk, ParticipantDisplayNameThunk};
+        damage_chain_service = {
+            sizeof(AnomalyNteDamageChainServiceV1),
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            this, DamageChainStartThunk, DamageChainSnapshotThunk, DamageChainCancelThunk};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
@@ -13549,6 +15695,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteEntitiesServiceV1 entities_service{};
     AnomalyNteActorsServiceV1 actors_service{};
     AnomalyNteCombatServiceV1 combat_service{};
+    AnomalyNteDamageChainServiceV1 damage_chain_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
     AnomalyNteMetricsServiceV1 metrics_service{};
@@ -14117,6 +16264,32 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? State::NextDamageEvent(lease.User(), after_sequence, event)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainStartThunk(
+        void* user, const AnomalyNteDamageChainRequestV1* request,
+        std::uint64_t* chain_id) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->StartDamageChain(request, chain_id)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainSnapshotThunk(
+        void* user, std::uint64_t chain_id,
+        AnomalyNteDamageChainSnapshotV1* snapshot) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->DamageChainSnapshot(chain_id, snapshot)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainCancelThunk(
+        void* user, std::uint64_t chain_id) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->CancelDamageChain(chain_id)
             : StoppedStatus();
     }
 
@@ -15168,6 +17341,27 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             semantic_lifetime)) {
         return false;
     }
+    const bool publish_damage_chain_service = framework_hook_ready &&
+        NteCombatProfileAvailable() &&
+        !IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
+    if (publish_damage_chain_service &&
+        !Publish(
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            &endpoint->damage_chain_service,
+            [self, observer_endpoint] {
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
+                if (!locked || !observed ||
+                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) return;
+                locked->player_demand.store(true, std::memory_order_release);
+                locked->combat_demand.store(true, std::memory_order_release);
+            }, semantic_lifetime)) {
+        return false;
+    }
+
+
+
     const bool publish_skills_service = framework_hook_ready &&
         NteSkillsProfileAvailable() &&
         !IsPublished(ANOMALY_NTE_SKILLS_SERVICE_V1_ID);
@@ -15575,13 +17769,16 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         const bool combat_service_ready =
             state->NteCombatProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_COMBAT_SERVICE_V1_ID);
+        const bool damage_chain_service_ready =
+            state->NteCombatProfileAvailable() &&
+            !state->IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
         const bool skills_service_ready =
             state->NteSkillsProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_SKILLS_SERVICE_V1_ID);
         const bool invocation_service_ready =
             state->SemanticFeatureAvailable("nte.skill-invocation") &&
             !state->IsPublished(ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID);
-        if (combat_service_ready || skills_service_ready || invocation_service_ready) {
+        if (combat_service_ready || damage_chain_service_ready || skills_service_ready || invocation_service_ready) {
             static_cast<void>(state->PublishAvailableServices(state));
         }
         state->RefreshPickupConfirmationLocked();
@@ -15663,6 +17860,8 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         callback.Invoke(delta_seconds);
     } catch (...) {
     }
+    // Rate controls cadence only; queued repeats never expire because wall time elapsed.
+    state->ProcessDamageChains();
 }
 
 void Ue5NteAdapter::OnDamageEvent(
@@ -15710,11 +17909,25 @@ void Ue5NteAdapter::OnCombatExecFunction(
         function != bindings->monster_damage &&
         function != bindings->player_damage_queue &&
         function != bindings->damage_widget &&
+        function != bindings->replay_apply_by_actor &&
+        function != bindings->replay_apply_to_target &&
+        function != bindings->replay_activate_by_actor &&
+        function != bindings->replay_server_activate_by_actor &&
         !is_buff_function) {
         return;
     }
+    if (function == bindings->replay_apply_by_actor) {
+        state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_apply_to_target) {
+        state->replay_entrypoint_observation_counts[1].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_activate_by_actor) {
+        state->replay_entrypoint_observation_counts[2].fetch_add(1, std::memory_order_relaxed);
+    } else if (function == bindings->replay_server_activate_by_actor) {
+        state->replay_entrypoint_observation_counts[3].fetch_add(1, std::memory_order_relaxed);
+    }
     state->EnqueueCombatProcessEvent(
-        *bindings, function, reinterpret_cast<void*>(parameters));
+        *bindings, receiver, function, reinterpret_cast<void*>(parameters),
+        kCombatCaptureIngressNativeExec);
     static_cast<void>(receiver);
 }
 
@@ -15757,9 +17970,20 @@ void Ue5NteAdapter::OnProcessEventPre(
     }
     const auto* const combat_bindings =
         state->combat_capture_bindings.load(std::memory_order_acquire);
-    if (combat_bindings != nullptr) {
+    if (combat_bindings != nullptr &&
+        !IsTopActorReplayCaptureFrame(this, object, function, parameters)) {
+        if (function == combat_bindings->replay_apply_by_actor) {
+            state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->replay_apply_to_target) {
+            state->replay_entrypoint_observation_counts[1].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->replay_activate_by_actor) {
+            state->replay_entrypoint_observation_counts[2].fetch_add(1, std::memory_order_relaxed);
+        } else if (function == combat_bindings->replay_server_activate_by_actor) {
+            state->replay_entrypoint_observation_counts[3].fetch_add(1, std::memory_order_relaxed);
+        }
         state->EnqueueCombatProcessEvent(
-            *combat_bindings, function, parameters);
+            *combat_bindings, object, function, parameters,
+            kCombatCaptureIngressProcessEvent);
     }
     const auto endpoint = state->process_event_endpoint.load(std::memory_order_acquire);
     if (endpoint) endpoint->Dispatch(object, function, parameters);
