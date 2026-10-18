@@ -2640,7 +2640,7 @@ struct Ue5NteAdapter::State {
         if (id == ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID ||
             id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
             // Legacy mutation routes are deliberately no longer exposed. The new
-            // chain-reaction service validates the captured GE context and confirms actual hits.
+            // chain-reaction service validates the captured damage root, configures the native DamageTriggerActor, and confirms actual hits.
             return false;
         }
         if (id == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_ID) {
