@@ -266,6 +266,8 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_VERSION);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_VERSION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_METRICS_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_NTE_METRICS_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION\": ");
@@ -288,6 +290,16 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT);
     output.append(",\n    \"ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID\": ");
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_VALID\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_VALID);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_STALE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_STALE);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_TARGET_BOUND\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_TARGET_BOUND);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_AWAITING_CONFIRMATION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SNAPSHOT_V1_AWAITING_CONFIRMATION);
     output.append(",\n    \"ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL\": ");
     AppendUnsigned(output, ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL);
     output.append(",\n    \"ANOMALY_NTE_COMBAT_EVENT_V1_HEAD_HIT\": ");
@@ -796,6 +808,18 @@ std::string BuildSnapshot() {
          {"ANOMALY_IPC_ERROR_V1_QUEUE_FULL", ANOMALY_IPC_ERROR_V1_QUEUE_FULL},
          {"ANOMALY_IPC_ERROR_V1_STALE_GENERATION", ANOMALY_IPC_ERROR_V1_STALE_GENERATION},
          {"ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED", ANOMALY_IPC_ERROR_V1_DEPENDENCY_REQUIRED}},
+        false);
+    AppendEnum(
+        output,
+        "AnomalyNteDamageChainReactionStateV1",
+        sizeof(AnomalyNteDamageChainReactionStateV1),
+        alignof(AnomalyNteDamageChainReactionStateV1),
+        {{"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_UNKNOWN", ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_UNKNOWN},
+         {"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE", ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE},
+         {"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION", ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION},
+         {"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_COMPLETED", ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_COMPLETED},
+         {"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED", ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED},
+         {"ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED", ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED}},
         false);
     AppendEnum(
         output,
@@ -2247,6 +2271,47 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteDamageChainReactionRequestV1",
+        sizeof(AnomalyNteDamageChainReactionRequestV1),
+        alignof(AnomalyNteDamageChainReactionRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageChainReactionRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageChainReactionRequestV1, flags)},
+         {"damage_sequence", offsetof(AnomalyNteDamageChainReactionRequestV1, damage_sequence)},
+         {"extra_count", offsetof(AnomalyNteDamageChainReactionRequestV1, extra_count)},
+         {"rate_milli", offsetof(AnomalyNteDamageChainReactionRequestV1, rate_milli)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageChainReactionSnapshotV1",
+        sizeof(AnomalyNteDamageChainReactionSnapshotV1),
+        alignof(AnomalyNteDamageChainReactionSnapshotV1),
+        {{"struct_size", offsetof(AnomalyNteDamageChainReactionSnapshotV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageChainReactionSnapshotV1, flags)},
+         {"chain", offsetof(AnomalyNteDamageChainReactionSnapshotV1, chain)},
+         {"damage_sequence", offsetof(AnomalyNteDamageChainReactionSnapshotV1, damage_sequence)},
+         {"last_confirmed_damage_sequence", offsetof(AnomalyNteDamageChainReactionSnapshotV1, last_confirmed_damage_sequence)},
+         {"requested_extra_count", offsetof(AnomalyNteDamageChainReactionSnapshotV1, requested_extra_count)},
+         {"dispatch_attempt_count", offsetof(AnomalyNteDamageChainReactionSnapshotV1, dispatch_attempt_count)},
+         {"confirmed_extra_count", offsetof(AnomalyNteDamageChainReactionSnapshotV1, confirmed_extra_count)},
+         {"state", offsetof(AnomalyNteDamageChainReactionSnapshotV1, state)},
+         {"rate_milli", offsetof(AnomalyNteDamageChainReactionSnapshotV1, rate_milli)},
+         {"reserved", offsetof(AnomalyNteDamageChainReactionSnapshotV1, reserved)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageChainReactionServiceV1",
+        sizeof(AnomalyNteDamageChainReactionServiceV1),
+        alignof(AnomalyNteDamageChainReactionServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageChainReactionServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageChainReactionServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageChainReactionServiceV1, user)},
+         {"start_chain", offsetof(AnomalyNteDamageChainReactionServiceV1, start_chain)},
+         {"apply_next", offsetof(AnomalyNteDamageChainReactionServiceV1, apply_next)},
+         {"snapshot", offsetof(AnomalyNteDamageChainReactionServiceV1, snapshot)},
+         {"stop_chain", offsetof(AnomalyNteDamageChainReactionServiceV1, stop_chain)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNteSkillFrameV1",
         sizeof(AnomalyNteSkillFrameV1),
         alignof(AnomalyNteSkillFrameV1),
@@ -2489,6 +2554,9 @@ std::string BuildSnapshot() {
     AppendService(output, ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
         ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
         "AnomalyNteDamageReplayServiceV1", false);
+    AppendService(output, ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_VERSION,
+        "AnomalyNteDamageChainReactionServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION, "AnomalyNteSkillsServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
