@@ -683,7 +683,7 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
     if (!window) return;
 
     service->text(service->user, anomaly::sdk::StringView(
-        "原始命中保持不变；额外次数不包含首次命中。只接受已验证的直接 ASC GameplayEffect 应用上下文。"));
+        "原始命中保持不变；额外次数不包含首次命中。Core 会验证原生 DamageTriggerActor 与 EffectContainer；每次额外伤害都必须有真实命中确认。"));
     service->text(service->user, anomaly::sdk::StringView(
         "速率只控制相邻应用的调度，不会按经过的时间自动结束；每项成功都必须有真实伤害事件确认。"));
 
@@ -703,7 +703,8 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
             service, offsetof(AnomalyUiServiceV1, input_uint32)) &&
         service->input_uint32 != nullptr) {
         if (service->input_uint32(service->user,
-                anomaly::sdk::StringView("额外结算次数"), &extra_count, 1, 10) != 0) {
+                anomaly::sdk::StringView("额外结算次数"), &extra_count,
+                kMinimumExtraCount, kMaximumExtraCount) != 0) {
             extra_count = ClampExtraCount(extra_count);
             std::scoped_lock lock(g.mutex);
             g.extra_count = extra_count;

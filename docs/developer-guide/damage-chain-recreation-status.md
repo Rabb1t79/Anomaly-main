@@ -149,3 +149,8 @@
 - 发现独立构建工作流之前指向旧的 `plugins/NteDamageChainReaction`，不是当前目标 `plugins/DamageChainReaction`。本次同步修正了工作流源文件、包含目录、manifest/产物名称，并加入 `RateQueue` 确定性测试。待新工作流运行成功后才记录为构建验证通过。
 - `RateQueue` 修正只影响调度安全性：非有限速率值回退到 100 次/秒；时间间隔向上取整，避免因时钟精度截断而让调度快于设定速率。没有改变“首次原生命中不计数、每次额外真实命中逐一确认、停顿后不突发补发、成功数以真实伤害事件为准”的行为合同。
 - 尚未完成：实机确认 1 次正常攻击 + N 次额外伤害严格成立；确认原生 Actor 的周期事件对原目标真实结算；确认无递归扩增、多目标独立、长时间停顿后继续完成队列。不得把 ABI 编译通过称为功能已生效。
+
+### 同步修正：次数输入范围与路线文案
+- 本轮复查发现 UI 将“额外结算次数”硬编码限制为 1–10，而插件/Core 的数量上限为 1,000,000，因此无法通过 UI 设置要求示例中的 100 次。已改用 `kMinimumExtraCount` / `kMaximumExtraCount`，默认值仍为 1。
+- UI 提示和 manifest 原本还写着“直接 ASC GameplayEffect 应用上下文”，与已切换的 `DamageTriggerActor` / `EffectContainer` 路线不一致；已同步修正。此项只是界面/描述准确性修复，不是实机伤害验证。
+- 修改文件：`plugins/DamageChainReaction/plugin.cpp`、`plugins/DamageChainReaction/manifest.json`，并在同一提交更新两份进度/行为合同 MD。后续由本分支 Windows/Core/独立插件工作流验证。

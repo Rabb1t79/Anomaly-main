@@ -51,3 +51,8 @@ With the feature disabled, one native attack produces one ordinary damage result
 - The service implementation was moved away from the old captured-GameplayEffect buffer path. The current `apply_next` route invokes the validated `DamageTriggerActor` period function through Core's guarded reflected invoker. That establishes what this branch currently calls; it does **not** establish that the call actually creates one real hit in the game.
 - This revision hardens the rate scheduler against non-finite rate values and rounds interval durations up so the scheduled cadence cannot exceed the selected rate due to duration truncation. It also adds deterministic queue tests and fixes the standalone workflow so it builds/packages `plugins/DamageChainReaction`, not the legacy `plugins/NteDamageChainReaction`.
 - Pending proof: new workflow green; in-game result of 1 normal hit plus exactly N confirmed extra hits; no recursive chain roots; independent targets; and continued pending work after a long stall.
+
+## UI contract correction — 2026-10-18
+
+- The extra-count control now uses the plugin's declared bounds: default `1`, minimum `1`, maximum `1,000,000`. The previous hard-coded UI maximum `10` contradicted the Core and plugin count limits and blocked the required 100-extra-hit acceptance case.
+- UI and manifest descriptions now name the current native `DamageTriggerActor` / `EffectContainer` route instead of describing a direct ASC GameplayEffect replay route. This is a description and input-range correction, not proof the native period event produces the intended damage in game.
