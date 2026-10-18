@@ -36,6 +36,11 @@ namespace {
 // The native damage callback executes synchronously during a queued GameplayEffect dispatch.
 // Carry only an opaque chain id across that re-entrant callback; no UObject pointer is stored.
 thread_local std::uint64_t g_current_damage_chain_id{};
+thread_local std::uintptr_t g_damage_chain_expected_receiver{};
+thread_local std::uintptr_t g_damage_chain_expected_function{};
+thread_local std::uintptr_t g_damage_chain_expected_attacker{};
+thread_local std::uintptr_t g_damage_chain_expected_victim{};
+
 struct DamageChainDispatchScope final {
     std::uint64_t previous{};
     explicit DamageChainDispatchScope(const std::uint64_t chain_id) noexcept
@@ -44,6 +49,52 @@ struct DamageChainDispatchScope final {
     }
     ~DamageChainDispatchScope() { g_current_damage_chain_id = previous; }
 };
+
+// Narrow the chain identity to the exact validated native GameplayEffect invocation.
+// Nested ProcessEvent/damage callbacks must not inherit it merely because they happen
+// while ReplayDamage is on the stack.
+struct DamageChainInvocationScope final {
+    std::uintptr_t previous_receiver{};
+    std::uintptr_t previous_function{};
+    std::uintptr_t previous_attacker{};
+    std::uintptr_t previous_victim{};
+
+    DamageChainInvocationScope(
+        const std::uintptr_t receiver, const std::uintptr_t function,
+        const std::uintptr_t attacker, const std::uintptr_t victim) noexcept
+        : previous_receiver(g_damage_chain_expected_receiver),
+          previous_function(g_damage_chain_expected_function),
+          previous_attacker(g_damage_chain_expected_attacker),
+          previous_victim(g_damage_chain_expected_victim) {
+        g_damage_chain_expected_receiver = receiver;
+        g_damage_chain_expected_function = function;
+        g_damage_chain_expected_attacker = attacker;
+        g_damage_chain_expected_victim = victim;
+    }
+
+    ~DamageChainInvocationScope() {
+        g_damage_chain_expected_receiver = previous_receiver;
+        g_damage_chain_expected_function = previous_function;
+        g_damage_chain_expected_attacker = previous_attacker;
+        g_damage_chain_expected_victim = previous_victim;
+    }
+};
+
+[[nodiscard]] bool CurrentDamageChainInvocationMatches(
+    const std::uintptr_t receiver, const std::uintptr_t function) noexcept {
+    return g_current_damage_chain_id != 0 &&
+        receiver != 0 && function != 0 &&
+        receiver == g_damage_chain_expected_receiver &&
+        function == g_damage_chain_expected_function;
+}
+
+[[nodiscard]] bool CurrentDamageChainParticipantsMatch(
+    const std::uintptr_t attacker, const std::uintptr_t victim) noexcept {
+    return g_current_damage_chain_id != 0 &&
+        attacker != 0 && victim != 0 &&
+        attacker == g_damage_chain_expected_attacker &&
+        victim == g_damage_chain_expected_victim;
+}
 
 constexpr std::uint8_t kCombatCaptureIngressProcessEvent = 1U << 0U;
 constexpr std::uint8_t kCombatCaptureIngressActorProcessEvent = 1U << 1U;
@@ -1074,6 +1125,9 @@ struct Ue5NteAdapter::State {
         std::uint64_t root_damage_sequence{};
         std::uint64_t world_generation{};
         std::uint64_t object_generation{};
+        AnomalyGenerationHandleV1 root_attacker{};
+        AnomalyGenerationHandleV1 root_victim{};
+        std::uint64_t root_source_id{};
         std::uint32_t state{ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY};
         std::uint32_t requested_repeat_count{};
         std::uint32_t dispatched_repeat_count{};
@@ -4266,6 +4320,24 @@ struct Ue5NteAdapter::State {
         return nullptr;
     }
 
+    [[nodiscard]] bool DamageEventMatchesChainRootLocked(
+        const std::uint64_t chain_id,
+        const AnomalyNteDamageEventV1& event) noexcept {
+        const auto* const chain = FindDamageChainLocked(chain_id);
+        return chain != nullptr &&
+            chain->root_source_id != 0 &&
+            chain->world_generation == world_generation &&
+            chain->object_generation == object_generation &&
+            event.world.generation == chain->world_generation &&
+            event.attacker.id != 0 &&
+            event.attacker.id == chain->root_attacker.id &&
+            event.attacker.generation == chain->root_attacker.generation &&
+            event.victim.id != 0 &&
+            event.victim.id == chain->root_victim.id &&
+            event.victim.generation == chain->root_victim.generation &&
+            event.source_id == chain->root_source_id;
+    }
+
     [[nodiscard]] bool IsActiveDamageChainRootLocked(
         const std::uint64_t damage_sequence) const noexcept {
         if (damage_sequence == 0) return false;
@@ -6105,7 +6177,9 @@ struct Ue5NteAdapter::State {
         capture.receiver = receiver;
         capture.function = function;
         capture.source_parameter_address = reinterpret_cast<std::uintptr_t>(parameters);
-        capture.damage_chain_id = g_current_damage_chain_id;
+        capture.damage_chain_id =
+            CurrentDamageChainInvocationMatches(receiver, function)
+                ? g_current_damage_chain_id : 0U;
         capture.ingress_mask = ingress_mask;
         capture.replay_gameplay_tags = {};
         capture.replay_tag_arrays_valid = true;
@@ -6191,7 +6265,9 @@ struct Ue5NteAdapter::State {
         std::memcpy(&damage.source_serial, source + bindings.damage_source_offset + 4, 4);
         damage.victim = victim;
         damage.attacker = attacker;
-        damage.damage_chain_id = g_current_damage_chain_id;
+        damage.damage_chain_id =
+            CurrentDamageChainParticipantsMatch(attacker, victim)
+                ? g_current_damage_chain_id : 0U;
         damage.critical = synchronous_critical;
         std::uintptr_t saved_skill_cdo{};
         std::int32_t active_spec_handle{};
@@ -7015,7 +7091,15 @@ struct Ue5NteAdapter::State {
             }
             const auto* const chain = FindDamageChainLocked(candidate.damage_chain_id);
             if (chain == nullptr ||
-                chain->observed_chain_damage_count >= chain->dispatched_repeat_count) {
+                chain->observed_chain_damage_count >= chain->dispatched_repeat_count ||
+                chain->root_source_id == 0 || chain->root_source_id != source_id) {
+                continue;
+            }
+            std::uintptr_t root_attacker{};
+            std::uintptr_t root_victim{};
+            if (!ResolveObjectHandleLocked(chain->root_attacker, root_attacker) ||
+                !ResolveObjectHandleLocked(chain->root_victim, root_victim) ||
+                root_attacker != attacker || root_victim != victim) {
                 continue;
             }
             if (!ReplayContextMatchesDamageLocked(
@@ -7246,9 +7330,15 @@ struct Ue5NteAdapter::State {
         // Native dispatch can enqueue a new hit that later rotates the rolling ring.
         // Snapshot the root before dispatch, then pin only after the validated call succeeds.
         const DamageRecord replay_root = *record;
-        if (!InvokeNativeProcessEventLocked(
+        bool native_dispatch_succeeded{};
+        {
+            DamageChainInvocationScope invocation_scope(
+                replay_receiver, record->replay.function, attacker, victim);
+            native_dispatch_succeeded = InvokeNativeProcessEventLocked(
                 replay_receiver, record->replay.function,
-                parameters.data(), record->replay.parameter_size)) {
+                parameters.data(), record->replay.parameter_size);
+        }
+        if (!native_dispatch_succeeded) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "validated native GameplayEffect call failed");
         }
@@ -7375,6 +7465,7 @@ struct Ue5NteAdapter::State {
         for (auto& candidate : damage_chains) {
             if (candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY ||
                 (!candidate.in_flight &&
+                 candidate.observed_chain_damage_count >= candidate.dispatched_repeat_count &&
                  (candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED ||
                   candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED ||
                   candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED))) {
@@ -7394,6 +7485,9 @@ struct Ue5NteAdapter::State {
         slot->root_damage_sequence = request->damage_sequence;
         slot->world_generation = world_generation;
         slot->object_generation = object_generation;
+        slot->root_attacker = root->event.attacker;
+        slot->root_victim = root->event.victim;
+        slot->root_source_id = root->event.source_id;
         slot->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING;
         slot->requested_repeat_count = request->repeat_count;
         slot->rate_per_second = request->rate_per_second;
@@ -7525,6 +7619,18 @@ struct Ue5NteAdapter::State {
                 if (chain == nullptr) continue;
                 chain->in_flight = false;
                 chain->last_status_code = dispatch_status.code;
+                if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED) {
+                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK &&
+                        chain->dispatched_repeat_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->dispatched_repeat_count;
+                    }
+                    SetDamageChainMessage(*chain,
+                        dispatch_status.code == ANOMALY_STATUS_V1_OK
+                            ? "队列已取消；取消前已在执行的一次调用已返回，剩余次数已停止"
+                            : "队列已取消；在途调用失败，剩余次数已停止");
+                    continue;
+                }
                 if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
                     if (chain->dispatched_repeat_count !=
                         (std::numeric_limits<std::uint32_t>::max)()) {
@@ -7614,24 +7720,29 @@ struct Ue5NteAdapter::State {
             ReplayEffectContext replay_context{};
             const bool has_replay_context = FindReplayContextForDamageLocked(
                 attacker, victim, event.source_id, capture_tick_sequence, replay_context);
-            // Prefer the synchronous TLS identity. If the native damage broadcast arrives
-            // later, reuse only the chain id carried by the exact validated GameplayEffect
-            // invocation selected by the existing GEDef/ASC/source/target correlation.
-            std::uint64_t correlated_chain_id = damage_chain_id;
-            if (correlated_chain_id != 0) {
-                // The synchronous TLS identity is authoritative. Claim the corresponding
-                // captured invocation as well, so it cannot be reused for a later callback.
+            // A TLS chain id is only a candidate. Accept it when the real callback
+            // matches the root chain's attacker, victim, DamageGEDef identity and world.
+            // Delayed callbacks use a one-to-one match against an exact captured invocation.
+            std::uint64_t correlated_chain_id{};
+            if (damage_chain_id != 0 &&
+                DamageEventMatchesChainRootLocked(damage_chain_id, event)) {
+                correlated_chain_id = damage_chain_id;
                 std::uint64_t claimed_chain_id{};
                 static_cast<void>(FindDelayedChainIdentityForDamageLocked(
                     attacker, victim, event.source_id, capture_tick_sequence,
                     claimed_chain_id, correlated_chain_id));
-            } else {
+            }
+            if (correlated_chain_id == 0) {
                 // Root replay-context matching deliberately excludes chain-tagged calls.
-                // Always attempt a separate one-to-one delayed-chain correlation even when
-                // an unrelated ordinary GameplayEffect context also matches this event.
+                // Also attempt delayed correlation when an unrelated ordinary effect context
+                // matched this event, so unrelated effects do not block a valid chain match.
                 static_cast<void>(FindDelayedChainIdentityForDamageLocked(
                     attacker, victim, event.source_id, capture_tick_sequence,
                     correlated_chain_id));
+            }
+            if (correlated_chain_id != 0 &&
+                !DamageEventMatchesChainRootLocked(correlated_chain_id, event)) {
+                correlated_chain_id = 0;
             }
             if (correlated_chain_id != 0) {
                 event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
