@@ -65,6 +65,9 @@ jobs:
           $generated = Join-Path $env:RUNNER_TEMP 'nte-damage-chain-generated-abi.json'
           & $snapshot --write $generated
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate ABI snapshot from the built SDK.' }
+          # The previous checker only compared a generated file to itself; parse it too,
+          # so malformed JSON (including trailing commas) cannot pass as a valid ABI.
+          Get-Content -LiteralPath $generated -Raw | ConvertFrom-Json | Out-Null
           & $snapshot --check $generated
           if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
 
