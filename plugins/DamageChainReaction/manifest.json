@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 2,
+  "id": "anomaly.builtin.nte-damage-chain-reaction",
+  "name": "伤害链式反应",
+  "description": "捕获本地玩家角色对敌人的原生 CharacterOnDamaged 命中。启用后，固定首次命中的目标和经验证的直接 AbilitySystemComponent GameplayEffect 上下文，按设定速率逐次提交额外原生伤害应用；只有匹配到新的实际伤害事件才计数。速率不限制链的生命周期；不会重放输入、技能激活或动画，不会直接写入目标 HP。",
+  "author": "Anomaly",
+  "license": "AGPL-3.0-only",
+  "version": "0.1.0",
+  "entry": "plugin.dll",
+  "api": {
+    "major": 1,
+    "minMinor": 0,
+    "maxMinor": 0
+  },
+  "games": [
+    "nte"
+  ],
+  "builds": [
+    "nte-*"
+  ],
+  "loadPhase": "game-ready",
+  "services": [
+    {
+      "id": "anomaly.ui",
+      "minVersion": 1
+    },
+    {
+      "id": "anomaly.nte.combat",
+      "minVersion": 1
+    },
+    {
+      "id": "anomaly.nte.damage-chain-reaction",
+      "minVersion": 1
+    },
+    {
+      "id": "anomaly.storage",
+      "minVersion": 1,
+      "optional": true
+    }
+  ],
+  "capabilities": [
+    "ui",
+    "nte-combat-read",
+    "game-events",
+    "nte-damage-chain-reaction",
+    "storage"
+  ]
+}
