@@ -17970,8 +17970,7 @@ void Ue5NteAdapter::OnProcessEventPre(
     }
     const auto* const combat_bindings =
         state->combat_capture_bindings.load(std::memory_order_acquire);
-    if (combat_bindings != nullptr &&
-        !IsTopActorReplayCaptureFrame(this, object, function, parameters)) {
+    if (combat_bindings != nullptr) {
         if (function == combat_bindings->replay_apply_by_actor) {
             state->replay_entrypoint_observation_counts[0].fetch_add(1, std::memory_order_relaxed);
         } else if (function == combat_bindings->replay_apply_to_target) {
