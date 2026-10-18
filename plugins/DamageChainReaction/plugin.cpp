@@ -372,7 +372,7 @@ void UpdateOneChain(
         } else if (dispatched && found->awaiting_confirmation) {
             char line[224]{};
             std::snprintf(line, sizeof(line),
-                "链 #%llu 已分派一项原生 GE 应用，等待真实伤害事件；分派不等于成功。",
+                "链 #%llu 已调用 DamageTriggerActor 周期事件，等待真实伤害事件；调用不等于成功。",
                 static_cast<unsigned long long>(handle.id));
             LogLocked(line);
         }
@@ -423,9 +423,9 @@ void DrainDamageEvents(
             continue;
         }
 
-        // Core independently verifies that both endpoints are HTAbilityCharacter
-        // instances, that the attacker is the local player-controlled pawn, that the
-        // victim is hostile, and that a direct ASC GameplayEffect context was captured.
+        // Core independently verifies HTAbilityCharacter identity and hostility, resolves
+        // DamageGEDef to a concrete Dump-derived effect class, and binds a native
+        // DamageTriggerActor's EffectContainer to this original target.
         AddChain(chain_service, event, extra_count, rate);
     }
 }
