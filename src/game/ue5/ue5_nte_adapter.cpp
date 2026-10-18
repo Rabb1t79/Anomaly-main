@@ -1135,6 +1135,7 @@ struct Ue5NteAdapter::State {
         std::uint32_t rate_per_second{};
         std::uint32_t last_status_code{ANOMALY_STATUS_V1_OK};
         bool in_flight{};
+        bool context_invalidated{};
         std::chrono::steady_clock::duration interval{};
         std::chrono::steady_clock::time_point next_due{};
         std::array<char, ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY> status_message{};
@@ -2821,11 +2822,14 @@ struct Ue5NteAdapter::State {
         pinned_damage_replay_count = 0;
         damage_chain_dispatch_tokens = {};
         for (auto& chain : damage_chains) {
-            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY) continue;
+            chain.context_invalidated = true;
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                chain.observed_chain_damage_count < chain.dispatched_repeat_count) {
                 chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
                 chain.last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
                 SetDamageChainMessage(chain,
-                    "World/object generation changed; old damage-chain context invalidated");
+                    "世界/对象代次已变化；旧上下文与待确认项已失效，未确认事件不会再关联到新世界");
             }
         }
         damage_dropped_count = 0;
@@ -4345,6 +4349,7 @@ struct Ue5NteAdapter::State {
         const AnomalyNteDamageEventV1& event) noexcept {
         const auto* const chain = FindDamageChainLocked(chain_id);
         return chain != nullptr &&
+            !chain->context_invalidated &&
             chain->root_source_id != 0 &&
             chain->world_generation == world_generation &&
             chain->object_generation == object_generation &&
@@ -7543,13 +7548,18 @@ struct Ue5NteAdapter::State {
 
         DamageChainRecord* slot = nullptr;
         for (auto& candidate : damage_chains) {
-            if (candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY ||
-                (!candidate.in_flight &&
-                 candidate.observed_chain_damage_count >= candidate.dispatched_repeat_count &&
-                 (candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED ||
-                  candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED ||
-                  candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED)) &&
-                 !HasDamageChainDispatchTokensLocked(candidate.id)) {
+            const bool empty = candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY;
+            const bool terminal =
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED ||
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED ||
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED;
+            const bool confirmations_resolved =
+                candidate.context_invalidated ||
+                candidate.observed_chain_damage_count >= candidate.dispatched_repeat_count;
+            const bool reusable_terminal =
+                !candidate.in_flight && terminal && confirmations_resolved &&
+                !HasDamageChainDispatchTokensLocked(candidate.id);
+            if (empty || reusable_terminal) {
                 slot = &candidate;
                 break;
             }
