@@ -2780,6 +2780,7 @@ struct Ue5NteAdapter::State {
         pinned_damage_replays = {};
         pinned_damage_replay_start = 0;
         pinned_damage_replay_count = 0;
+        damage_chain_reactions.clear();
         damage_dropped_count = 0;
         damage_next_source_id = kDamageSourceBase;
         damage_source_object_ids.clear();
@@ -8363,13 +8364,16 @@ struct Ue5NteAdapter::State {
         }
 
         bool native_dispatch_attempted{};
-        const std::uint64_t previous_provenance = g_active_damage_chain_reaction_id.Get();
-        g_active_damage_chain_reaction_id.Set(chain_id);
-        struct ProvenanceRestore final {
-            std::uint64_t previous;
-            ~ProvenanceRestore() noexcept { g_active_damage_chain_reaction_id.Set(previous); }
-        } provenance_restore{previous_provenance};
-        const auto apply_status = ApplyCapturedDamage(root_sequence, &native_dispatch_attempted);
+        AnomalyStatusV1 apply_status{};
+        {
+            const std::uint64_t previous_provenance = g_active_damage_chain_reaction_id.Get();
+            g_active_damage_chain_reaction_id.Set(chain_id);
+            struct ProvenanceRestore final {
+                std::uint64_t previous;
+                ~ProvenanceRestore() noexcept { g_active_damage_chain_reaction_id.Set(previous); }
+            } provenance_restore{previous_provenance};
+            apply_status = ApplyCapturedDamage(root_sequence, &native_dispatch_attempted);
+        }
 
         std::scoped_lock lock(mutex);
         auto* chain = FindDamageChainReactionLocked(handle);
