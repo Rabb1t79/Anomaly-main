@@ -2888,13 +2888,33 @@ struct Ue5NteAdapter::State {
     }
 
     void InvalidateCombatSkillDiscoveryLocked() noexcept {
+        bool invalidate_dispatch_ledger = false;
         for (auto& chain : damage_chains) {
-            if (chain.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) continue;
-            chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
-            chain.last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY) continue;
+            const bool unresolved_dispatch =
+                chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                chain.in_flight ||
+                chain.observed_chain_damage_count < chain.dispatched_repeat_count ||
+                HasDamageChainDispatchTokensLocked(chain.id);
+            if (!unresolved_dispatch) continue;
+
+            invalidate_dispatch_ledger = true;
+            chain.context_invalidated = true;
             chain.in_flight = false;
-            SetDamageChainMessage(
-                chain, "链已停止：原生 GameplayEffect 绑定或对象代际失效");
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+            }
+            chain.last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+            SetDamageChainMessage(chain,
+                chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED
+                    ? "队列已取消；原生绑定失效，未确认项已作废，不计为成功"
+                    : "链已停止：原生 GameplayEffect 绑定或对象代际失效；未确认项已作废");
+        }
+        if (invalidate_dispatch_ledger) {
+            // The source/target callback route is no longer validated, so these tokens
+            // cannot safely be correlated after the binding change. No elapsed-time
+            // expiry is involved; this is an explicit lifecycle/binding invalidation.
+            damage_chain_dispatch_tokens = {};
         }
         combat_skill_discovery = {};
         // This method is noexcept; clearing is allocation-free. ReplayDamage supplies
