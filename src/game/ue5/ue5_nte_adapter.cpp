@@ -2610,7 +2610,11 @@ struct Ue5NteAdapter::State {
             return framework_hook_ready && NteCombatProfileAvailable();
         }
         if (id == ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID) {
+            // Legacy compatibility only. The new chain service has its own native trigger route.
             return framework_hook_ready && NteCombatProfileAvailable();
+        }
+        if (id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
+            return framework_hook_ready && NteCombatProfileAvailable() && ObjectFindAvailable();
         }
         if (id == ANOMALY_NTE_SKILLS_SERVICE_V1_ID) {
             return framework_hook_ready && NteSkillsProfileAvailable();
@@ -7271,6 +7275,7 @@ struct Ue5NteAdapter::State {
             const std::int32_t native_max_count = repeat_count == 0
                 ? (std::numeric_limits<std::int32_t>::max)()
                 : static_cast<std::int32_t>(repeat_count);
+            const std::int32_t trigger_count_per_period = 1;
             const auto write_field = [this, actor, actor_class](
                 const std::string_view name, const std::string_view expected_type,
                 const std::uint16_t expected_size, const std::uint16_t expected_offset,
@@ -7289,7 +7294,7 @@ struct Ue5NteAdapter::State {
                 !write_field("RuntimeTriggerDuration", "FloatProperty", 4, 0x5EC,
                     &duration_seconds, sizeof(duration_seconds)) ||
                 !write_field("RuntimeTriggerCountPerPeriod", "IntProperty", 4, 0x5F0,
-                    &std::int32_t{1}, sizeof(std::int32_t)) ||
+                    &trigger_count_per_period, sizeof(trigger_count_per_period)) ||
                 !write_field("RuntimeMaxTriggerCount", "IntProperty", 4, 0x5F4,
                     &native_max_count, sizeof(native_max_count))) {
                 return false;
@@ -18162,6 +18167,10 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteDamageReplayServiceV1),
             ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
             this, DamageReplayThunk};
+        damage_chain_service = {
+            sizeof(AnomalyNteDamageChainServiceV1),
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            this, DamageChainStartThunk, DamageChainStopThunk, DamageChainSnapshotThunk};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
@@ -18212,7 +18221,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteEntitiesServiceV1 entities_service{};
     AnomalyNteActorsServiceV1 actors_service{};
     AnomalyNteCombatServiceV1 combat_service{};
-    AnomalyNteDamageReplayServiceV1 damage_replay_service{};
+    AnomalyNteDamageReplayServiceV1 damage_replay_service{}; // deprecated legacy API
+    AnomalyNteDamageChainServiceV1 damage_chain_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
     AnomalyNteMetricsServiceV1 metrics_service{};
@@ -18829,6 +18839,32 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? static_cast<State*>(lease.User())->ReplayDamage(request)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainStartThunk(
+        void* user, const AnomalyNteDamageChainRequestV1* request,
+        AnomalyGenerationHandleV1* chain) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->StartNativeDamageChain(request, chain)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainStopThunk(
+        void* user, AnomalyGenerationHandleV1 chain) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->StopNativeDamageChain(chain)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainSnapshotThunk(
+        void* user, AnomalyGenerationHandleV1 chain,
+        AnomalyNteDamageChainSnapshotV1* snapshot) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->SnapshotNativeDamageChain(chain, snapshot)
             : StoppedStatus();
     }
 
@@ -19885,6 +19921,27 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             semantic_lifetime)) {
         return false;
     }
+    const bool publish_damage_chain_service = framework_hook_ready &&
+        NteCombatProfileAvailable() && ObjectFindAvailable() &&
+        !IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
+    if (publish_damage_chain_service &&
+        !Publish(
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            &endpoint->damage_chain_service,
+            [self, observer_endpoint] {
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
+                if (!locked || !observed ||
+                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) {
+                    return;
+                }
+                locked->player_demand.store(true, std::memory_order_release);
+                locked->combat_demand.store(true, std::memory_order_release);
+            },
+            semantic_lifetime)) {
+        return false;
+    }
     const bool publish_skills_service = framework_hook_ready &&
         NteSkillsProfileAvailable() &&
         !IsPublished(ANOMALY_NTE_SKILLS_SERVICE_V1_ID);
@@ -20301,8 +20358,11 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         const bool damage_replay_service_ready =
             state->NteCombatProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
+        const bool damage_chain_service_ready =
+            state->NteCombatProfileAvailable() && state->ObjectFindAvailable() &&
+            !state->IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
         if (combat_service_ready || skills_service_ready || invocation_service_ready ||
-            damage_replay_service_ready) {
+            damage_replay_service_ready || damage_chain_service_ready) {
             static_cast<void>(state->PublishAvailableServices(state));
         }
         state->RefreshPickupConfirmationLocked();
@@ -20328,6 +20388,7 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
             ++state->player_cache_hit_count;
         }
             state->DrainCombatCaptureQueueLocked();
+            state->AdvanceNativeDamageChainsLocked(std::chrono::steady_clock::now());
             state->ResolveNextCombatEventNameLocked();
             state->ResolveNextCombatParticipantNameLocked();
             // One deferred name lookup per tick bounds game-thread FText work;
