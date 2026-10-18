@@ -70,6 +70,13 @@ jobs:
           Get-Content -LiteralPath $generated -Raw | ConvertFrom-Json | Out-Null
           & $snapshot --check $generated
           if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
+          # Temporary export for synchronizing the checked-in ABI manifests from this build.
+          $snapshotText = [IO.File]::ReadAllText($generated)
+          $snapshotBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($snapshotText))
+          for ($offset = 0; $offset -lt $snapshotBase64.Length; $offset += 2000) {
+            $length = [Math]::Min(2000, $snapshotBase64.Length - $offset)
+            Write-Host ("ABIJSON_B64:{0}:{1}" -f $offset, $snapshotBase64.Substring($offset, $length))
+          }
 
       - name: Upload Core and ABI snapshot artifacts
         uses: actions/upload-artifact@v4
