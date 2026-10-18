@@ -1052,7 +1052,10 @@ struct Ue5NteAdapter::State {
         bool attacker_was_local_player_pawn{};
         ReplayEffectContext replay{};
     };
-    static constexpr std::size_t kReplayEffectCallCapacity = 32;
+    // Preserve a wider recent call window: bursty, unrelated buff/server-RPC captures can
+    // otherwise evict the actual damage-effect invocation before the damage notification is matched.
+    // This changes retention only; Effect/ASC/receiver/source and tick validation stay strict.
+    static constexpr std::size_t kReplayEffectCallCapacity = 256;
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
     std::size_t replay_effect_call_start{};
     std::size_t replay_effect_call_count{};
@@ -6511,6 +6514,13 @@ struct Ue5NteAdapter::State {
         std::uint32_t target_ability_system_mismatch{};
         std::uint32_t unsupported_call_kind{};
         std::uint32_t exceptions{};
+        // Raw-window counters include every retained record, even when its Effect identity
+        // mismatches. Existing tick_delta_too_large/future_tick counters remain the count
+        // of records that passed all earlier identity checks and were rejected by time.
+        std::uint32_t raw_tick_delta_too_large{};
+        std::uint32_t raw_future_tick{};
+        std::array<std::uint32_t, 5> candidate_kind_count{};
+        std::array<std::uint32_t, 5> effect_mismatch_kind_count{};
 
         void Record(ReplayMatchFailure failure) noexcept {
             switch (failure) {
@@ -6551,7 +6561,17 @@ struct Ue5NteAdapter::State {
                 ",target_asc_mismatch=" + std::to_string(target_ability_system_mismatch) +
                 ",source_missing=" + std::to_string(missing_damage_source) +
                 ",other=" + std::to_string(
-                    missing_bindings + invalid_effect_identity + unsupported_call_kind + exceptions);
+                    missing_bindings + invalid_effect_identity + unsupported_call_kind + exceptions) +
+                ",raw_tick_delta_gt_8=" + std::to_string(raw_tick_delta_too_large) +
+                ",raw_future_tick=" + std::to_string(raw_future_tick) +
+                ",kind1=" + std::to_string(candidate_kind_count[1]) +
+                ",kind2=" + std::to_string(candidate_kind_count[2]) +
+                ",kind3=" + std::to_string(candidate_kind_count[3]) +
+                ",kind4=" + std::to_string(candidate_kind_count[4]) +
+                ",effect_mismatch_kind1=" + std::to_string(effect_mismatch_kind_count[1]) +
+                ",effect_mismatch_kind2=" + std::to_string(effect_mismatch_kind_count[2]) +
+                ",effect_mismatch_kind3=" + std::to_string(effect_mismatch_kind_count[3]) +
+                ",effect_mismatch_kind4=" + std::to_string(effect_mismatch_kind_count[4]);
             if (!invalid_context_detail.empty()) {
                 summary += ",invalid_detail=" + invalid_context_detail;
             }
@@ -6754,6 +6774,19 @@ struct Ue5NteAdapter::State {
             const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
                 reverse) % kReplayEffectCallCapacity;
             const auto& candidate = replay_effect_calls[index];
+            if (diagnostics != nullptr) {
+                if (candidate.kind < diagnostics->candidate_kind_count.size()) {
+                    ++diagnostics->candidate_kind_count[candidate.kind];
+                }
+                if (candidate.valid) {
+                    if (candidate.tick_sequence > capture_tick_sequence) {
+                        ++diagnostics->raw_future_tick;
+                    } else if (capture_tick_sequence - candidate.tick_sequence >
+                        kReplayCorrelationMaxTickAge) {
+                        ++diagnostics->raw_tick_delta_too_large;
+                    }
+                }
+            }
             if (!candidate.valid) {
                 if (diagnostics != nullptr) {
                     ++diagnostics->invalid_context;
@@ -6783,6 +6816,10 @@ struct Ue5NteAdapter::State {
                     candidate, attacker, victim, source_id, &failure)) {
                 if (diagnostics != nullptr) {
                     diagnostics->Record(failure);
+                    if (failure == ReplayMatchFailure::DamageEffectMismatch &&
+                        candidate.kind < diagnostics->effect_mismatch_kind_count.size()) {
+                        ++diagnostics->effect_mismatch_kind_count[candidate.kind];
+                    }
                     // 只记录前三个结构性不匹配候选的对象路径；始终不改变原有匹配条件。
                     if (diagnostics->structural_mismatch_entries < 3U) {
                         try {
@@ -7037,7 +7074,7 @@ struct Ue5NteAdapter::State {
             if (replay_effect_call_count != 0) {
                 try {
                     const std::string diagnostic =
-                        "validated GameplayEffect calls were captured, but none matched this hit's DamageGEDef, attacker/victim ASC, and bounded past Game-Tick window; match diagnostics: " +
+                        "validated GameplayEffect call records were captured, but none passed this hit's DamageGEDef and participant/function identity checks; raw tick-window counters cover all retained records, while bounded-window rejection applies only after identity checks; match diagnostics: " +
                         replay_match_diagnostics.Summary();
                     return Status(ANOMALY_STATUS_V1_UNAVAILABLE, diagnostic.c_str());
                 } catch (...) {
