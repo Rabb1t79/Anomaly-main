@@ -830,7 +830,7 @@ std::string BuildSnapshot() {
          {"ANOMALY_NTE_COMBAT_EVENT_V1_HEAL", ANOMALY_NTE_COMBAT_EVENT_V1_HEAL},
          {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_ADD},
          {"ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE", ANOMALY_NTE_COMBAT_EVENT_V1_BUFF_REMOVE}},
-        false);
+        true);
     output.append("  },\n");
 
     output.append("  \"structs\": {\n");
