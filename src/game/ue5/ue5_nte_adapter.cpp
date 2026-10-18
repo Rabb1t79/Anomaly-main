@@ -1051,6 +1051,37 @@ struct Ue5NteAdapter::State {
         bool attacker_was_local_player_pawn{};
         ReplayEffectContext replay{};
     };
+
+    // Native chains own a DamageTriggerActor instance; they never retain or replay
+    // the original GameplayEffect parameter buffer. The public chain handle is opaque
+    // and separate from the generation-checked UE actor handle.
+    struct NativeDamageChainRecord {
+        AnomalyGenerationHandleV1 handle{};
+        AnomalyGenerationHandleV1 world{};
+        AnomalyGenerationHandleV1 attacker{};
+        AnomalyGenerationHandleV1 target{};
+        AnomalyGenerationHandleV1 trigger_actor{};
+        std::uint64_t damage_sequence{};
+        std::uint64_t source_id{};
+        std::uint64_t object_generation{};
+        std::uint64_t last_dispatch_damage_sequence{};
+        std::uint32_t interval_milliseconds{};
+        std::uint32_t requested_repeat_count{};
+        std::uint32_t confirmed_repeat_count{};
+        std::uint32_t state{ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_UNKNOWN};
+        std::uint32_t flags{};
+        std::uintptr_t period_function{};
+        std::uintptr_t destroy_function{};
+        std::chrono::steady_clock::time_point next_trigger_at{};
+        std::chrono::steady_clock::time_point confirmation_deadline{};
+        bool awaiting_confirmation{};
+        bool stop_requested{};
+    };
+    static constexpr std::size_t kNativeDamageChainActiveLimit = 32;
+    static constexpr std::size_t kNativeDamageChainHistoryLimit = 96;
+    std::vector<NativeDamageChainRecord> native_damage_chains;
+    std::uint64_t next_native_damage_chain_id{1};
+
     static constexpr std::size_t kReplayEffectCallCapacity = 32;
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
     std::size_t replay_effect_call_start{};
@@ -6878,6 +6909,858 @@ struct Ue5NteAdapter::State {
         result = closest_match;
         return true;
     }
+
+
+    [[nodiscard]] DamageRecord* FindDamageRecordBySequenceLocked(
+        const std::uint64_t sequence) noexcept {
+        if (sequence == 0) return nullptr;
+        for (std::size_t index{}; index < damage_event_count; ++index) {
+            auto& record = damage_events[(damage_event_start + index) % kDamageEventCapacity];
+            if (record.event.sequence == sequence) return &record;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] NativeDamageChainRecord* FindNativeDamageChainLocked(
+        const AnomalyGenerationHandleV1 handle) noexcept {
+        if (handle.id == 0 || handle.generation == 0) return nullptr;
+        const auto found = std::ranges::find_if(native_damage_chains,
+            [&](const NativeDamageChainRecord& chain) {
+                return chain.handle.id == handle.id &&
+                    chain.handle.generation == handle.generation;
+            });
+        return found == native_damage_chains.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] bool ValidateNoParameterFunctionLocked(
+        const std::uintptr_t function) const noexcept {
+        if (function == 0) return false;
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{};
+        if (!ReadValue(*memory,
+                function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.numParms")),
+                num_parms) ||
+            !ReadValue(*memory,
+                function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.parmsSize")),
+                parms_size) ||
+            num_parms != 0 || parms_size != 0) {
+            return false;
+        }
+        ReflectedPropertyInfo return_value;
+        return !FindReflectedPropertyLocked(function, "ReturnValue", return_value, false);
+    }
+
+    [[nodiscard]] bool ReadActorLocationForDamageChainLocked(
+        const std::uintptr_t actor, std::array<double, 3>& location) const noexcept {
+        location = {};
+        if (actor == 0 || !ReadableRange(*memory, actor, 0x20U)) return false;
+        std::uintptr_t function{};
+        if (!FindExactObjectLocked(
+                L"/Script/Engine.Actor.K2_GetActorLocation", function)) {
+            return false;
+        }
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{}, return_offset{};
+        if (!ReadValue(*memory,
+                function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.numParms")),
+                num_parms) ||
+            !ReadValue(*memory,
+                function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.parmsSize")),
+                parms_size) ||
+            !ReadValue(*memory,
+                function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.returnValueOffset")),
+                return_offset) ||
+            num_parms != 1 || parms_size != 0x18 || return_offset != 0) {
+            return false;
+        }
+        ReflectedPropertyInfo result;
+        if (!FindReflectedPropertyLocked(function, "ReturnValue", result, false) ||
+            result.type != "StructProperty" || result.element_size != 0x18 ||
+            result.offset != 0) {
+            return false;
+        }
+        alignas(16) std::array<std::uint8_t, 0x18> parameters{};
+        if (!InvokeProcessEventGuarded(
+                process_event_invoker, actor, function,
+                parameters.data(), parameters.size())) {
+            return false;
+        }
+        std::memcpy(location.data(), parameters.data(), sizeof(location));
+        return std::ranges::all_of(location,
+            [](const double value) { return std::isfinite(value); });
+    }
+
+    [[nodiscard]] bool SpawnNativeDamageTriggerActorLocked(
+        const std::uintptr_t actor_class,
+        const std::uintptr_t world_context,
+        const std::uintptr_t owner,
+        const std::array<double, 3>& location,
+        std::uintptr_t& spawned,
+        std::uintptr_t& destroy_function) noexcept {
+        spawned = 0;
+        destroy_function = 0;
+        try {
+            if (actor_class == 0 || world_context == 0 || owner == 0 ||
+                !ReadableRange(*memory, actor_class, 0x20U) ||
+                !ReadableRange(*memory, world_context, 0x20U) ||
+                !ReadableRange(*memory, owner, 0x20U) ||
+                !std::ranges::all_of(location,
+                    [](const double value) { return std::isfinite(value); })) {
+                return false;
+            }
+
+            // These are current Profile-reflected UFunctions; no game image offset is used.
+            std::uintptr_t begin_function{}, finish_function{}, destroy_cdo{};
+            if (!FindExactObjectLocked(
+                    L"/Script/Engine.GameplayStatics.BeginDeferredActorSpawnFromClass",
+                    begin_function) ||
+                !FindExactObjectLocked(
+                    L"/Script/Engine.GameplayStatics.FinishSpawningActor",
+                    finish_function) ||
+                !FindExactObjectLocked(
+                    L"/Script/Engine.Actor.K2_DestroyActor", destroy_function) ||
+                !ValidateNoParameterFunctionLocked(destroy_function)) {
+                return false;
+            }
+
+            std::uint8_t begin_num_parms{}, finish_num_parms{};
+            std::uint16_t begin_parms_size{}, begin_return_offset{};
+            std::uint16_t finish_parms_size{}, finish_return_offset{};
+            if (!ReadValue(*memory,
+                    begin_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.numParms")),
+                    begin_num_parms) ||
+                !ReadValue(*memory,
+                    begin_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.parmsSize")),
+                    begin_parms_size) ||
+                !ReadValue(*memory,
+                    begin_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.returnValueOffset")),
+                    begin_return_offset) ||
+                begin_num_parms != 7 || begin_parms_size != 0x90 ||
+                begin_return_offset != 0x88 ||
+                !ReadValue(*memory,
+                    finish_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.numParms")),
+                    finish_num_parms) ||
+                !ReadValue(*memory,
+                    finish_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.parmsSize")),
+                    finish_parms_size) ||
+                !ReadValue(*memory,
+                    finish_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.returnValueOffset")),
+                    finish_return_offset) ||
+                finish_num_parms != 4 || finish_parms_size != 0x80 ||
+                finish_return_offset != 0x78) {
+                return false;
+            }
+
+            std::uintptr_t statics_class{}, statics_cdo{};
+            if (!ReadPointerAt(*memory, begin_function,
+                    Layout(profile, "object.outer"), statics_class) ||
+                !ReadPointerAt(*memory, statics_class,
+                    Layout(profile, "uclass.classDefaultObject"), statics_cdo) ||
+                statics_cdo == 0 ||
+                !ReadPointerAt(*memory, finish_function,
+                    Layout(profile, "object.outer"), statics_class) ||
+                !ReadPointerAt(*memory, statics_class,
+                    Layout(profile, "uclass.classDefaultObject"), destroy_cdo) ||
+                destroy_cdo == 0) {
+                return false;
+            }
+            const std::uintptr_t statics_cdo_for_finish = destroy_cdo;
+
+            const auto field = [this](
+                const std::uintptr_t function, const std::string_view name,
+                const std::string_view type, const std::uint16_t size,
+                const std::uint16_t offset, ReflectedPropertyInfo& out) {
+                return FindReflectedPropertyLocked(function, name, out, false) &&
+                    out.type == type && out.element_size == size &&
+                    out.offset == offset && out.array_dim == 1;
+            };
+            ReflectedPropertyInfo world_context_field, actor_class_field,
+                spawn_transform_field, collision_field, owner_field, scale_method_field,
+                begin_return_field;
+            if (!field(begin_function, "WorldContextObject", "ObjectProperty", 8, 0x00, world_context_field) ||
+                !field(begin_function, "ActorClass", "ClassProperty", 8, 0x08, actor_class_field) ||
+                !field(begin_function, "SpawnTransform", "StructProperty", 0x60, 0x10, spawn_transform_field) ||
+                !field(begin_function, "Owner", "ObjectProperty", 8, 0x78, owner_field) ||
+                !field(begin_function, "ReturnValue", "ObjectProperty", 8, 0x88, begin_return_field) ||
+                !FindReflectedPropertyLocked(begin_function, "CollisionHandlingOverride", collision_field, false) ||
+                (collision_field.type != "ByteProperty" && collision_field.type != "EnumProperty") ||
+                collision_field.element_size != 1 || collision_field.offset != 0x70 ||
+                !FindReflectedPropertyLocked(begin_function, "TransformScaleMethod", scale_method_field, false) ||
+                (scale_method_field.type != "ByteProperty" && scale_method_field.type != "EnumProperty") ||
+                scale_method_field.element_size != 1 || scale_method_field.offset != 0x80) {
+                return false;
+            }
+
+            ReflectedPropertyInfo finish_actor_field, finish_transform_field,
+                finish_default_transform_field, finish_return_field;
+            if (!field(finish_function, "Actor", "ObjectProperty", 8, 0x00, finish_actor_field) ||
+                !field(finish_function, "SpawnTransform", "StructProperty", 0x60, 0x10, finish_transform_field) ||
+                !field(finish_function, "ReturnValue", "ObjectProperty", 8, 0x78, finish_return_field) ||
+                !FindReflectedPropertyLocked(finish_function, "bIsDefaultTransform", finish_default_transform_field, false) ||
+                finish_default_transform_field.type != "BoolProperty" ||
+                finish_default_transform_field.element_size != 1 ||
+                finish_default_transform_field.offset != 0x70) {
+                return false;
+            }
+
+            alignas(16) std::array<std::uint8_t, 0x60> transform{};
+            const double one = 1.0;
+            const std::array<double, 3> unit_scale{1.0, 1.0, 1.0};
+            std::memcpy(transform.data() + 0x18, &one, sizeof(one));
+            std::memcpy(transform.data() + 0x20, location.data(), sizeof(location));
+            std::memcpy(transform.data() + 0x40, unit_scale.data(), sizeof(unit_scale));
+
+            alignas(16) std::array<std::uint8_t, 0x90> begin_parameters{};
+            std::memcpy(begin_parameters.data(), &world_context, sizeof(world_context));
+            std::memcpy(begin_parameters.data() + 0x08, &actor_class, sizeof(actor_class));
+            std::memcpy(begin_parameters.data() + 0x10, transform.data(), transform.size());
+            begin_parameters[0x70] = 1;  // Dump enum: AlwaysSpawn
+            std::memcpy(begin_parameters.data() + 0x78, &owner, sizeof(owner));
+            begin_parameters[0x80] = 0;  // Dump enum: OverrideRootScale
+            if (!InvokeProcessEventGuarded(process_event_invoker, statics_cdo,
+                    begin_function, begin_parameters.data(), begin_parameters.size())) {
+                return false;
+            }
+            std::memcpy(&spawned, begin_parameters.data() + 0x88, sizeof(spawned));
+            if (spawned == 0) return false;
+
+            alignas(16) std::array<std::uint8_t, 0x80> finish_parameters{};
+            std::memcpy(finish_parameters.data(), &spawned, sizeof(spawned));
+            std::memcpy(finish_parameters.data() + 0x10, transform.data(), transform.size());
+            finish_parameters[0x70] = 0;
+            if (!InvokeProcessEventGuarded(process_event_invoker, statics_cdo_for_finish,
+                    finish_function, finish_parameters.data(), finish_parameters.size())) {
+                static_cast<void>(InvokeProcessEventGuarded(
+                    process_event_invoker, spawned, destroy_function, nullptr, 0));
+                spawned = 0;
+                return false;
+            }
+            std::uintptr_t finished_actor{};
+            std::memcpy(&finished_actor, finish_parameters.data() + 0x78, sizeof(finished_actor));
+            if (finished_actor == 0) {
+                static_cast<void>(InvokeProcessEventGuarded(
+                    process_event_invoker, spawned, destroy_function, nullptr, 0));
+                spawned = 0;
+                return false;
+            }
+            spawned = finished_actor;
+            return ReadableRange(*memory, spawned, 0x20U);
+        } catch (...) {
+            if (spawned != 0 && destroy_function != 0) {
+                static_cast<void>(InvokeProcessEventGuarded(
+                    process_event_invoker, spawned, destroy_function, nullptr, 0));
+            }
+            spawned = 0;
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool ConfigureNativeDamageTriggerActorLocked(
+        const std::uintptr_t actor,
+        const std::uintptr_t actor_class,
+        const std::uintptr_t attacker,
+        const std::uintptr_t victim,
+        const std::uintptr_t effect_class,
+        const std::uintptr_t target_type_class,
+        const std::uintptr_t override_container_function,
+        const std::uint32_t interval_milliseconds,
+        const std::uint32_t repeat_count) noexcept {
+        try {
+            if (actor == 0 || actor_class == 0 || attacker == 0 || victim == 0 ||
+                effect_class == 0 || target_type_class == 0 ||
+                override_container_function == 0) return false;
+
+            ReflectedPropertyInfo event_data, effect_container;
+            if (!FindReflectedPropertyLocked(actor_class, "EventData", event_data, true) ||
+                event_data.type != "StructProperty" || event_data.element_size != 0xB0 ||
+                event_data.offset != 0x3D8 || event_data.structure == 0 ||
+                !FindReflectedPropertyLocked(actor_class, "EffectContainer", effect_container, true) ||
+                effect_container.type != "StructProperty" || effect_container.element_size != 0x28 ||
+                effect_container.offset != 0x3A8 || effect_container.structure == 0) {
+                return false;
+            }
+
+            ReflectedPropertyInfo event_instigator, event_target;
+            if (!FindReflectedPropertyLocked(event_data.structure, "Instigator", event_instigator, false) ||
+                event_instigator.type != "ObjectProperty" || event_instigator.element_size != 8 ||
+                event_instigator.offset != 0x08 ||
+                !FindReflectedPropertyLocked(event_data.structure, "Target", event_target, false) ||
+                event_target.type != "ObjectProperty" || event_target.element_size != 8 ||
+                event_target.offset != 0x10) {
+                return false;
+            }
+            std::uintptr_t instigator_address{}, target_address{};
+            if (!AddAddress(actor, static_cast<std::int64_t>(event_data.offset) + event_instigator.offset,
+                    instigator_address) ||
+                !AddAddress(actor, static_cast<std::int64_t>(event_data.offset) + event_target.offset,
+                    target_address) ||
+                !memory->Write(instigator_address, &attacker, sizeof(attacker)) ||
+                !memory->Write(target_address, &victim, sizeof(victim))) {
+                return false;
+            }
+            std::uintptr_t instigator_readback{}, target_readback{};
+            if (!ReadValue(*memory, instigator_address, instigator_readback) ||
+                !ReadValue(*memory, target_address, target_readback) ||
+                instigator_readback != attacker || target_readback != victim) {
+                return false;
+            }
+
+            // The TArray header refers to call-scoped input storage. The native
+            // OverrideEffectContainer function must copy it to its own UE-managed array.
+            // We verify the resulting actor-owned TArray immediately afterward.
+            alignas(16) std::array<std::uint8_t, 0x28> effect_container_parameters{};
+            NativeArrayHeader input_effects{};
+            input_effects.data = reinterpret_cast<std::uintptr_t>(&effect_class);
+            input_effects.count = 1;
+            input_effects.capacity = 1;
+            std::memcpy(effect_container_parameters.data(), &target_type_class,
+                sizeof(target_type_class));
+            std::memcpy(effect_container_parameters.data() + 0x18, &input_effects,
+                sizeof(input_effects));
+
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{};
+            if (!ReadValue(*memory,
+                    override_container_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.numParms")),
+                    num_parms) ||
+                !ReadValue(*memory,
+                    override_container_function + static_cast<std::uintptr_t>(Layout(profile, "ufunction.parmsSize")),
+                    parms_size) ||
+                num_parms != 1 || parms_size != 0x28) {
+                return false;
+            }
+            ReflectedPropertyInfo input_container;
+            if (!FindReflectedPropertyLocked(
+                    override_container_function, "InEffectContainer", input_container, false) ||
+                input_container.type != "StructProperty" ||
+                input_container.element_size != 0x28 || input_container.offset != 0 ||
+                input_container.structure != effect_container.structure) {
+                return false;
+            }
+            if (!InvokeProcessEventGuarded(process_event_invoker, actor,
+                    override_container_function, effect_container_parameters.data(),
+                    effect_container_parameters.size())) {
+                return false;
+            }
+
+            std::uintptr_t actor_effects_address{}, actor_target_type{};
+            if (!AddAddress(actor, static_cast<std::int64_t>(effect_container.offset) + 0x18,
+                    actor_effects_address) ||
+                !ReadValue(*memory,
+                    actor + static_cast<std::uintptr_t>(effect_container.offset),
+                    actor_target_type) || actor_target_type != target_type_class) {
+                return false;
+            }
+            NativeArrayHeader actor_effects{};
+            if (!ReadNativeArrayHeaderLocked(actor_effects_address, actor_effects, 1) ||
+                actor_effects.count != 1 || actor_effects.capacity < 1 ||
+                actor_effects.data == 0 || !ReadableRange(*memory, actor_effects.data, sizeof(effect_class))) {
+                return false;
+            }
+            std::uintptr_t actor_effect_class{};
+            if (!ReadValue(*memory, actor_effects.data, actor_effect_class) ||
+                actor_effect_class != effect_class) {
+                return false;
+            }
+
+            const float period_seconds =
+                static_cast<float>(interval_milliseconds) / 1000.0F;
+            const float duration_seconds = repeat_count == 0
+                ? 3600.0F
+                : (period_seconds * static_cast<float>(repeat_count + 1U) + period_seconds);
+            const std::int32_t native_max_count = repeat_count == 0
+                ? (std::numeric_limits<std::int32_t>::max)()
+                : static_cast<std::int32_t>(repeat_count);
+            const auto write_field = [this, actor, actor_class](
+                const std::string_view name, const std::string_view expected_type,
+                const std::uint16_t expected_size, const std::uint16_t expected_offset,
+                const void* value, const std::size_t value_size) {
+                ReflectedPropertyInfo property;
+                std::uintptr_t address{};
+                return FindReflectedPropertyLocked(actor_class, name, property, true) &&
+                    property.type == expected_type && property.element_size == expected_size &&
+                    property.offset == expected_offset &&
+                    AddAddress(actor, property.offset, address) &&
+                    memory->Write(address, value, value_size);
+            };
+            if (!std::isfinite(period_seconds) || !std::isfinite(duration_seconds) ||
+                !write_field("RuntimeTriggerPeriod", "FloatProperty", 4, 0x5E8,
+                    &period_seconds, sizeof(period_seconds)) ||
+                !write_field("RuntimeTriggerDuration", "FloatProperty", 4, 0x5EC,
+                    &duration_seconds, sizeof(duration_seconds)) ||
+                !write_field("RuntimeTriggerCountPerPeriod", "IntProperty", 4, 0x5F0,
+                    &std::int32_t{1}, sizeof(std::int32_t)) ||
+                !write_field("RuntimeMaxTriggerCount", "IntProperty", 4, 0x5F4,
+                    &native_max_count, sizeof(native_max_count))) {
+                return false;
+            }
+            float period_readback{}, duration_readback{};
+            std::int32_t count_readback{}, max_count_readback{};
+            if (!ReadValue(*memory, actor + 0x5E8, period_readback) ||
+                !ReadValue(*memory, actor + 0x5EC, duration_readback) ||
+                !ReadValue(*memory, actor + 0x5F0, count_readback) ||
+                !ReadValue(*memory, actor + 0x5F4, max_count_readback) ||
+                std::fabs(period_readback - period_seconds) > 0.0001F ||
+                std::fabs(duration_readback - duration_seconds) > 0.001F ||
+                count_readback != 1 || max_count_readback != native_max_count) {
+                return false;
+            }
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void DestroyNativeDamageChainActorLocked(
+        NativeDamageChainRecord& chain) noexcept {
+        if (chain.trigger_actor.id == 0) return;
+        if (chain.object_generation != object_generation ||
+            chain.world.generation != world_generation ||
+            chain.trigger_actor.generation != object_generation ||
+            chain.destroy_function == 0) {
+            chain.trigger_actor = {};
+            return;
+        }
+        std::uintptr_t actor{};
+        if (!ResolveObjectHandleLocked(chain.trigger_actor, actor)) {
+            chain.trigger_actor = {};
+            return;
+        }
+        std::uintptr_t actor_class{};
+        std::uintptr_t damage_trigger_class{};
+        if (!ReadPointerAt(*memory, actor, Layout(profile, "object.class"), actor_class) ||
+            !FindExactObjectLocked(L"/Script/HTGame.DamageTriggerActor", damage_trigger_class) ||
+            !IsClassDerivedFromLocked(actor_class, damage_trigger_class)) {
+            chain.trigger_actor = {};
+            return;
+        }
+        if (InvokeProcessEventGuarded(
+                process_event_invoker, actor, chain.destroy_function, nullptr, 0)) {
+            chain.trigger_actor = {};
+        }
+    }
+
+    void StopNativeDamageChainLocked(
+        NativeDamageChainRecord& chain, const std::uint32_t terminal_state) noexcept {
+        chain.awaiting_confirmation = false;
+        chain.stop_requested = false;
+        if (chain.object_generation == object_generation &&
+            chain.world.generation == world_generation) {
+            DestroyNativeDamageChainActorLocked(chain);
+        } else {
+            // A stale World/object generation must never dereference an old UObject pointer.
+            chain.trigger_actor = {};
+            chain.flags |= ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_STALE;
+        }
+        chain.state = terminal_state;
+    }
+
+    AnomalyStatusV1 StartNativeDamageChain(
+        const AnomalyNteDamageChainRequestV1* request,
+        AnomalyGenerationHandleV1* out_chain) noexcept {
+        if (out_chain != nullptr) *out_chain = {};
+        if (request == nullptr || out_chain == nullptr ||
+            request->struct_size < sizeof(*request) || request->flags != 0 ||
+            request->damage_sequence == 0 ||
+            request->interval_milliseconds < 100 ||
+            request->interval_milliseconds > 1000 ||
+            request->repeat_count > 1000) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid native damage-chain request; interval must be 100-1000 ms and repeat_count 0 means unlimited");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "native damage-chain creation must run on the Game thread");
+        }
+
+        std::scoped_lock lock(mutex);
+        try {
+            DrainCombatCaptureQueueLocked();
+            DamageRecord* stored_root = FindDamageRecordBySequenceLocked(request->damage_sequence);
+            if (stored_root == nullptr) {
+                return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                    "original CharacterOnDamaged event is no longer available");
+            }
+            const DamageRecord root = *stored_root;
+            const auto& hit = root.event;
+            if (hit.struct_size < sizeof(hit) ||
+                (hit.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
+                hit.final_damage <= 0 || hit.source_id == 0 ||
+                hit.attacker.id == 0 || hit.victim.id == 0 ||
+                hit.attacker.id == hit.victim.id) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "damage-chain root is not a complete positive CharacterOnDamaged event");
+            }
+            if (!root.attacker_was_local_player_pawn) {
+                return Status(ANOMALY_STATUS_V1_PERMISSION_DENIED,
+                    "damage-chain root was not captured from the local player-controlled character");
+            }
+            if (hit.world.generation != world_generation ||
+                hit.attacker.generation != object_generation ||
+                hit.victim.generation != object_generation) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "damage-chain root belongs to a stale World or UObject generation");
+            }
+
+            for (const auto& active : native_damage_chains) {
+                if (active.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE &&
+                    active.object_generation == object_generation &&
+                    active.world.id == hit.world.id &&
+                    active.world.generation == hit.world.generation &&
+                    active.attacker.id == hit.attacker.id &&
+                    active.attacker.generation == hit.attacker.generation &&
+                    active.target.id == hit.victim.id &&
+                    active.target.generation == hit.victim.generation) {
+                    return Status(ANOMALY_STATUS_V1_CONFLICT,
+                        "this attacker and target already have an active native damage chain; the existing chain was not reset");
+                }
+            }
+            std::size_t active_count{};
+            for (const auto& chain : native_damage_chains) {
+                if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE) ++active_count;
+            }
+            if (active_count >= kNativeDamageChainActiveLimit) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "native damage-chain active-target capacity reached");
+            }
+            if (native_damage_chains.size() >= kNativeDamageChainHistoryLimit) {
+                std::erase_if(native_damage_chains, [](const NativeDamageChainRecord& chain) {
+                    return chain.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE &&
+                        chain.trigger_actor.id == 0;
+                });
+                if (native_damage_chains.size() >= kNativeDamageChainHistoryLimit) {
+                    return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                        "native damage-chain history is full; stop or unload an old chain first");
+                }
+            }
+
+            std::uintptr_t attacker{}, victim{};
+            if (!ResolveObjectHandleLocked(hit.attacker, attacker) ||
+                !ResolveObjectHandleLocked(hit.victim, victim) ||
+                attacker == 0 || victim == 0 || attacker == victim) {
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "captured attacker or target is no longer a valid UE object");
+            }
+            std::uintptr_t attacker_class{}, victim_class{}, ability_character_class{};
+            if (!ReadPointerAt(*memory, attacker,
+                    Layout(profile, "object.class"), attacker_class) ||
+                !ReadPointerAt(*memory, victim,
+                    Layout(profile, "object.class"), victim_class) ||
+                !FindExactObjectLocked(L"/Script/HTGame.HTAbilityCharacter",
+                    ability_character_class) ||
+                !IsClassDerivedFromLocked(attacker_class, ability_character_class) ||
+                !IsClassDerivedFromLocked(victim_class, ability_character_class)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "the captured attacker/target did not validate as HTAbilityCharacter objects; vehicles and non-character targets are excluded");
+            }
+            bool victim_is_friendly{};
+            if (!IsFriendlyTargetLocked(attacker, victim, victim_is_friendly)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "dump-validated HTAbilityCharacter.IsFriendlyTarget is unavailable; refusing to start a damage chain");
+            }
+            if (victim_is_friendly) {
+                return Status(ANOMALY_STATUS_V1_PERMISSION_DENIED,
+                    "native damage chain is restricted to non-friendly targets");
+            }
+
+            const auto source = damage_source_objects.find(hit.source_id);
+            if (source == damage_source_objects.end() || source->second == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "DamageGEDef source object is unavailable; no substitute effect was guessed");
+            }
+            std::uintptr_t effect_class{}, effect_base_class{};
+            if (!ReadPointerAt(*memory, source->second,
+                    Layout(profile, "object.class"), effect_class) ||
+                !FindExactObjectLocked(L"/Script/HTGame.HTGamePlayEffect",
+                    effect_base_class) ||
+                effect_class == effect_base_class ||
+                !IsClassDerivedFromLocked(effect_class, effect_base_class)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "DamageGEDef did not resolve to a concrete Dump-derived HTGamePlayEffect class");
+            }
+
+            std::uintptr_t damage_trigger_class{}, target_type_class{}, target_type_base{};
+            if (!FindExactObjectLocked(L"/Script/HTGame.DamageTriggerActor",
+                    damage_trigger_class) ||
+                !FindExactObjectLocked(L"/Script/HTGame.HTGATargetType_UseEventData",
+                    target_type_class) ||
+                !FindExactObjectLocked(L"/Script/HTGame.HTGATargetType",
+                    target_type_base) ||
+                !IsClassDerivedFromLocked(target_type_class, target_type_base)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "Dump-declared DamageTriggerActor/UseEventData target-type classes are unavailable");
+            }
+            std::uintptr_t override_container_function{}, period_function{}, destroy_function{};
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.HTAbilitySpawnActor.OverrideEffectContainer",
+                    override_container_function) ||
+                !FindExactObjectLocked(
+                    L"/Script/HTGame.DamageTriggerActor.K2_OnTriggerPeriodGamePlayEffect",
+                    period_function) ||
+                !ValidateNoParameterFunctionLocked(period_function) ||
+                !FindExactObjectLocked(
+                    L"/Script/Engine.Actor.K2_DestroyActor", destroy_function) ||
+                !ValidateNoParameterFunctionLocked(destroy_function)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "native trigger entry-point signatures did not validate against the active Profile");
+            }
+
+            std::array<double, 3> location{};
+            if (!ReadActorLocationForDamageChainLocked(victim, location)) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "the target's reflected K2_GetActorLocation ABI did not validate");
+            }
+
+            std::uintptr_t trigger_actor{};
+            if (!SpawnNativeDamageTriggerActorLocked(
+                    damage_trigger_class, attacker, attacker, location,
+                    trigger_actor, destroy_function) ||
+                trigger_actor == 0) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "native DamageTriggerActor spawn ABI failed validation");
+            }
+            const auto cleanup_spawned = [&]() noexcept {
+                if (trigger_actor != 0) {
+                    static_cast<void>(InvokeProcessEventGuarded(
+                        process_event_invoker, trigger_actor, destroy_function, nullptr, 0));
+                    trigger_actor = 0;
+                }
+            };
+            std::uintptr_t spawned_class{};
+            if (!ReadPointerAt(*memory, trigger_actor,
+                    Layout(profile, "object.class"), spawned_class) ||
+                !IsClassDerivedFromLocked(spawned_class, damage_trigger_class)) {
+                cleanup_spawned();
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "spawned actor did not validate as a DamageTriggerActor");
+            }
+            if (!ConfigureNativeDamageTriggerActorLocked(
+                    trigger_actor, spawned_class, attacker, victim, effect_class,
+                    target_type_class, override_container_function,
+                    request->interval_milliseconds, request->repeat_count)) {
+                cleanup_spawned();
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "native trigger target/effect container/timing fields failed Dump-reflection readback validation");
+            }
+
+            // Refresh the UObject array once so the new actor can be held only by a
+            // generation-checked handle; abandon the chain if that refresh invalidates the hit.
+            RefreshObjects();
+            if (object_generation != hit.attacker.generation ||
+                hit.world.generation != world_generation) {
+                cleanup_spawned();
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "World/UObject generation changed while creating the native trigger");
+            }
+            std::uintptr_t attacker_readback{}, victim_readback{};
+            if (!ResolveObjectHandleLocked(hit.attacker, attacker_readback) ||
+                !ResolveObjectHandleLocked(hit.victim, victim_readback) ||
+                attacker_readback != attacker || victim_readback != victim) {
+                cleanup_spawned();
+                return Status(ANOMALY_STATUS_V1_CONFLICT,
+                    "attacker or target identity changed while creating the native trigger");
+            }
+            AnomalyGenerationHandleV1 trigger_actor_handle{};
+            if (!ObjectHandleLocked(trigger_actor, trigger_actor_handle)) {
+                cleanup_spawned();
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "spawned native trigger could not be generation-pinned in the UObject registry");
+            }
+
+            NativeDamageChainRecord chain{};
+            chain.handle.id = next_native_damage_chain_id++;
+            if (chain.handle.id == 0) chain.handle.id = next_native_damage_chain_id++;
+            chain.handle.generation = object_generation;
+            chain.world = hit.world;
+            chain.attacker = hit.attacker;
+            chain.target = hit.victim;
+            chain.trigger_actor = trigger_actor_handle;
+            chain.damage_sequence = hit.sequence;
+            chain.source_id = hit.source_id;
+            chain.object_generation = object_generation;
+            chain.interval_milliseconds = request->interval_milliseconds;
+            chain.requested_repeat_count = request->repeat_count;
+            chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE;
+            chain.flags = ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_VALID |
+                ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_TARGET_BOUND;
+            chain.period_function = period_function;
+            chain.destroy_function = destroy_function;
+            const auto now = std::chrono::steady_clock::now();
+            chain.next_trigger_at = now +
+                std::chrono::milliseconds(chain.interval_milliseconds);
+            native_damage_chains.push_back(chain);
+            *out_chain = chain.handle;
+            trigger_actor = 0; // ownership has transferred to the chain record
+            return anomaly::sdk::Ok();
+        } catch (...) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "exception while creating the native DamageTriggerActor chain; legacy replay was not attempted");
+        }
+    }
+
+    AnomalyStatusV1 StopNativeDamageChain(
+        const AnomalyGenerationHandleV1 handle) noexcept {
+        if (handle.id == 0 || handle.generation == 0) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid native damage-chain handle");
+        }
+        std::scoped_lock lock(mutex);
+        auto* chain = FindNativeDamageChainLocked(handle);
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "native damage-chain handle was not found");
+        }
+        if (chain->state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE &&
+            chain->trigger_actor.id == 0) {
+            return anomaly::sdk::Ok();
+        }
+        if (GetCurrentThreadId() == game_thread_id.load(std::memory_order_acquire)) {
+            StopNativeDamageChainLocked(
+                *chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED);
+        } else {
+            chain->stop_requested = true;
+            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED;
+            chain->awaiting_confirmation = false;
+        }
+        return anomaly::sdk::Ok();
+    }
+
+    AnomalyStatusV1 SnapshotNativeDamageChain(
+        const AnomalyGenerationHandleV1 handle,
+        AnomalyNteDamageChainSnapshotV1* snapshot) noexcept {
+        if (handle.id == 0 || handle.generation == 0 ||
+            snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid native damage-chain snapshot request");
+        }
+        std::scoped_lock lock(mutex);
+        const auto* chain = FindNativeDamageChainLocked(handle);
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "native damage-chain handle was not found");
+        }
+        AnomalyNteDamageChainSnapshotV1 result{};
+        result.struct_size = sizeof(result);
+        result.flags = chain->flags | ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_VALID;
+        result.chain = chain->handle;
+        result.damage_sequence = chain->damage_sequence;
+        result.requested_repeat_count = chain->requested_repeat_count;
+        result.confirmed_repeat_count = chain->confirmed_repeat_count;
+        result.state = chain->state;
+        result.interval_milliseconds = chain->interval_milliseconds;
+        if (chain->object_generation != object_generation ||
+            chain->world.generation != world_generation) {
+            result.flags |= ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_STALE;
+            if (result.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE) {
+                result.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED;
+            }
+        }
+        *snapshot = result;
+        return anomaly::sdk::Ok();
+    }
+
+    void AdvanceNativeDamageChainsLocked(
+        const std::chrono::steady_clock::time_point now) noexcept {
+        for (auto& chain : native_damage_chains) {
+            if (chain.stop_requested) {
+                StopNativeDamageChainLocked(
+                    chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED);
+                continue;
+            }
+            if (chain.object_generation != object_generation ||
+                chain.world.generation != world_generation) {
+                chain.trigger_actor = {};
+                chain.awaiting_confirmation = false;
+                chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED;
+                chain.flags |= ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_STALE;
+                continue;
+            }
+            if (chain.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE) {
+                // Retry native cleanup for terminal records if the first Destroy call faulted.
+                if (chain.trigger_actor.id != 0) {
+                    DestroyNativeDamageChainActorLocked(chain);
+                }
+                continue;
+            }
+
+            std::uintptr_t trigger_actor{}, attacker{}, victim{};
+            std::uintptr_t trigger_actor_class{}, damage_trigger_class{};
+            if (!ResolveObjectHandleLocked(chain.trigger_actor, trigger_actor) ||
+                !ResolveObjectHandleLocked(chain.attacker, attacker) ||
+                !ResolveObjectHandleLocked(chain.target, victim) ||
+                !ReadPointerAt(*memory, trigger_actor,
+                    Layout(profile, "object.class"), trigger_actor_class) ||
+                !FindExactObjectLocked(
+                    L"/Script/HTGame.DamageTriggerActor", damage_trigger_class) ||
+                !IsClassDerivedFromLocked(trigger_actor_class, damage_trigger_class) ||
+                !ReadableRange(*memory, chain.period_function, 0x20U)) {
+                StopNativeDamageChainLocked(
+                    chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED);
+                continue;
+            }
+            bool friendly{};
+            if (!IsFriendlyTargetLocked(attacker, victim, friendly) || friendly) {
+                StopNativeDamageChainLocked(
+                    chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED);
+                continue;
+            }
+
+            if (chain.awaiting_confirmation) {
+                bool confirmed{};
+                for (std::size_t index{}; index < damage_event_count; ++index) {
+                    const auto& observed = damage_events[
+                        (damage_event_start + index) % kDamageEventCapacity].event;
+                    if (observed.sequence <= chain.last_dispatch_damage_sequence ||
+                        observed.source_id != chain.source_id ||
+                        observed.world.id != chain.world.id ||
+                        observed.world.generation != chain.world.generation ||
+                        observed.attacker.id != chain.attacker.id ||
+                        observed.attacker.generation != chain.attacker.generation ||
+                        observed.victim.id != chain.target.id ||
+                        observed.victim.generation != chain.target.generation ||
+                        observed.final_damage <= 0 ||
+                        (observed.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0) {
+                        continue;
+                    }
+                    confirmed = true;
+                    ++chain.confirmed_repeat_count;
+                    break;
+                }
+                if (confirmed) {
+                    chain.awaiting_confirmation = false;
+                    chain.next_trigger_at = now +
+                        std::chrono::milliseconds(chain.interval_milliseconds);
+                    if (chain.requested_repeat_count != 0 &&
+                        chain.confirmed_repeat_count >= chain.requested_repeat_count) {
+                        StopNativeDamageChainLocked(
+                            chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED);
+                    }
+                    continue;
+                }
+                if (now >= chain.confirmation_deadline) {
+                    StopNativeDamageChainLocked(
+                        chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED);
+                }
+                continue;
+            }
+            if (now < chain.next_trigger_at) continue;
+
+            // Execute the Dump-declared native DamageTriggerActor period event, which
+            // resolves the actor-owned EffectContainer and fixed EventData.Target. This is
+            // deliberately not a replay of the captured GameplayEffect call or its params.
+            chain.last_dispatch_damage_sequence = damage_event_sequence;
+            if (!InvokeProcessEventGuarded(
+                    process_event_invoker, trigger_actor, chain.period_function, nullptr, 0)) {
+                StopNativeDamageChainLocked(
+                    chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED);
+                continue;
+            }
+            chain.flags |= ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_NATIVE_TRIGGER_STARTED;
+            chain.awaiting_confirmation = true;
+            chain.confirmation_deadline = now + std::chrono::seconds(2);
+        }
+    }
+
 
     AnomalyStatusV1 ReplayDamage(
         const AnomalyNteDamageReplayRequestV1* request) noexcept {
