@@ -1,0 +1,62 @@
+name: NTE native damage Dump evidence extraction
+
+on:
+  push:
+    branches:
+      - work/nte-damage-chain-reaction-independent-20261018
+    paths:
+      - .github/workflows/nte-dump-native-evidence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Checkout branch extractor only
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          path: repo
+          fetch-depth: 1
+          sparse-checkout: |
+            tools/damage_chain/dump_native_evidence.py
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout only relevant Dump files from main and materialize Git LFS
+        uses: actions/checkout@v4
+        with:
+          repository: Rabb1t79/Anomaly-main
+          ref: main
+          path: dump-source
+          fetch-depth: 1
+          lfs: true
+          sparse-checkout: |
+            5.6.1/CppSDK/SDK/HTGame_classes.hpp
+            5.6.1/CppSDK/SDK/HTGame_structs.hpp
+            5.6.1/CppSDK/SDK/HTGame_parameters.hpp
+            5.6.1/GObjects-Dump.txt
+            5.6.1-new/CppSDK/SDK/HTGame_classes.hpp
+            5.6.1-new/CppSDK/SDK/HTGame_structs.hpp
+            5.6.1-new/CppSDK/SDK/HTGame_parameters.hpp
+            5.6.1-new/GObjects-Dump.txt
+          sparse-checkout-cone-mode: false
+
+      - name: Extract signatures, layouts, and focused diffs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python repo/tools/damage_chain/dump_native_evidence.py dump-source --output artifacts/dump-native-evidence.md
+          if ($LASTEXITCODE -ne 0) { throw 'Dump evidence extraction failed.' }
+          Get-Content artifacts/dump-native-evidence.md -TotalCount 24
+
+      - name: Upload focused evidence report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nte-native-damage-dump-evidence
+          path: artifacts/dump-native-evidence.md
+          if-no-files-found: error
+          retention-days: 7
