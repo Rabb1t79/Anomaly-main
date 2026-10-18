@@ -7649,9 +7649,10 @@ struct Ue5NteAdapter::State {
                                 "全部次数已派发，仍在等待真实伤害事件确认；无时间期限");
                         }
                     } else {
-                        // Advance from the prior scheduled slot, not from 'now'. If a
-                        // frame stalls, this preserves backlog without expiring it.
-                        chain->next_due += chain->interval;
+                        // Schedule from the just-finished native dispatch. A stall keeps
+                        // all remaining repeats queued, but does not cause a catch-up burst
+                        // that temporarily exceeds the requested cadence.
+                        chain->next_due = std::chrono::steady_clock::now() + chain->interval;
                         SetDamageChainMessage(*chain,
                             "队列运行中：按速率派发；延迟只会积压，不会丢弃剩余次数");
                     }
