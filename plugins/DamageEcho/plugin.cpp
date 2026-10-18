@@ -25,9 +25,9 @@ namespace {
 constexpr std::size_t kLogCapacity = 128;
 constexpr std::size_t kLogLineSize = 512;
 constexpr std::size_t kMaxNameBytes = 2048;
-constexpr std::uint32_t kPageCapacity = 128;
+constexpr std::uint32_t kPageCapacity = ANOMALY_NTE_ENTITY_PAGE_V1_MAX_CAPACITY;
 constexpr std::uint64_t kFramePollMs = 350;
-constexpr std::uint64_t kPagePollMs = 125;
+constexpr std::uint64_t kPagePollMs = 0;
 static_assert(kPageCapacity <= ANOMALY_NTE_ENTITY_PAGE_V1_MAX_CAPACITY);
 
 template <typename S, typename F>
