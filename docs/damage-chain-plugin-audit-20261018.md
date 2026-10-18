@@ -50,3 +50,12 @@ The repaired source now:
 - A successful DLL build validates compilation and packaging only.
 - This guarded build intentionally does not perform chain damage. It must not be presented as a working legacy-mechanism recreation.
 - The next implementation step needs either a 5.6.1/profile-validated function entry with a matching ABI, or a supported Anomaly Core service that safely resolves and invokes the appropriate reflected/game-native behavior on the Game thread. Do not invent a signature pattern or re-enable the raw offset based only on an executable-page check.
+
+
+## Build/package check
+
+- The dedicated `Build Damage Echo MSVC` workflow completed successfully: run `39091653214`, source commit `27b50906b1b45a18a171718d665deec3bb498bd2`. This verifies compilation and artifact creation for the guarded source/manifest; it is not an in-game feature test.
+- The downloaded artifact was normalized to a flat plugin package containing only `plugin.dll` and `manifest.json`; ZIP integrity passed, the manifest parses as JSON at version `1.5.0`, the DLL is PE32+ x64, and it exports `AnomalyPluginEntryV1`.
+- Flat package SHA-256: `09a69b67f2999f73d1391e5b6e273d96ec538b341ecd9f5502e9556d7f720290`.
+- DLL SHA-256: `cdaf1142c976a8a95d5885cc753e74154f5dd1bfdf6a402e4af91161fda77310`.
+- No in-game test has been run; the entry guard intentionally prevents the chain-damage loop from starting.
