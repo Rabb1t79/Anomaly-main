@@ -1070,6 +1070,7 @@ struct Ue5NteAdapter::State {
         std::uint32_t confirmed_repeat_count{};
         std::uint32_t state{ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_UNKNOWN};
         std::uint32_t flags{};
+        std::uintptr_t trigger_actor_class{};
         std::uintptr_t period_function{};
         std::uintptr_t destroy_function{};
         std::chrono::steady_clock::time_point next_trigger_at{};
@@ -7256,7 +7257,7 @@ struct Ue5NteAdapter::State {
                 return false;
             }
             NativeArrayHeader actor_effects{};
-            if (!ReadNativeArrayHeaderLocked(actor_effects_address, actor_effects, 1) ||
+            if (!ReadNativeArrayHeaderLocked(actor_effects_address, actor_effects, 64) ||
                 actor_effects.count != 1 || actor_effects.capacity < 1 ||
                 actor_effects.data == 0 || !ReadableRange(*memory, actor_effects.data, sizeof(effect_class))) {
                 return false;
@@ -7332,10 +7333,9 @@ struct Ue5NteAdapter::State {
             return;
         }
         std::uintptr_t actor_class{};
-        std::uintptr_t damage_trigger_class{};
-        if (!ReadPointerAt(*memory, actor, Layout(profile, "object.class"), actor_class) ||
-            !FindExactObjectLocked(L"/Script/HTGame.DamageTriggerActor", damage_trigger_class) ||
-            !IsClassDerivedFromLocked(actor_class, damage_trigger_class)) {
+        if (chain.trigger_actor_class == 0 ||
+            !ReadPointerAt(*memory, actor, Layout(profile, "object.class"), actor_class) ||
+            !IsClassDerivedFromLocked(actor_class, chain.trigger_actor_class)) {
             chain.trigger_actor = {};
             return;
         }
@@ -7588,6 +7588,7 @@ struct Ue5NteAdapter::State {
             chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_ACTIVE;
             chain.flags = ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_VALID |
                 ANOMALY_NTE_DAMAGE_CHAIN_SNAPSHOT_V1_TARGET_BOUND;
+            chain.trigger_actor_class = damage_trigger_class;
             chain.period_function = period_function;
             chain.destroy_function = destroy_function;
             const auto now = std::chrono::steady_clock::now();
@@ -7689,24 +7690,17 @@ struct Ue5NteAdapter::State {
             }
 
             std::uintptr_t trigger_actor{}, attacker{}, victim{};
-            std::uintptr_t trigger_actor_class{}, damage_trigger_class{};
+            std::uintptr_t trigger_actor_class{};
             if (!ResolveObjectHandleLocked(chain.trigger_actor, trigger_actor) ||
                 !ResolveObjectHandleLocked(chain.attacker, attacker) ||
                 !ResolveObjectHandleLocked(chain.target, victim) ||
                 !ReadPointerAt(*memory, trigger_actor,
                     Layout(profile, "object.class"), trigger_actor_class) ||
-                !FindExactObjectLocked(
-                    L"/Script/HTGame.DamageTriggerActor", damage_trigger_class) ||
-                !IsClassDerivedFromLocked(trigger_actor_class, damage_trigger_class) ||
+                chain.trigger_actor_class == 0 ||
+                !IsClassDerivedFromLocked(trigger_actor_class, chain.trigger_actor_class) ||
                 !ReadableRange(*memory, chain.period_function, 0x20U)) {
                 StopNativeDamageChainLocked(
                     chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED);
-                continue;
-            }
-            bool friendly{};
-            if (!IsFriendlyTargetLocked(attacker, victim, friendly) || friendly) {
-                StopNativeDamageChainLocked(
-                    chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED);
                 continue;
             }
 
@@ -7749,6 +7743,12 @@ struct Ue5NteAdapter::State {
                 continue;
             }
             if (now < chain.next_trigger_at) continue;
+            bool friendly{};
+            if (!IsFriendlyTargetLocked(attacker, victim, friendly) || friendly) {
+                StopNativeDamageChainLocked(
+                    chain, ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_STOPPED);
+                continue;
+            }
 
             // Execute the Dump-declared native DamageTriggerActor period event, which
             // resolves the actor-owned EffectContainer and fixed EventData.Target. This is
