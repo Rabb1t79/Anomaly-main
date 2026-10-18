@@ -6,6 +6,7 @@ on:
       - work/nte-damage-chain-reaction-independent-20261018
     paths:
       - .github/workflows/nte-dump-native-evidence.yml
+      - tools/damage_chain/dump_native_evidence.py
   workflow_dispatch:
 
 permissions:

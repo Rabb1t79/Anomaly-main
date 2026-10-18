@@ -160,3 +160,8 @@
 - 测试包 artifact：`DamageChainReaction-windows-x64`，SHA-256 `9e08a8a74ebc3489a6d9efd48c3ffc6767dacd8263fe461492196dfb9564d06a`。这是可用于进一步验证的测试包，不是已实机确认的最终成品。
 - 本次 MD 更新时，全量 Windows 工作流 [39125202479](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202479) 与 Core/ABI 工作流 [39125202470](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202470) 仍在运行；后续以 GitHub 实际结果为准。
 - 实机尚未证明 DamageTriggerActor 周期事件每次产生恰好一次额外真实伤害，或 100 次配置能在游戏内完整兑现。构建和队列测试不能替代该验证。
+
+### Dump 取证覆盖补强（2026-10-18）
+- 第一轮 LFS 报告比较了伤害事件、ASC 与 OnDamaged 参数，但没有把 `ADamageTriggerActor` / `AHTAbilitySpawnActor` 完整类块和 `OverrideEffectContainer` 参数布局纳入报告；因此之前的证据报告没有完整覆盖当前候选调用路径。
+- 已扩展 `tools/damage_chain/dump_native_evidence.py`，下一次 LFS 取证将提取触发 Actor、基础 Actor、EffectContainer/Spawn 配置结构，以及 `OverrideEffectContainer` 的参数布局并逐版本比较；工作流路径过滤也已加入该脚本，确保其改动会自动重跑取证。
+- 这次只是补足证据提取，不表示候选路线已确认。需要确认两版中的块均成功提取、活动 Profile 的反射布局匹配，并实机证明一次周期调用产生一次针对原目标的真实伤害。

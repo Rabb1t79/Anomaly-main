@@ -63,3 +63,9 @@ With the feature disabled, one native attack produces one ordinary damage result
 - Artifact: `DamageChainReaction-windows-x64`, SHA-256 `9e08a8a74ebc3489a6d9efd48c3ffc6767dacd8263fe461492196dfb9564d06a`. This is a **test package**, not a runtime-verified release.
 - At the time of this update, full Windows workflow [39125202479](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202479) and Core/ABI workflow [39125202470](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202470) were still in progress. Their results must be checked separately.
 - In-game damage behavior remains unverified: a green build/queue test proves compilation and scheduler behavior only, not that the DamageTriggerActor event creates exactly one additional real damage result each time.
+
+## Dump evidence coverage correction — 2026-10-18
+
+- The first LFS report compared the damage event and ASC parameter blocks, but did not include the complete `ADamageTriggerActor` / `AHTAbilitySpawnActor` class blocks or `OverrideEffectContainer` parameter layout. This left a gap between the documented candidate and the captured evidence report.
+- The evidence extractor is being expanded to include those class, container/static-data structure, and effect-container override parameter blocks in both Dump versions. The workflow path filter now watches the extractor itself so changes trigger a fresh report.
+- This is a measurement improvement only. Do not accept the native-trigger adapter until these blocks resolve in both versions, the active Profile validates the actual reflected layouts, and runtime testing confirms each period dispatch causes one real hit on the original target.
