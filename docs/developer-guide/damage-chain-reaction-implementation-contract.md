@@ -93,3 +93,9 @@ With the feature disabled, one native attack produces one ordinary damage result
 
 - Core configures the native container with `HTGATargetType_UseEventData` and validates it as a child of `HTGATargetType`. The prior 16-block report covered the container and nested `FGameplayEventData` layouts, but did not extract the target-type class blocks themselves.
 - This revision adds both `UHTGATargetType` and `UHTGATargetType_UseEventData` to the paired LFS evidence extractor and adds the base type to the GObjects query. Wait for the new report to confirm these class blocks exist and match in both Dump versions; do not infer the target-type behavior from its name alone.
+## Target-type declaration result — 2026-10-18
+
+- Evidence run [39126720146](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126720146) completed successfully. The report now contains **18 focused blocks**, with zero missing markers, zero unavailable diffs, and all 18 blocks text-identical across `5.6.1` and `5.6.1-new`.
+- The new blocks confirm `UHTGATargetType` has `GetTargets(OwningActor, TargetingActor, FGameplayEventData&, OutTargetData, OutHitResults, OutActors) const`; `UHTGATargetType_UseEventData` has no extra fields and inherits that function. This provides a declared target-resolution interface that receives `FGameplayEventData` and returns actor/target-data outputs.
+- This still does not prove that the concrete `GetTargets` implementation returns `EventData.Target` in all relevant game states. Its runtime behavior needs a read-only in-game probe or a trace of the native event path before the adapter can be considered verified.
+- Refreshed report path `/mnt/data/NTE-damage-Dump-evidence-5.6.1-vs-5.6.1-new.md`; SHA-256 `2b7b9b5657b00571dced930f5dfe0a7f2f5e759cc4259421514700efa0ccdc8f`.

@@ -109,3 +109,8 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 
 - 当前适配器选择 `HTGATargetType_UseEventData` 作为 GameplayEffect 容器目标类型，且通过反射验证其父类为 `HTGATargetType`。这两个类声明尚未列入前一轮聚焦对照。
 - 新增两版 Dump 的目标类型类块提取项；需等后续报告验证它们是否存在以及声明是否相同，再提升对应证据等级。
+## 2026-10-18 目标类型声明结果
+
+- 双版本报告 [39126720146](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126720146) 已成功：18/18 个聚焦块可提取且文本一致，缺失标记为 0。
+- `UHTGATargetType` 有 `GetTargets` 反射声明，输入包含 `const FGameplayEventData&`，输出包括 `OutTargetData`、`OutHitResults` 与 `OutActors`；`UHTGATargetType_UseEventData` 没有附加字段并继承它。这加强了“使用事件数据进行目标解析”的声明层依据。
+- 但 Dump 仅显示函数声明，不包含实际函数逻辑；仍需运行时确认这个类型确实选择原始受击目标，再确认每次周期触发造成一次真实伤害。

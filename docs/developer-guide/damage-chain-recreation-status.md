@@ -184,3 +184,8 @@
 ### 目标选择类型证据补齐（2026-10-18）
 - 当前 Core 会把 `HTGATargetType_UseEventData` 设置为 `FHTGameplayEffectContainer.TargetType`，并验证它属于 `HTGATargetType` 子类。上一份 16 块报告覆盖了容器和内层 `FGameplayEventData`，但没有独立提取这两个目标类型类声明。
 - 本次扩展双版本 LFS 取证脚本：增加 `UHTGATargetType` 与 `UHTGATargetType_UseEventData` 聚焦类块，并在 GObjects 搜索中加入基类名称。等待下一次报告确认两版都能提取且布局一致；类型名本身不证明目标解析的运行语义。
+### 目标类型双版本核验结果（2026-10-18）
+- 新增目标类型的取证运行 [39126720146](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39126720146) 已成功。当前报告共有 18 个聚焦声明块，缺失标记 0、不可用 diff 0、18/18 块在两版中均文本一致。
+- `UHTGATargetType` 声明 `GetTargets(OwningActor, TargetingActor, FGameplayEventData&, OutTargetData, OutHitResults, OutActors) const`；`UHTGATargetType_UseEventData` 的类大小与父类相同，没有额外字段，继承 `GetTargets`。这证明该目标解析接口接收 `FGameplayEventData` 并可输出目标 Actor/TargetData。
+- 这仍不能证明具体实现一定返回 `EventData.Target`，也不能证明调用 `K2_OnTriggerPeriodGamePlayEffect` 必然造成一次真实伤害。下一步需要针对当前游戏版本的只读运行时目标解析探针/事件追踪，或实机伤害确认。
+- 最新报告 `/mnt/data/NTE-damage-Dump-evidence-5.6.1-vs-5.6.1-new.md`，SHA-256 `2b7b9b5657b00571dced930f5dfe0a7f2f5e759cc4259421514700efa0ccdc8f`。
