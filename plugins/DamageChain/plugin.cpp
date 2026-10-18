@@ -541,17 +541,17 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
         row->root_damage_sequence = event.sequence;
         row->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING;
         row->requested = request.repeat_count;
-        row->dispatched = 1; // StartChain only succeeds after the first repeat dispatch returns.
+        row->dispatched = 0; // StartChain confirms queue acceptance, not a dispatched hit.
         row->observed = 0;
         row->rate = request.rate_per_second;
         row->last_status = ANOMALY_STATUS_V1_OK;
-        row->last_logged_dispatch = 1;
-        const auto source_message = "链已启动 chain_id=" + std::to_string(chain_id) +
+        row->last_logged_dispatch = 0;
+        const auto source_message = "链已排队 chain_id=" + std::to_string(chain_id) +
             " root_damage_sequence=" + std::to_string(event.sequence) +
             " original_damage=" + std::to_string(event.final_damage) +
             " repeat_count=" + std::to_string(request.repeat_count) +
             " rate_per_second=" + std::to_string(request.rate_per_second) +
-            "; time limit=none";
+            "; queue_accepted=1; dispatched_repeats=0; time_limit=none";
         std::memcpy(row->message.data(), source_message.data(),
             (std::min)(source_message.size(), row->message.size() - 1U));
         LogLine(*context, source_message);
