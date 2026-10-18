@@ -939,13 +939,13 @@ typedef struct AnomalyNteDamageChainServiceV1 {
         AnomalyNteDamageChainSnapshotV1* snapshot);
 } AnomalyNteDamageChainServiceV1;
 
-// Independent native damage-chain reaction API. This is intentionally separate from
-// the deprecated damage-replay service and from the legacy DamageTriggerActor chain.
-// A chain is rooted in a previously captured CharacterOnDamaged event. apply_next()
-// dispatches at most one original-context GameplayEffect application and remains pending
-// until Core observes a matching new CharacterOnDamaged event. Elapsed time never expires
-// the chain or an unconfirmed application; the plugin owns cadence, while Core owns safety,
-// identity checks, and application confirmation.
+// Native damage-chain reaction API, separate from the deprecated damage-replay API.
+// A chain is rooted in a captured CharacterOnDamaged event. Core creates a Dump-validated
+// DamageTriggerActor whose EffectContainer is bound to the root DamageGEDef and original
+// target. apply_next() invokes at most one reflected DamageTriggerActor period event; return
+// means the event was entered, not that damage succeeded. Core confirms only a matching
+// real CharacterOnDamaged result. The plugin owns cadence; Core owns validation, identity,
+// thread, lifetime, and confirmation checks. Elapsed time alone never expires a chain.
 #define ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_ID "anomaly.nte.damage-chain-reaction"
 #define ANOMALY_NTE_DAMAGE_CHAIN_REACTION_SERVICE_V1_VERSION 1u
 
