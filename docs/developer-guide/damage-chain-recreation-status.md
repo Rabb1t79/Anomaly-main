@@ -165,3 +165,8 @@
 - 第一轮 LFS 报告比较了伤害事件、ASC 与 OnDamaged 参数，但没有把 `ADamageTriggerActor` / `AHTAbilitySpawnActor` 完整类块和 `OverrideEffectContainer` 参数布局纳入报告；因此之前的证据报告没有完整覆盖当前候选调用路径。
 - 已扩展 `tools/damage_chain/dump_native_evidence.py`，下一次 LFS 取证将提取触发 Actor、基础 Actor、EffectContainer/Spawn 配置结构，以及 `OverrideEffectContainer` 的参数布局并逐版本比较；工作流路径过滤也已加入该脚本，确保其改动会自动重跑取证。
 - 这次只是补足证据提取，不表示候选路线已确认。需要确认两版中的块均成功提取、活动 Profile 的反射布局匹配，并实机证明一次周期调用产生一次针对原目标的真实伤害。
+
+### CI 结果刷新（2026-10-18）
+- 已确认源代码提交 `9a53edc3b398e559ca469bdd55c507b74216d3e2` 的三项检查全部成功：独立插件构建 + RateQueue 测试/打包 [39125202472](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202472)、全量 Windows 框架 Runtime/打包 [39125202479](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202479)、Core/ABI 校验 [39125202470](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202470)。
+- 随后的提交 `eed4357560b63c8a6b5619465102861713080d2f` 只修改取证脚本、取证工作流和文档。扩展后的两版 Dump 取证任务 [39125616938](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125616938) 在最近一次检查时为 queued；需等新报告出来后再确认新增块的实际差异。
+- 当前所有已通过的 CI 只证明源码编译、SDK/ABI 校验和队列测试通过，不证明游戏中伤害已生效。剩余核心验证是：一次原生命中后，N 次周期触发必须产生恰好 N 次针对原目标的新真实伤害事件。
