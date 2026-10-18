@@ -1,0 +1,47 @@
+name: Export AnomalyUltimate reference DLLs
+
+on:
+  push:
+    branches:
+      - work/export-anomalyultimate-reference-20261018
+    paths:
+      - '.github/workflows/export-anomalyultimate-reference.yml'
+  workflow_dispatch:
+
+jobs:
+  export-reference:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout reference branch
+        uses: actions/checkout@v4
+
+      - name: Verify and package tracked reference files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'plugins/TimeAccel'
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist/AnomalyUltimate-reference'
+          New-Item -ItemType Directory -Path $output -Force | Out-Null
+
+          $files = @('plugin.dll', 'plugin_old.dll', 'manifest.json', 'manifest_old.json')
+          $hashLines = @()
+          foreach ($name in $files) {
+            $path = Join-Path $source $name
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            Copy-Item -LiteralPath $path -Destination (Join-Path $output $name)
+            $item = Get-Item -LiteralPath $path
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hashLines += "$name $($item.Length) $hash"
+          }
+          if ($hashLines.Count -lt 3) { throw 'The expected AnomalyUltimate reference files were not found.' }
+          $hashLines | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding UTF8
+          Compress-Archive -Path (Join-Path $output '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/AnomalyUltimate-reference.zip') -Force
+
+      - name: Upload reference archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnomalyUltimate-reference
+          path: dist/AnomalyUltimate-reference.zip
+          if-no-files-found: error
