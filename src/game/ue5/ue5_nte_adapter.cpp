@@ -2503,7 +2503,8 @@ struct Ue5NteAdapter::State {
         if (id == ANOMALY_NTE_ACTORS_SERVICE_V1_ID) {
             return framework_hook_ready && NteActorsLayoutAvailable();
         }
-        if (id == ANOMALY_NTE_COMBAT_SERVICE_V1_ID) {
+        if (id == ANOMALY_NTE_COMBAT_SERVICE_V1_ID ||
+            id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
             return framework_hook_ready && NteCombatProfileAvailable();
         }
         if (id == ANOMALY_NTE_SKILLS_SERVICE_V1_ID) {
@@ -7469,11 +7470,10 @@ struct Ue5NteAdapter::State {
             GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
             return;
         }
-        // A due backlog may continue on later Game ticks, but never emits a same-tick
-        // catch-up burst for one chain.
-        constexpr std::size_t kMaximumDispatchesPerChainPerTick = 1;
-        constexpr std::size_t kMaximumDamageChainDispatchesPerTick =
-            kDamageChainCapacity * kMaximumDispatchesPerChainPerTick;
+        // Catch up bounded overdue cadence slots, but keep a global per-tick budget.
+        // Any work left over remains queued; no repeat expires because wall time passed.
+        constexpr std::size_t kMaximumDispatchesPerChainPerTick = 32;
+        constexpr std::size_t kMaximumDamageChainDispatchesPerTick = 256;
         std::array<std::size_t, kDamageChainCapacity> dispatches_this_tick{};
         for (std::size_t dispatched_this_tick{};
              dispatched_this_tick < kMaximumDamageChainDispatchesPerTick;
@@ -7536,6 +7536,19 @@ struct Ue5NteAdapter::State {
             {
                 DamageChainDispatchScope chain_scope(chain_id);
                 dispatch_status = DispatchDamageChainEffect(&replay_request);
+            }
+            // The native CharacterOnDamaged hook queues synchronously during the
+            // effect call. Mark this token eligible first, then drain while still on
+            // the Game thread so confirmed hits can sustain requested rates above FPS.
+            if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
+                std::scoped_lock capture_lock(mutex);
+                auto& submitted_token = damage_chain_dispatch_tokens[token_slot];
+                if (submitted_token.occupied &&
+                    submitted_token.sequence == reserved_token_sequence &&
+                    submitted_token.chain_id == chain_id) {
+                    submitted_token.pending = true;
+                }
+                DrainCombatCaptureQueueLocked();
             }
             std::array<char, ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY> detail{};
             if (dispatch_status.message.data != nullptr && dispatch_status.message.size != 0) {
@@ -7612,8 +7625,8 @@ struct Ue5NteAdapter::State {
                         }
                     } else {
                         // Advance the cadence slot, not the remaining count. A stall leaves
-                        // due work queued; the scheduler can send at most one application per
-                        // chain per Game tick, and it waits for the prior real damage callback.
+                        // overdue work queued; a bounded catch-up loop can send more than one
+                        // application per Game tick when needed to approach the requested rate.
                         chain->next_due += chain->interval;
                         SetDamageChainMessage(*chain,
                             chain->observed_chain_damage_count < chain->dispatched_repeat_count
