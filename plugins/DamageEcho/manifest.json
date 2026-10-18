@@ -1,11 +1,11 @@
 {
   "schemaVersion": 2,
   "id": "com.rabb1t79.damage-echo",
-  "name": "Damage Echo (Native)",
-  "description": "伤害链实验插件：独立目标调度、游戏线程门控与诊断日志导出。伤害入口仍需 Dump/ABI 签名验证.",
+  "name": "Damage Chain (Entry Guarded)",
+  "description": "链式伤害入口核验版本。对照 5.6.1 Dump 发现 ApplyDamage 是反射包装函数，未证实硬编码 RVA；因此本版本不会安装原始 Hook，仅提供状态与诊断日志导出。",
   "author": "Rabb1t79",
   "license": "AGPL-3.0-only",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -23,19 +23,9 @@
     {
       "id": "anomaly.ui",
       "minVersion": 1
-    },
-    {
-      "id": "anomaly.interop.hook",
-      "minVersion": 1
-    },
-    {
-      "id": "anomaly.ue5.framework",
-      "minVersion": 1
     }
   ],
   "capabilities": [
-    "ui",
-    "interop-hook",
-    "game-events"
+    "ui"
   ]
 }
