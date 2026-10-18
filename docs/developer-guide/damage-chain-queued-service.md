@@ -4,7 +4,7 @@
 
 The original player damage event remains the first hit. `repeat_count` is the number of **additional** effect applications, so a request for 100 repeats is one observed root hit plus up to 100 queued native effect applications.
 
-`rate_per_second` defines scheduling cadence only. It is not a duration, deadline, TTL, or cancellation timeout. If the Game thread is blocked or cannot dispatch every due item, outstanding work stays queued. The scheduler may catch up by a bounded maximum of four applications per Game tick; it never drains an unlimited backlog in one frame. Actual achievable rate is therefore subject to Game-thread cadence and native invocation cost.
+`rate_per_second` defines scheduling cadence only. It is not a duration, deadline, TTL, or cancellation timeout. If the Game thread is blocked or cannot dispatch every due item, outstanding work stays queued. The scheduler may catch up by at most four applications per chain per Game tick, with a global ceiling of 128 applications per tick. Round-robin slot selection prevents one overdue chain from monopolizing the scheduler; the backlog is still bounded and never drained without a per-tick limit. Actual achievable rate is therefore subject to Game-thread cadence and native invocation cost.
 
 A Core result of `OK` means the validated GameplayEffect call was dispatched; it does not prove health changed. The API reports `dispatched_repeat_count` separately from `observed_chain_damage_count`, which is incremented only when Core observes a corresponding native `CharacterOnDamaged` event.
 
