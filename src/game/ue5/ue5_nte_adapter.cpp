@@ -1150,7 +1150,9 @@ struct Ue5NteAdapter::State {
     };
     static constexpr std::size_t kDamageChainCapacity =
         ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS;
-    static constexpr std::size_t kDamageChainDispatchTokenCapacity = 4096;
+    // At most one native application per chain can await confirmation, so the ledger
+    // capacity equals the maximum number of independently active chains.
+    static constexpr std::size_t kDamageChainDispatchTokenCapacity = kDamageChainCapacity;
     std::array<DamageChainRecord, kDamageChainCapacity> damage_chains{};
     std::array<DamageChainDispatchToken, kDamageChainDispatchTokenCapacity> damage_chain_dispatch_tokens{};
     std::uint64_t damage_chain_dispatch_token_next_sequence{1};
