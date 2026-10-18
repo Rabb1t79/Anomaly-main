@@ -232,3 +232,32 @@ Anomaly 主仓库自身规定的完整本机构建需要 Visual Studio 2022 C++ 
 2. 用新的 raw per-kind counters 判断最近 256 个候选中真实入口的分布。若仍只有 kind4 Buff RPC，说明正确 DamageGEDef 的调用路由尚未被四个当前捕获点观察到；不要把扩大缓存当作已证明解决。
 3. 调查 Dump 中 `AHTPlayerController.ServerApplyGameplayEffectOnNetTarget` 与 `FCharacterForNet`。当前 FCharacterForNet 是 opaque 0x28 bytes，身份解析和路由语义未确认；不得只凭函数名就把它加入重放路线。
 4. 游戏内伤害行为、当前命中真正的 GameplayEffect 应用调用路由、旧 DLL 机制是否一致，仍未验证。
+
+
+### 本轮助手公开文本（原文存档）
+
+#### 进度消息 1
+
+这份日志已经把问题缩小到一个很具体的点：不是没有捕获到调用，也不是 ASC 缺失或 Tick 超窗，而是 **32 个候选全部被 `effect_mismatch` 排除**。我会直接对照当前实验分支的匹配代码和仓库里的 Dump 校验依据，查清 `ServerActivateGameEffectsWithClassByActor` 的 `arg` 为什么是装备 Buff 类，而伤害根记录却是 Zankou 的 `Melee1_1_Damage`；不会为了让它通过而简单放宽校验。
+
+#### 进度消息 2
+
+Dump 的参数定义进一步确认了：`ServerActivateGameEffectsWithClassByActor` 的 `GameplayEffect` 是 `UGameplayEffect*` 对象参数，`FBufferData` 里没有显式的目标 ASC 字段；这条日志捕获到的是 Zankou 自己发起、参数为装备 Buff 的调用。它不能安全地当成对 Mammon Boss 的伤害调用重放。另一个值得修正的问题是候选缓存只有 32 条，容易被同一攻击期间的无关 Buff/RPC 调用挤满。我会扩大缓存，并让下次日志报告各调用路由的候选数量和所有候选的原始 Tick 年龄；匹配条件仍然严格不放宽。
+
+#### 阶段性答复
+
+这次日志指向的不是简单的 Tick 超时，而是**当前捕获到的原生调用与实际命中伤害之间没有通过效果身份匹配**。
+
+我已对照 `Rabb1t79/Anomaly-main` 当前实验分支和仓库内 `5.6.1` Dump 核查：
+
+- 32 个候选全部在 `DamageGEDef` 身份匹配阶段失败。因此，`tick_delta_gt_8=0` 不能理解为 32 个候选都已通过时间窗检查。
+- 日志中的具体调用是 `HTAbilityCharacter.ServerActivateGameEffectsWithClassByActor`，实际参数指向 Zankou 自己的装备 Buff，而原始命中记录指向 `GE_Player_Zankou_Melee1_1_Damage`，目标却是 Mammon Boss。它们不是同一个效果，不能强行匹配。
+- Dump 中这条 Server 调用没有显式的目标 ASC 参数。因此，不能只凭它的函数名就认定它是实际对 Boss 造成伤害的入口。
+
+我没有放宽匹配条件。已经提交的修改是扩大最近调用记录的缓存，并增加按调用类型统计的候选数量、原始 Tick 年龄及效果不匹配数量，帮助区分“正确调用被缓存挤掉”和“真正的伤害入口根本没有被捕获”这两种情况。
+
+#### 构建状态补充
+
+- 完整 Windows workflow：`39081822394`，HEAD `c896b0997a1b19b2fc5a4c7f0010d1bf3cf911f2`。
+- 最新一次轮询：`Build` 步骤仍在进行；GitHub 的运行中日志端点尚未提供可下载日志（返回 BlobNotFound），没有可据此判断编译失败的证据。
+- 不把仍在运行的 CI 说成成功；等待该工作流给出最终状态后再核验 staging 与 artifact。
