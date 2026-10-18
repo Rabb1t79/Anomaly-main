@@ -7736,15 +7736,19 @@ struct Ue5NteAdapter::State {
                 }
                 chain->last_status_code = dispatch_status.code;
                 if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED) {
-                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK &&
-                        chain->dispatched_repeat_count !=
+                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
+                        if (token_matches) token.pending = true;
+                        if (chain->dispatched_repeat_count !=
                             (std::numeric_limits<std::uint32_t>::max)()) {
-                        ++chain->dispatched_repeat_count;
+                            ++chain->dispatched_repeat_count;
+                        }
+                    } else if (token_matches) {
+                        token = {};
                     }
                     SetDamageChainMessage(*chain,
                         dispatch_status.code == ANOMALY_STATUS_V1_OK
-                            ? "队列已取消；取消前已在执行的一次调用已返回，剩余次数已停止"
-                            : "队列已取消；在途调用失败，剩余次数已停止");
+                            ? "队列已取消；在途原生调用已返回，仍保留其真实伤害确认项"
+                            : "队列已取消；在途调用失败，确认项已清除");
                     continue;
                 }
                 if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
