@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <type_traits>
 
 namespace {
@@ -786,6 +787,14 @@ static_assert(std::is_same_v<decltype(AnomalyHookServiceV1::end_callback),
                              HookEndCallbackSignature>);
 static_assert(std::is_same_v<decltype(AnomalyUiServiceV1::begin_window),
                              UiBeginWindowSignature>);
+static_assert(std::is_same_v<decltype(AnomalyUe5FrameworkServiceV1::is_game_thread),
+                             int (ANOMALY_CALL *)(void*)>);
+static_assert(std::is_same_v<decltype(AnomalyUiServiceV1::checkbox),
+                             int (ANOMALY_CALL *)(void*, AnomalyStringViewV1, int*)>);
+static_assert(std::is_same_v<decltype(AnomalyUiServiceV1::slider_float),
+                             int (ANOMALY_CALL *)(void*, AnomalyStringViewV1, float*, float, float)>);
+static_assert(std::is_same_v<decltype(AnomalyUiServiceV1::button),
+                             int (ANOMALY_CALL *)(void*, AnomalyStringViewV1, float, float)>);
 static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_load),
                              decltype(&Load)>);
 static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_start),
@@ -815,7 +824,7 @@ AnomalyPluginEntryV1(AnomalyPluginDescriptorV1* descriptor) {
         anomaly::sdk::StringView("com.rabb1t79.damage-echo"),
         anomaly::sdk::StringView("Damage Echo (Native)"),
         anomaly::sdk::StringView("Rabb1t79"),
-        anomaly::sdk::StringView("1.3.2"),
+        anomaly::sdk::StringView("1.4.0"),
         Load,
         Start,
         Stop,
