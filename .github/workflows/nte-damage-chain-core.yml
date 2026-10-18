@@ -1,6 +1,23 @@
 name: NTE damage-chain Core validation
 
 on:
+  push:
+    branches:
+      - work/nte-damage-chain-reaction-independent-20261018
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'cmake/**'
+      - 'include/anomaly/**'
+      - 'src/game/**'
+      - 'src/runtime/**'
+      - 'src/plugin/**'
+      - 'profiles/nte/**'
+      - 'abi/**'
+      - 'apps/abi_snapshot/**'
+      - 'plugins/DamageChainReaction/**'
+      - 'Anomaly-2.0.0-sdk/**'
+      - '.github/workflows/nte-damage-chain-core.yml'
   pull_request:
     paths:
       - 'CMakeLists.txt'
@@ -12,6 +29,8 @@ on:
       - 'src/plugin/**'
       - 'profiles/nte/**'
       - 'abi/**'
+      - 'apps/abi_snapshot/**'
+      - 'plugins/DamageChainReaction/**'
       - 'Anomaly-2.0.0-sdk/**'
       - '.github/workflows/nte-damage-chain-core.yml'
   workflow_dispatch:
@@ -56,5 +75,6 @@ jobs:
           path: |
             .build/windows-vs2022/bin/RelWithDebInfo/Anomaly.Core.dll
             .build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe
+            ${{ runner.temp }}/nte-damage-chain-generated-abi.json
           if-no-files-found: error
           retention-days: 7
