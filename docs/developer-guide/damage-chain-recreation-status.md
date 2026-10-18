@@ -162,11 +162,12 @@
 - 实机尚未证明 DamageTriggerActor 周期事件每次产生恰好一次额外真实伤害，或 100 次配置能在游戏内完整兑现。构建和队列测试不能替代该验证。
 
 ### Dump 取证覆盖补强（2026-10-18）
-- 第一轮 LFS 报告比较了伤害事件、ASC 与 OnDamaged 参数，但没有把 `ADamageTriggerActor` / `AHTAbilitySpawnActor` 完整类块和 `OverrideEffectContainer` 参数布局纳入报告；因此之前的证据报告没有完整覆盖当前候选调用路径。
-- 已扩展 `tools/damage_chain/dump_native_evidence.py`，下一次 LFS 取证将提取触发 Actor、基础 Actor、EffectContainer/Spawn 配置结构，以及 `OverrideEffectContainer` 的参数布局并逐版本比较；工作流路径过滤也已加入该脚本，确保其改动会自动重跑取证。
-- 这次只是补足证据提取，不表示候选路线已确认。需要确认两版中的块均成功提取、活动 Profile 的反射布局匹配，并实机证明一次周期调用产生一次针对原目标的真实伤害。
+- 扩展后的 LFS 取证运行 [39125616938](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125616938) 已成功完成，读取源仍是 `main` 的两版 Dump，未修改 `main`。
+- 自动化报告成功提取 15 个聚焦声明块，缺失标记数为 0；15/15 块在两版中均报告文本一致。新增覆盖：`ADamageTriggerActor`、`AHTAbilitySpawnActor`、`FHTGameplayEffectContainer`、`FSpawnDamageTriggerActor`、`FSpawnDamageTriggerActorArray`、`FDamageTriggerActorStaticData` 及 `HTAbilitySpawnActor_OverrideEffectContainer`。
+- 读到的 Dump 声明：周期 Actor 的运行字段为 `RuntimeTriggerPeriod=0x5E8`、`RuntimeTriggerDuration=0x5EC`、`RuntimeTriggerCountPerPeriod=0x5F0`、`RuntimeMaxTriggerCount=0x5F4`；父类 `AHTAbilitySpawnActor` 的 `EffectContainer=0x3A8`、`EventData=0x3D8`；`OverrideEffectContainer` 参数 `InEffectContainer` 为 `FHTGameplayEffectContainer`，大小 `0x28`。
+- 以上只证明两个 Dump 对应声明块一致。完整 classes、structs 和 GObjects 文件哈希仍然不同；没有证据可从声明直接推断手动调用周期事件必然造成一次真实伤害，实机伤害确认仍未完成。
 
 ### CI 结果刷新（2026-10-18）
 - 已确认源代码提交 `9a53edc3b398e559ca469bdd55c507b74216d3e2` 的三项检查全部成功：独立插件构建 + RateQueue 测试/打包 [39125202472](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202472)、全量 Windows 框架 Runtime/打包 [39125202479](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202479)、Core/ABI 校验 [39125202470](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202470)。
-- 随后的提交 `eed4357560b63c8a6b5619465102861713080d2f` 只修改取证脚本、取证工作流和文档。扩展后的两版 Dump 取证任务 [39125616938](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125616938) 在最近一次检查时为 queued；需等新报告出来后再确认新增块的实际差异。
+- 随后的提交 `eed4357560b63c8a6b5619465102861713080d2f` 只修改取证脚本、取证工作流和文档；扩展取证运行 [39125616938](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125616938) 已成功，15 个聚焦声明块均提取成功且两版文本一致。
 - 当前所有已通过的 CI 只证明源码编译、SDK/ABI 校验和队列测试通过，不证明游戏中伤害已生效。剩余核心验证是：一次原生命中后，N 次周期触发必须产生恰好 N 次针对原目标的新真实伤害事件。

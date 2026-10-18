@@ -90,7 +90,8 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 - **候选 A（周期/区域触发 Actor）**：周期字段与目标表现有部分对应，但 overlap 跟踪字段保存的是 `AHTPlayerCharacter*`，且没有原生实现体证明它绑定最初受击的敌人；当前应视为**待验证的邻近机制**，不能优先当作最终方案。
 - 要把任一候选提升为实现路线，仍需查清配置数据的实际消费者、目标选取实现与 Actor 创建/销毁生命周期。Dump 的生成函数包装不能替代这些证据。
 
-## 2026-10-18 证据提取覆盖说明
+## 2026-10-18 双版本证据对照结果
 
-- 初版候选笔记基于 `5.6.1` 已读取的类/结构/参数声明，但前一份自动化双版本报告并未包含 `ADamageTriggerActor` 完整类块与 `HTAbilitySpawnActor.OverrideEffectContainer` 参数块。不能仅凭旧笔记 + 其他参数块无差异就宣称当前实现路线已通过两版核验。
-- 已扩展双版本证据提取脚本以补齐这些块；待新的自动化报告生成后，逐项核对标记是否成功找到、参数结构尺寸与字段偏移是否一致，并将结果记录在进度文档。
+- 扩展报告 [39125616938](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125616938) 已成功读取两版实际 LFS 对象。15 个聚焦块均成功提取，缺失标记为 0，15/15 块文本一致。
+- 与当前候选路径直接相关的声明包括：`ADamageTriggerActor` 周期字段 `RuntimeTriggerPeriod`/`RuntimeTriggerDuration`/`RuntimeTriggerCountPerPeriod`/`RuntimeMaxTriggerCount` 的偏移分别为 `0x5E8/0x5EC/0x5F0/0x5F4`；基类 `AHTAbilitySpawnActor` 的 `EffectContainer`/`EventData` 偏移为 `0x3A8/0x3D8`；`OverrideEffectContainer` 接收一个大小 `0x28` 的 `FHTGameplayEffectContainer`。
+- 完整 classes、structs 与 GObjects 文件哈希在两个版本间仍不同；focused diff 匹配不能证明该周期事件的运行语义，也不能证明手动触发会造成一次真实伤害。仍需 Core 反射读回与实机伤害验证。
