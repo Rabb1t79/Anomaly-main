@@ -4389,18 +4389,19 @@ struct Ue5NteAdapter::State {
                 token.tick_sequence > capture_tick_sequence ||
                 (expected_chain_id != 0 && token.chain_id != expected_chain_id)) continue;
             const auto* const chain = FindDamageChainLocked(token.chain_id);
-            if (chain == nullptr) continue;
-            if (expected_chain_id == 0) {
+            if (chain == nullptr || chain->context_invalidated || source_id == 0 ||
+                chain->root_source_id == 0 || chain->root_source_id != source_id) continue;
+            // Both synchronous and delayed paths must prove the same attacker and victim
+            // before consuming a token. The expected TLS chain id narrows the candidate;
+            // it does not waive source or participant identity validation.
+            std::uintptr_t root_attacker{}, root_victim{};
+            if (!ResolveObjectHandleLocked(chain->root_attacker, root_attacker) ||
+                !ResolveObjectHandleLocked(chain->root_victim, root_victim) ||
+                root_attacker != attacker || root_victim != victim) continue;
+            if (expected_chain_id == 0 && ordinary_context != nullptr &&
+                ordinary_context->tick_sequence >= token.tick_sequence) {
                 // Don't classify a fresh natural attack as an old chain callback.
-                if (source_id == 0 || (ordinary_context != nullptr &&
-                    ordinary_context->tick_sequence >= token.tick_sequence)) continue;
-                // Use the chain's persisted root identity instead of the pinned event ring.
-                // The ledger may outlive both the rolling DamageEvent and replay-context rings.
-                if (chain->root_source_id == 0 || chain->root_source_id != source_id) continue;
-                std::uintptr_t root_attacker{}, root_victim{};
-                if (!ResolveObjectHandleLocked(chain->root_attacker, root_attacker) ||
-                    !ResolveObjectHandleLocked(chain->root_victim, root_victim) ||
-                    root_attacker != attacker || root_victim != victim) continue;
+                continue;
             }
             if (token.sequence < best_sequence) {
                 best_sequence = token.sequence;
