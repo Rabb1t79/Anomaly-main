@@ -134,7 +134,7 @@ const char* StatusName(const std::uint32_t code) noexcept {
 const char* ChainStateName(const std::uint32_t state) noexcept {
     switch (state) {
     case ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING: return "运行中";
-    case ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED: return "已派发完";
+    case ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED: return "已完成（已确认真实伤害）";
     case ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED: return "失败停止";
     case ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED: return "已取消";
     default: return "未知";
