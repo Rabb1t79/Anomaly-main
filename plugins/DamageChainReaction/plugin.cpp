@@ -15,7 +15,7 @@
 
 namespace {
 
-constexpr std::uint32_t kDefaultExtraCount = 100;
+constexpr std::uint32_t kDefaultExtraCount = 1;
 constexpr float kDefaultRate = 100.0F;
 constexpr std::uint32_t kMinimumExtraCount = 1;
 constexpr std::uint32_t kMaximumExtraCount = 1000000;
@@ -189,7 +189,7 @@ void AddChain(
     if (result.code != ANOMALY_STATUS_V1_OK || handle.id == 0) {
         char line[320]{};
         std::snprintf(line, sizeof(line),
-            "原始命中 #%llu 未建立链：status=%s(%u)。可能缺少经验证的直接 ASC GE 上下文，详见 Core 诊断。",
+            "原始命中 #%llu 未建立链：status=%s(%u)。DamageTriggerActor/EffectContainer 原生配置验证未通过，详见 Core 诊断。",
             static_cast<unsigned long long>(event.sequence),
             StatusName(result.code), result.code);
         Log(line);
