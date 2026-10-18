@@ -7641,7 +7641,9 @@ struct Ue5NteAdapter::State {
             GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
             return;
         }
-        constexpr std::size_t kMaximumDispatchesPerChainPerTick = 4;
+        // A due backlog may continue on later Game ticks, but never emits a same-tick
+        // catch-up burst for one chain.
+        constexpr std::size_t kMaximumDispatchesPerChainPerTick = 1;
         constexpr std::size_t kMaximumDamageChainDispatchesPerTick =
             kDamageChainCapacity * kMaximumDispatchesPerChainPerTick;
         std::array<std::size_t, kDamageChainCapacity> dispatches_this_tick{};
@@ -7664,6 +7666,7 @@ struct Ue5NteAdapter::State {
                             kMaximumDispatchesPerChainPerTick ||
                         candidate.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
                         candidate.dispatched_repeat_count >= candidate.requested_repeat_count ||
+                        candidate.dispatched_repeat_count > candidate.observed_chain_damage_count ||
                         candidate.in_flight || candidate.next_due > now) {
                         continue;
                     }
@@ -7764,12 +7767,14 @@ struct Ue5NteAdapter::State {
                                 "全部次数已派发，仍在等待真实伤害事件确认；无时间期限");
                         }
                     } else {
-                        // Schedule from the just-finished native dispatch. A stall keeps
-                        // all remaining repeats queued, but does not cause a catch-up burst
-                        // that temporarily exceeds the requested cadence.
-                        chain->next_due = std::chrono::steady_clock::now() + chain->interval;
+                        // Advance the cadence slot, not the remaining count. A stall leaves
+                        // due work queued; the scheduler can send at most one application per
+                        // chain per Game tick, and it waits for the prior real damage callback.
+                        chain->next_due += chain->interval;
                         SetDamageChainMessage(*chain,
-                            "队列运行中：按速率派发；延迟只会积压，不会丢弃剩余次数");
+                            chain->observed_chain_damage_count < chain->dispatched_repeat_count
+                                ? "已派发当前次数，等待对应的真实伤害事件；确认后继续，无时间期限"
+                                : "队列运行中：按请求速率排队；延迟不会丢弃剩余次数");
                     }
                 } else {
                     if (token_matches) token = {};
