@@ -7324,6 +7324,9 @@ struct Ue5NteAdapter::State {
             std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                 std::chrono::duration<double>(1.0 / request->rate_per_second)));
         std::scoped_lock lock(mutex);
+        // A pending immutable ProcessEvent/Native-Exec record may be queued just ahead
+        // of the DamageEvent. Drain on the Game thread before binding the root context.
+        DrainCombatCaptureQueueLocked();
         DamageRecord* root = nullptr;
         for (std::size_t index{}; index < damage_event_count; ++index) {
             auto& candidate = damage_events[
@@ -7353,6 +7356,43 @@ struct Ue5NteAdapter::State {
             (root->replay.valid && root->replay.object_generation != object_generation)) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
                 "root damage lacks current world/object identity or a resolved DamageGEDef source");
+        }
+        if (!root->attacker_was_local_player_pawn) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "root damage was not caused by the local player-controlled character at hit time");
+        }
+        if (!root->replay.valid) {
+            std::uintptr_t delayed_attacker{};
+            std::uintptr_t delayed_victim{};
+            ReplayEffectContext delayed_context{};
+            std::size_t delayed_context_slot = kReplayEffectCallCapacity;
+            if (ResolveObjectHandleLocked(root->event.attacker, delayed_attacker) &&
+                ResolveObjectHandleLocked(root->event.victim, delayed_victim) &&
+                FindReplayContextForDamageLocked(
+                    delayed_attacker, delayed_victim, root->event.source_id,
+                    root->event.tick_sequence, delayed_context, nullptr,
+                    &delayed_context_slot)) {
+                root->replay = delayed_context;
+                if (delayed_context_slot < kReplayEffectCallCapacity) {
+                    replay_effect_calls[delayed_context_slot].damage_callback_correlated = true;
+                }
+            }
+        }
+        if (!root->replay.valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "no Dump-validated GameplayEffect invocation matches the root DamageGEDef, attacker, target and bounded Game-tick window");
+        }
+        if (!root->replay.tag_arrays_valid) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "root FBufferData tag arrays could not be safely copied; no chain was created");
+        }
+        std::uintptr_t validated_attacker{}, validated_victim{};
+        if (!ResolveObjectHandleLocked(root->event.attacker, validated_attacker) ||
+            !ResolveObjectHandleLocked(root->event.victim, validated_victim) ||
+            !ReplayContextMatchesDamageLocked(
+                root->replay, validated_attacker, validated_victim, root->event.source_id)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "captured GameplayEffect context does not match the root attacker/target/source identity");
         }
         if (IsKnownDamageChainRootLocked(request->damage_sequence)) {
             return Status(ANOMALY_STATUS_V1_CONFLICT,
