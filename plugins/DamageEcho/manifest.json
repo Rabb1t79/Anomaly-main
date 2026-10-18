@@ -1,11 +1,11 @@
 {
   "schemaVersion": 2,
   "id": "com.rabb1t79.damage-echo",
-  "name": "伤害回响 (Damage Echo)",
-  "description": "为已登记的受伤目标持续触发伤害回响，可调整每秒触发次数。",
+  "name": "Damage Echo (Native)",
+  "description": "持续触发已登记目标的伤害回响，使用 Anomaly 官方 Hook 服务。",
   "author": "Rabb1t79",
   "license": "AGPL-3.0-only",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -23,10 +23,14 @@
     {
       "id": "anomaly.ui",
       "minVersion": 1
+    },
+    {
+      "id": "anomaly.interop.hook",
+      "minVersion": 1
     }
   ],
   "capabilities": [
     "ui",
-    "memory-write"
+    "interop-hook"
   ]
 }

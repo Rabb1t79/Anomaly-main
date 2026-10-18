@@ -1,5 +1,5 @@
 #include "anomaly/sdk/cpp.hpp"
-#include "anomaly/sdk/services/ui.h"
+#include "anomaly/sdk/services/interop.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -7,238 +7,307 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
-#include <mutex>
 #include <type_traits>
-#include <vector>
 
 namespace {
 
 constexpr std::uintptr_t kApplyDamageOffset = 0x42D5E50;
-constexpr std::size_t kHookSize = 14;
-constexpr float kMinEchoRate = 1.0F;
-constexpr float kMaxEchoRate = 20.0F;
-
-struct AActor;
-struct AController;
-struct UClass;
-
-using ApplyDamageFn = float (*)(AActor*, float, AController*, AActor*, UClass*);
-
-ApplyDamageFn g_OriginalApplyDamage = nullptr;
-thread_local bool g_IsReplaying = false;
+constexpr ULONGLONG kEchoIntervalMs = 200;
+constexpr std::size_t kMaxTasks = 64;
 
 struct EchoTask {
-    AActor* Target{};
+    void* Target{};
     float Damage{};
-    AController* Instigator{};
-    AActor* Causer{};
-    UClass* DamageTypeClass{};
-    std::chrono::steady_clock::time_point NextTriggerTime{};
+    void* Instigator{};
+    void* Causer{};
+    void* DamageTypeClass{};
+    ULONGLONG NextTriggerTime{};
+    LONG Active{};
 };
 
-std::mutex g_TaskMutex;
-std::vector<EchoTask> g_EchoTasks;
-std::atomic<float> g_EchoRate{5.0F};
-std::atomic_bool g_PluginEnabled{true};
+EchoTask g_EchoTasks[kMaxTasks]{};
+CRITICAL_SECTION g_TaskCS{};
+bool g_TaskCSInitialized = false;
+std::atomic_bool g_PluginEnabled{false};
+thread_local bool g_IsReplaying = false;
+int g_WindowOpen = 1;
 
-void* g_Trampoline = nullptr;
-void* g_TargetAddr = nullptr;
-std::uint8_t g_OriginalBytes[kHookSize]{};
-bool g_HookInstalled = false;
+const AnomalyHookServiceV1* g_HookService = nullptr;
+AnomalyGenerationHandleV1 g_HookHandle{};
+std::uintptr_t g_OriginalAddress = 0;
+
+using ApplyDamageFn = float (ANOMALY_CALL *)(void*, float, void*, void*, void*);
 
 #define HAS_UI(ui, field) \
     ((ui) != nullptr && \
      (ui)->struct_size >= offsetof(AnomalyUiServiceV1, field) + sizeof((ui)->field) && \
      (ui)->field != nullptr)
 
-bool InstallHook(void* target, void* detour) {
-    if (target == nullptr || detour == nullptr || g_HookInstalled) {
-        return false;
-    }
-
-    void* trampoline = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE,
-                                    PAGE_EXECUTE_READWRITE);
-    if (trampoline == nullptr) {
-        return false;
-    }
-
-    // Keep the original bytes for restoration and construct the trampoline.
-    std::memcpy(g_OriginalBytes, target, kHookSize);
-    std::memcpy(trampoline, target, kHookSize);
-
-    auto* trampolineEnd = static_cast<std::uint8_t*>(trampoline) + kHookSize;
-    trampolineEnd[0] = 0xFF;
-    trampolineEnd[1] = 0x25;
-    *reinterpret_cast<std::uint32_t*>(trampolineEnd + 2) = 0;
-    *reinterpret_cast<std::uint64_t*>(trampolineEnd + 6) =
-        reinterpret_cast<std::uint64_t>(target) + kHookSize;
-
-    DWORD oldProtect{};
-    if (!VirtualProtect(target, kHookSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        VirtualFree(trampoline, 0, MEM_RELEASE);
-        std::memset(g_OriginalBytes, 0, sizeof(g_OriginalBytes));
-        return false;
-    }
-
-    g_TargetAddr = target;
-    g_Trampoline = trampoline;
-    g_OriginalApplyDamage = reinterpret_cast<ApplyDamageFn>(trampoline);
-
-    auto* entry = static_cast<std::uint8_t*>(target);
-    entry[0] = 0xFF;
-    entry[1] = 0x25;
-    *reinterpret_cast<std::uint32_t*>(entry + 2) = 0;
-    *reinterpret_cast<std::uint64_t*>(entry + 6) =
-        reinterpret_cast<std::uint64_t>(detour);
-
-    FlushInstructionCache(GetCurrentProcess(), trampoline, kHookSize + 14);
-    FlushInstructionCache(GetCurrentProcess(), target, kHookSize);
-
-    DWORD ignored{};
-    VirtualProtect(target, kHookSize, oldProtect, &ignored);
-    g_HookInstalled = true;
-    return true;
+bool HookServiceReady(const AnomalyHookServiceV1* service) noexcept {
+    constexpr std::size_t required_size =
+        offsetof(AnomalyHookServiceV1, end_callback) +
+        sizeof(decltype(AnomalyHookServiceV1::end_callback));
+    return service != nullptr &&
+           service->struct_size >= required_size &&
+           service->service_version >= ANOMALY_HOOK_SERVICE_V1_VERSION &&
+           service->create != nullptr &&
+           service->release != nullptr &&
+           service->begin_callback != nullptr &&
+           service->end_callback != nullptr;
 }
 
-void UninstallHook() {
-    bool restored = false;
+class HookCallbackLease final {
+public:
+    HookCallbackLease() noexcept {
+        const auto* service = g_HookService;
+        if (service == nullptr || g_HookHandle.id == 0 || g_HookHandle.generation == 0 ||
+            service->begin_callback == nullptr || service->end_callback == nullptr) {
+            return;
+        }
 
-    if (g_TargetAddr != nullptr && g_HookInstalled) {
-        DWORD oldProtect{};
-        if (VirtualProtect(g_TargetAddr, kHookSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-            std::memcpy(g_TargetAddr, g_OriginalBytes, kHookSize);
-            FlushInstructionCache(GetCurrentProcess(), g_TargetAddr, kHookSize);
-            DWORD ignored{};
-            restored = VirtualProtect(g_TargetAddr, kHookSize, oldProtect, &ignored) != 0;
-            g_HookInstalled = !restored;
+        const auto status = service->begin_callback(
+            service->user, g_HookHandle, &lease_);
+        if (status.code == ANOMALY_STATUS_V1_OK) {
+            service_ = service;
+            acquired_ = true;
         }
     }
 
-    // Do not release the trampoline if restoring the entry failed.
-    if (restored || !g_HookInstalled) {
-        if (g_Trampoline != nullptr) {
-            VirtualFree(g_Trampoline, 0, MEM_RELEASE);
+    ~HookCallbackLease() {
+        if (acquired_ && service_ != nullptr) {
+            (void)service_->end_callback(service_->user, lease_);
         }
-        g_Trampoline = nullptr;
-        g_TargetAddr = nullptr;
-        g_OriginalApplyDamage = nullptr;
-        std::memset(g_OriginalBytes, 0, sizeof(g_OriginalBytes));
     }
-}
 
-// Keep SEH in a function without C++ objects that require stack unwinding (MSVC C2712).
-bool InvokeOriginalSafely(EchoTask* task) noexcept {
-    if (task == nullptr || g_OriginalApplyDamage == nullptr) {
+    HookCallbackLease(const HookCallbackLease&) = delete;
+    HookCallbackLease& operator=(const HookCallbackLease&) = delete;
+
+    [[nodiscard]] bool acquired() const noexcept { return acquired_; }
+
+private:
+    const AnomalyHookServiceV1* service_{};
+    AnomalyGenerationHandleV1 lease_{};
+    bool acquired_{};
+};
+
+// Isolated SEH boundary: no local C++ objects with destructors (MSVC C2712).
+bool InvokeOriginalSafely(
+    const ApplyDamageFn original,
+    void* target,
+    const float damage,
+    void* instigator,
+    void* causer,
+    void* damageTypeClass,
+    float* result) noexcept {
+    if (original == nullptr || result == nullptr) {
         return false;
     }
 
     __try {
-        g_OriginalApplyDamage(task->Target, task->Damage, task->Instigator,
-                              task->Causer, task->DamageTypeClass);
+        *result = original(target, damage, instigator, causer, damageTypeClass);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
     return true;
 }
 
-float Hooked_ApplyDamage(AActor* damagedActor, float baseDamage,
-                         AController* eventInstigator, AActor* damageCauser,
-                         UClass* damageTypeClass) {
-    const auto original = g_OriginalApplyDamage;
+void ClearTasks() noexcept {
+    if (!g_TaskCSInitialized) {
+        return;
+    }
+
+    EnterCriticalSection(&g_TaskCS);
+    for (std::size_t i = 0; i < kMaxTasks; ++i) {
+        g_EchoTasks[i].Active = 0;
+    }
+    LeaveCriticalSection(&g_TaskCS);
+}
+
+float ANOMALY_CALL Hooked_ApplyDamage(
+    void* damagedActor,
+    float baseDamage,
+    void* eventInstigator,
+    void* damageCauser,
+    void* damageTypeClass) {
+    // Acquire the host callback lease before touching hook-owned state.
+    HookCallbackLease callbackLease;
+    const auto original = reinterpret_cast<ApplyDamageFn>(g_OriginalAddress);
     if (original == nullptr) {
         return 0.0F;
     }
 
-    const float result =
-        original(damagedActor, baseDamage, eventInstigator, damageCauser, damageTypeClass);
+    float result{};
+    if (!InvokeOriginalSafely(original, damagedActor, baseDamage, eventInstigator,
+                              damageCauser, damageTypeClass, &result)) {
+        return 0.0F;
+    }
 
-    if (g_IsReplaying || !g_PluginEnabled.load(std::memory_order_relaxed)) {
+    if (!callbackLease.acquired() ||
+        g_IsReplaying ||
+        !g_PluginEnabled.load(std::memory_order_relaxed) ||
+        baseDamage <= 0.0F || eventInstigator == nullptr || damagedActor == nullptr ||
+        !g_TaskCSInitialized) {
         return result;
     }
 
-    if (baseDamage > 0.0F && eventInstigator != nullptr && damagedActor != nullptr) {
-        const auto now = std::chrono::steady_clock::now();
-        std::lock_guard<std::mutex> lock(g_TaskMutex);
+    const ULONGLONG now = GetTickCount64();
+    EnterCriticalSection(&g_TaskCS);
 
-        for (auto& task : g_EchoTasks) {
-            if (task.Target == damagedActor) {
-                task.Damage = baseDamage;
-                task.Instigator = eventInstigator;
-                task.Causer = damageCauser;
-                task.DamageTypeClass = damageTypeClass;
-                return result;
-            }
+    bool found = false;
+    for (std::size_t i = 0; i < kMaxTasks; ++i) {
+        auto& task = g_EchoTasks[i];
+        if (task.Active != 0 && task.Target == damagedActor) {
+            task.Damage = baseDamage;
+            task.Instigator = eventInstigator;
+            task.Causer = damageCauser;
+            task.DamageTypeClass = damageTypeClass;
+            found = true;
+            break;
         }
-
-        g_EchoTasks.push_back({
-            damagedActor,
-            baseDamage,
-            eventInstigator,
-            damageCauser,
-            damageTypeClass,
-            now
-        });
     }
 
+    if (!found) {
+        for (std::size_t i = 0; i < kMaxTasks; ++i) {
+            auto& task = g_EchoTasks[i];
+            if (task.Active == 0) {
+                task = {damagedActor, baseDamage, eventInstigator, damageCauser,
+                        damageTypeClass, now, 1};
+                break;
+            }
+        }
+    }
+
+    LeaveCriticalSection(&g_TaskCS);
     return result;
 }
 
 void UpdateEchoTasks() {
-    if (!g_PluginEnabled.load(std::memory_order_relaxed) || g_OriginalApplyDamage == nullptr) {
+    if (!g_PluginEnabled.load(std::memory_order_relaxed) ||
+        g_OriginalAddress == 0 || !g_TaskCSInitialized) {
         return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
-    const float configuredRate = g_EchoRate.load(std::memory_order_relaxed);
-    const float rate = std::clamp(configuredRate, kMinEchoRate, kMaxEchoRate);
-    const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-        std::chrono::duration<double>(1.0 / static_cast<double>(rate)));
+    const ULONGLONG now = GetTickCount64();
 
-    std::lock_guard<std::mutex> lock(g_TaskMutex);
-    for (auto it = g_EchoTasks.begin(); it != g_EchoTasks.end();) {
-        if (it->Target == nullptr || it->Instigator == nullptr) {
-            it = g_EchoTasks.erase(it);
+    for (std::size_t i = 0; i < kMaxTasks; ++i) {
+        EchoTask taskSnapshot{};
+        bool shouldTrigger = false;
+
+        // Copy the task under the lock, then call game code without holding the
+        // task lock. This avoids blocking other damage callbacks in the original.
+        EnterCriticalSection(&g_TaskCS);
+        const auto& current = g_EchoTasks[i];
+        if (current.Active != 0 && now >= current.NextTriggerTime) {
+            taskSnapshot = current;
+            g_EchoTasks[i].NextTriggerTime = now + kEchoIntervalMs;
+            shouldTrigger = true;
+        }
+        LeaveCriticalSection(&g_TaskCS);
+
+        if (!shouldTrigger || !g_PluginEnabled.load(std::memory_order_relaxed)) {
             continue;
         }
 
-        if (now >= it->NextTriggerTime) {
-            g_IsReplaying = true;
-            const bool callSucceeded = InvokeOriginalSafely(&*it);
-            g_IsReplaying = false;
+        float ignoredResult{};
+        g_IsReplaying = true;
+        const bool succeeded = InvokeOriginalSafely(
+            reinterpret_cast<ApplyDamageFn>(g_OriginalAddress),
+            taskSnapshot.Target,
+            taskSnapshot.Damage,
+            taskSnapshot.Instigator,
+            taskSnapshot.Causer,
+            taskSnapshot.DamageTypeClass,
+            &ignoredResult);
+        g_IsReplaying = false;
 
-            if (!callSucceeded) {
-                it = g_EchoTasks.erase(it);
-                continue;
+        if (!succeeded) {
+            EnterCriticalSection(&g_TaskCS);
+            auto& current = g_EchoTasks[i];
+            if (current.Active != 0 && current.Target == taskSnapshot.Target) {
+                current.Active = 0;
             }
-
-            it->NextTriggerTime = now + interval;
+            LeaveCriticalSection(&g_TaskCS);
         }
-        ++it;
+    }
+}
+
+void CleanupFailedLoad() noexcept {
+    g_PluginEnabled.store(false, std::memory_order_relaxed);
+    g_OriginalAddress = 0;
+    g_HookHandle = {};
+    g_HookService = nullptr;
+
+    if (g_TaskCSInitialized) {
+        DeleteCriticalSection(&g_TaskCS);
+        g_TaskCSInitialized = false;
     }
 }
 
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
-    (void)host;
-    if (context == nullptr) {
+    if (context == nullptr || host == nullptr) {
         return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     }
+    *context = nullptr;
+
+    if (!InitializeCriticalSectionEx(&g_TaskCS, 0, 0)) {
+        return {ANOMALY_STATUS_V1_FAILED, 0, {}};
+    }
+    g_TaskCSInitialized = true;
+
+    anomaly::sdk::Host hostApi(host);
+    const auto hookRef = hostApi.Query<AnomalyHookServiceV1>(
+        ANOMALY_HOOK_SERVICE_V1_ID, ANOMALY_HOOK_SERVICE_V1_VERSION);
+    if (!hookRef || !HookServiceReady(hookRef.get())) {
+        CleanupFailedLoad();
+        return {ANOMALY_STATUS_V1_UNAVAILABLE, 0, {}};
+    }
+    g_HookService = hookRef.get();
 
     const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleA("HTGame.exe"));
     if (base == 0) {
+        CleanupFailedLoad();
         return {ANOMALY_STATUS_V1_FAILED, 0, {}};
     }
 
-    auto* target = reinterpret_cast<void*>(base + kApplyDamageOffset);
-    if (!InstallHook(target, reinterpret_cast<void*>(&Hooked_ApplyDamage))) {
+    AnomalyHookRequestV1 request{};
+    request.struct_size = sizeof(request);
+    request.kind = ANOMALY_HOOK_V1_FUNCTION;
+    request.target = base + kApplyDamageOffset;
+    request.detour = reinterpret_cast<void*>(&Hooked_ApplyDamage);
+    request.label = anomaly::sdk::StringView("ApplyDamageHook");
+
+    // Pass persistent storage: the host fills original + handle before enabling
+    // the detour. The detour therefore does not depend on stack-local outputs.
+    g_OriginalAddress = 0;
+    g_HookHandle = {};
+    const auto status = g_HookService->create(
+        g_HookService->user, &request, &g_OriginalAddress, &g_HookHandle);
+    if (status.code != ANOMALY_STATUS_V1_OK) {
+        if (g_HookHandle.id != 0) {
+            (void)g_HookService->release(g_HookService->user, g_HookHandle);
+        }
+        CleanupFailedLoad();
+        return status;
+    }
+
+    if (g_OriginalAddress == 0 || g_HookHandle.id == 0 || g_HookHandle.generation == 0) {
+        if (g_HookHandle.id != 0) {
+            const auto releaseStatus =
+                g_HookService->release(g_HookService->user, g_HookHandle);
+            if (releaseStatus.code != ANOMALY_STATUS_V1_OK) {
+                // Leave the callback state intact for the host's PluginScope cleanup.
+                *context = &g_TaskCS;
+                return {ANOMALY_STATUS_V1_FAILED, 0, {}};
+            }
+        }
+        CleanupFailedLoad();
         return {ANOMALY_STATUS_V1_FAILED, 0, {}};
     }
 
-    *context = &g_EchoTasks;
+    *context = &g_TaskCS;
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
@@ -249,17 +318,35 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
 
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     g_PluginEnabled.store(false, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lock(g_TaskMutex);
-    g_EchoTasks.clear();
+    ClearTasks();
     return {ANOMALY_STATUS_V1_OK, 0, {}};
 }
 
 void ANOMALY_CALL Unload(void*) {
     g_PluginEnabled.store(false, std::memory_order_relaxed);
-    UninstallHook();
 
-    std::lock_guard<std::mutex> lock(g_TaskMutex);
-    g_EchoTasks.clear();
+    bool released = (g_HookHandle.id == 0);
+    if (g_HookService != nullptr && g_HookHandle.id != 0) {
+        const auto status = g_HookService->release(g_HookService->user, g_HookHandle);
+        released = status.code == ANOMALY_STATUS_V1_OK;
+    }
+
+    ClearTasks();
+
+    // Do not tear down synchronization or callback state if the host reports that
+    // hook callbacks did not drain. PluginScope owns a final cleanup attempt.
+    if (!released) {
+        return;
+    }
+
+    g_HookHandle = {};
+    g_HookService = nullptr;
+    g_OriginalAddress = 0;
+
+    if (g_TaskCSInitialized) {
+        DeleteCriticalSection(&g_TaskCS);
+        g_TaskCSInitialized = false;
+    }
 }
 
 void ANOMALY_CALL Update(void*, double) {
@@ -272,12 +359,15 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
     }
 
     if (HAS_UI(ui, set_next_window_size)) {
-        // First-use condition used by the Anomaly UI service.
-        ui->set_next_window_size(ui->user, 420.0F, 250.0F, 4u);
+        ui->set_next_window_size(ui->user, 420.0F, 220.0F, 4u);
     }
 
-    if (ui->begin_window(ui->user, anomaly::sdk::StringView("伤害回响 (Damage Echo)"),
-                         nullptr, 0u) != 0) {
+    // Current Anomaly SDK signature: begin_window(user, title, open, flags).
+    const int visible = ui->begin_window(
+        ui->user, anomaly::sdk::StringView("伤害回响 (Damage Echo)"),
+        &g_WindowOpen, 0u);
+
+    if (visible != 0) {
         int enabled = g_PluginEnabled.load(std::memory_order_relaxed) ? 1 : 0;
         if (HAS_UI(ui, checkbox) &&
             ui->checkbox(ui->user, anomaly::sdk::StringView("启用伤害回响"), &enabled) != 0) {
@@ -288,43 +378,46 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) {
             ui->separator(ui->user);
         }
 
-        float rate = g_EchoRate.load(std::memory_order_relaxed);
-        if (HAS_UI(ui, slider_float) &&
-            ui->slider_float(ui->user, anomaly::sdk::StringView("每秒触发次数"),
-                             &rate, kMinEchoRate, kMaxEchoRate) != 0) {
-            g_EchoRate.store(std::clamp(rate, kMinEchoRate, kMaxEchoRate),
-                             std::memory_order_relaxed);
+        ui->text(ui->user, anomaly::sdk::StringView("回响间隔：200 ms"));
+
+        std::size_t activeCount = 0;
+        if (g_TaskCSInitialized) {
+            EnterCriticalSection(&g_TaskCS);
+            for (const auto& task : g_EchoTasks) {
+                if (task.Active != 0) ++activeCount;
+            }
+            LeaveCriticalSection(&g_TaskCS);
         }
 
-        char status[128]{};
+        char status[96]{};
+        std::snprintf(status, sizeof(status), "当前回响目标：%zu", activeCount);
+        ui->text(ui->user, anomaly::sdk::StringView(status));
+
         std::snprintf(status, sizeof(status), "运行状态：%s",
                       g_PluginEnabled.load(std::memory_order_relaxed) ? "已启用" : "已暂停");
         ui->text(ui->user, anomaly::sdk::StringView(status));
-
-        const float currentRate = g_EchoRate.load(std::memory_order_relaxed);
-        std::snprintf(status, sizeof(status), "当前频率：%.1f 次/秒",
-                      static_cast<double>(currentRate));
-        ui->text(ui->user, anomaly::sdk::StringView(status));
-
-        std::size_t activeTargets{};
-        {
-            std::lock_guard<std::mutex> lock(g_TaskMutex);
-            activeTargets = g_EchoTasks.size();
-        }
-        std::snprintf(status, sizeof(status), "持续回响目标：%zu", activeTargets);
-        ui->text(ui->user, anomaly::sdk::StringView(status));
-        ui->text(ui->user, anomaly::sdk::StringView("频率设置按每个已登记目标分别生效。"));
     }
 
+    // Pair every successful begin_window call, including collapsed windows.
     ui->end_window(ui->user);
 }
 
+using HookCreateSignature = AnomalyStatusV1 (ANOMALY_CALL *)(
+    void*, const AnomalyHookRequestV1*, std::uintptr_t*, AnomalyGenerationHandleV1*);
+using HookReleaseSignature = AnomalyStatusV1 (ANOMALY_CALL *)(
+    void*, AnomalyGenerationHandleV1);
+using HookBeginCallbackSignature = AnomalyStatusV1 (ANOMALY_CALL *)(
+    void*, AnomalyGenerationHandleV1, AnomalyGenerationHandleV1*);
+using HookEndCallbackSignature = AnomalyStatusV1 (ANOMALY_CALL *)(
+    void*, AnomalyGenerationHandleV1);
+using UiBeginWindowSignature = int (ANOMALY_CALL *)(
+    void*, AnomalyStringViewV1, int*, std::uint32_t);
 
-using BeginWindowSignature =
-    int (ANOMALY_CALL *)(void*, AnomalyStringViewV1, int*, std::uint32_t);
-static_assert(std::is_same_v<decltype(AnomalyUiServiceV1::begin_window),
-                             BeginWindowSignature>,
-              "Damage Echo must match the current Anomaly UI ABI");
+static_assert(std::is_same_v<decltype(AnomalyHookServiceV1::create), HookCreateSignature>);
+static_assert(std::is_same_v<decltype(AnomalyHookServiceV1::release), HookReleaseSignature>);
+static_assert(std::is_same_v<decltype(AnomalyHookServiceV1::begin_callback), HookBeginCallbackSignature>);
+static_assert(std::is_same_v<decltype(AnomalyHookServiceV1::end_callback), HookEndCallbackSignature>);
+static_assert(std::is_same_v<decltype(AnomalyUiServiceV1::begin_window), UiBeginWindowSignature>);
 static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_load), decltype(&Load)>);
 static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_start), decltype(&Start)>);
 static_assert(std::is_same_v<decltype(AnomalyPluginDescriptorV1::on_stop), decltype(&Stop)>);
@@ -345,9 +438,9 @@ AnomalyPluginEntryV1(AnomalyPluginDescriptorV1* descriptor) {
         ANOMALY_PLUGIN_API_V1_MAJOR,
         ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("com.rabb1t79.damage-echo"),
-        anomaly::sdk::StringView("伤害回响 (Damage Echo)"),
+        anomaly::sdk::StringView("Damage Echo (Native)"),
         anomaly::sdk::StringView("Rabb1t79"),
-        anomaly::sdk::StringView("1.0.0"),
+        anomaly::sdk::StringView("1.3.0"),
         Load,
         Start,
         Stop,
