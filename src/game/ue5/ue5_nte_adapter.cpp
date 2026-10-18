@@ -7797,6 +7797,18 @@ struct Ue5NteAdapter::State {
                     }
                     continue;
                 }
+                if (chain->context_invalidated) {
+                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK &&
+                        chain->dispatched_repeat_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->dispatched_repeat_count;
+                    }
+                    if (token_matches) token = {};
+                    chain->last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+                    SetDamageChainMessage(*chain,
+                        "原生绑定/世界代次已失效；在途调用已返回但不能再安全确认，剩余队列已停止");
+                    continue;
+                }
                 chain->last_status_code = dispatch_status.code;
                 if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED) {
                     if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
