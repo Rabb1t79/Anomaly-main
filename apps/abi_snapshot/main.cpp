@@ -290,13 +290,13 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT);
     output.append(",\n    \"ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID\": ");
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID);
-    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED\\": ");
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED\": ");
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED);
-    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT\\": ");
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT\": ");
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT);
-    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND\\": ");
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND\": ");
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND);
-    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS\\": ");
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS\": ");
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS);
     output.append(",\n    \"ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL\": ");
     AppendUnsigned(output, ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL);
