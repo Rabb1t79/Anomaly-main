@@ -56,18 +56,26 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $package = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/builtin-plugins/DamageChain'
-          $dll = Join-Path $package 'plugin.dll'
-          $manifest = Join-Path $package 'manifest.json'
+          $buildPackage = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/builtin-plugins/DamageChain'
+          $dll = Join-Path $buildPackage 'plugin.dll'
+          $manifest = Join-Path $buildPackage 'manifest.json'
           if (!(Test-Path $dll)) { throw "Damage Chain DLL was not built: $dll" }
           if (!(Test-Path $manifest)) { throw "Damage Chain manifest was not staged: $manifest" }
           $entry = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
           if ($entry.id -ne 'anomaly.builtin.damage-chain') { throw "Unexpected plugin id: $($entry.id)" }
           if ($entry.version -ne '1.0.0') { throw "Unexpected Damage Chain version: $($entry.version)" }
           if (!($entry.services.id -contains 'anomaly.nte.damage-chain')) { throw 'New native damage-chain service is not declared in the manifest' }
+
+          # MSVC's import library and export file are build byproducts, not plugin package content.
+          # Stage an allowlisted pair so only plugin.dll and manifest.json enter the ZIP.
+          $package = Join-Path $env:RUNNER_TEMP 'DamageChain-windows-x64'
+          if (Test-Path $package) { Remove-Item -LiteralPath $package -Recurse -Force }
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          Copy-Item -LiteralPath $dll -Destination (Join-Path $package 'plugin.dll')
+          Copy-Item -LiteralPath $manifest -Destination (Join-Path $package 'manifest.json')
           $expected = @('manifest.json', 'plugin.dll')
           $actual = @(Get-ChildItem -LiteralPath $package -File | ForEach-Object { $_.Name } | Sort-Object)
-          if (($actual -join ',') -ne (($expected | Sort-Object) -join ',')) { throw "Unexpected package files: $($actual -join ',')" }
+          if (($actual -join ',') -ne (($expected | Sort-Object) -join ',')) { throw "Unexpected staged package files: $($actual -join ',')" }
           $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
           $zip = Join-Path $dist 'DamageChain-windows-x64.zip'
