@@ -290,6 +290,14 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT);
     output.append(",\n    \"ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID\": ");
     AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID);
+    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED\\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED);
+    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT\\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT);
+    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND\\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND);
+    output.append(",\\n    \\"ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS\\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS);
     output.append(",\n    \"ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL\": ");
     AppendUnsigned(output, ANOMALY_NTE_COMBAT_EVENT_V1_CRITICAL);
     output.append(",\n    \"ANOMALY_NTE_COMBAT_EVENT_V1_HEAD_HIT\": ");
@@ -2221,6 +2229,46 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteDamageChainRequestV1",
+        sizeof(AnomalyNteDamageChainRequestV1),
+        alignof(AnomalyNteDamageChainRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageChainRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageChainRequestV1, flags)},
+         {"damage_sequence", offsetof(AnomalyNteDamageChainRequestV1, damage_sequence)},
+         {"repeat_count", offsetof(AnomalyNteDamageChainRequestV1, repeat_count)},
+         {"rate_per_second", offsetof(AnomalyNteDamageChainRequestV1, rate_per_second)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageChainSnapshotV1",
+        sizeof(AnomalyNteDamageChainSnapshotV1),
+        alignof(AnomalyNteDamageChainSnapshotV1),
+        {{"struct_size", offsetof(AnomalyNteDamageChainSnapshotV1, struct_size)},
+         {"state", offsetof(AnomalyNteDamageChainSnapshotV1, state)},
+         {"chain_id", offsetof(AnomalyNteDamageChainSnapshotV1, chain_id)},
+         {"root_damage_sequence", offsetof(AnomalyNteDamageChainSnapshotV1, root_damage_sequence)},
+         {"requested_repeat_count", offsetof(AnomalyNteDamageChainSnapshotV1, requested_repeat_count)},
+         {"dispatched_repeat_count", offsetof(AnomalyNteDamageChainSnapshotV1, dispatched_repeat_count)},
+         {"observed_chain_damage_count", offsetof(AnomalyNteDamageChainSnapshotV1, observed_chain_damage_count)},
+         {"rate_per_second", offsetof(AnomalyNteDamageChainSnapshotV1, rate_per_second)},
+         {"last_status_code", offsetof(AnomalyNteDamageChainSnapshotV1, last_status_code)},
+         {"reserved", offsetof(AnomalyNteDamageChainSnapshotV1, reserved)},
+         {"status_message", offsetof(AnomalyNteDamageChainSnapshotV1, status_message)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageChainServiceV1",
+        sizeof(AnomalyNteDamageChainServiceV1),
+        alignof(AnomalyNteDamageChainServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageChainServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageChainServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageChainServiceV1, user)},
+         {"start_chain", offsetof(AnomalyNteDamageChainServiceV1, start_chain)},
+         {"snapshot", offsetof(AnomalyNteDamageChainServiceV1, snapshot)},
+         {"cancel_chain", offsetof(AnomalyNteDamageChainServiceV1, cancel_chain)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNteSkillFrameV1",
         sizeof(AnomalyNteSkillFrameV1),
         alignof(AnomalyNteSkillFrameV1),
@@ -2460,6 +2508,8 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_ACTORS_SERVICE_V1_VERSION, "AnomalyNteActorsServiceV1", false);
     AppendService(output, ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION, "AnomalyNteCombatServiceV1", false);
+    AppendService(output, ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION, "AnomalyNteDamageChainServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION, "AnomalyNteSkillsServiceV1", false);
     AppendService(output, ANOMALY_NTE_SKILL_INVOCATION_SERVICE_V1_ID,
