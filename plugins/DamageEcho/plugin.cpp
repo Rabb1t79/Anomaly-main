@@ -550,12 +550,12 @@ void ANOMALY_CALL Draw(void* pluginContext, const AnomalyUiServiceV1* ui) {
     }
     if (HAS_UI(ui, separator)) ui->separator(ui->user);
     if (HAS_UI(ui, button)) {
-        if (ui->button(ui->user, observing ? "停止只读观察" : "启动只读观察", 155.0F, 0.0F) != 0) {
+        if (ui->button(ui->user, anomaly::sdk::StringView(observing ? "停止只读观察" : "启动只读观察"), 155.0F, 0.0F) != 0) {
             if (observing) (void)Stop(c, 0); else (void)Start(c);
         }
         if (HAS_UI(ui, same_line)) ui->same_line(ui->user, 0.0F, 8.0F);
-        if (ui->button(ui->user, "启动链式伤害（安全阻止）", 220.0F, 0.0F) != 0) TryStartChain(c);
-        if (ui->button(ui->user, "导出诊断日志", 160.0F, 0.0F) != 0) (void)ExportLog(c);
+        if (ui->button(ui->user, anomaly::sdk::StringView("启动链式伤害（安全阻止）"), 220.0F, 0.0F) != 0) TryStartChain(c);
+        if (ui->button(ui->user, anomaly::sdk::StringView("导出诊断日志"), 160.0F, 0.0F) != 0) (void)ExportLog(c);
     }
     std::size_t count{};
     { std::lock_guard lock(c->mutex); count = c->logCount; }
