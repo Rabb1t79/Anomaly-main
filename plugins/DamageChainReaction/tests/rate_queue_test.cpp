@@ -56,6 +56,37 @@ int main() {
     Check(!queue.Poll(after_stall + milliseconds(20)), "defer delays work");
     Check(queue.Poll(deferred_to), "deferred item becomes due at retry time");
 
+    // Elapsed wall time is not a chain lifetime. Pending work remains valid after
+    // a pause much longer than the old one-second example.
+    Queue long_stall;
+    long_stall.Start({100, 100.0}, start);
+    const auto after_five_seconds = start + seconds(5);
+    Check(long_stall.Poll(after_five_seconds),
+        "pending chain work remains eligible after a five-second stall");
+    long_stall.CommitSuccess(after_five_seconds);
+    Check(long_stall.Remaining() == 99,
+        "one confirmed item after a long stall leaves the other 99 pending");
+    Check(long_stall.NextDue() == after_five_seconds + milliseconds(10),
+        "long stall does not trigger an immediate catch-up burst");
+
+    // Exactly 100 confirmed successes are required to complete a configured
+    // 100-item chain; dispatch time alone has no method to consume queue items.
+    Queue full_chain;
+    full_chain.Start({100, 100.0}, start);
+    auto due = start;
+    for (std::uint32_t i = 0; i < 100; ++i) {
+        if (i != 0) due = full_chain.NextDue();
+        Check(full_chain.Poll(due), "each pending extra item becomes due");
+        full_chain.CommitSuccess(due);
+        if (i < 99) {
+            Check(full_chain.Active(), "chain stays active until all 100 successes");
+            Check(full_chain.Remaining() == 99 - i,
+                "each confirmed success consumes exactly one extra item");
+        }
+    }
+    Check(!full_chain.Active(), "chain completes after exactly 100 successes");
+    Check(full_chain.Remaining() == 0, "no extra items remain after completion");
+
     Queue upper_clamp;
     upper_clamp.Start({1, 2000.0}, start);
     Check(upper_clamp.Interval() == duration_cast<Queue::Clock::duration>(milliseconds(1)),

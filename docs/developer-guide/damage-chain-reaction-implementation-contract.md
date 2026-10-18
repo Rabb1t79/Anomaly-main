@@ -110,3 +110,8 @@ With the feature disabled, one native attack produces one ordinary damage result
 - Audit found `.github/workflows/nte-damage-chain-runtime-probe.yml` was mislabeled: it packaged `plugins/NteAttackReplay` v1.9.7 and had no `push` trigger, so it did not produce a Runtime probe for this feature on independent-branch updates.
 - The workflow now stages/verifies `plugins/DamageChainReaction`, checks manifest ID `anomaly.builtin.nte-damage-chain-reaction` and version `0.1.0`, emits `DamageChainReactionRuntimeProbe-windows-x64.zip`, and runs for relevant pushes as well as pull requests/manual dispatch.
 - This corrects packaging/automation only. A successful Runtime build or artifact does not prove the native period event creates exactly one hit per queue item; the actor lifecycle and in-game hit confirmation remain separate validation items.
+## RateQueue acceptance coverage expanded — 2026-10-18
+
+- Added deterministic tests for a five-second pause: the chain remains eligible, only one confirmed item is consumed when execution resumes, and the next item is scheduled one configured interval later rather than issuing a catch-up burst.
+- Added a full 100-item progression test: the queue remains active until all 100 confirmations are committed and reaches completion only after the 100th success. This validates scheduler/count semantics; it does not simulate native damage or prove each Core dispatch hits the game target.
+- The independent plugin workflow will rerun on this test-source change. Record its result only after GitHub reports the new run complete.

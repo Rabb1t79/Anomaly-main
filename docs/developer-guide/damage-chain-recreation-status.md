@@ -198,3 +198,7 @@
 - 发现旧 `.github/workflows/nte-damage-chain-runtime-probe.yml` 实际构建完整 Runtime 后，却校验/打包 `plugins/NteAttackReplay` v1.9.7；并且它没有 `push` 触发器，独立工作分支的更新不会自动触发该探针。这与当前目标链式反应插件不一致。
 - 已把探针切换到 `plugins/DamageChainReaction`，验证 manifest ID `anomaly.builtin.nte-damage-chain-reaction`、版本 `0.1.0`，产物命名改为 `DamageChainReactionRuntimeProbe-windows-x64.zip`，并在相关分支 push 时触发。
 - 本次修改和进度记录在同一 Git 提交。工作流结果仍只证明 Runtime/Core/插件的构建与打包；不证明游戏中每次周期调用恰好产生一次额外伤害。
+### RateQueue 验收测试补强（2026-10-18）
+- 新增五秒停顿测试：暂停超过一秒后任务仍有效；恢复执行时只消耗一次已确认任务；下一次执行仍按设定间隔排期，不会把积压任务瞬间补发。
+- 新增完整 100 次推进测试：每次成功只消耗一个额外任务，直到第 100 次成功才完成队列。这验证了调度和计数语义，不模拟游戏原生伤害，也不能证明每次 Core 调用都对目标造成伤害。
+- 本次修改与两份进度/行为合同 MD 同一提交；独立插件构建与调度器测试将自动重跑，结果以新 run 为准。
