@@ -71,6 +71,8 @@ struct NteCharacterDamageCapture {
     std::int32_t active_spec_handle{};
     NteDamageCriticalState critical;
     NteDamageTags tags;
+    // Non-zero only when the capture happened synchronously inside a Core-owned chain dispatch.
+    std::uint64_t damage_chain_id{};
 };
 static_assert(std::is_trivially_copyable_v<NteCharacterDamageCapture>);
 
