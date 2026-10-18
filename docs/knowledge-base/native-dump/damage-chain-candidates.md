@@ -95,3 +95,8 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 - 扩展报告 [39125616938](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125616938) 已成功读取两版实际 LFS 对象。15 个聚焦块均成功提取，缺失标记为 0，15/15 块文本一致。
 - 与当前候选路径直接相关的声明包括：`ADamageTriggerActor` 周期字段 `RuntimeTriggerPeriod`/`RuntimeTriggerDuration`/`RuntimeTriggerCountPerPeriod`/`RuntimeMaxTriggerCount` 的偏移分别为 `0x5E8/0x5EC/0x5F0/0x5F4`；基类 `AHTAbilitySpawnActor` 的 `EffectContainer`/`EventData` 偏移为 `0x3A8/0x3D8`；`OverrideEffectContainer` 接收一个大小 `0x28` 的 `FHTGameplayEffectContainer`。
 - 完整 classes、structs 与 GObjects 文件哈希在两个版本间仍不同；focused diff 匹配不能证明该周期事件的运行语义，也不能证明手动触发会造成一次真实伤害。仍需 Core 反射读回与实机伤害验证。
+
+## 2026-10-18 补充布局证据：FGameplayEventData
+
+- 当前 Core 适配器还会验证 `AHTAbilitySpawnActor.EventData` 的内层结构：`FGameplayEventData` 总大小 `0xB0`，`Instigator` offset `0x08`，`Target` offset `0x10`。这些值可在 `5.6.1/CppSDK/SDK/GameplayAbilities_structs.hpp` 中找到，但之前自动化双版本报告没有包含该头文件。
+- 已将旧版与新版 `GameplayAbilities_structs.hpp` 一并纳入 LFS 取证，并将 `FGameplayEventData` 加入 focused block 对照。新报告返回后需核对提取成功与字段布局差异，不能只依靠旧版声明决定适配器兼容性。

@@ -15,10 +15,14 @@ SDK_FILES = (
     "CppSDK/SDK/HTGame_classes.hpp",
     "CppSDK/SDK/HTGame_structs.hpp",
     "CppSDK/SDK/HTGame_parameters.hpp",
+    "CppSDK/SDK/GameplayAbilities_structs.hpp",
     "GObjects-Dump.txt",
 )
 
 BLOCKS = {
+    "FGameplayEventData": ("CppSDK/SDK/GameplayAbilities_structs.hpp",
+        "// ScriptStruct GameplayAbilities.GameplayEventData",
+        "DUMPER7_ASSERTS_FGameplayEventData;"),
     "FHTDamageEvent": ("CppSDK/SDK/HTGame_structs.hpp",
         "// ScriptStruct HTGame.HTDamageEvent", "DUMPER7_ASSERTS_FHTDamageEvent;"),
     "FBufferData": ("CppSDK/SDK/HTGame_structs.hpp",

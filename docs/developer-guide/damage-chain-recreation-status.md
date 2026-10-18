@@ -171,3 +171,8 @@
 - 已确认源代码提交 `9a53edc3b398e559ca469bdd55c507b74216d3e2` 的三项检查全部成功：独立插件构建 + RateQueue 测试/打包 [39125202472](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202472)、全量 Windows 框架 Runtime/打包 [39125202479](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202479)、Core/ABI 校验 [39125202470](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125202470)。
 - 随后的提交 `eed4357560b63c8a6b5619465102861713080d2f` 只修改取证脚本、取证工作流和文档；扩展取证运行 [39125616938](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39125616938) 已成功，15 个聚焦声明块均提取成功且两版文本一致。
 - 当前所有已通过的 CI 只证明源码编译、SDK/ABI 校验和队列测试通过，不证明游戏中伤害已生效。剩余核心验证是：一次原生命中后，N 次周期触发必须产生恰好 N 次针对原目标的新真实伤害事件。
+
+### 追加核验：EventData 内层结构布局（2026-10-18）
+- 继续审查 Core 的原生触发适配器时，发现还需要对照 `GameplayAbilities` 包内的 `FGameplayEventData` 声明：适配器验证外层 `AHTAbilitySpawnActor.EventData` 大小为 `0xB0`，并要求内层 `Instigator` / `Target` 两个对象属性分别位于 `0x08` / `0x10`。旧版 Dump 声明支持这些值，但之前自动报告没有包含这个单独的结构头文件，因此不能说这一处已完成双版本核验。
+- 本轮把 `5.6.1/CppSDK/SDK/GameplayAbilities_structs.hpp` 与 `5.6.1-new/CppSDK/SDK/GameplayAbilities_structs.hpp` 纳入 LFS 取证输入，并新增 `FGameplayEventData` 聚焦块。工作流在脚本或自身改动时会自动运行。
+- 本次只增加证据覆盖，没有更改 Core 的硬编码布局或调用逻辑。需等待新报告确认两版的 `FGameplayEventData` 块是否一致，再决定后续实现动作。

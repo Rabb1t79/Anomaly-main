@@ -39,10 +39,12 @@ jobs:
             5.6.1/CppSDK/SDK/HTGame_classes.hpp
             5.6.1/CppSDK/SDK/HTGame_structs.hpp
             5.6.1/CppSDK/SDK/HTGame_parameters.hpp
+            5.6.1/CppSDK/SDK/GameplayAbilities_structs.hpp
             5.6.1/GObjects-Dump.txt
             5.6.1-new/CppSDK/SDK/HTGame_classes.hpp
             5.6.1-new/CppSDK/SDK/HTGame_structs.hpp
             5.6.1-new/CppSDK/SDK/HTGame_parameters.hpp
+            5.6.1-new/CppSDK/SDK/GameplayAbilities_structs.hpp
             5.6.1-new/GObjects-Dump.txt
           sparse-checkout-cone-mode: false
 
