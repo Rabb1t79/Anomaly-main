@@ -35,8 +35,41 @@ EchoTask g_EchoTasks[kMaxTasks]{};
 CRITICAL_SECTION g_TaskCS{};
 bool g_TaskCSInitialized = false;
 std::atomic_bool g_PluginEnabled{false};
-thread_local bool g_IsReplaying = false;
+DWORD g_ReplayTlsIndex = TLS_OUT_OF_INDEXES;
 int g_WindowOpen = 1;
+
+bool IsReplayingOnCurrentThread() noexcept {
+    return g_ReplayTlsIndex != TLS_OUT_OF_INDEXES &&
+           TlsGetValue(g_ReplayTlsIndex) != nullptr;
+}
+
+class ReplayScope final {
+public:
+    ReplayScope() noexcept {
+        if (g_ReplayTlsIndex == TLS_OUT_OF_INDEXES) {
+            return;
+        }
+        index_ = g_ReplayTlsIndex;
+        previous_ = TlsGetValue(index_);
+        active_ = TlsSetValue(index_, reinterpret_cast<void*>(static_cast<std::uintptr_t>(1))) != 0;
+    }
+
+    ~ReplayScope() {
+        if (active_ && index_ != TLS_OUT_OF_INDEXES) {
+            (void)TlsSetValue(index_, previous_);
+        }
+    }
+
+    ReplayScope(const ReplayScope&) = delete;
+    ReplayScope& operator=(const ReplayScope&) = delete;
+
+    [[nodiscard]] bool active() const noexcept { return active_; }
+
+private:
+    DWORD index_{TLS_OUT_OF_INDEXES};
+    void* previous_{};
+    bool active_{};
+};
 
 const AnomalyHookServiceV1* g_HookService = nullptr;
 AnomalyGenerationHandleV1 g_HookHandle{};
@@ -157,7 +190,7 @@ float ANOMALY_CALL Hooked_ApplyDamage(
     // If shutdown has started, still pass through the original call but don't
     // access task state unless the host granted the callback lease.
     if (!callbackLease.acquired() ||
-        g_IsReplaying ||
+        IsReplayingOnCurrentThread() ||
         !g_PluginEnabled.load(std::memory_order_relaxed) ||
         baseDamage <= 0.0F ||
         eventInstigator == nullptr ||
@@ -173,9 +206,6 @@ float ANOMALY_CALL Hooked_ApplyDamage(
     for (auto& task : g_EchoTasks) {
         if (task.Active && task.Target == damagedActor) {
             task.Damage = baseDamage;
-            task.Instigator = eventInstigator;
-            task.Causer = damageCauser;
-            task.DamageTypeClass = damageTypeClass;
             found = true;
             break;
         }
@@ -229,16 +259,23 @@ void UpdateEchoTasks() {
         }
 
         float ignoredResult{};
-        g_IsReplaying = true;
-        const bool succeeded = InvokeOriginalSafely(
-            reinterpret_cast<ApplyDamageFn>(g_OriginalAddress),
-            snapshot.Target,
-            snapshot.Damage,
-            snapshot.Instigator,
-            snapshot.Causer,
-            snapshot.DamageTypeClass,
-            &ignoredResult);
-        g_IsReplaying = false;
+        bool succeeded = false;
+        {
+            ReplayScope replayScope;
+            if (!replayScope.active()) {
+                // Dynamic TLS is unavailable on this thread: skip this tick
+                // rather than call damage without recursion suppression.
+                continue;
+            }
+            succeeded = InvokeOriginalSafely(
+                reinterpret_cast<ApplyDamageFn>(g_OriginalAddress),
+                snapshot.Target,
+                snapshot.Damage,
+                snapshot.Instigator,
+                snapshot.Causer,
+                snapshot.DamageTypeClass,
+                &ignoredResult);
+        }
 
         if (!succeeded) {
             EnterCriticalSection(&g_TaskCS);
@@ -259,6 +296,10 @@ void CleanupFailedLoad() noexcept {
     g_HookHandle = {};
     g_HookService = nullptr;
 
+    if (g_ReplayTlsIndex != TLS_OUT_OF_INDEXES) {
+        (void)TlsFree(g_ReplayTlsIndex);
+        g_ReplayTlsIndex = TLS_OUT_OF_INDEXES;
+    }
     if (g_TaskCSInitialized) {
         DeleteCriticalSection(&g_TaskCS);
         g_TaskCSInitialized = false;
@@ -277,6 +318,14 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
         return {ANOMALY_STATUS_V1_FAILED, 0, {}};
     }
     g_TaskCSInitialized = true;
+
+    // Use Windows dynamic TLS, not C++ thread_local: the host rejects images
+    // that require loader-managed static TLS in a plugin DLL.
+    g_ReplayTlsIndex = TlsAlloc();
+    if (g_ReplayTlsIndex == TLS_OUT_OF_INDEXES) {
+        CleanupFailedLoad();
+        return {ANOMALY_STATUS_V1_FAILED, 0, {}};
+    }
 
     anomaly::sdk::Host hostApi(host);
     const auto hookRef = hostApi.Query<AnomalyHookServiceV1>(
@@ -358,6 +407,10 @@ void ANOMALY_CALL Unload(void*) {
     g_HookService = nullptr;
     g_OriginalAddress = 0;
 
+    if (g_ReplayTlsIndex != TLS_OUT_OF_INDEXES) {
+        (void)TlsFree(g_ReplayTlsIndex);
+        g_ReplayTlsIndex = TLS_OUT_OF_INDEXES;
+    }
     if (g_TaskCSInitialized) {
         DeleteCriticalSection(&g_TaskCS);
         g_TaskCSInitialized = false;
@@ -473,7 +526,7 @@ AnomalyPluginEntryV1(AnomalyPluginDescriptorV1* descriptor) {
         anomaly::sdk::StringView("com.rabb1t79.damage-echo"),
         anomaly::sdk::StringView("Damage Echo (Native)"),
         anomaly::sdk::StringView("Rabb1t79"),
-        anomaly::sdk::StringView("1.3.1"),
+        anomaly::sdk::StringView("1.3.2"),
         Load,
         Start,
         Stop,
