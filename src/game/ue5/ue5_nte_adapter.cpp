@@ -8174,6 +8174,14 @@ struct Ue5NteAdapter::State {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                     "the original hit has no safe, dump-validated GameplayEffect context; no substitute was guessed");
             }
+            // Chain reaction intentionally repeats only the directly captured
+            // AbilitySystemComponent GameplayEffect-application entries. Do not
+            // re-enter character activation wrappers or a ServerActivate RPC:
+            // those may replay broader ability/activation behavior, not just damage.
+            if (root->replay.kind != 1U && root->replay.kind != 2U) {
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    "the captured hit was not produced by a direct ASC GameplayEffect-application call; activation wrappers and ServerActivate RPCs are excluded");
+            }
             if (root->replay.object_generation != object_generation) {
                 return Status(ANOMALY_STATUS_V1_CONFLICT,
                     "the original GameplayEffect context belongs to a stale UObject generation");
@@ -8544,6 +8552,7 @@ struct Ue5NteAdapter::State {
                     event.attacker.generation == candidate_chain->attacker.generation &&
                     event.victim.id == candidate_chain->target.id &&
                     event.victim.generation == candidate_chain->target.generation &&
+                    damage_event_sequence >= candidate_chain->pending_after_sequence &&
                     replay_context.kind == candidate_chain->root_replay_kind &&
                     replay_context.function == candidate_chain->root_replay_function &&
                     ReplayContextMatchesDamageLocked(
