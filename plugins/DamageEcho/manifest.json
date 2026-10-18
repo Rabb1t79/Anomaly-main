@@ -1,31 +1,20 @@
 {
   "schemaVersion": 2,
   "id": "com.rabb1t79.damage-echo",
-  "name": "Damage Chain (Entry Guarded)",
-  "description": "链式伤害入口核验版本。对照 5.6.1 Dump 发现 ApplyDamage 是反射包装函数，未证实硬编码 RVA；因此本版本不会安装原始 Hook，仅提供状态与诊断日志导出。",
+  "name": "伤害链式反应（只读取证版）",
+  "description": "读取战斗伤害事件和 DamageTriggerActor 类 Actor 快照，以建立原生候选与真实事件之间的时间关联。不施加伤害、不生成触发器、不调用私有函数或安装原始 Hook。",
   "author": "Rabb1t79",
   "license": "AGPL-3.0-only",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "entry": "plugin.dll",
-  "api": {
-    "major": 1,
-    "minMinor": 0,
-    "maxMinor": 0
-  },
-  "games": [
-    "nte"
-  ],
-  "builds": [
-    "nte-*"
-  ],
+  "api": {"major": 1, "minMinor": 0, "maxMinor": 0},
+  "games": ["nte"],
+  "builds": ["nte-*"],
   "loadPhase": "game-ready",
   "services": [
-    {
-      "id": "anomaly.ui",
-      "minVersion": 1
-    }
+    {"id": "anomaly.ui", "minVersion": 1},
+    {"id": "anomaly.nte.actors", "minVersion": 1},
+    {"id": "anomaly.nte.combat", "minVersion": 1}
   ],
-  "capabilities": [
-    "ui"
-  ]
+  "capabilities": ["ui", "nte-actor-snapshot", "nte-combat-read"]
 }
