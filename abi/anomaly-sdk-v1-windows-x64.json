@@ -2104,6 +2104,31 @@
         "register_button": 16,
         "unregister_button": 24
       }
+    },
+    "AnomalyNteDamageChainRequestV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "damage_sequence": 8,
+        "repeat_count": 16,
+        "interval_milliseconds": 20
+      }
+    },
+    "AnomalyNteDamageChainSnapshotV1": {
+      "size": 48,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "chain": 8,
+        "damage_sequence": 24,
+        "requested_repeat_count": 32,
+        "confirmed_repeat_count": 36,
+        "state": 40,
+        "interval_milliseconds": 44
+      }
     }
   },
   "services": [
@@ -2336,6 +2361,11 @@
       "id": "anomaly.nte.esc-menu-button",
       "version": 1,
       "table": "AnomalyNteEscMenuButtonServiceV1"
+    },
+    {
+      "id": "anomaly.nte.damage-chain",
+      "version": 1,
+      "table": "AnomalyNteDamageChainServiceV1"
     }
   ]
 }
