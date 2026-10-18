@@ -1,0 +1,75 @@
+name: Build NTE Damage Chain Reaction
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'plugins/NteDamageChainReaction/**'
+      - '.github/workflows/build-nte-damage-chain-reaction.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'plugins/NteDamageChainReaction/**'
+      - '.github/workflows/build-nte-damage-chain-reaction.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure standalone plugin build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $src = Join-Path $env:GITHUB_WORKSPACE '.build/nte-damage-chain-src'
+          $b = Join-Path $env:GITHUB_WORKSPACE '.build/nte-damage-chain'
+          New-Item -ItemType Directory -Path $src -Force | Out-Null
+          @"
+          cmake_minimum_required(VERSION 3.22)
+          project(NteDamageChainReactionStandalone LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(nte_damage_chain_reaction SHARED "$root/plugins/NteDamageChainReaction/plugin.cpp")
+          target_include_directories(nte_damage_chain_reaction PRIVATE "$root/include")
+          target_compile_definitions(nte_damage_chain_reaction PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          target_link_libraries(nte_damage_chain_reaction PRIVATE Shell32 Ole32)
+          if(MSVC)
+            target_compile_options(nte_damage_chain_reaction PRIVATE /utf-8 /W4 /permissive- /EHsc)
+          endif()
+          set_target_properties(nte_damage_chain_reaction PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+          "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
+          cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
+
+      - name: Build and package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $b = Join-Path $env:GITHUB_WORKSPACE '.build/nte-damage-chain'
+          cmake --build $b --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw 'Damage Chain Reaction plugin build failed.' }
+
+          $dll = Join-Path $b 'Release/plugin.dll'
+          if (!(Test-Path -LiteralPath $dll -PathType Leaf)) {
+            throw 'plugin.dll was not produced.'
+          }
+
+          $package = Join-Path $env:GITHUB_WORKSPACE 'dist/NteDamageChainReaction-windows-x64'
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          Copy-Item -LiteralPath $dll -Destination (Join-Path $package 'plugin.dll')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteDamageChainReaction/manifest.json') -Destination (Join-Path $package 'manifest.json')
+          Compress-Archive -Path (Join-Path $package '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/NteDamageChainReaction-windows-x64.zip') -Force
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NteDamageChainReaction-windows-x64
+          path: dist/NteDamageChainReaction-windows-x64.zip
+          if-no-files-found: error
