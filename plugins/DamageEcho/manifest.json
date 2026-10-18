@@ -5,7 +5,7 @@
   "description": "持续触发已登记目标的伤害回响，使用 Anomaly 官方 Hook 服务。",
   "author": "Rabb1t79",
   "license": "AGPL-3.0-only",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
