@@ -33,6 +33,69 @@
 namespace anomaly {
 namespace {
 
+// The native damage callback executes synchronously during a queued GameplayEffect dispatch.
+// Carry only an opaque chain id across that re-entrant callback; no UObject pointer is stored.
+thread_local std::uint64_t g_current_damage_chain_id{};
+thread_local std::uintptr_t g_damage_chain_expected_receiver{};
+thread_local std::uintptr_t g_damage_chain_expected_function{};
+thread_local std::uintptr_t g_damage_chain_expected_attacker{};
+thread_local std::uintptr_t g_damage_chain_expected_victim{};
+
+struct DamageChainDispatchScope final {
+    std::uint64_t previous{};
+    explicit DamageChainDispatchScope(const std::uint64_t chain_id) noexcept
+        : previous(g_current_damage_chain_id) {
+        g_current_damage_chain_id = chain_id;
+    }
+    ~DamageChainDispatchScope() { g_current_damage_chain_id = previous; }
+};
+
+// Narrow the chain identity to the exact validated native GameplayEffect invocation.
+// Nested ProcessEvent/damage callbacks must not inherit it merely because they happen
+// while ReplayDamage is on the stack.
+struct DamageChainInvocationScope final {
+    std::uintptr_t previous_receiver{};
+    std::uintptr_t previous_function{};
+    std::uintptr_t previous_attacker{};
+    std::uintptr_t previous_victim{};
+
+    DamageChainInvocationScope(
+        const std::uintptr_t receiver, const std::uintptr_t function,
+        const std::uintptr_t attacker, const std::uintptr_t victim) noexcept
+        : previous_receiver(g_damage_chain_expected_receiver),
+          previous_function(g_damage_chain_expected_function),
+          previous_attacker(g_damage_chain_expected_attacker),
+          previous_victim(g_damage_chain_expected_victim) {
+        g_damage_chain_expected_receiver = receiver;
+        g_damage_chain_expected_function = function;
+        g_damage_chain_expected_attacker = attacker;
+        g_damage_chain_expected_victim = victim;
+    }
+
+    ~DamageChainInvocationScope() {
+        g_damage_chain_expected_receiver = previous_receiver;
+        g_damage_chain_expected_function = previous_function;
+        g_damage_chain_expected_attacker = previous_attacker;
+        g_damage_chain_expected_victim = previous_victim;
+    }
+};
+
+[[nodiscard]] bool CurrentDamageChainInvocationMatches(
+    const std::uintptr_t receiver, const std::uintptr_t function) noexcept {
+    return g_current_damage_chain_id != 0 &&
+        receiver != 0 && function != 0 &&
+        receiver == g_damage_chain_expected_receiver &&
+        function == g_damage_chain_expected_function;
+}
+
+[[nodiscard]] bool CurrentDamageChainParticipantsMatch(
+    const std::uintptr_t attacker, const std::uintptr_t victim) noexcept {
+    return g_current_damage_chain_id != 0 &&
+        attacker != 0 && victim != 0 &&
+        attacker == g_damage_chain_expected_attacker &&
+        victim == g_damage_chain_expected_victim;
+}
+
 constexpr std::uint8_t kCombatCaptureIngressProcessEvent = 1U << 0U;
 constexpr std::uint8_t kCombatCaptureIngressActorProcessEvent = 1U << 1U;
 constexpr std::uint8_t kCombatCaptureIngressNativeExec = 1U << 2U;
@@ -1032,6 +1095,12 @@ struct Ue5NteAdapter::State {
         std::uint16_t parameter_size{};
         std::uint64_t object_generation{};
         std::uint64_t tick_sequence{};
+        // Non-zero only when this native GameplayEffect invocation was dispatched by a chain.
+        std::uint64_t damage_chain_id{};
+        // One native GameplayEffect invocation may confirm at most one delayed DamageEvent.
+        // Synchronous chain identity is tracked by TLS; this bit prevents stale delayed
+        // captures from being reused to label multiple unrelated same-target attacks.
+        bool damage_callback_correlated{};
         // Count unique captured invocations after coalescing the same call observed at both
         // ProcessEvent and Native Exec ingress points.
         std::uint32_t matching_candidate_count{};
@@ -1051,7 +1120,45 @@ struct Ue5NteAdapter::State {
         bool attacker_was_local_player_pawn{};
         ReplayEffectContext replay{};
     };
-    static constexpr std::size_t kReplayEffectCallCapacity = 32;
+    struct DamageChainRecord {
+        std::uint64_t id{};
+        std::uint64_t root_damage_sequence{};
+        std::uint64_t world_generation{};
+        std::uint64_t object_generation{};
+        AnomalyGenerationHandleV1 root_attacker{};
+        AnomalyGenerationHandleV1 root_victim{};
+        std::uint64_t root_source_id{};
+        std::uint32_t state{ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY};
+        std::uint32_t requested_repeat_count{};
+        std::uint32_t dispatched_repeat_count{};
+        std::uint32_t observed_chain_damage_count{};
+        std::uint32_t rate_per_second{};
+        std::uint32_t last_status_code{ANOMALY_STATUS_V1_OK};
+        bool in_flight{};
+        bool context_invalidated{};
+        std::chrono::steady_clock::duration interval{};
+        std::chrono::steady_clock::time_point next_due{};
+        std::array<char, ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY> status_message{};
+    };
+    struct DamageChainDispatchToken {
+        bool occupied{};
+        bool pending{};
+        std::uint64_t sequence{};
+        std::uint64_t chain_id{};
+        std::uint64_t root_damage_sequence{};
+        std::uint64_t tick_sequence{};
+    };
+    static constexpr std::size_t kDamageChainCapacity =
+        ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS;
+    // At most one native application per chain can await confirmation, so the ledger
+    // capacity equals the maximum number of independently active chains.
+    static constexpr std::size_t kDamageChainDispatchTokenCapacity = kDamageChainCapacity;
+    std::array<DamageChainRecord, kDamageChainCapacity> damage_chains{};
+    std::array<DamageChainDispatchToken, kDamageChainDispatchTokenCapacity> damage_chain_dispatch_tokens{};
+    std::uint64_t damage_chain_dispatch_token_next_sequence{1};
+    std::uint64_t damage_chain_next_id{1};
+    std::size_t damage_chain_scheduler_cursor{};
+    static constexpr std::size_t kReplayEffectCallCapacity = 256;
     std::array<ReplayEffectContext, kReplayEffectCallCapacity> replay_effect_calls{};
     std::size_t replay_effect_call_start{};
     std::size_t replay_effect_call_count{};
@@ -1245,6 +1352,7 @@ struct Ue5NteAdapter::State {
         std::uintptr_t receiver{};
         std::uintptr_t function{};
         std::uintptr_t source_parameter_address{};
+        std::uint64_t damage_chain_id{};
         std::uint8_t ingress_mask{};
         bool replay_tag_arrays_valid{};
         CapturedGameplayTagArrays replay_gameplay_tags{};
@@ -2714,6 +2822,18 @@ struct Ue5NteAdapter::State {
         pinned_damage_replays = {};
         pinned_damage_replay_start = 0;
         pinned_damage_replay_count = 0;
+        damage_chain_dispatch_tokens = {};
+        for (auto& chain : damage_chains) {
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY) continue;
+            chain.context_invalidated = true;
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                chain.observed_chain_damage_count < chain.dispatched_repeat_count) {
+                chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+                chain.last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+                SetDamageChainMessage(chain,
+                    "世界/对象代次已变化；旧上下文与待确认项已失效，未确认事件不会再关联到新世界");
+            }
+        }
         damage_dropped_count = 0;
         damage_next_source_id = kDamageSourceBase;
         damage_source_object_ids.clear();
@@ -2768,6 +2888,34 @@ struct Ue5NteAdapter::State {
     }
 
     void InvalidateCombatSkillDiscoveryLocked() noexcept {
+        bool invalidate_dispatch_ledger = false;
+        for (auto& chain : damage_chains) {
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY) continue;
+            const bool unresolved_dispatch =
+                chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                chain.in_flight ||
+                chain.observed_chain_damage_count < chain.dispatched_repeat_count ||
+                HasDamageChainDispatchTokensLocked(chain.id);
+            if (!unresolved_dispatch) continue;
+
+            invalidate_dispatch_ledger = true;
+            chain.context_invalidated = true;
+            chain.in_flight = false;
+            if (chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                chain.state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+            }
+            chain.last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+            SetDamageChainMessage(chain,
+                chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED
+                    ? "队列已取消；原生绑定失效，未确认项已作废，不计为成功"
+                    : "链已停止：原生 GameplayEffect 绑定或对象代际失效；未确认项已作废");
+        }
+        if (invalidate_dispatch_ledger) {
+            // The source/target callback route is no longer validated, so these tokens
+            // cannot safely be correlated after the binding change. No elapsed-time
+            // expiry is involved; this is an explicit lifecycle/binding invalidation.
+            damage_chain_dispatch_tokens = {};
+        }
         combat_skill_discovery = {};
         // This method is noexcept; clearing is allocation-free. ReplayDamage supplies
         // the static pending-discovery message when no validation attempt has run yet.
@@ -4170,9 +4318,21 @@ struct Ue5NteAdapter::State {
             }
         }
         if (pinned_damage_replay_count == kPinnedDamageReplayCapacity) {
-            pinned_damage_replays[pinned_damage_replay_start] = record;
-            pinned_damage_replay_start =
-                (pinned_damage_replay_start + 1U) % kPinnedDamageReplayCapacity;
+            // Never evict a root belonging to a still-running chain. Reuse a completed
+            // or unrelated diagnostic entry instead. Active chains are capped to the
+            // same count as this pin cache, so a free-to-reuse entry must exist.
+            std::size_t replacement = kPinnedDamageReplayCapacity;
+            for (std::size_t index{}; index < pinned_damage_replay_count; ++index) {
+                const auto candidate_slot =
+                    (pinned_damage_replay_start + index) % kPinnedDamageReplayCapacity;
+                if (!IsActiveDamageChainRootLocked(
+                        pinned_damage_replays[candidate_slot].event.sequence)) {
+                    replacement = candidate_slot;
+                    break;
+                }
+            }
+            if (replacement == kPinnedDamageReplayCapacity) return;
+            pinned_damage_replays[replacement] = record;
             return;
         }
         const auto slot = (pinned_damage_replay_start + pinned_damage_replay_count) %
@@ -4195,6 +4355,129 @@ struct Ue5NteAdapter::State {
             }
         }
         return nullptr;
+    }
+
+    [[nodiscard]] DamageChainRecord* FindDamageChainLocked(
+        const std::uint64_t chain_id) noexcept {
+        if (chain_id == 0) return nullptr;
+        for (auto& chain : damage_chains) {
+            if (chain.id == chain_id) return &chain;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] bool DamageEventMatchesChainParticipantsLocked(
+        const std::uint64_t chain_id,
+        const AnomalyNteDamageEventV1& event) noexcept {
+        const auto* const chain = FindDamageChainLocked(chain_id);
+        return chain != nullptr &&
+            !chain->context_invalidated &&
+            chain->world_generation == world_generation &&
+            chain->object_generation == object_generation &&
+            event.world.id != 0 &&
+            event.world.generation == chain->world_generation &&
+            event.attacker.id != 0 &&
+            event.attacker.id == chain->root_attacker.id &&
+            event.attacker.generation == chain->root_attacker.generation &&
+            event.victim.id != 0 &&
+            event.victim.id == chain->root_victim.id &&
+            event.victim.generation == chain->root_victim.generation;
+    }
+
+    [[nodiscard]] bool DamageEventMatchesChainRootLocked(
+        const std::uint64_t chain_id,
+        const AnomalyNteDamageEventV1& event) noexcept {
+        const auto* const chain = FindDamageChainLocked(chain_id);
+        return DamageEventMatchesChainParticipantsLocked(chain_id, event) &&
+            chain != nullptr &&
+            chain->root_source_id != 0 &&
+            event.source_id == chain->root_source_id;
+    }
+
+    [[nodiscard]] bool HasDamageChainDispatchTokensLocked(
+        const std::uint64_t chain_id) const noexcept {
+        if (chain_id == 0) return false;
+        for (const auto& token : damage_chain_dispatch_tokens) {
+            if (token.occupied && token.chain_id == chain_id) return true;
+        }
+        return false;
+    }
+
+    // One token represents one successful native application awaiting its real DamageEvent.
+    // Tokens do not expire by wall time; a full ledger backpressures dispatch.
+    [[nodiscard]] bool ConsumeDamageChainDispatchTokenForDamageLocked(
+        const std::uintptr_t attacker, const std::uintptr_t victim,
+        const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
+        const ReplayEffectContext* const ordinary_context,
+        std::uint64_t& chain_id,
+        const std::uint64_t expected_chain_id = 0) noexcept {
+        chain_id = 0;
+        std::size_t best_slot = kDamageChainDispatchTokenCapacity;
+        std::uint64_t best_sequence = (std::numeric_limits<std::uint64_t>::max)();
+        for (std::size_t index{}; index < damage_chain_dispatch_tokens.size(); ++index) {
+            const auto& token = damage_chain_dispatch_tokens[index];
+            if (!token.occupied || !token.pending || token.chain_id == 0 ||
+                token.tick_sequence > capture_tick_sequence ||
+                (expected_chain_id != 0 && token.chain_id != expected_chain_id)) continue;
+            const auto* const chain = FindDamageChainLocked(token.chain_id);
+            if (chain == nullptr || chain->context_invalidated || source_id == 0 ||
+                chain->root_source_id == 0 || chain->root_source_id != source_id) continue;
+            // Both synchronous and delayed paths must prove the same attacker and victim
+            // before consuming a token. The expected TLS chain id narrows the candidate;
+            // it does not waive source or participant identity validation.
+            std::uintptr_t root_attacker{}, root_victim{};
+            if (!ResolveObjectHandleLocked(chain->root_attacker, root_attacker) ||
+                !ResolveObjectHandleLocked(chain->root_victim, root_victim) ||
+                root_attacker != attacker || root_victim != victim) continue;
+            if (expected_chain_id == 0 && ordinary_context != nullptr &&
+                ordinary_context->tick_sequence >= token.tick_sequence) {
+                // Don't classify a fresh natural attack as an old chain callback.
+                continue;
+            }
+            if (token.sequence < best_sequence) {
+                best_sequence = token.sequence;
+                best_slot = index;
+            }
+        }
+        if (best_slot == kDamageChainDispatchTokenCapacity) return false;
+        chain_id = damage_chain_dispatch_tokens[best_slot].chain_id;
+        damage_chain_dispatch_tokens[best_slot] = {};
+        return chain_id != 0;
+    }
+
+    [[nodiscard]] bool IsActiveDamageChainRootLocked(
+        const std::uint64_t damage_sequence) const noexcept {
+        if (damage_sequence == 0) return false;
+        for (const auto& chain : damage_chains) {
+            if (chain.root_damage_sequence == damage_sequence &&
+                chain.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool IsKnownDamageChainRootLocked(
+        const std::uint64_t damage_sequence) const noexcept {
+        if (damage_sequence == 0) return false;
+        for (const auto& chain : damage_chains) {
+            if (chain.root_damage_sequence == damage_sequence &&
+                chain.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY &&
+                !chain.context_invalidated) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static void SetDamageChainMessage(
+        DamageChainRecord& chain, const std::string_view message) noexcept {
+        chain.status_message.fill('\0');
+        const auto count = (std::min)(
+            message.size(), chain.status_message.size() - 1U);
+        if (count != 0) {
+            std::memcpy(chain.status_message.data(), message.data(), count);
+        }
     }
 
     void RecordCombatEventLocked(AnomalyNteCombatEventV1 event) noexcept {
@@ -5618,7 +5901,8 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t source_parameter_address,
         const std::uint8_t ingress_mask,
         const CapturedGameplayTagArrays& gameplay_tags,
-        const bool tag_arrays_valid) noexcept {
+        const bool tag_arrays_valid,
+        const std::uint64_t damage_chain_id) noexcept {
         const bool character_by_actor_wrapper =
             kind == CombatCaptureKind::GameplayEffectByActorFromCharacter;
         const bool server_character_by_actor =
@@ -5654,6 +5938,7 @@ struct Ue5NteAdapter::State {
                         : kGameplayEffectReplayToTargetFunctionParmsSize)));
         captured.object_generation = object_generation;
         captured.tick_sequence = capture_tick_sequence;
+        captured.damage_chain_id = damage_chain_id;
         captured.source_parameter_address = source_parameter_address;
         captured.ingress_mask = ingress_mask;
         captured.duplicate_observation_count = 0;
@@ -5677,6 +5962,7 @@ struct Ue5NteAdapter::State {
                 if (!previous.valid ||
                     previous.object_generation != captured.object_generation ||
                     previous.tick_sequence != captured.tick_sequence ||
+                    previous.damage_chain_id != captured.damage_chain_id ||
                     previous.source_parameter_address != captured.source_parameter_address ||
                     previous.receiver != captured.receiver ||
                     previous.function != captured.function ||
@@ -5740,7 +6026,8 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t source_parameter_address,
         const std::uint8_t ingress_mask,
         const CapturedGameplayTagArrays& gameplay_tags,
-        const bool tag_arrays_valid) noexcept {
+        const bool tag_arrays_valid,
+        const std::uint64_t damage_chain_id) noexcept {
         switch (kind) {
         case CombatCaptureKind::CharacterDamage:
             CaptureCharacterDamageBytesLocked(parameters, capture_tick_sequence);
@@ -5758,7 +6045,8 @@ struct Ue5NteAdapter::State {
         case CombatCaptureKind::GameplayEffectByActorFromServer:
             CaptureReplayEffectInvocationLocked(
                 kind, receiver, function, parameters, capture_tick_sequence,
-                source_parameter_address, ingress_mask, gameplay_tags, tag_arrays_valid);
+                source_parameter_address, ingress_mask, gameplay_tags, tag_arrays_valid,
+                damage_chain_id);
             break;
         }
     }
@@ -5776,7 +6064,8 @@ struct Ue5NteAdapter::State {
                 std::span<const std::uint8_t>(capture.payload).first(capture.payload_size),
                 capture.info_offset, capture.tick_sequence, capture.receiver, capture.function,
                 capture.source_parameter_address, capture.ingress_mask,
-                capture.replay_gameplay_tags, capture.replay_tag_arrays_valid);
+                capture.replay_gameplay_tags, capture.replay_tag_arrays_valid,
+                capture.damage_chain_id);
             ++read;
             ++drained;
         }
@@ -6008,6 +6297,9 @@ struct Ue5NteAdapter::State {
         capture.receiver = receiver;
         capture.function = function;
         capture.source_parameter_address = reinterpret_cast<std::uintptr_t>(parameters);
+        capture.damage_chain_id =
+            CurrentDamageChainInvocationMatches(receiver, function)
+                ? g_current_damage_chain_id : 0U;
         capture.ingress_mask = ingress_mask;
         capture.replay_gameplay_tags = {};
         capture.replay_tag_arrays_valid = true;
@@ -6093,6 +6385,9 @@ struct Ue5NteAdapter::State {
         std::memcpy(&damage.source_serial, source + bindings.damage_source_offset + 4, 4);
         damage.victim = victim;
         damage.attacker = attacker;
+        damage.damage_chain_id =
+            CurrentDamageChainParticipantsMatch(attacker, victim)
+                ? g_current_damage_chain_id : 0U;
         damage.critical = synchronous_critical;
         std::uintptr_t saved_skill_cdo{};
         std::int32_t active_spec_handle{};
@@ -6714,7 +7009,9 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t attacker, const std::uintptr_t victim,
         const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
         ReplayEffectContext& result,
-        ReplayMatchDiagnostics* const diagnostics = nullptr) const noexcept {
+        ReplayMatchDiagnostics* const diagnostics = nullptr,
+        std::size_t* const matched_slot = nullptr) const noexcept {
+        if (matched_slot != nullptr) *matched_slot = kReplayEffectCallCapacity;
         if (diagnostics != nullptr) diagnostics->candidates = static_cast<std::uint32_t>(
             (std::min)(replay_effect_call_count,
                 static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)())));
@@ -6724,6 +7021,7 @@ struct Ue5NteAdapter::State {
         // 时间容差必须有上限；应用时间条件前，先完整校验 DamageGEDef、ASC、函数路由与来源关系。
         constexpr std::uint64_t kReplayCorrelationMaxTickAge = 8U;
         ReplayEffectContext closest_match{};
+        std::size_t closest_slot = kReplayEffectCallCapacity;
         std::uint64_t closest_tick_delta = (std::numeric_limits<std::uint64_t>::max)();
         std::uint32_t matching_candidates{};
         for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
@@ -6753,6 +7051,10 @@ struct Ue5NteAdapter::State {
                 }
                 continue;
             }
+
+            // Chain-dispatched invocations are replay seeds, not valid roots for a new chain.
+            // They are correlated independently below, one invocation per observed event.
+            if (candidate.damage_chain_id != 0 || candidate.damage_callback_correlated) continue;
 
             ReplayMatchFailure failure = ReplayMatchFailure::None;
             if (!ReplayContextMatchesDamageLocked(
@@ -6867,6 +7169,7 @@ struct Ue5NteAdapter::State {
             // 中文说明：优先选择时间差最小的精确调用；反向遍历保证同 Tick 多条调用时优先取最新捕获项。
             if (matching_candidates == 0 || delta < closest_tick_delta) {
                 closest_match = candidate;
+                closest_slot = index;
                 closest_tick_delta = delta;
             }
             if (matching_candidates != (std::numeric_limits<std::uint32_t>::max)()) {
@@ -6876,7 +7179,69 @@ struct Ue5NteAdapter::State {
         if (matching_candidates == 0) return false;
         closest_match.matching_candidate_count = matching_candidates;
         result = closest_match;
+        if (matched_slot != nullptr) *matched_slot = closest_slot;
         return true;
+    }
+
+    // If a chain DamageEvent notification arrives beyond the standard replay-correlation
+    // window, use a chain-tagged exact GEDef/ASC/source/target match only to recover the
+    // chain identity. Ordinary root-hit matching above keeps its strict eight-tick bound.
+    // A delayed native damage callback can outlive the ordinary eight-tick event
+    // correlation window. Use the chain-tagged effect identity only while that chain
+    // still has dispatched applications lacking observed damage callbacks. Once all
+    // dispatched applications have been observed, stale contexts must not label a later
+    // independent attack on the same target as chain-generated.
+    // Match delayed damage callbacks to one exact, unconsumed chain-tagged invocation.
+    // This correlation has no wall-clock expiry: an outstanding native application may
+    // report its real DamageEvent later. However, each captured invocation can account for
+    // at most one callback, and only while the chain has dispatched-but-unobserved work.
+    [[nodiscard]] bool FindDelayedChainIdentityForDamageLocked(
+        const std::uintptr_t attacker, const std::uintptr_t victim,
+        const std::uint64_t source_id, const std::uint64_t capture_tick_sequence,
+        std::uint64_t& chain_id,
+        const std::uint64_t expected_chain_id = 0) noexcept {
+        chain_id = 0;
+        std::size_t best_slot = kReplayEffectCallCapacity;
+        std::uint64_t best_chain_id{};
+        std::uint64_t closest_tick_delta = (std::numeric_limits<std::uint64_t>::max)();
+        for (std::size_t reverse{}; reverse < replay_effect_call_count; ++reverse) {
+            const auto index = (replay_effect_call_start + replay_effect_call_count - 1U -
+                reverse) % kReplayEffectCallCapacity;
+            auto& candidate = replay_effect_calls[index];
+            if (!candidate.valid || candidate.damage_chain_id == 0 ||
+                candidate.damage_callback_correlated ||
+                candidate.tick_sequence > capture_tick_sequence ||
+                (expected_chain_id != 0 && candidate.damage_chain_id != expected_chain_id)) {
+                continue;
+            }
+            const auto* const chain = FindDamageChainLocked(candidate.damage_chain_id);
+            if (chain == nullptr ||
+                chain->observed_chain_damage_count >= chain->dispatched_repeat_count ||
+                chain->root_source_id == 0 || chain->root_source_id != source_id) {
+                continue;
+            }
+            std::uintptr_t root_attacker{};
+            std::uintptr_t root_victim{};
+            if (!ResolveObjectHandleLocked(chain->root_attacker, root_attacker) ||
+                !ResolveObjectHandleLocked(chain->root_victim, root_victim) ||
+                root_attacker != attacker || root_victim != victim) {
+                continue;
+            }
+            if (!ReplayContextMatchesDamageLocked(
+                    candidate, attacker, victim, source_id, nullptr)) {
+                continue;
+            }
+            const auto delta = capture_tick_sequence - candidate.tick_sequence;
+            if (best_slot == kReplayEffectCallCapacity || delta < closest_tick_delta) {
+                best_slot = index;
+                best_chain_id = candidate.damage_chain_id;
+                closest_tick_delta = delta;
+            }
+        }
+        if (best_slot == kReplayEffectCallCapacity) return false;
+        replay_effect_calls[best_slot].damage_callback_correlated = true;
+        chain_id = best_chain_id;
+        return chain_id != 0;
     }
 
     AnomalyStatusV1 ReplayDamage(
@@ -6925,14 +7290,19 @@ struct Ue5NteAdapter::State {
             std::uintptr_t delayed_attacker{};
             std::uintptr_t delayed_victim{};
             ReplayEffectContext delayed_replay{};
+            std::size_t delayed_replay_slot = kReplayEffectCallCapacity;
             const bool replay_context_found =
                 ResolveObjectHandleLocked(record->event.attacker, delayed_attacker) &&
                 ResolveObjectHandleLocked(record->event.victim, delayed_victim) &&
                 FindReplayContextForDamageLocked(
                     delayed_attacker, delayed_victim, record->event.source_id,
-                    record->event.tick_sequence, delayed_replay, &replay_match_diagnostics);
+                    record->event.tick_sequence, delayed_replay, &replay_match_diagnostics,
+                    &delayed_replay_slot);
             if (replay_context_found) {
                 record->replay = delayed_replay;
+                if (delayed_replay_slot < kReplayEffectCallCapacity) {
+                    replay_effect_calls[delayed_replay_slot].damage_callback_correlated = true;
+                }
             }
         }
         if (!record->replay.valid) {
@@ -7090,9 +7460,15 @@ struct Ue5NteAdapter::State {
         // Native dispatch can enqueue a new hit that later rotates the rolling ring.
         // Snapshot the root before dispatch, then pin only after the validated call succeeds.
         const DamageRecord replay_root = *record;
-        if (!InvokeNativeProcessEventLocked(
+        bool native_dispatch_succeeded{};
+        {
+            DamageChainInvocationScope invocation_scope(
+                replay_receiver, record->replay.function, attacker, victim);
+            native_dispatch_succeeded = InvokeNativeProcessEventLocked(
                 replay_receiver, record->replay.function,
-                parameters.data(), record->replay.parameter_size)) {
+                parameters.data(), record->replay.parameter_size);
+        }
+        if (!native_dispatch_succeeded) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "validated native GameplayEffect call failed");
         }
@@ -7168,6 +7544,339 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    AnomalyStatusV1 StartDamageChain(
+        const AnomalyNteDamageChainRequestV1* request,
+        std::uint64_t* chain_id_out) noexcept {
+        if (chain_id_out != nullptr) *chain_id_out = 0;
+        if (request == nullptr || chain_id_out == nullptr ||
+            request->struct_size < sizeof(*request) || request->flags != 0 ||
+            request->damage_sequence == 0 || request->repeat_count == 0 ||
+            request->repeat_count > ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT ||
+            request->rate_per_second == 0 ||
+            request->rate_per_second > ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid damage-chain request; count/rate outside the declared limits");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "starting a damage chain must run on the Game thread");
+        }
+
+        const auto interval = (std::max)(
+            std::chrono::steady_clock::duration{1},
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(1.0 / request->rate_per_second)));
+        std::scoped_lock lock(mutex);
+        DamageRecord* root = nullptr;
+        for (std::size_t index{}; index < damage_event_count; ++index) {
+            auto& candidate = damage_events[
+                (damage_event_start + index) % kDamageEventCapacity];
+            if (candidate.event.sequence == request->damage_sequence) {
+                root = &candidate;
+                break;
+            }
+        }
+        if (root == nullptr) root = FindPinnedDamageReplayLocked(request->damage_sequence);
+        if (root == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "root CharacterOnDamaged event is no longer present in the validated cache");
+        }
+        if ((root->event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
+            (root->event.flags & ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED) != 0) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "damage chain requires an original CharacterOnDamaged event, not a chain-generated event");
+        }
+        if (root->event.world.id == 0 ||
+            root->event.world.generation != world_generation ||
+            root->event.attacker.id == 0 ||
+            root->event.attacker.generation != object_generation ||
+            root->event.victim.id == 0 ||
+            root->event.victim.generation != object_generation ||
+            root->event.source_id == 0 ||
+            (root->replay.valid && root->replay.object_generation != object_generation)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "root damage lacks current world/object identity or a resolved DamageGEDef source");
+        }
+        if (IsKnownDamageChainRootLocked(request->damage_sequence)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT,
+                "this root damage event already has an active chain");
+        }
+
+        DamageChainRecord* slot = nullptr;
+        for (auto& candidate : damage_chains) {
+            const bool empty = candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY;
+            const bool terminal =
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED ||
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED ||
+                candidate.state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED;
+            const bool confirmations_resolved =
+                candidate.context_invalidated ||
+                candidate.observed_chain_damage_count >= candidate.dispatched_repeat_count;
+            const bool reusable_terminal =
+                !candidate.in_flight && terminal && confirmations_resolved &&
+                !HasDamageChainDispatchTokensLocked(candidate.id);
+            if (empty || reusable_terminal) {
+                slot = &candidate;
+                break;
+            }
+        }
+        if (slot == nullptr) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "all 32 independent damage-chain slots are occupied");
+        }
+        // Pin the validated root before any replay dispatch. The ordinary event ring may
+        // rotate while other independent chains produce events, but this chain must retain
+        // its original captured effect context until every additional application finishes.
+        RetainPinnedDamageReplayLocked(*root);
+
+        std::uint64_t chain_id = damage_chain_next_id++;
+        if (chain_id == 0) chain_id = damage_chain_next_id++;
+        *slot = {};
+        slot->id = chain_id;
+        slot->root_damage_sequence = request->damage_sequence;
+        slot->world_generation = world_generation;
+        slot->object_generation = object_generation;
+        slot->root_attacker = root->event.attacker;
+        slot->root_victim = root->event.victim;
+        slot->root_source_id = root->event.source_id;
+        slot->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING;
+        slot->requested_repeat_count = request->repeat_count;
+        slot->rate_per_second = request->rate_per_second;
+        slot->interval = interval;
+        slot->last_status_code = ANOMALY_STATUS_V1_OK;
+        // Make the first extra application due immediately, but dispatch it only from
+        // ProcessDamageChains after the host tick callback finishes. This keeps all roots
+        // created in one callback under the same bounded, fair scheduler.
+        slot->next_due = std::chrono::steady_clock::now();
+        SetDamageChainMessage(*slot,
+            "原生伤害已捕获；后续应用已排队，首个调用将在当前 Game tick 的队列阶段派发");
+        *chain_id_out = chain_id;
+        return Status(ANOMALY_STATUS_V1_OK,
+            "damage chain queued; repeat count controls total additions, rate controls cadence, and there is no wall-clock expiry");
+    }
+
+    AnomalyStatusV1 DamageChainSnapshot(
+        const std::uint64_t chain_id,
+        AnomalyNteDamageChainSnapshotV1* snapshot) noexcept {
+        if (snapshot == nullptr ||
+            snapshot->struct_size < sizeof(AnomalyNteDamageChainSnapshotV1)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "invalid damage-chain snapshot");
+        }
+        std::scoped_lock lock(mutex);
+        const auto* chain = [&]() -> const DamageChainRecord* {
+            for (const auto& candidate : damage_chains) {
+                if (candidate.id == chain_id && chain_id != 0) return &candidate;
+            }
+            return nullptr;
+        }();
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "damage-chain id is not in the retained status window");
+        }
+        snapshot->struct_size = sizeof(*snapshot);
+        snapshot->state = chain->state;
+        snapshot->chain_id = chain->id;
+        snapshot->root_damage_sequence = chain->root_damage_sequence;
+        snapshot->requested_repeat_count = chain->requested_repeat_count;
+        snapshot->dispatched_repeat_count = chain->dispatched_repeat_count;
+        snapshot->observed_chain_damage_count = chain->observed_chain_damage_count;
+        snapshot->rate_per_second = chain->rate_per_second;
+        snapshot->last_status_code = chain->last_status_code;
+        snapshot->reserved = 0;
+        std::memcpy(snapshot->status_message, chain->status_message.data(),
+            sizeof(snapshot->status_message));
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 CancelDamageChain(const std::uint64_t chain_id) noexcept {
+        if (chain_id == 0) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "chain id is zero");
+        }
+        std::scoped_lock lock(mutex);
+        auto* chain = FindDamageChainLocked(chain_id);
+        if (chain == nullptr) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND,
+                "damage-chain id is not in the retained status window");
+        }
+        if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED;
+            chain->last_status_code = ANOMALY_STATUS_V1_CANCELLED;
+            SetDamageChainMessage(*chain,
+                "用户已取消剩余队列；已派发的伤害不会回滚");
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    void ProcessDamageChains() noexcept {
+        if (!started.load(std::memory_order_acquire) ||
+            GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return;
+        }
+        // A due backlog may continue on later Game ticks, but never emits a same-tick
+        // catch-up burst for one chain.
+        constexpr std::size_t kMaximumDispatchesPerChainPerTick = 1;
+        constexpr std::size_t kMaximumDamageChainDispatchesPerTick =
+            kDamageChainCapacity * kMaximumDispatchesPerChainPerTick;
+        std::array<std::size_t, kDamageChainCapacity> dispatches_this_tick{};
+        for (std::size_t dispatched_this_tick{};
+             dispatched_this_tick < kMaximumDamageChainDispatchesPerTick;
+             ++dispatched_this_tick) {
+            std::uint64_t chain_id{};
+            std::uint64_t root_sequence{};
+            std::size_t token_slot = kDamageChainDispatchTokenCapacity;
+            std::uint64_t reserved_token_sequence{};
+            {
+                std::scoped_lock lock(mutex);
+                const auto now = std::chrono::steady_clock::now();
+                std::size_t due_slot = kDamageChainCapacity;
+                for (std::size_t offset{}; offset < kDamageChainCapacity; ++offset) {
+                    const auto index = (damage_chain_scheduler_cursor + offset) %
+                        kDamageChainCapacity;
+                    const auto& candidate = damage_chains[index];
+                    if (dispatches_this_tick[index] >=
+                            kMaximumDispatchesPerChainPerTick ||
+                        candidate.state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING ||
+                        candidate.dispatched_repeat_count >= candidate.requested_repeat_count ||
+                        candidate.dispatched_repeat_count > candidate.observed_chain_damage_count ||
+                        candidate.in_flight || candidate.next_due > now) {
+                        continue;
+                    }
+                    due_slot = index;
+                    break;
+                }
+                if (due_slot == kDamageChainCapacity) return;
+                std::size_t free_token_slot = kDamageChainDispatchTokenCapacity;
+                for (std::size_t index{}; index < damage_chain_dispatch_tokens.size(); ++index) {
+                    if (!damage_chain_dispatch_tokens[index].occupied) { free_token_slot = index; break; }
+                }
+                auto& due_chain = damage_chains[due_slot];
+                if (free_token_slot == kDamageChainDispatchTokenCapacity) {
+                    SetDamageChainMessage(due_chain,
+                        "待确认账本已满；派发暂缓，剩余次数保留且无过期时间");
+                    return;
+                }
+                auto& token = damage_chain_dispatch_tokens[free_token_slot];
+                token = {};
+                token.occupied = true;
+                token.sequence = damage_chain_dispatch_token_next_sequence++;
+                if (token.sequence == 0) token.sequence = damage_chain_dispatch_token_next_sequence++;
+                token.chain_id = due_chain.id;
+                token.root_damage_sequence = due_chain.root_damage_sequence;
+                token.tick_sequence = tick_sequence.load(std::memory_order_acquire);
+                token_slot = free_token_slot;
+                reserved_token_sequence = token.sequence;
+                due_chain.in_flight = true;
+                ++dispatches_this_tick[due_slot];
+                damage_chain_scheduler_cursor = (due_slot + 1U) % kDamageChainCapacity;
+                chain_id = due_chain.id;
+                root_sequence = due_chain.root_damage_sequence;
+            }
+
+            AnomalyNteDamageReplayRequestV1 replay_request{};
+            replay_request.struct_size = sizeof(replay_request);
+            replay_request.damage_sequence = root_sequence;
+            AnomalyStatusV1 dispatch_status{};
+            {
+                DamageChainDispatchScope chain_scope(chain_id);
+                dispatch_status = ReplayDamage(&replay_request);
+            }
+            std::array<char, ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY> detail{};
+            if (dispatch_status.message.data != nullptr && dispatch_status.message.size != 0) {
+                const auto copied = (std::min)(
+                    dispatch_status.message.size, detail.size() - 1U);
+                std::memcpy(detail.data(), dispatch_status.message.data, copied);
+            }
+
+            {
+                std::scoped_lock lock(mutex);
+                auto* chain = FindDamageChainLocked(chain_id);
+                auto& token = damage_chain_dispatch_tokens[token_slot];
+                const bool token_matches = token.occupied && token.sequence == reserved_token_sequence &&
+                    token.chain_id == chain_id;
+                if (chain == nullptr) { if (token_matches) token = {}; continue; }
+                chain->in_flight = false;
+                if (chain->world_generation != world_generation || chain->object_generation != object_generation) {
+                    if (token_matches) token = {};
+                    if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                        chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+                        chain->last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+                        SetDamageChainMessage(*chain,
+                            "世界或对象代次变化，原生上下文已失效；旧链终止");
+                    }
+                    continue;
+                }
+                if (chain->context_invalidated) {
+                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK &&
+                        chain->dispatched_repeat_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->dispatched_repeat_count;
+                    }
+                    if (token_matches) token = {};
+                    chain->last_status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+                    SetDamageChainMessage(*chain,
+                        "原生绑定/世界代次已失效；在途调用已返回但不能再安全确认，剩余队列已停止");
+                    continue;
+                }
+                chain->last_status_code = dispatch_status.code;
+                if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED) {
+                    if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
+                        if (token_matches) token.pending = true;
+                        if (chain->dispatched_repeat_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                            ++chain->dispatched_repeat_count;
+                        }
+                    } else if (token_matches) {
+                        token = {};
+                    }
+                    SetDamageChainMessage(*chain,
+                        dispatch_status.code == ANOMALY_STATUS_V1_OK
+                            ? "队列已取消；在途原生调用已返回，仍保留其真实伤害确认项"
+                            : "队列已取消；在途调用失败，确认项已清除");
+                    continue;
+                }
+                if (dispatch_status.code == ANOMALY_STATUS_V1_OK) {
+                    if (token_matches) token.pending = true;
+                    if (chain->dispatched_repeat_count !=
+                        (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->dispatched_repeat_count;
+                    }
+                    if (chain->state != ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) continue;
+                    if (chain->dispatched_repeat_count >= chain->requested_repeat_count) {
+                        if (chain->observed_chain_damage_count >= chain->requested_repeat_count) {
+                            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED;
+                            SetDamageChainMessage(*chain,
+                                "已观察到全部请求次数对应的真实伤害事件；队列完成");
+                        } else {
+                            // Native calls have all been dispatched, but the requested
+                            // number of real damage callbacks has not yet been observed.
+                            // Keep the chain alive without re-dispatching or expiring it.
+                            SetDamageChainMessage(*chain,
+                                "全部次数已派发，仍在等待真实伤害事件确认；无时间期限");
+                        }
+                    } else {
+                        // Advance the cadence slot, not the remaining count. A stall leaves
+                        // due work queued; the scheduler can send at most one application per
+                        // chain per Game tick, and it waits for the prior real damage callback.
+                        chain->next_due += chain->interval;
+                        SetDamageChainMessage(*chain,
+                            chain->observed_chain_damage_count < chain->dispatched_repeat_count
+                                ? "已派发当前次数，等待对应的真实伤害事件；确认后继续，无时间期限"
+                                : "队列运行中：按请求速率排队；延迟不会丢弃剩余次数");
+                    }
+                } else {
+                    if (token_matches) token = {};
+                    if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING) {
+                        chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED;
+                        SetDamageChainMessage(*chain, detail[0] != '\0'
+                            ? std::string_view(detail.data())
+                            : std::string_view("后续原生 GameplayEffect 派发失败"));
+                    }
+                }
+            }
+        }
+    }
+
     void ProcessCharacterDamageLocked(
         const float damage,
         const std::int32_t source_index,
@@ -7179,7 +7888,8 @@ struct Ue5NteAdapter::State {
         const bool critical,
         const bool critical_valid,
         const bool partial,
-        const std::uint64_t capture_tick_sequence) noexcept {
+        const std::uint64_t capture_tick_sequence,
+        const std::uint64_t damage_chain_id) noexcept {
         const auto drop = [this]() noexcept {
             ++damage_dropped_count;
             damage_capture_drop_count.fetch_add(1, std::memory_order_relaxed);
@@ -7220,8 +7930,63 @@ struct Ue5NteAdapter::State {
             }
             event.final_damage = static_cast<std::int64_t>(std::llround(damage));
             ReplayEffectContext replay_context{};
+            std::size_t replay_context_slot = kReplayEffectCallCapacity;
             const bool has_replay_context = FindReplayContextForDamageLocked(
-                attacker, victim, event.source_id, capture_tick_sequence, replay_context);
+                attacker, victim, event.source_id, capture_tick_sequence, replay_context,
+                nullptr, &replay_context_slot);
+
+            std::uint64_t correlated_chain_id{};
+            bool chain_damage_callback_correlated{};
+            // A synchronous callback captured inside the exact replay invocation carries a
+            // trusted chain id and participant pair. Preserve that origin marker even if the
+            // emitted DamageGEDef representation cannot be matched to the root; do not count
+            // it as a completed repeat unless the strict source identity and token also match.
+            const bool synchronous_chain_origin =
+                damage_chain_id != 0 &&
+                DamageEventMatchesChainParticipantsLocked(damage_chain_id, event);
+            if (synchronous_chain_origin &&
+                DamageEventMatchesChainRootLocked(damage_chain_id, event)) {
+                correlated_chain_id = damage_chain_id;
+                std::uint64_t consumed_chain_id{};
+                chain_damage_callback_correlated = ConsumeDamageChainDispatchTokenForDamageLocked(
+                    attacker, victim, event.source_id, capture_tick_sequence,
+                    has_replay_context ? &replay_context : nullptr, consumed_chain_id,
+                    correlated_chain_id);
+            } else {
+                chain_damage_callback_correlated = ConsumeDamageChainDispatchTokenForDamageLocked(
+                    attacker, victim, event.source_id, capture_tick_sequence,
+                    has_replay_context ? &replay_context : nullptr, correlated_chain_id);
+            }
+            if (correlated_chain_id != 0 &&
+                !DamageEventMatchesChainRootLocked(correlated_chain_id, event)) {
+                correlated_chain_id = 0;
+                chain_damage_callback_correlated = false;
+            }
+            if (correlated_chain_id == 0 && has_replay_context &&
+                replay_context_slot < kReplayEffectCallCapacity) {
+                replay_effect_calls[replay_context_slot].damage_callback_correlated = true;
+            }
+            if (synchronous_chain_origin || correlated_chain_id != 0) {
+                // Provenance prevents recursive queue creation; only a one-to-one token
+                // match after strict root-effect validation increments observed count.
+                event.flags |= ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED;
+            }
+            if (correlated_chain_id != 0) {
+                if (chain_damage_callback_correlated) {
+                    if (auto* chain = FindDamageChainLocked(correlated_chain_id);
+                        chain != nullptr && chain->observed_chain_damage_count !=
+                            (std::numeric_limits<std::uint32_t>::max)()) {
+                        ++chain->observed_chain_damage_count;
+                        if (chain->state == ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING &&
+                            chain->dispatched_repeat_count >= chain->requested_repeat_count &&
+                            chain->observed_chain_damage_count >= chain->requested_repeat_count) {
+                            chain->state = ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED;
+                            SetDamageChainMessage(*chain,
+                                "已观察到全部请求次数对应的真实伤害事件；队列完成");
+                        }
+                    }
+                }
+            }
             bool attacker_was_local_player_character =
                 attacker != 0 && attacker == player_pawn;
             if (attacker_was_local_player_character) {
@@ -7281,7 +8046,7 @@ struct Ue5NteAdapter::State {
             damage.damage, damage.source_index, damage.source_serial,
             damage.victim, damage.attacker, damage.saved_skill_cdo, damage.active_spec_handle,
             critical, critical_valid, damage.tags.partial || !critical_valid,
-            capture_tick_sequence);
+            capture_tick_sequence, damage.damage_chain_id);
     }
 
     void RefreshEntityCache(
@@ -17279,6 +18044,10 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             sizeof(AnomalyNteDamageReplayServiceV1),
             ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION,
             this, DamageReplayThunk};
+        damage_chain_service = {
+            sizeof(AnomalyNteDamageChainServiceV1),
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            this, DamageChainStartThunk, DamageChainSnapshotThunk, DamageChainCancelThunk};
         skills_service = {
             sizeof(AnomalyNteSkillsServiceV1), ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION,
             this, SkillFrameThunk, SkillSnapshotAtThunk, SkillPageThunk,
@@ -17330,6 +18099,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteActorsServiceV1 actors_service{};
     AnomalyNteCombatServiceV1 combat_service{};
     AnomalyNteDamageReplayServiceV1 damage_replay_service{};
+    AnomalyNteDamageChainServiceV1 damage_chain_service{};
     AnomalyNteSkillsServiceV1 skills_service{};
     AnomalyNteSkillInvocationServiceV1 skill_invocation_service{};
     AnomalyNteMetricsServiceV1 metrics_service{};
@@ -17946,6 +18716,32 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? static_cast<State*>(lease.User())->ReplayDamage(request)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainStartThunk(
+        void* user, const AnomalyNteDamageChainRequestV1* request,
+        std::uint64_t* chain_id) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->StartDamageChain(request, chain_id)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainSnapshotThunk(
+        void* user, std::uint64_t chain_id,
+        AnomalyNteDamageChainSnapshotV1* snapshot) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->DamageChainSnapshot(chain_id, snapshot)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainCancelThunk(
+        void* user, std::uint64_t chain_id) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->CancelDamageChain(chain_id)
             : StoppedStatus();
     }
 
@@ -19002,6 +19798,27 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             semantic_lifetime)) {
         return false;
     }
+    const bool publish_damage_chain_service = framework_hook_ready &&
+        NteCombatProfileAvailable() &&
+        !IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
+    if (publish_damage_chain_service &&
+        !Publish(
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            &endpoint->damage_chain_service,
+            [self, observer_endpoint] {
+                const auto locked = self.lock();
+                const auto observed = observer_endpoint.lock();
+                if (!locked || !observed ||
+                    locked->semantic_endpoint.load(std::memory_order_acquire) != observed) {
+                    return;
+                }
+                locked->player_demand.store(true, std::memory_order_release);
+                locked->combat_demand.store(true, std::memory_order_release);
+            },
+            semantic_lifetime)) {
+        return false;
+    }
     const bool publish_skills_service = framework_hook_ready &&
         NteSkillsProfileAvailable() &&
         !IsPublished(ANOMALY_NTE_SKILLS_SERVICE_V1_ID);
@@ -19418,8 +20235,11 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         const bool damage_replay_service_ready =
             state->NteCombatProfileAvailable() &&
             !state->IsPublished(ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID);
+        const bool damage_chain_service_ready =
+            state->NteCombatProfileAvailable() &&
+            !state->IsPublished(ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID);
         if (combat_service_ready || skills_service_ready || invocation_service_ready ||
-            damage_replay_service_ready) {
+            damage_replay_service_ready || damage_chain_service_ready) {
             static_cast<void>(state->PublishAvailableServices(state));
         }
         state->RefreshPickupConfirmationLocked();
@@ -19501,6 +20321,10 @@ void Ue5NteAdapter::OnGameTick(double delta_seconds) noexcept {
         callback.Invoke(delta_seconds);
     } catch (...) {
     }
+    // Run queued native-effect applications after plugin callbacks. New roots accepted
+    // during this tick are eligible immediately; work is count-based, fair across chains,
+    // bounded per tick, and never expires merely because wall time passed.
+    state->ProcessDamageChains();
 }
 
 void Ue5NteAdapter::OnDamageEvent(

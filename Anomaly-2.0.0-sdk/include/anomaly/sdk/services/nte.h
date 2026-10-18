@@ -759,6 +759,8 @@ typedef uint32_t AnomalyNteDamageFlagsV1;
 #define ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT (1u << 4u)
 // Without CRITICAL_VALID, an unset CRITICAL bit means unknown, not non-critical.
 #define ANOMALY_NTE_DAMAGE_V1_CRITICAL_VALID (1u << 5u)
+// Core sets this only when a damage callback is correlated with a queued chain dispatch.
+#define ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED (1u << 6u)
 typedef struct AnomalyNteDamageEventV1 {
     uint32_t struct_size; uint32_t flags;
     uint64_t sequence; uint64_t tick_sequence;
@@ -868,6 +870,54 @@ typedef struct AnomalyNteDamageReplayServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *replay_damage)(
         void* user, const AnomalyNteDamageReplayRequestV1* request);
 } AnomalyNteDamageReplayServiceV1;
+
+// Queues additional native GameplayEffect applications from a validated real damage
+// event. repeat_count counts extra applications after the original hit, not the root hit.
+// rate_per_second controls spacing only. The queue has no wall-clock expiry; lag delays
+// work but does not discard remaining applications. A successful dispatch is NOT proof
+// that HP changed; snapshot separates dispatched_repeat_count from observed_chain_damage_count.
+#define ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID "anomaly.nte.damage-chain"
+#define ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION 1u
+#define ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_REPEAT_COUNT 100000u
+#define ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_RATE_PER_SECOND 1000u
+#define ANOMALY_NTE_DAMAGE_CHAIN_V1_MAX_ACTIVE_CHAINS 32u
+#define ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY 192u
+typedef enum AnomalyNteDamageChainStateV1 {
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_EMPTY = 0,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_RUNNING = 1,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_COMPLETED = 2,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_FAILED = 3,
+    ANOMALY_NTE_DAMAGE_CHAIN_STATE_V1_CANCELLED = 4
+} AnomalyNteDamageChainStateV1;
+typedef struct AnomalyNteDamageChainRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t damage_sequence;
+    uint32_t repeat_count;
+    uint32_t rate_per_second;
+} AnomalyNteDamageChainRequestV1;
+typedef struct AnomalyNteDamageChainSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t state;
+    uint64_t chain_id;
+    uint64_t root_damage_sequence;
+    uint32_t requested_repeat_count;
+    uint32_t dispatched_repeat_count;
+    uint32_t observed_chain_damage_count;
+    uint32_t rate_per_second;
+    uint32_t last_status_code;
+    uint32_t reserved;
+    char status_message[ANOMALY_NTE_DAMAGE_CHAIN_V1_STATUS_MESSAGE_CAPACITY];
+} AnomalyNteDamageChainSnapshotV1;
+typedef struct AnomalyNteDamageChainServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *start_chain)(
+        void* user, const AnomalyNteDamageChainRequestV1* request, uint64_t* chain_id);
+    AnomalyStatusV1 (ANOMALY_CALL *snapshot)(
+        void* user, uint64_t chain_id, AnomalyNteDamageChainSnapshotV1* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *cancel_chain)(void* user, uint64_t chain_id);
+} AnomalyNteDamageChainServiceV1;
+
 
 typedef struct AnomalyNteSkillFrameV1 {
     uint32_t struct_size; uint32_t flags;
