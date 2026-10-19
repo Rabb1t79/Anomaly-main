@@ -11434,289 +11434,156 @@ struct Ue5NteAdapter::State {
     }
 
 
-    [[nodiscard]] bool ReadSavedVehicleConfigurationLocked(
+    [[nodiscard]] bool BuildVehicleConfigurationLocked(
         const VehicleCatalogEntry& selected,
-        SavedVehicleConfiguration& saved,
+        const AnomalyNteVehicleSummonRequestV1& request,
+        VehicleBuildConfiguration& build,
         std::string& failure) noexcept {
-        saved = {};
+        build = {};
         failure.clear();
         try {
-            if (!selected.vehicle_id_valid) {
-                failure = "DT_VehicleData 没有有效的 FVehicleData.VehicleID，无法关联玩家改装存档";
+            if (!selected.vehicle_id_valid ||
+                (selected.vehicle_id_comparison_index == 0 && selected.vehicle_id_number == 0)) {
+                failure = "所选车型没有可验证的 VehicleData.VehicleID";
                 return false;
             }
-            const std::uint64_t requested_vehicle_id =
-                static_cast<std::uint64_t>(selected.vehicle_id_comparison_index) |
+            if (request.module_selection_count > 32U ||
+                (request.module_selection_count != 0 && request.module_selections == nullptr)) {
+                failure = "自定义模块选择数量或数组指针无效";
+                return false;
+            }
+            if (!EnsureVehicleCustomizationCatalogLocked(selected)) {
+                failure = vehicle_customization_failure_reason;
+                return false;
+            }
+            build.vehicle_id = static_cast<std::uint64_t>(selected.vehicle_id_comparison_index) |
                 (static_cast<std::uint64_t>(selected.vehicle_id_number) << 32U);
-            if (requested_vehicle_id == 0) {
-                failure = "所选载具 VehicleID 为 None";
-                return false;
-            }
 
-            const auto player_state_offset = Layout(profile, "controller.playerState", -1);
-            std::uintptr_t player_state{};
-            std::uintptr_t player_state_class{};
-            if (player_controller == 0 || player_state_offset < 0 ||
-                !ReadPointerAt(*memory, player_controller, player_state_offset, player_state) ||
-                player_state == 0 ||
-                !ReadPointerAt(*memory, player_state, Layout(profile, "object.class"), player_state_class)) {
-                failure = "无法解析本地 HTPlayerState";
-                return false;
-            }
-
-            ReflectedPropertyInfo vehicle_component_property;
-            if (!FindReflectedPropertyLocked(
-                    player_state_class, "VehicleComponentPtr", vehicle_component_property, true) ||
-                vehicle_component_property.type != "ObjectProperty" ||
-                vehicle_component_property.element_size != 8 ||
-                vehicle_component_property.offset != 0x25C8 ||
-                vehicle_component_property.array_dim != 1) {
-                failure = "HTPlayerState.VehicleComponentPtr 未通过 Dump 5.6.1 反射校验";
-                return false;
-            }
-            std::uintptr_t vehicle_component{};
-            if (!ReadValue(*memory,
-                    player_state + static_cast<std::uintptr_t>(vehicle_component_property.offset),
-                    vehicle_component) || vehicle_component == 0) {
-                failure = "本地玩家尚未初始化 HTVehicleComponent";
-                return false;
-            }
-
-            std::uintptr_t expected_vehicle_component_class{};
-            std::uintptr_t actual_vehicle_component_class{};
-            if (!FindExactObjectLocked(
-                    L"/Script/HTGame.HTVehicleComponent", expected_vehicle_component_class) ||
-                !ReadPointerAt(*memory, vehicle_component, Layout(profile, "object.class"),
-                    actual_vehicle_component_class) ||
-                !IsClassDerivedFromLocked(actual_vehicle_component_class, expected_vehicle_component_class)) {
-                failure = "玩家 VehicleComponent 的运行时类型未通过校验";
-                return false;
-            }
-
-            ReflectedPropertyInfo whole_vehicle_map_property;
-            if (!FindReflectedPropertyLocked(actual_vehicle_component_class,
-                    "WholeVehicleDatas", whole_vehicle_map_property, true) ||
-                whole_vehicle_map_property.type != "MapProperty" ||
-                whole_vehicle_map_property.element_size != 0x50 ||
-                whole_vehicle_map_property.offset != 0x1B8 ||
-                whole_vehicle_map_property.array_dim != 1) {
-                failure = "HTVehicleComponent.WholeVehicleDatas 未通过 Dump 5.6.1 反射校验";
-                return false;
-            }
-
-            std::uintptr_t whole_vehicle_data_struct{};
-            if (!FindExactObjectLocked(
-                    L"/Script/HTGame.WholeVehicleData", whole_vehicle_data_struct)) {
-                failure = "HTGame.WholeVehicleData 反射类型不可用";
-                return false;
-            }
-            const auto validate_saved_field = [&](const std::string_view name,
-                    const std::string_view type, const std::int32_t element_size,
-                    const std::int32_t offset, ReflectedPropertyInfo& property) {
-                return FindReflectedPropertyLocked(
-                           whole_vehicle_data_struct, name, property, false) &&
-                    property.type == type && property.element_size == element_size &&
-                    property.offset == offset && property.array_dim == 1;
-            };
-            ReflectedPropertyInfo saved_vehicle_id_property;
-            ReflectedPropertyInfo modules_property;
-            ReflectedPropertyInfo skin_id_property;
-            ReflectedPropertyInfo default_data_property;
-            if (!validate_saved_field("VehicleID", "NameProperty", 8, 0x00,
-                    saved_vehicle_id_property) ||
-                !validate_saved_field("Modules", "ArrayProperty", 0x10, 0x28, modules_property) ||
-                !validate_saved_field("SkinID", "NameProperty", 8, 0x78, skin_id_property) ||
-                !validate_saved_field("FishExtraData", "StructProperty", 0x1C, 0xA4,
-                    default_data_property) ||
-                default_data_property.structure == 0) {
-                failure = "WholeVehicleData 的 VehicleID / Modules / SkinID / FishExtraData 字段校验失败";
-                return false;
-            }
-            std::string saved_default_data_type;
-            if (!ReadReflectedObjectNameLocked(
-                    default_data_property.structure, saved_default_data_type) ||
-                saved_default_data_type != "VehicleModuleDefaultData") {
-                failure = "WholeVehicleData.FishExtraData 结构类型不是 VehicleModuleDefaultData";
-                return false;
-            }
-
-            // Dump 5.6.1 gives WholeVehicleData size 0xC0. A TMap set element also
-            // carries two 32-bit hash-link fields after the key/value pair. The existing
-            // DT_VehicleData RowMap stride (FName + row pointer + 8-byte hash metadata = 0x18)
-            // validates that shared container layout; this map therefore uses 0xD0.
-            const std::int64_t whole_vehicle_data_size =
-                static_cast<std::int64_t>(default_data_property.offset) +
-                default_data_property.element_size;
-            const std::int64_t map_pair_size =
-                static_cast<std::int64_t>(sizeof(std::uint64_t)) + whole_vehicle_data_size;
-            const std::int64_t map_element_stride =
-                map_pair_size + 2 * static_cast<std::int64_t>(sizeof(std::uint32_t));
-            if (whole_vehicle_data_size != 0xC0 ||
-                map_pair_size != 0xC8 || map_element_stride != 0xD0) {
-                failure = "WholeVehicleData / TMap 元素尺寸与 Dump 5.6.1 容器布局不一致";
-                return false;
-            }
-            std::uintptr_t whole_vehicle_map_address{};
-            if (!AddAddress(vehicle_component,
-                    whole_vehicle_map_property.offset, whole_vehicle_map_address)) {
-                failure = "WholeVehicleDatas 地址计算失败";
-                return false;
-            }
-            SparseMapView map_view;
-            if (!ReadSparseMapViewLocked(whole_vehicle_map_address, map_view,
-                    map_element_stride, static_cast<std::int64_t>(sizeof(std::uint64_t)), 4096) ||
-                map_view.num <= 0 || map_view.num_free > map_view.num) {
-                failure = "玩家 WholeVehicleDatas TMap 布局或容量校验失败";
-                return false;
-            }
-            if (static_cast<std::uint64_t>(map_view.num) >
-                    (std::numeric_limits<std::size_t>::max)() /
-                        static_cast<std::size_t>(map_view.stride)) {
-                failure = "WholeVehicleDatas 元素缓冲区尺寸溢出";
-                return false;
-            }
-            const std::size_t element_bytes =
-                static_cast<std::size_t>(map_view.num) * static_cast<std::size_t>(map_view.stride);
-            std::vector<std::uint8_t> elements(element_bytes);
-            if (!memory->Read(map_view.data, elements.data(), elements.size())) {
-                failure = "无法读取玩家 WholeVehicleDatas 元素";
-                return false;
-            }
-
-            std::uintptr_t matched_value{};
-            std::uint32_t matches{};
-            const std::size_t stride = static_cast<std::size_t>(map_view.stride);
-            for (std::int32_t slot = 0; slot < map_view.num; ++slot) {
-                const auto slot_index = static_cast<std::uint32_t>(slot);
-                const std::size_t flag_index = static_cast<std::size_t>(slot_index) / 32U;
-                if (flag_index >= map_view.flags.size()) {
-                    failure = "WholeVehicleDatas sparse-map 活跃标记数组越界";
+            const VehicleCustomizationOption* selected_skin{};
+            if (request.skin_id.data != nullptr && request.skin_id.size != 0) {
+                if (request.skin_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                    failure = "涂装 ID 超出 ABI 长度限制";
                     return false;
                 }
-                if ((map_view.flags[flag_index] & (1U << (slot_index & 31U))) == 0) continue;
-
-                const auto* entry = elements.data() + static_cast<std::size_t>(slot) * stride;
-                std::uint64_t map_key{};
-                std::memcpy(&map_key, entry, sizeof(map_key));
-                std::uint64_t record_vehicle_id{};
-                std::memcpy(&record_vehicle_id,
-                    entry + sizeof(std::uint64_t) +
-                        static_cast<std::size_t>(saved_vehicle_id_property.offset),
-                    sizeof(record_vehicle_id));
-
-                const bool key_matches = map_key == requested_vehicle_id;
-                const bool record_matches = record_vehicle_id == requested_vehicle_id;
-                if (key_matches != record_matches) {
-                    failure = "玩家车辆存档的 TMap 键与 WholeVehicleData.VehicleID 不一致";
+                const std::string_view requested_skin{request.skin_id.data, request.skin_id.size};
+                for (const auto& option : vehicle_customization_options) {
+                    if (option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN &&
+                        option.id == requested_skin) {
+                        selected_skin = &option;
+                        break;
+                    }
+                }
+                if (selected_skin == nullptr) {
+                    failure = "所选涂装 ID 不属于当前车型的 VehicleSkinDataTable";
                     return false;
                 }
-                if (!key_matches) continue;
-
-                const std::uint64_t value_delta =
-                    static_cast<std::uint64_t>(slot) * static_cast<std::uint64_t>(map_view.stride) +
-                    sizeof(std::uint64_t);
-                if (value_delta > (std::numeric_limits<std::uintptr_t>::max)() - map_view.data) {
-                    failure = "玩家车辆存档地址溢出";
-                    return false;
+            } else {
+                for (const auto& option : vehicle_customization_options) {
+                    if (option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN &&
+                        option.is_default) {
+                        selected_skin = &option;
+                        break;
+                    }
                 }
-                const std::uintptr_t value_address =
-                    map_view.data + static_cast<std::uintptr_t>(value_delta);
-                if (!ReadableRange(*memory, value_address,
-                        static_cast<std::size_t>(whole_vehicle_data_size))) {
-                    failure = "玩家车辆改装存档不在可读内存范围内";
-                    return false;
-                }
-                matched_value = value_address;
-                ++matches;
-            }
-            if (matches == 0 || matched_value == 0) {
-                failure = "玩家存档中找不到所选载具的 WholeVehicleData；改装召唤已取消";
-                return false;
-            }
-            if (matches != 1) {
-                failure = "玩家存档中存在多个匹配的载具记录，拒绝猜测改装方案";
-                return false;
-            }
-
-            std::uint64_t stored_vehicle_id{};
-            if (!ReadValue(*memory,
-                    matched_value + static_cast<std::uintptr_t>(saved_vehicle_id_property.offset),
-                    stored_vehicle_id) ||
-                stored_vehicle_id != requested_vehicle_id ||
-                !ReadValue(*memory,
-                    matched_value + static_cast<std::uintptr_t>(skin_id_property.offset),
-                    saved.skin_id) ||
-                !memory->Read(
-                    matched_value + static_cast<std::uintptr_t>(default_data_property.offset),
-                    saved.default_module_data.data(), saved.default_module_data.size())) {
-                failure = "玩家车辆的 VehicleID / SkinID / FishExtraData 无法完整读取";
-                return false;
-            }
-            std::uint32_t saved_skin_index{}, saved_skin_number{};
-            std::memcpy(&saved_skin_index, &saved.skin_id, sizeof(saved_skin_index));
-            std::memcpy(&saved_skin_number,
-                reinterpret_cast<const std::uint8_t*>(&saved.skin_id) + sizeof(saved_skin_index),
-                sizeof(saved_skin_number));
-            std::string resolved_skin_id;
-            if (!ResolveFNameLocked(saved_skin_index, saved_skin_number, resolved_skin_id) ||
-                resolved_skin_id.empty()) {
-                failure = "玩家车辆存档的 SkinID FName 无法解析";
-                return false;
-            }
-
-            std::uintptr_t modules_array_address{};
-            if (!AddAddress(matched_value, modules_property.offset, modules_array_address)) {
-                failure = "WholeVehicleData.Modules 地址计算失败";
-                return false;
-            }
-            NativeArrayHeader module_array;
-            constexpr std::int32_t kMaximumSavedModuleIds = 128;
-            if (!ReadNativeArrayHeaderLocked(
-                    modules_array_address, module_array, kMaximumSavedModuleIds)) {
-                failure = "玩家改装 Modules 数组的 TArray 布局或容量校验失败";
-                return false;
-            }
-            saved.module_ids.resize(static_cast<std::size_t>(module_array.count));
-            if (!saved.module_ids.empty() &&
-                !memory->Read(module_array.data, saved.module_ids.data(),
-                    saved.module_ids.size() * sizeof(std::uint64_t))) {
-                saved.module_ids.clear();
-                failure = "玩家改装 Modules 数组无法读取";
-                return false;
-            }
-            for (const auto raw_module_id : saved.module_ids) {
-                std::uint32_t module_name_index{}, module_name_number{};
-                std::memcpy(&module_name_index, &raw_module_id, sizeof(module_name_index));
-                std::memcpy(&module_name_number,
-                    reinterpret_cast<const std::uint8_t*>(&raw_module_id) + sizeof(module_name_index),
-                    sizeof(module_name_number));
-                std::string resolved_module_name;
-                if (!ResolveFNameLocked(module_name_index, module_name_number, resolved_module_name) ||
-                    resolved_module_name.empty()) {
-                    failure = "玩家存档的 Modules 中存在无法解析的 FName";
+                if (selected_skin == nullptr) {
+                    failure = "当前车型没有可验证的默认涂装，请先在改造清单中选择涂装";
                     return false;
                 }
             }
-            saved.vehicle_id = stored_vehicle_id;
+            build.skin_id = selected_skin->native_name;
+            if (build.skin_id == 0) {
+                failure = "所选 SkinID 为 None，拒绝调用原生改装函数";
+                return false;
+            }
+
+            // Start from this model's game-defined default module records. The plugin sends only
+            // explicit per-slot overrides; this prevents an omitted UI slot from deleting the
+            // stock module list or pulling another model's choices into the build.
+            for (const auto& option : vehicle_customization_options) {
+                if (option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE &&
+                    option.is_default) {
+                    if (option.native_name == 0) {
+                        failure = "车型默认模块包含无效 FName";
+                        return false;
+                    }
+                    if (std::ranges::find(build.module_ids, option.native_name) ==
+                        build.module_ids.end()) {
+                        build.module_ids.push_back(option.native_name);
+                    }
+                }
+            }
+            if (build.module_ids.size() > 128U) {
+                failure = "车型默认模块数量超过安全上限";
+                return false;
+            }
+
+            std::array<bool, 27> seen_module_types{};
+            for (std::uint32_t index = 0; index < request.module_selection_count; ++index) {
+                const auto& selection = request.module_selections[index];
+                if (selection.struct_size < sizeof(AnomalyNteVehicleModuleSelectionV1) ||
+                    selection.module_type == 0 || selection.module_type >= seen_module_types.size() ||
+                    selection.module_id.data == nullptr || selection.module_id.size == 0 ||
+                    selection.module_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                    failure = "自定义模块选择字段或 ModuleType 无效";
+                    return false;
+                }
+                if (seen_module_types[selection.module_type]) {
+                    failure = "同一 ModuleType 选择了多个模块；每个槽位只能指定一个 ID";
+                    return false;
+                }
+                seen_module_types[selection.module_type] = true;
+                const std::string_view module_id{
+                    selection.module_id.data, selection.module_id.size};
+                const VehicleCustomizationOption* selected_module{};
+                for (const auto& option : vehicle_customization_options) {
+                    if (option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE &&
+                        option.module_type == selection.module_type && option.id == module_id) {
+                        selected_module = &option;
+                        break;
+                    }
+                }
+                if (selected_module == nullptr || selected_module->native_name == 0) {
+                    failure = "模块 ID 或 ModuleType 不属于当前车型的 DT_vehicleModuleData";
+                    return false;
+                }
+
+                // Remove every default item in this slot before inserting the chosen module ID.
+                std::erase_if(build.module_ids, [&](const std::uint64_t native_name) {
+                    for (const auto& candidate : vehicle_customization_options) {
+                        if (candidate.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE &&
+                            candidate.native_name == native_name &&
+                            candidate.module_type == selection.module_type) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+                build.module_ids.push_back(selected_module->native_name);
+            }
+            if (build.module_ids.size() > 128U) {
+                failure = "合并后的模块列表超过安全上限";
+                return false;
+            }
+            failure.clear();
             return true;
         } catch (...) {
-            saved = {};
-            failure = "读取玩家载具改装存档时发生异常";
+            build = {};
+            failure = "组装用户选择的载具改造配置时发生异常";
             return false;
         }
     }
 
-    [[nodiscard]] bool ApplySavedVehicleConfigurationLocked(
+    [[nodiscard]] bool ApplyVehicleConfigurationLocked(
         const std::uintptr_t spawned_vehicle,
-        const SavedVehicleConfiguration& saved,
+        const VehicleBuildConfiguration& saved,
         std::size_t& restored_module_count,
         std::string& failure) noexcept {
         restored_module_count = 0;
         failure.clear();
         try {
             if (spawned_vehicle == 0 || saved.vehicle_id == 0 ||
-                saved.module_ids.size() > 128U) {
-                failure = "生成的车辆或保存配置参数无效";
+                saved.module_ids.size() > 128U || saved.skin_id == 0) {
+                failure = "生成的车辆或用户自定义配置参数无效";
                 return false;
             }
             std::uintptr_t spawned_class{};
@@ -11873,7 +11740,7 @@ struct Ue5NteAdapter::State {
             NativeArrayHeader current_modules_array;
             if (!ReadNativeArrayHeaderLocked(current_modules_address, current_modules_array, 128) ||
                 current_modules_array.count != static_cast<std::int32_t>(saved.module_ids.size())) {
-                failure = "原生改装调用后 CurrentModuleIDList 数量与存档不一致";
+                failure = "原生改装调用后 CurrentModuleIDList 数量与用户所选配置不一致";
                 return false;
             }
             std::vector<std::uint64_t> observed_module_ids(saved.module_ids.size());
@@ -11893,7 +11760,7 @@ struct Ue5NteAdapter::State {
             restored_module_count = saved.module_ids.size();
             return true;
         } catch (...) {
-            failure = "应用玩家载具改装配置时发生异常";
+            failure = "应用用户选择的载具改装配置时发生异常";
             return false;
         }
     }
