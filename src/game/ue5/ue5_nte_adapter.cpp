@@ -11277,6 +11277,16 @@ struct Ue5NteAdapter::State {
                 saved_record.data() + static_cast<std::size_t>(vehicle_id_property.offset), 8);
             std::memcpy(&next.skin_id_name,
                 saved_record.data() + static_cast<std::size_t>(skin_id_property.offset), 8);
+            std::uint32_t skin_index{}, skin_number{};
+            std::memcpy(&skin_index, &next.skin_id_name, sizeof(skin_index));
+            std::memcpy(&skin_number,
+                reinterpret_cast<const std::uint8_t*>(&next.skin_id_name) + sizeof(skin_index),
+                sizeof(skin_number));
+            std::string resolved_skin_id;
+            if (!ResolveFNameLocked(skin_index, skin_number, resolved_skin_id) ||
+                resolved_skin_id.empty()) {
+                return fail("保存记录的 SkinID FName 无法解析");
+            }
             std::memcpy(next.default_module_data.data(),
                 saved_record.data() + static_cast<std::size_t>(fish_extra_property.offset),
                 next.default_module_data.size());
