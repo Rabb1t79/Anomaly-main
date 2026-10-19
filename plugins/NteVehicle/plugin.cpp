@@ -54,6 +54,7 @@ struct Context {
     std::atomic_bool apply_other_torque{};
     std::atomic_bool reset{};
     std::atomic_bool summon{};
+    std::atomic_bool summon_customized{};
     std::atomic_bool friction_toggle{};
     std::atomic_bool started{};
     float speed_ratio{1.0F};
@@ -531,7 +532,7 @@ void Update() {
         }
     }
 
-    if (g_context.summon.exchange(false, std::memory_order_acq_rel)) {
+    const auto execute_summon = [&](const bool customized) {
         AnomalyNteVehicleSummonRequestV1 request{};
         request.struct_size = sizeof(request);
         request.flags = ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
@@ -550,7 +551,7 @@ void Update() {
                     ? g_context.vehicle_labels[index] : selected_id;
             }
             if (position_valid) {
-                // The requested offset stays close to the player: X - 500, Y + 500, Z + 500.
+                // Reuse the established spawn offset for ordinary and customized summons.
                 request.world_position[0] = g_context.player_snapshot.position[0] - 500.0;
                 request.world_position[1] = g_context.player_snapshot.position[1] + 500.0;
                 request.world_position[2] = g_context.player_snapshot.position[2] + 500.0;
@@ -568,38 +569,57 @@ void Update() {
                 : "召唤失败：当前选择未同步到 Host 载具目录";
             SetStatus(reason);
             SetLastSummon(reason);
-        } else {
-            const auto status = g_context.vehicle->summon_vehicle(
-                g_context.vehicle->user, &request);
-            if (status.code == ANOMALY_STATUS_V1_OK) {
-                const std::string label = selected_label.empty() ? selected_id : selected_label;
-                const std::string detail = status.message.data != nullptr && status.message.size != 0
-                    ? std::string(status.message.data, status.message.size)
-                    : std::string{};
-                constexpr std::string_view verified_prefix = "召唤已实际生成并通过后置验证：";
-                const bool postcondition_verified =
-                    !detail.empty() && detail.find(verified_prefix) == 0;
-                std::string result;
-                if (postcondition_verified) {
-                    // Successful summons stay silent; only failure or unverified states show a message.
-                    SetStatus({});
-                    SetLastSummon({});
-                } else {
-                    // An OK status without the Core's explicit postcondition marker is not
-                    // proof that a new vehicle exists; keep this diagnostic visible.
-                    result = "召唤状态未验证：" + label + " (" + selected_id +
-                        ")；Host 返回 OK，但没有明确的实际生成/后置验证标记";
-                    if (!detail.empty()) result += "；Host 信息：" + detail;
-                    SetStatus(result);
-                    SetLastSummon(result);
-                }
-            } else {
-                const auto reason = StatusDescription("召唤失败", status);
+            return;
+        }
+        auto summon_fn = g_context.vehicle->summon_vehicle;
+        if (customized) {
+            if (!HasField<AnomalyNteVehicleServiceV1,
+                    decltype(AnomalyNteVehicleServiceV1::summon_customized_vehicle)>(
+                    g_context.vehicle,
+                    offsetof(AnomalyNteVehicleServiceV1, summon_customized_vehicle)) ||
+                g_context.vehicle->summon_customized_vehicle == nullptr) {
+                const std::string reason = "召唤改装载具失败：Host 未发布 V6 原生改装召唤接口";
                 SetStatus(reason);
                 SetLastSummon(reason);
+                return;
             }
+            summon_fn = g_context.vehicle->summon_customized_vehicle;
         }
-    }
+        const auto status = summon_fn(g_context.vehicle->user, &request);
+        if (status.code == ANOMALY_STATUS_V1_OK) {
+            const std::string label = selected_label.empty() ? selected_id : selected_label;
+            const std::string detail = status.message.data != nullptr && status.message.size != 0
+                ? std::string(status.message.data, status.message.size)
+                : std::string{};
+            constexpr std::string_view verified_prefix = "召唤已实际生成并通过后置验证：";
+            const bool postcondition_verified =
+                !detail.empty() && detail.find(verified_prefix) == 0;
+            std::string result;
+            if (postcondition_verified) {
+                // Successful summons stay silent; only failures/unverified states are shown.
+                SetStatus({});
+                SetLastSummon({});
+            } else {
+                result = customized
+                    ? "改装载具召唤状态未验证：" + label + " (" + selected_id +
+                        ")；Host 未明确确认改装应用及召唤后置条件"
+                    : "召唤状态未验证：" + label + " (" + selected_id +
+                        ")；Host 返回 OK，但没有明确的实际生成/后置验证标记";
+                if (!detail.empty()) result += "；Host 信息：" + detail;
+                SetStatus(result);
+                SetLastSummon(result);
+            }
+        } else {
+            const auto reason = StatusDescription(
+                customized ? "召唤保存改装载具失败" : "召唤失败", status);
+            SetStatus(reason);
+            SetLastSummon(reason);
+        }
+    };
+    if (g_context.summon.exchange(false, std::memory_order_acq_rel))
+        execute_summon(false);
+    if (g_context.summon_customized.exchange(false, std::memory_order_acq_rel))
+        execute_summon(true);
 
     if (g_context.friction_toggle.exchange(false, std::memory_order_acq_rel)) {
         bool enabled;
@@ -843,6 +863,16 @@ void DrawSummonTab(
     const bool can_summon = player_position_valid && has_selected;
     if (DrawButtonEnabled(ui, "召唤", can_summon)) {
         g_context.summon.store(true, std::memory_order_release);
+    }
+    DrawInlineGap(ui);
+    const bool customized_summon_available =
+        HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::summon_customized_vehicle)>(
+                g_context.vehicle,
+                offsetof(AnomalyNteVehicleServiceV1, summon_customized_vehicle)) &&
+        g_context.vehicle->summon_customized_vehicle != nullptr;
+    if (DrawButtonEnabled(ui, "召唤已保存改装", can_summon && customized_summon_available)) {
+        g_context.summon_customized.store(true, std::memory_order_release);
     }
 }
 
@@ -1197,7 +1227,11 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     if (!vehicle || !player) return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
 
     if (!vehicle->snapshot || !vehicle->set_top_speed_ratio ||
-        !vehicle->summon_vehicle || !vehicle->set_wheel_friction_enabled ||
+        !vehicle->summon_vehicle ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::summon_customized_vehicle)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, summon_customized_vehicle)) ||
+        !vehicle->summon_customized_vehicle || !vehicle->set_wheel_friction_enabled ||
         !vehicle->reset || !vehicle->catalog_snapshot || !vehicle->vehicle_id_at ||
         !vehicle->set_summon_vehicle_id ||
         !HasField<AnomalyNteVehicleServiceV1,
@@ -1244,6 +1278,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.apply_other_torque.store(false, std::memory_order_release);
     g_context.reset.store(false, std::memory_order_release);
     g_context.summon.store(false, std::memory_order_release);
+    g_context.summon_customized.store(false, std::memory_order_release);
     g_context.friction_toggle.store(false, std::memory_order_release);
     g_context.refresh_catalog_requested.store(false, std::memory_order_release);
     g_context.speed_ratio = kLockedSpeedRatio;
@@ -1331,6 +1366,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("载具控制"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.9"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.10.0"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
