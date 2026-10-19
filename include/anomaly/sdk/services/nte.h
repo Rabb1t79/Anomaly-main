@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 5u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 6u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -308,6 +308,8 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
+// Requires restoring the selected vehicle's saved player-owned module/skin configuration.
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_OWNED_MODIFICATIONS (1u << 2u)
 typedef struct AnomalyNteVehicleSnapshotV1 {
     uint32_t struct_size;
     uint32_t flags;
