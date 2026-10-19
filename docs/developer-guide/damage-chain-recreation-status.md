@@ -201,4 +201,10 @@
 ### RateQueue 验收测试补强（2026-10-18）
 - 新增五秒停顿测试：暂停超过一秒后任务仍有效；恢复执行时只消耗一次已确认任务；下一次执行仍按设定间隔排期，不会把积压任务瞬间补发。
 - 新增完整 100 次推进测试：每次成功只消耗一个额外任务，直到第 100 次成功才完成队列。这验证了调度和计数语义，不模拟游戏原生伤害，也不能证明每次 Core 调用都对目标造成伤害。
-- 本次修改与两份进度/行为合同 MD 同一提交；独立插件构建与调度器测试将自动重跑，结果以新 run 为准。
+- 已验证：独立插件构建工作流 [39127512880](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512880) 成功，RateQueue 测试 1/1 通过，测试包已上传。
+### 当前提交完整 CI 结果（commit `8dd451f2abb7079a0ec2b275b025305186007888`）
+- **独立插件 + 调度器测试** [39127512880](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512880)：成功；RateQueue 测试 1/1 通过，`100% tests passed`。插件测试包 SHA-256：`4b609129500c3db882ccf0bb25a33d7a010486ee2d534a9438ad8b42d4fc8811`。
+- **Core / ABI 校验** [39127512883](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512883)：成功；已生成 `nte-damage-chain-core-validation` 诊断工件，SHA-256：`73568e4be73ac5fe38acf61eec272b1d9f3030d37bc28de01ab8daaff26df564`。
+- **全量 Windows 构建** [39127513011](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127513011)：成功，包括构建、ABI 快照与打包接口验证。
+- **Runtime 探针包** [39127512930](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512930)：成功；它实际校验的是 `plugins/DamageChainReaction`，工件 SHA-256：`59c9a40a63dc44b56ee7196f02a332aeaa769ddcd8f391c6884f50c8107be080`。
+- 上述成功只证明该提交的构建、ABI 与包完整性检查通过，不是游戏实机效果证明。周期事件是否确实每次造成一次伤害、100 次是否完全兑现、目标是否稳定、是否存在 Actor 自主触发，仍未验证；生成后才写入容器/周期字段的生命周期风险依然开放。

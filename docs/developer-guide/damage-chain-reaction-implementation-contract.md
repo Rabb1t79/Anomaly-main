@@ -114,4 +114,11 @@ With the feature disabled, one native attack produces one ordinary damage result
 
 - Added deterministic tests for a five-second pause: the chain remains eligible, only one confirmed item is consumed when execution resumes, and the next item is scheduled one configured interval later rather than issuing a catch-up burst.
 - Added a full 100-item progression test: the queue remains active until all 100 confirmations are committed and reaches completion only after the 100th success. This validates scheduler/count semantics; it does not simulate native damage or prove each Core dispatch hits the game target.
-- The independent plugin workflow will rerun on this test-source change. Record its result only after GitHub reports the new run complete.
+- Verified: independent plugin workflow [39127512880](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512880) passed and its RateQueue test passed 1/1 on commit `8dd451f2abb7079a0ec2b275b025305186007888`.
+## Latest verified build state — 2026-10-18, commit `8dd451f2abb7079a0ec2b275b025305186007888`
+
+- Independent `DamageChainReaction` plugin build, RateQueue tests, and plugin package passed: [run 39127512880](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512880). Test report: `1/1` passed, `100% tests passed`; artifact `DamageChainReaction-windows-x64`, SHA-256 `4b609129500c3db882ccf0bb25a33d7a010486ee2d534a9438ad8b42d4fc8811`.
+- Core and ABI snapshot validation passed: [run 39127512883](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512883). Artifact `nte-damage-chain-core-validation`, SHA-256 `73568e4be73ac5fe38acf61eec272b1d9f3030d37bc28de01ab8daaff26df564`.
+- Full Windows build and ABI/package checks passed: [run 39127513011](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127513011).
+- Runtime probe successfully built and staged the current `plugins/DamageChainReaction` Runtime package: [run 39127512930](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512930). Artifact `DamageChainReactionRuntimeProbe-windows-x64`, SHA-256 `59c9a40a63dc44b56ee7196f02a332aeaa769ddcd8f391c6884f50c8107be080`.
+- These results prove build/ABI/package checks for the specified commit. They are not an in-game execution result: the native period event's actual damage outcome, exact N-hit count, target stability, and absence of autonomous extra triggers remain unverified. In particular, the post-spawn field-configuration order remains a documented lifecycle risk pending runtime evidence.
