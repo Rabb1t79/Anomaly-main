@@ -11151,15 +11151,20 @@ struct Ue5NteAdapter::State {
                 return false;
             }
 
-            // FWholeVehicleData ends at 0xC0; TMap<FName, FWholeVehicleData> stores its
-            // 8-byte key followed by the inline value, giving a reflected element stride of 0xC8.
+            // Dump 5.6.1 gives WholeVehicleData size 0xC0. A TMap set element also
+            // carries two 32-bit hash-link fields after the key/value pair. The existing
+            // DT_VehicleData RowMap stride (FName + row pointer + 8-byte hash metadata = 0x18)
+            // validates that shared container layout; this map therefore uses 0xD0.
             const std::int64_t whole_vehicle_data_size =
                 static_cast<std::int64_t>(default_data_property.offset) +
                 default_data_property.element_size;
-            const std::int64_t map_element_stride =
+            const std::int64_t map_pair_size =
                 static_cast<std::int64_t>(sizeof(std::uint64_t)) + whole_vehicle_data_size;
-            if (whole_vehicle_data_size != 0xC0 || map_element_stride != 0xC8) {
-                failure = "WholeVehicleData 尺寸与 Dump 5.6.1 的 0xC0 布局不一致";
+            const std::int64_t map_element_stride =
+                map_pair_size + 2 * static_cast<std::int64_t>(sizeof(std::uint32_t));
+            if (whole_vehicle_data_size != 0xC0 ||
+                map_pair_size != 0xC8 || map_element_stride != 0xD0) {
+                failure = "WholeVehicleData / TMap 元素尺寸与 Dump 5.6.1 容器布局不一致";
                 return false;
             }
             std::uintptr_t whole_vehicle_map_address{};
