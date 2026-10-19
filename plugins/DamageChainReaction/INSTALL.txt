@@ -1,0 +1,13 @@
+伤害链式反应 0.1.4 安装说明
+
+请将本压缩包解压到 Anomaly\plugins\ 目录；包内自带 DamageChainReaction 文件夹。
+
+最终应为：
+  plugins\DamageChainReaction\manifest.json
+  plugins\DamageChainReaction\plugin.dll
+
+必须将这两个文件作为一组安装，不要把它们解压到 plugins 根目录，也不要覆盖 NteAttackReplay 的文件。
+
+NteAttackReplay 是旧路线，显示名可能同为 “NTE Damage Chain Reaction”，版本 1.9.7，并依赖旧服务 anomaly.nte.damage-replay。测试独立版时请先完全退出游戏和 Anomaly，再将 plugins\NteAttackReplay 文件夹移出 plugins 目录。若 plugins\NteDamageChainReaction 旧文件夹仍存在，也应移出 plugins 目录。旧源代码已在仓库 reference\legacy-plugins 中保留供参考，不属于活动插件。
+
+此包只包含独立版 DamageChainReaction，不包含 AttackReplay，也不会自动清理本机已有的旧插件文件夹。
