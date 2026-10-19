@@ -176,15 +176,18 @@ void AddChain(
     AnomalyGenerationHandleV1 handle{};
     const auto result = service->start_chain(service->user, &request, &handle);
     if (result.code != ANOMALY_STATUS_V1_OK || handle.id == 0) {
-        char line[320]{};
-        std::snprintf(line, sizeof(line),
-            "原始命中 #%llu 未建立链：status=%s(%u)。DamageTriggerActor/EffectContainer 原生配置验证未通过，详见 Core 诊断。",
+        char prefix[192]{};
+        std::snprintf(prefix, sizeof(prefix),
+            "原始命中 #%llu 未建立链：status=%s(%u)",
             static_cast<unsigned long long>(event.sequence),
             StatusName(result.code), result.code);
+        std::string line(prefix);
+        const std::string detail = StatusDetail(result);
+        if (!detail.empty()) line += " detail=" + detail.substr(0, 384);
         {
             std::scoped_lock lock(g.mutex);
             ++g.failure_count;
-            LogLocked(line);
+            LogLocked(std::move(line));
             g.status = std::string("未启动链：") + StatusName(result.code);
         }
         return;
@@ -368,16 +371,19 @@ void UpdateOneChain(
             !found->terminal && !found->awaiting_confirmation) {
             ++g.failure_count;
             found->queue.Defer(Clock::now() + kRetryDelay);
-            char line[256]{};
-            std::snprintf(line, sizeof(line),
+            char prefix[192]{};
+            std::snprintf(prefix, sizeof(prefix),
                 "链 #%llu 的本次应用未进入原生调用：status=%s(%u)，稍后重试；未计入成功次数。",
                 static_cast<unsigned long long>(handle.id),
                 StatusName(applied.code), applied.code);
-            LogLocked(line);
+            std::string line(prefix);
+            const std::string detail = StatusDetail(applied);
+            if (!detail.empty()) line += " detail=" + detail.substr(0, 384);
+            LogLocked(std::move(line));
         } else if (dispatched && found->awaiting_confirmation) {
             char line[224]{};
             std::snprintf(line, sizeof(line),
-                "链 #%llu 已调用 DamageTriggerActor 周期事件，等待真实伤害事件；调用不等于成功。",
+                "链 #%llu 已调用原生 TriggerPeriodGamePlayEffectEvent，等待真实伤害事件；调用不等于成功。",
                 static_cast<unsigned long long>(handle.id));
             LogLocked(line);
         }
