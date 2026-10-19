@@ -348,7 +348,8 @@ typedef struct AnomalyNteVehicleSummonRequestV1 {
     AnomalyStringViewV1 customization_skin_id;
     const AnomalyStringViewV1* customization_module_ids;
     uint32_t customization_module_count;
-    uint32_t customization_catalog_sequence;
+    uint32_t reserved_customization;
+    uint64_t customization_catalog_sequence;
 } AnomalyNteVehicleSummonRequestV1;
 
 typedef struct AnomalyNteVehicleModificationCatalogSnapshotV1 {
