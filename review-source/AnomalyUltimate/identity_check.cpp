@@ -42,12 +42,34 @@ int wmain(int argc, wchar_t** argv) {
         static_cast<int>(id.size()), id.data(),
         static_cast<int>(name.size()), name.data(),
         static_cast<int>(version.size()), version.data());
-    if (id != "anomaly.local.ultimate") {
-        std::fprintf(stderr, "descriptor id mismatch: expected anomaly.local.ultimate\n");
+    if (id != "anomaly.ultimate") {
+        std::fprintf(stderr, "descriptor id mismatch: expected anomaly.ultimate\n");
         FreeLibrary(image);
         return 6;
     }
-    std::printf("exports: AnomalyPluginEntryV1=OK AnomalyPluginCxxThrowV1=OK descriptor-id=OK\n");
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0) {
+        std::fprintf(stderr, "invalid PE header\\n");
+        FreeLibrary(image);
+        return 7;
+    }
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+        reinterpret_cast<const unsigned char*>(image) + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        std::fprintf(stderr, "expected PE32+ x64 image\\n");
+        FreeLibrary(image);
+        return 8;
+    }
+    const auto& tls = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
+    if (tls.VirtualAddress != 0 || tls.Size != 0) {
+        std::fprintf(stderr, "static TLS directory present: RVA=%lu size=%lu\\n",
+            static_cast<unsigned long>(tls.VirtualAddress),
+            static_cast<unsigned long>(tls.Size));
+        FreeLibrary(image);
+        return 9;
+    }
+    std::printf("exports: AnomalyPluginEntryV1=OK AnomalyPluginCxxThrowV1=OK descriptor-id=OK static-tls=absent\\n");
     FreeLibrary(image);
     return 0;
 }
