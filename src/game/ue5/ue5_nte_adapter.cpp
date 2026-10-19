@@ -885,6 +885,14 @@ struct Ue5NteAdapter::State {
         bool vehicle_id_valid{};
         std::uintptr_t row{};
     };
+    struct SavedVehicleCustomization {
+        // FWholeVehicleData / WholeVehicleDatas layout verified against Dump 5.6.1-0+UE5-HT.
+        std::uint64_t vehicle_id_name{};
+        std::uint64_t skin_id_name{};
+        std::vector<std::uint64_t> module_ids;
+        std::vector<std::string> module_names;
+        std::array<std::uint8_t, 0x1C> default_module_data{};
+    };
     std::vector<VehicleCatalogEntry> vehicle_catalog;
     std::uint64_t vehicle_catalog_generation{};
     std::uint64_t vehicle_catalog_sequence{};
@@ -4494,14 +4502,20 @@ struct Ue5NteAdapter::State {
 
     [[nodiscard]] bool ReadSparseMapViewLocked(
         const std::uintptr_t map,
-        SparseMapView& view) const noexcept {
+        SparseMapView& view,
+        const std::int64_t element_stride_override = -1,
+        const std::int64_t row_offset_override = -1) const {
         const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
         const auto data_offset = Layout(profile, "dataTable.rowMapData", 0);
         const auto num_offset = Layout(profile, "dataTable.rowMapNum", 8);
         const auto num_free_offset = Layout(profile, "dataTable.rowMapNumFree", 52);
         const auto max_offset = Layout(profile, "dataTable.rowMapMax", 12);
-        const auto stride = Layout(profile, "dataTable.rowMapElementStride", 24);
-        const auto row_offset = Layout(profile, "dataTable.rowMapRowOffset", 8);
+        const auto configured_stride = Layout(profile, "dataTable.rowMapElementStride", 24);
+        const auto configured_row_offset = Layout(profile, "dataTable.rowMapRowOffset", 8);
+        const auto stride = element_stride_override >= 0
+            ? element_stride_override : configured_stride;
+        const auto row_offset = row_offset_override >= 0
+            ? row_offset_override : configured_row_offset;
         const auto flags_data_offset = Layout(profile, "dataTable.rowMapFlagsData", 32);
         const auto flags_num_offset = Layout(profile, "dataTable.rowMapFlagsNum", 40);
         const auto flags_max_offset = Layout(profile, "dataTable.rowMapFlagsMax", 44);
@@ -4510,7 +4524,7 @@ struct Ue5NteAdapter::State {
             num_free_offset < 0 ||
             max_offset < 0 || flags_data_offset < 0 || flags_num_offset < 0 ||
             flags_max_offset < 0 || inline_flags_offset < 0 || stride < 16 ||
-            stride > 128 || row_offset < 0 ||
+            stride > 4096 || row_offset < 0 ||
             row_offset + static_cast<std::int64_t>(sizeof(std::uintptr_t)) > stride) {
             return false;
         }
@@ -11016,8 +11030,524 @@ struct Ue5NteAdapter::State {
         }
     }
 
+    [[nodiscard]] bool ReadFNameArrayLocked(
+        const std::uintptr_t owner,
+        const ReflectedPropertyInfo& property,
+        const std::size_t maximum_count,
+        std::vector<std::uint64_t>& values,
+        std::vector<std::string>& names,
+        std::string& failure) const {
+        if (owner == 0 || property.property == 0 || property.offset < 0 ||
+            property.type != "ArrayProperty" || property.array_dim != 1 ||
+            property.element_size != 0x10) {
+            failure = "数组属性反射类型/大小与 Dump 不符";
+            return false;
+        }
+        const auto inner_offset = Layout(profile, "farrayProperty.inner", -1);
+        const auto data_offset = Layout(profile, "tarray.data", -1);
+        const auto num_offset = Layout(profile, "tarray.num", -1);
+        const auto max_offset = Layout(profile, "tarray.max", -1);
+        if (inner_offset < 0 || data_offset < 0 || num_offset < 0 || max_offset < 0) {
+            failure = "当前 Build Profile 缺少 TArray/FArrayProperty 布局";
+            return false;
+        }
+        std::uintptr_t inner{};
+        std::string inner_type;
+        if (!ReadPointerAt(*memory, property.property, inner_offset, inner) ||
+            inner == 0 || !ReadReflectedFieldClassNameLocked(inner, inner_type) ||
+            inner_type != "NameProperty") {
+            failure = "数组元素不是经验证的 FName";
+            return false;
+        }
+        const auto field_address = owner + static_cast<std::uintptr_t>(property.offset);
+        std::uintptr_t data{};
+        std::int32_t num{};
+        std::int32_t max{};
+        if (!ReadableRange(*memory, field_address, 0x10) ||
+            !ReadValue(*memory, field_address + static_cast<std::uintptr_t>(data_offset), data) ||
+            !ReadValue(*memory, field_address + static_cast<std::uintptr_t>(num_offset), num) ||
+            !ReadValue(*memory, field_address + static_cast<std::uintptr_t>(max_offset), max) ||
+            num < 0 || max < num || static_cast<std::size_t>(num) > maximum_count ||
+            max > 4096 || (num > 0 && data == 0)) {
+            failure = "TArray 数据指针或 Num/Max 边界校验失败";
+            return false;
+        }
+        std::vector<std::uint64_t> next_values(static_cast<std::size_t>(num));
+        std::vector<std::string> next_names;
+        next_names.reserve(static_cast<std::size_t>(num));
+        if (num > 0) {
+            const auto bytes = static_cast<std::size_t>(num) * sizeof(std::uint64_t);
+            if (!ReadableRange(*memory, data, bytes) ||
+                !memory->Read(data, next_values.data(), bytes)) {
+                failure = "FName 数组内存不可读";
+                return false;
+            }
+            for (const auto raw : next_values) {
+                std::uint32_t comparison_index{};
+                std::uint32_t number{};
+                std::memcpy(&comparison_index, &raw, sizeof(comparison_index));
+                std::memcpy(&number,
+                    reinterpret_cast<const std::uint8_t*>(&raw) + sizeof(comparison_index),
+                    sizeof(number));
+                std::string name;
+                if (!ResolveFNameLocked(comparison_index, number, name) || name.empty()) {
+                    failure = "改装模块列表包含无法解析的 FName";
+                    return false;
+                }
+                next_names.push_back(std::move(name));
+            }
+        }
+        values = std::move(next_values);
+        names = std::move(next_names);
+        return true;
+    }
+
+    [[nodiscard]] bool ReadSavedVehicleCustomizationLocked(
+        const VehicleCatalogEntry& selected,
+        SavedVehicleCustomization& saved,
+        std::string& failure) noexcept {
+        const auto fail = [&](const std::string_view reason) {
+            failure.assign(reason);
+            return false;
+        };
+        try {
+            if (!selected.vehicle_id_valid || selected.vehicle_id.empty()) {
+                return fail("所选 DT_VehicleData 记录没有有效的 VehicleID FName");
+            }
+            std::uintptr_t controller_class{};
+            ReflectedPropertyInfo player_state_property;
+            if (player_controller == 0 ||
+                !ReadPointerAt(*memory, player_controller,
+                    Layout(profile, "object.class"), controller_class) ||
+                !FindReflectedPropertyLocked(controller_class, "PlayerState",
+                    player_state_property, true) ||
+                player_state_property.type != "ObjectProperty" ||
+                player_state_property.array_dim != 1 ||
+                player_state_property.element_size != 8 ||
+                player_state_property.offset < 0) {
+                return fail("HTPlayerController.PlayerState 属性未通过反射校验");
+            }
+            std::uintptr_t player_state{};
+            if (!ReadValue(*memory,
+                    player_controller + static_cast<std::uintptr_t>(player_state_property.offset),
+                    player_state) ||
+                player_state == 0 ||
+                !ObjectClassChainContainsLocked(player_state, "HTPlayerState")) {
+                return fail("当前本地 HTPlayerState 不可用");
+            }
+
+            std::uintptr_t player_state_class{};
+            ReflectedPropertyInfo vehicle_component_property;
+            if (!ReadPointerAt(*memory, player_state,
+                    Layout(profile, "object.class"), player_state_class) ||
+                !FindReflectedPropertyLocked(player_state_class, "VehicleComponentPtr",
+                    vehicle_component_property, true) ||
+                vehicle_component_property.type != "ObjectProperty" ||
+                vehicle_component_property.array_dim != 1 ||
+                vehicle_component_property.element_size != 8 ||
+                vehicle_component_property.offset < 0) {
+                return fail("HTPlayerState.VehicleComponentPtr 属性未通过反射校验");
+            }
+            std::uintptr_t vehicle_component{};
+            if (!ReadValue(*memory,
+                    player_state + static_cast<std::uintptr_t>(vehicle_component_property.offset),
+                    vehicle_component) ||
+                vehicle_component == 0 ||
+                !ObjectClassChainContainsLocked(vehicle_component, "HTVehicleComponent")) {
+                return fail("玩家载具组件尚未初始化，无法读取已保存改装");
+            }
+
+            std::uintptr_t vehicle_component_class{};
+            ReflectedPropertyInfo whole_vehicle_datas_property;
+            if (!ReadPointerAt(*memory, vehicle_component,
+                    Layout(profile, "object.class"), vehicle_component_class) ||
+                !FindReflectedPropertyLocked(vehicle_component_class, "WholeVehicleDatas",
+                    whole_vehicle_datas_property, true) ||
+                whole_vehicle_datas_property.type != "MapProperty" ||
+                whole_vehicle_datas_property.array_dim != 1 ||
+                // Dump 5.6.1-0+UE5-HT: TMap<FName,FWholeVehicleData> field is 0x50 bytes.
+                whole_vehicle_datas_property.element_size != 0x50 ||
+                whole_vehicle_datas_property.offset < 0) {
+                return fail("HTVehicleComponent.WholeVehicleDatas 类型/布局未通过 Dump 校验");
+            }
+
+            std::uintptr_t whole_vehicle_struct{};
+            std::string whole_vehicle_struct_name;
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.WholeVehicleData", whole_vehicle_struct) ||
+                !ReadReflectedObjectNameLocked(whole_vehicle_struct, whole_vehicle_struct_name) ||
+                whole_vehicle_struct_name != "WholeVehicleData") {
+                return fail("Dump 声明的 FWholeVehicleData 结构当前不可解析");
+            }
+            ReflectedPropertyInfo vehicle_id_property;
+            ReflectedPropertyInfo modules_property;
+            ReflectedPropertyInfo skin_id_property;
+            ReflectedPropertyInfo fish_extra_property;
+            if (!FindReflectedPropertyLocked(whole_vehicle_struct, "VehicleID",
+                    vehicle_id_property, false) ||
+                vehicle_id_property.type != "NameProperty" ||
+                vehicle_id_property.element_size != 8 ||
+                vehicle_id_property.array_dim != 1 || vehicle_id_property.offset != 0 ||
+                !FindReflectedPropertyLocked(whole_vehicle_struct, "Modules",
+                    modules_property, false) ||
+                modules_property.type != "ArrayProperty" ||
+                modules_property.element_size != 0x10 ||
+                modules_property.array_dim != 1 || modules_property.offset != 0x28 ||
+                !FindReflectedPropertyLocked(whole_vehicle_struct, "SkinID",
+                    skin_id_property, false) ||
+                skin_id_property.type != "NameProperty" ||
+                skin_id_property.element_size != 8 ||
+                skin_id_property.array_dim != 1 || skin_id_property.offset != 0x78 ||
+                !FindReflectedPropertyLocked(whole_vehicle_struct, "FishExtraData",
+                    fish_extra_property, false) ||
+                fish_extra_property.type != "StructProperty" ||
+                fish_extra_property.element_size != 0x1C ||
+                fish_extra_property.array_dim != 1 || fish_extra_property.offset != 0xA4) {
+                return fail("FWholeVehicleData 的字段偏移/类型与 Dump 5.6.1 不符");
+            }
+            std::string default_data_struct_name;
+            if (fish_extra_property.structure == 0 ||
+                !ReadReflectedObjectNameLocked(
+                    fish_extra_property.structure, default_data_struct_name) ||
+                default_data_struct_name != "VehicleModuleDefaultData") {
+                return fail("FishExtraData 并非 Dump 声明的 FVehicleModuleDefaultData");
+            }
+            const auto module_inner_offset = Layout(profile, "farrayProperty.inner", -1);
+            std::uintptr_t module_inner{};
+            std::string module_inner_type;
+            if (module_inner_offset < 0 ||
+                !ReadPointerAt(*memory, modules_property.property, module_inner_offset, module_inner) ||
+                module_inner == 0 ||
+                !ReadReflectedFieldClassNameLocked(module_inner, module_inner_type) ||
+                module_inner_type != "NameProperty") {
+                return fail("FWholeVehicleData.Modules 的元素类型不是 FName");
+            }
+
+            const auto map_address =
+                vehicle_component + static_cast<std::uintptr_t>(whole_vehicle_datas_property.offset);
+            SparseMapView view;
+            // WholeVehicleDatas is FName(8) + FWholeVehicleData(0xC0) per slot.
+            // Keep map header/bit-array offsets Profile-driven; override only the stride and
+            // value offset after the reflected value fields above have passed validation.
+            if (!ReadSparseMapViewLocked(map_address, view, 0xC8, 8) ||
+                view.num <= 0 || view.num > 4096 || view.num_free > view.num) {
+                return fail("WholeVehicleDatas sparse-map header/flags 校验失败");
+            }
+            const auto elements_bytes = static_cast<std::size_t>(view.num) *
+                static_cast<std::size_t>(view.stride);
+            std::vector<std::uint8_t> elements(elements_bytes);
+            if (!ReadableRange(*memory, view.data, elements_bytes) ||
+                !memory->Read(view.data, elements.data(), elements.size())) {
+                return fail("WholeVehicleDatas 元素数组不可读");
+            }
+
+            std::array<std::uint8_t, 0xC0> saved_record{};
+            bool record_found = false;
+            const auto target_index = selected.vehicle_id_comparison_index;
+            const auto target_number = selected.vehicle_id_number;
+            for (std::int32_t slot = 0; slot < view.num; ++slot) {
+                const auto u_slot = static_cast<std::uint32_t>(slot);
+                if ((view.flags[static_cast<std::size_t>(u_slot) / 32U] &
+                        (1U << (u_slot & 31U))) == 0) continue;
+                const auto* element = elements.data() +
+                    static_cast<std::size_t>(slot) * static_cast<std::size_t>(view.stride);
+                std::uint32_t key_index{}, key_number{};
+                std::memcpy(&key_index, element, sizeof(key_index));
+                std::memcpy(&key_number, element + sizeof(key_index), sizeof(key_number));
+                if (key_index != target_index || key_number != target_number) continue;
+                if (record_found) return fail("WholeVehicleDatas 中存在重复的所选 VehicleID 记录");
+                std::memcpy(saved_record.data(), element + 8, saved_record.size());
+                record_found = true;
+            }
+            if (!record_found) {
+                return fail("玩家没有所选车型的已保存 FWholeVehicleData 记录；拒绝回退为原厂车");
+            }
+
+            std::uint32_t saved_vehicle_index{}, saved_vehicle_number{};
+            std::memcpy(&saved_vehicle_index,
+                saved_record.data() + static_cast<std::size_t>(vehicle_id_property.offset), 4);
+            std::memcpy(&saved_vehicle_number,
+                saved_record.data() + static_cast<std::size_t>(vehicle_id_property.offset) + 4U, 4);
+            if (saved_vehicle_index != target_index || saved_vehicle_number != target_number) {
+                return fail("保存记录的 VehicleID 与所选 DT_VehicleData.VehicleID 不一致");
+            }
+
+            SavedVehicleCustomization next;
+            std::memcpy(&next.vehicle_id_name,
+                saved_record.data() + static_cast<std::size_t>(vehicle_id_property.offset), 8);
+            std::memcpy(&next.skin_id_name,
+                saved_record.data() + static_cast<std::size_t>(skin_id_property.offset), 8);
+            std::memcpy(next.default_module_data.data(),
+                saved_record.data() + static_cast<std::size_t>(fish_extra_property.offset),
+                next.default_module_data.size());
+            // The copied FWholeVehicleData contains a TArray header; its Data pointer still
+            // points into the game's live heap. Read that header from the local record first,
+            // then validate/copy the pointed-to FName elements from the game address space.
+            const auto modules_field = saved_record.data() +
+                static_cast<std::size_t>(modules_property.offset);
+            std::uintptr_t module_data{};
+            std::int32_t module_num{};
+            std::int32_t module_max{};
+            const auto tarray_data_offset = Layout(profile, "tarray.data", -1);
+            const auto tarray_num_offset = Layout(profile, "tarray.num", -1);
+            const auto tarray_max_offset = Layout(profile, "tarray.max", -1);
+            if (tarray_data_offset < 0 || tarray_num_offset < 0 || tarray_max_offset < 0) {
+                return fail("当前 Build Profile 缺少 TArray header 布局");
+            }
+            std::memcpy(&module_data, modules_field + tarray_data_offset, sizeof(module_data));
+            std::memcpy(&module_num, modules_field + tarray_num_offset, sizeof(module_num));
+            std::memcpy(&module_max, modules_field + tarray_max_offset, sizeof(module_max));
+            if (module_num < 0 || module_max < module_num || module_num > 128 ||
+                module_max > 4096 || (module_num > 0 && module_data == 0)) {
+                return fail("保存的 Modules TArray header 无效");
+            }
+            next.module_ids.resize(static_cast<std::size_t>(module_num));
+            if (module_num > 0) {
+                const auto bytes = static_cast<std::size_t>(module_num) * sizeof(std::uint64_t);
+                if (!ReadableRange(*memory, module_data, bytes) ||
+                    !memory->Read(module_data, next.module_ids.data(), bytes)) {
+                    return fail("保存的 Modules 元素数组不可读");
+                }
+            }
+            next.module_names.reserve(next.module_ids.size());
+            for (const auto raw : next.module_ids) {
+                std::uint32_t name_index{}, name_number{};
+                std::memcpy(&name_index, &raw, sizeof(name_index));
+                std::memcpy(&name_number,
+                    reinterpret_cast<const std::uint8_t*>(&raw) + sizeof(name_index),
+                    sizeof(name_number));
+                std::string module_name;
+                if (!ResolveFNameLocked(name_index, name_number, module_name) ||
+                    module_name.empty()) {
+                    return fail("保存的 Modules 中存在无法解析的 FName");
+                }
+                next.module_names.push_back(std::move(module_name));
+            }
+            saved = std::move(next);
+            return true;
+        } catch (...) {
+            failure = "读取玩家保存改装时发生异常；已拒绝执行召唤";
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool ObjectOuterChainContainsLocked(
+        const std::uintptr_t object,
+        const std::uintptr_t expected_outer) const noexcept {
+        if (object == 0 || expected_outer == 0) return false;
+        std::uintptr_t current = object;
+        for (std::size_t depth{}; current != 0 && depth < 24; ++depth) {
+            std::uintptr_t outer{};
+            if (!ReadNullablePointerAt(
+                    *memory, current, Layout(profile, "object.outer"), outer) || outer == 0) {
+                return false;
+            }
+            if (outer == expected_outer) return true;
+            if (outer == current) return false;
+            current = outer;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool ApplySavedVehicleCustomizationLocked(
+        const std::uintptr_t vehicle_actor,
+        const SavedVehicleCustomization& saved,
+        std::string& failure) noexcept {
+        const auto fail = [&](const std::string_view reason) {
+            failure.assign(reason);
+            return false;
+        };
+        try {
+            if (vehicle_actor == 0 || saved.vehicle_id_name == 0 ||
+                !IsVehicleActorLocked(vehicle_actor)) {
+                return fail("新生成的载具实例或保存的 VehicleID 无效");
+            }
+
+            const auto* gobjects_symbol = Symbol("ue5.GObjects");
+            ObjectRegistryState refreshed_registry;
+            if (gobjects_symbol == nullptr || !gobjects_symbol->Available() ||
+                !LoadObjectRegistry(profile, *memory, gobjects_symbol->address, refreshed_registry)) {
+                return fail("改装应用前无法刷新 GObjects；拒绝假定车辆组件已初始化");
+            }
+            object_registry = refreshed_registry;
+            const auto scan_count = (std::min)(object_registry.count, object_registry.max_count);
+            std::uintptr_t modification_component{};
+            for (std::uint32_t index = 0; index < scan_count; ++index) {
+                std::uintptr_t object{};
+                std::uint32_t serial{};
+                if (!ReadObjectSlot(*memory, object_registry, index, object, serial) ||
+                    object == 0 || object == vehicle_actor) continue;
+                std::uintptr_t object_class{};
+                std::string object_class_name;
+                if (!ReadPointerAt(*memory, object, Layout(profile, "object.class"), object_class) ||
+                    !ReadReflectedObjectNameLocked(object_class, object_class_name) ||
+                    object_class_name != "HTVehicleModificationComponent" ||
+                    !ObjectOuterChainContainsLocked(object, vehicle_actor)) continue;
+                if (modification_component != 0) {
+                    return fail("新车下发现多个 HTVehicleModificationComponent，目标不唯一");
+                }
+                modification_component = object;
+            }
+            if (modification_component == 0) {
+                return fail("新车的 HTVehicleModificationComponent 尚未创建或无法定位");
+            }
+
+            std::uintptr_t function{};
+            std::uintptr_t function_class{};
+            std::uintptr_t function_outer{};
+            std::string function_name;
+            std::string function_class_name;
+            std::string function_outer_name;
+            std::uint8_t num_parms{};
+            std::uint16_t parms_size{};
+            std::uint16_t return_offset{};
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.HTVehicleModificationComponent.UpdateAllModulesWithIDs",
+                    function) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.class"), function_class) ||
+                !ReadPointerAt(*memory, function, Layout(profile, "object.outer"), function_outer) ||
+                !ReadReflectedObjectNameLocked(function, function_name) ||
+                !ReadReflectedObjectNameLocked(function_class, function_class_name) ||
+                !ReadReflectedObjectNameLocked(function_outer, function_outer_name) ||
+                function_name != "UpdateAllModulesWithIDs" ||
+                function_class_name != "Function" ||
+                function_outer_name != "HTVehicleModificationComponent" ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+                !ReadValue(*memory, function + Layout(profile, "ufunction.returnValueOffset"), return_offset) ||
+                num_parms != 5 || parms_size != 0x40 ||
+                return_offset != (std::numeric_limits<std::uint16_t>::max)()) {
+                return fail("UpdateAllModulesWithIDs 的 UFunction ABI 未通过 Dump 校验");
+            }
+
+            ReflectedPropertyInfo modules_parameter;
+            ReflectedPropertyInfo force_parameter;
+            ReflectedPropertyInfo vehicle_id_parameter;
+            ReflectedPropertyInfo skin_id_parameter;
+            ReflectedPropertyInfo default_data_parameter;
+            if (!FindReflectedPropertyLocked(function, "VehicleModuleIDList", modules_parameter, false) ||
+                modules_parameter.type != "ArrayProperty" || modules_parameter.element_size != 0x10 ||
+                modules_parameter.array_dim != 1 || modules_parameter.offset != 0 ||
+                !FindReflectedPropertyLocked(function, "bForceUpdate", force_parameter, false) ||
+                force_parameter.type != "BoolProperty" || force_parameter.element_size != 1 ||
+                force_parameter.array_dim != 1 || force_parameter.offset != 0x10 ||
+                !FindReflectedPropertyLocked(function, "VehicleID", vehicle_id_parameter, false) ||
+                vehicle_id_parameter.type != "NameProperty" || vehicle_id_parameter.element_size != 8 ||
+                vehicle_id_parameter.array_dim != 1 || vehicle_id_parameter.offset != 0x14 ||
+                !FindReflectedPropertyLocked(function, "SkinID", skin_id_parameter, false) ||
+                skin_id_parameter.type != "NameProperty" || skin_id_parameter.element_size != 8 ||
+                skin_id_parameter.array_dim != 1 || skin_id_parameter.offset != 0x1C ||
+                !FindReflectedPropertyLocked(function, "DefaultModuleData", default_data_parameter, false) ||
+                default_data_parameter.type != "StructProperty" ||
+                default_data_parameter.element_size != 0x1C ||
+                default_data_parameter.array_dim != 1 || default_data_parameter.offset != 0x24) {
+                return fail("UpdateAllModulesWithIDs 参数名称/类型/偏移不匹配");
+            }
+            std::string default_data_type;
+            if (default_data_parameter.structure == 0 ||
+                !ReadReflectedObjectNameLocked(default_data_parameter.structure, default_data_type) ||
+                default_data_type != "VehicleModuleDefaultData") {
+                return fail("UpdateAllModulesWithIDs.DefaultModuleData 结构类型不符");
+            }
+            const auto inner_offset = Layout(profile, "farrayProperty.inner", -1);
+            std::uintptr_t inner{};
+            std::string inner_type;
+            if (inner_offset < 0 ||
+                !ReadPointerAt(*memory, modules_parameter.property, inner_offset, inner) ||
+                inner == 0 || !ReadReflectedFieldClassNameLocked(inner, inner_type) ||
+                inner_type != "NameProperty") {
+                return fail("UpdateAllModulesWithIDs.VehicleModuleIDList 元素不是 FName");
+            }
+            ReflectedBoolParameter force_bool;
+            if (!ReadReflectedBoolParameterLocked(force_parameter, parms_size, force_bool) ||
+                force_bool.byte_offset < 0x10 || force_bool.byte_offset >= parms_size) {
+                return fail("UpdateAllModulesWithIDs.bForceUpdate bool mask 未通过校验");
+            }
+
+            struct NativeArrayHeader {
+                std::uintptr_t data{};
+                std::int32_t num{};
+                std::int32_t max{};
+            };
+            static_assert(sizeof(NativeArrayHeader) == 0x10);
+            if (saved.module_ids.size() > 128U ||
+                saved.module_ids.size() > static_cast<std::size_t>(
+                    (std::numeric_limits<std::int32_t>::max)())) {
+                return fail("保存的改装模块数量超出允许范围");
+            }
+            NativeArrayHeader modules_header{};
+            modules_header.data = saved.module_ids.empty()
+                ? 0 : reinterpret_cast<std::uintptr_t>(saved.module_ids.data());
+            modules_header.num = static_cast<std::int32_t>(saved.module_ids.size());
+            modules_header.max = modules_header.num;
+            alignas(8) std::array<std::uint8_t, 0x40> parameters{};
+            std::memcpy(parameters.data() + modules_parameter.offset,
+                &modules_header, sizeof(modules_header));
+            const auto force_offset = static_cast<std::size_t>(force_bool.byte_offset);
+            parameters[force_offset] = static_cast<std::uint8_t>(
+                (parameters[force_offset] & static_cast<std::uint8_t>(~force_bool.byte_mask)) |
+                force_bool.field_mask);
+            std::memcpy(parameters.data() + vehicle_id_parameter.offset,
+                &saved.vehicle_id_name, sizeof(saved.vehicle_id_name));
+            std::memcpy(parameters.data() + skin_id_parameter.offset,
+                &saved.skin_id_name, sizeof(saved.skin_id_name));
+            std::memcpy(parameters.data() + default_data_parameter.offset,
+                saved.default_module_data.data(), saved.default_module_data.size());
+            if (!InvokeProcessEventGuarded(process_event_invoker, modification_component,
+                    function, parameters.data(), parameters.size())) {
+                return fail("UpdateAllModulesWithIDs ProcessEvent 调用失败");
+            }
+
+            std::uintptr_t component_class{};
+            ReflectedPropertyInfo current_modules_property;
+            if (!ReadPointerAt(*memory, modification_component,
+                    Layout(profile, "object.class"), component_class) ||
+                !FindReflectedPropertyLocked(component_class, "CurrentModuleIDList",
+                    current_modules_property, true) ||
+                current_modules_property.type != "ArrayProperty" ||
+                current_modules_property.element_size != 0x10 ||
+                current_modules_property.array_dim != 1 ||
+                current_modules_property.offset != 0x138) {
+                return fail("新车 CurrentModuleIDList 属性未通过 Dump 校验");
+            }
+            std::vector<std::uint64_t> observed_modules;
+            std::vector<std::string> observed_names;
+            std::string array_failure;
+            if (!ReadFNameArrayLocked(modification_component, current_modules_property, 128,
+                    observed_modules, observed_names, array_failure)) {
+                failure = "原生模块应用已调用，但无法读取验证结果：" + array_failure;
+                return false;
+            }
+            auto expected_sorted = saved.module_ids;
+            auto observed_sorted = observed_modules;
+            std::ranges::sort(expected_sorted);
+            std::ranges::sort(observed_sorted);
+            if (expected_sorted != observed_sorted) {
+                failure = "原生模块应用后 CurrentModuleIDList 与玩家保存配置不一致（保存 " +
+                    std::to_string(expected_sorted.size()) + " 项，实际 " +
+                    std::to_string(observed_sorted.size()) + " 项）";
+                return false;
+            }
+            return true;
+        } catch (...) {
+            failure = "原生改装还原或后置校验出现异常";
+            return false;
+        }
+    }
+
     AnomalyStatusV1 VehicleSummon(
         const AnomalyNteVehicleSummonRequestV1* request) noexcept {
+        return VehicleSummonInternal(request, false);
+    }
+
+    AnomalyStatusV1 VehicleSummonCustomized(
+        const AnomalyNteVehicleSummonRequestV1* request) noexcept {
+        return VehicleSummonInternal(request, true);
+    }
+
+    AnomalyStatusV1 VehicleSummonInternal(
+        const AnomalyNteVehicleSummonRequestV1* request,
+        const bool customized) noexcept {
         if (request == nullptr || request->struct_size < sizeof(*request) ||
             (request->flags & (ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
                 ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER)) !=
@@ -11056,6 +11586,18 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "selected VehicleID is no longer in the current data table");
         }
 
+        SavedVehicleCustomization saved_customization;
+        if (customized) {
+            std::string customization_read_failure;
+            if (!ReadSavedVehicleCustomizationLocked(
+                    *selected, saved_customization, customization_read_failure)) {
+                vehicle_summon_status_message =
+                    "召唤已保存改装失败：" + customization_read_failure;
+                return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                    vehicle_summon_status_message.c_str());
+            }
+        }
+
         // Prefer the Anomaly-style direct route: resolve the VehicleData row's InVehicleTemple
         // soft class and use GameplayStatics deferred spawn. This path does not require a CheatManager.
         const std::array<double, 3> direct_destination{
@@ -11066,6 +11608,16 @@ struct Ue5NteAdapter::State {
             const char* direct_spawn_failure{};
             if (SpawnVehicleDirectLocked(
                     direct_vehicle_class, direct_destination, direct_spawned, direct_spawn_failure)) {
+                if (customized) {
+                    std::string apply_failure;
+                    if (!ApplySavedVehicleCustomizationLocked(
+                            direct_spawned, saved_customization, apply_failure)) {
+                        vehicle_summon_status_message =
+                            "载具已生成，但保存改装应用未通过验证：" + apply_failure;
+                        return Status(ANOMALY_STATUS_V1_FAILED,
+                            vehicle_summon_status_message.c_str());
+                    }
+                }
                 std::string class_name = "Vehicle";
                 std::uintptr_t class_object{};
                 if (ReadPointerAt(*memory, direct_spawned, Layout(profile, "object.class"), class_object))
@@ -11081,6 +11633,14 @@ struct Ue5NteAdapter::State {
                 vehicle_summon_status_message += "；目标位置=(" + std::to_string(direct_destination[0]) +
                     ", " + std::to_string(direct_destination[1]) + ", " + std::to_string(direct_destination[2]) +
                     ")；Actor.Owner 已核验为本地玩家 Pawn";
+                if (customized) {
+                    vehicle_summon_status_message += "；玩家保存改装已应用并校验 CurrentModuleIDList（" +
+                        std::to_string(saved_customization.module_ids.size()) + " 项）";
+                }
+        if (customized) {
+            vehicle_summon_status_message += "；玩家保存改装已应用并校验 CurrentModuleIDList（" +
+                std::to_string(saved_customization.module_ids.size()) + " 项）";
+        }
                 return Status(ANOMALY_STATUS_V1_OK, vehicle_summon_status_message.c_str());
             }
             // The detailed failure stage tells us whether no actor was created or a
@@ -11191,6 +11751,16 @@ struct Ue5NteAdapter::State {
             actual_owner != player_pawn) {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "vehicle position verified but Actor.Owner is not the local player pawn");
+        }
+        if (customized) {
+            std::string apply_failure;
+            if (!ApplySavedVehicleCustomizationLocked(
+                    spawned, saved_customization, apply_failure)) {
+                vehicle_summon_status_message =
+                    "载具已生成，但保存改装应用未通过验证：" + apply_failure;
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    vehicle_summon_status_message.c_str());
+            }
         }
         std::string class_name = "Vehicle";
         std::uintptr_t class_object{};
@@ -16467,7 +17037,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetOtherVehiclesEngineTorqueRatioThunk,
             VehicleSetOtherVehiclesMinSpeedRatioThunk,
             VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
-            VehicleRevokeFineSpeedAuthorizationThunk};
+            VehicleRevokeFineSpeedAuthorizationThunk, VehicleSummonCustomizedThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -16855,6 +17425,14 @@ private:
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease
             ? static_cast<State*>(lease.User())->VehicleSetOtherVehiclesEngineTorqueRatio(ratio)
+            : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleSummonCustomizedThunk(
+        void* user, const AnomalyNteVehicleSummonRequestV1* request) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleSummonCustomized(request)
             : StoppedStatus();
     }
 
