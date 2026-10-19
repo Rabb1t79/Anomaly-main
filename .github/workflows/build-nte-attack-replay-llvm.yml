@@ -5,7 +5,7 @@ on:
     branches:
       - '**'
     paths:
-      - 'plugins/NteAttackReplay/**'
+      - 'reference/legacy-plugins/NteAttackReplay/**'
       - 'include/anomaly/sdk/services/nte.h'
       - '.github/workflows/build-nte-attack-replay-llvm.yml'
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
           project(NteAttackReplayStandalone LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          add_library(nte_attack_replay SHARED "$root/plugins/NteAttackReplay/plugin.cpp" "$root/sdk/cpp/plugin_cxx_throw_bridge.cpp")
+          add_library(nte_attack_replay SHARED "$root/reference/legacy-plugins/NteAttackReplay/plugin.cpp" "$root/sdk/cpp/plugin_cxx_throw_bridge.cpp")
           target_include_directories(nte_attack_replay PRIVATE "$root/include")
           target_compile_definitions(nte_attack_replay PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
           target_compile_options(nte_attack_replay PRIVATE /W4 /permissive- /EHsc /Zc:threadSafeInit- /utf-8)
@@ -52,7 +52,7 @@ jobs:
           $pkg = Join-Path $env:GITHUB_WORKSPACE 'dist/NteAttackReplay-windows-x64'
           New-Item -ItemType Directory -Path $pkg -Force | Out-Null
           Copy-Item $dll (Join-Path $pkg 'plugin.dll')
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/manifest.json') (Join-Path $pkg 'manifest.json')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'reference/legacy-plugins/NteAttackReplay/manifest.json') (Join-Path $pkg 'manifest.json')
           Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/NteAttackReplay-windows-x64.zip') -Force
       - name: Upload plugin package
         uses: actions/upload-artifact@v4
