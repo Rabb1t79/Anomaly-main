@@ -119,3 +119,9 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 - Core 的调用顺序：在状态锁内将当前链置为等待确认，释放锁后设置临时 provenance 并调用 `K2_OnTriggerPeriodGamePlayEffect`，返回后重新上锁并排空捕获队列。DamageHook 的管理锁也在调用原始处理函数及回调前释放。静态代码中未发现明显的同线程重复锁定死锁。
 - 生成路径中，`BeginDeferredActorSpawnFromClass`/`FinishSpawningActor` 组成的生成 helper 会在独立配置函数写入 `EventData`、EffectContainer 与周期字段之前完成 spawn。这是应检查的生命周期时序风险，但 Dump 声明不提供 BeginPlay/定时器内部行为，尚不能断言一定会自动多触发。
 - 现有手动路径每个队列项调用 `K2_OnTriggerPeriodGamePlayEffect`；当前代码没有显式调用 `StartTriggerGamePlayEffect` 或 `TriggerPeriodGamePlayEffectEvent`。仍需确认真实运行时行为，不能仅凭函数名假设它只造成一次伤害或完全不会后台调度。
+
+## 2026-10-20 implementation follow-up: period-handler distinction
+
+- The implementation had treated `K2_OnTriggerPeriodGamePlayEffect` as the per-item trigger function. The Dump lists that K2 callback separately from `TriggerPeriodGamePlayEffectEvent` and `StartTriggerGamePlayEffect`; those declarations must not be conflated.
+- The new DCR route chooses `TriggerPeriodGamePlayEffectEvent` as the manually scheduled per-item entry, with Profile reflection/signature checks. It deliberately does not start an autonomous actor timer in parallel with the plugin's own rate queue, which could make extra-hit counts drift.
+- This resolves an implementation ambiguity using available Dump declarations, not the missing native method body. The route still needs in-game validation to confirm one invocation produces one real hit against `EventData.Target`; if not, preserve the exported diagnostics and continue from measured result rather than guessing another function.
