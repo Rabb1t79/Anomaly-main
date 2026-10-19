@@ -24,8 +24,6 @@ constexpr float kMaximumRate = 1000.0F;
 constexpr std::size_t kMaximumLogEntries = 200;
 constexpr std::size_t kMaximumChainsKept = 96;
 constexpr std::size_t kMaximumEventsDrainedPerUpdate = 64;
-constexpr std::size_t kMaximumChainRows = 8;
-constexpr std::size_t kMaximumLogRows = 8;
 constexpr auto kRetryDelay = std::chrono::milliseconds(250);
 constexpr char kLogPath[] = "damage-chain-reaction.log";
 
@@ -43,16 +41,7 @@ struct ChainItem {
     bool awaiting_confirmation{};
     bool stop_sent{};
     bool terminal{};
-};
-
-struct ChainRow {
-    std::uint64_t id{};
-    std::uint64_t root_sequence{};
-    std::uint64_t target_id{};
-    std::uint32_t confirmed{};
-    std::uint32_t requested{};
-    std::uint32_t state{};
-    bool awaiting_confirmation{};
+    bool failure_counted{};
 };
 
 struct Context {
@@ -65,6 +54,9 @@ struct Context {
     std::uint32_t extra_count{kDefaultExtraCount};
     float rate{kDefaultRate};
     std::uint64_t damage_cursor{};
+    std::uint64_t damage_count{};
+    std::uint64_t failure_count{};
+    std::uint64_t replay_count{};
     std::string status{"等待 Anomaly 原生伤害服务"};
     std::vector<ChainItem> chains;
     std::vector<std::string> log;
@@ -96,18 +88,6 @@ const char* StatusName(const std::uint32_t status) noexcept {
     case ANOMALY_STATUS_V1_CONFLICT: return "CONFLICT";
     case ANOMALY_STATUS_V1_CANCELLED: return "CANCELLED";
     default: return "UNKNOWN_STATUS";
-    }
-}
-
-const char* ChainStateName(const std::uint32_t state) noexcept {
-    switch (state) {
-    case ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_ACTIVE: return "进行中";
-    case ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION:
-        return "等待真实伤害确认";
-    case ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_COMPLETED: return "已完成";
-    case ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED: return "已停止";
-    case ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED: return "已取消/失败";
-    default: return "未知";
     }
 }
 
@@ -192,8 +172,12 @@ void AddChain(
             "原始命中 #%llu 未建立链：status=%s(%u)。DamageTriggerActor/EffectContainer 原生配置验证未通过，详见 Core 诊断。",
             static_cast<unsigned long long>(event.sequence),
             StatusName(result.code), result.code);
-        Log(line);
-        SetStatus(std::string("未启动链：") + StatusName(result.code));
+        {
+            std::scoped_lock lock(g.mutex);
+            ++g.failure_count;
+            LogLocked(line);
+            g.status = std::string("未启动链：") + StatusName(result.code);
+        }
         return;
     }
 
@@ -234,6 +218,7 @@ void ObserveSnapshotLocked(
             chain.queue.CommitSuccess(now);
         }
         chain.confirmed_seen = snapshot.confirmed_extra_count;
+        g.damage_count += delta;
 
         char line[256]{};
         std::snprintf(line, sizeof(line),
@@ -242,7 +227,12 @@ void ObserveSnapshotLocked(
             chain.confirmed_seen, chain.requested_count);
         LogLocked(line);
     }
-    chain.dispatch_seen = (std::max)(chain.dispatch_seen, snapshot.dispatch_attempt_count);
+    const auto observed_dispatches =
+        (std::max)(chain.dispatch_seen, snapshot.dispatch_attempt_count);
+    if (observed_dispatches > chain.dispatch_seen) {
+        g.replay_count += observed_dispatches - chain.dispatch_seen;
+        chain.dispatch_seen = observed_dispatches;
+    }
     chain.core_state = snapshot.state;
     chain.awaiting_confirmation =
         snapshot.state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_AWAITING_CONFIRMATION ||
@@ -262,6 +252,11 @@ void ObserveSnapshotLocked(
         chain.queue.Cancel();
     } else if (snapshot.state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED ||
                snapshot.state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_STOPPED) {
+        if (snapshot.state == ANOMALY_NTE_DAMAGE_CHAIN_REACTION_STATE_V1_FAILED &&
+            !chain.failure_counted) {
+            ++g.failure_count;
+            chain.failure_counted = true;
+        }
         chain.terminal = true;
         chain.queue.Cancel();
     }
@@ -362,6 +357,7 @@ void UpdateOneChain(
         ObserveSnapshotLocked(*found, after, Clock::now());
         if (!dispatched && applied.code != ANOMALY_STATUS_V1_OK &&
             !found->terminal && !found->awaiting_confirmation) {
+            ++g.failure_count;
             found->queue.Defer(Clock::now() + kRetryDelay);
             char line[256]{};
             std::snprintf(line, sizeof(line),
@@ -414,13 +410,17 @@ void DrainDamageEvents(
             g.damage_cursor = event.sequence;
         }
 
-        if (!enabled ||
-            (event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
+        if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
             (event.flags & ANOMALY_NTE_DAMAGE_V1_CHAIN_GENERATED) != 0 ||
             event.final_damage <= 0 ||
             !SameHandle(event.attacker, player_character) ||
             event.victim.id == 0 || event.victim.id == event.attacker.id) {
             continue;
+        }
+        if (!enabled) continue;
+        {
+            std::scoped_lock lock(g.mutex);
+            ++g.damage_count;
         }
 
         // Core independently verifies HTAbilityCharacter identity and hostility, resolves
@@ -490,6 +490,9 @@ void ResetState() {
     g.extra_count = kDefaultExtraCount;
     g.rate = kDefaultRate;
     g.damage_cursor = 0;
+    g.damage_count = 0;
+    g.failure_count = 0;
+    g.replay_count = 0;
     g.status = "等待 Anomaly 原生伤害服务";
     g.chains.clear();
     g.log.clear();
@@ -648,33 +651,35 @@ void ANOMALY_CALL Update(void* context, double) {
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
     if (service == nullptr) service = g.ui;
     if (service == nullptr || service->begin_window == nullptr ||
-        service->end_window == nullptr || service->text == nullptr) {
+        service->end_window == nullptr || service->text == nullptr ||
+        service->checkbox == nullptr || service->button == nullptr) {
         return;
     }
 
     bool enabled{};
     std::uint32_t extra_count{};
     float rate{};
+    std::uint64_t damage_count{};
+    std::uint64_t failure_count{};
+    std::uint64_t replay_count{};
+    bool bound{};
+    bool trigger_active{};
     std::string status;
-    std::vector<ChainRow> chains;
-    std::vector<std::string> logs;
     {
         std::scoped_lock lock(g.mutex);
         enabled = g.enabled;
         extra_count = g.extra_count;
         rate = g.rate;
+        damage_count = g.damage_count;
+        failure_count = g.failure_count;
+        replay_count = g.replay_count;
         status = g.status;
-        chains.reserve(g.chains.size());
         for (const auto& item : g.chains) {
-            chains.push_back({
-                item.handle.id, item.root_sequence, item.target.id,
-                item.confirmed_seen, item.requested_count, item.core_state,
-                item.awaiting_confirmation});
-        }
-        const auto log_start = g.log.size() > kMaximumLogRows
-            ? g.log.size() - kMaximumLogRows : 0;
-        for (std::size_t index = log_start; index < g.log.size(); ++index) {
-            logs.push_back(g.log[index]);
+            if (!item.terminal && item.target.id != 0 && item.target.generation != 0) {
+                bound = true;
+                trigger_active = true;
+                break;
+            }
         }
     }
 
@@ -683,27 +688,25 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
     if (!window) return;
 
     service->text(service->user, anomaly::sdk::StringView(
-        "原始命中保持不变；额外次数不包含首次命中。Core 会验证原生 DamageTriggerActor 与 EffectContainer；每次额外伤害都必须有真实命中确认。"));
+        "保留首次原生命中；伤害重复次数只统计其后的额外伤害。速率只控制触发间隔，不限制链的总持续时间。"));
     service->text(service->user, anomaly::sdk::StringView(
-        "速率只控制相邻应用的调度，不会按经过的时间自动结束；每项成功都必须有真实伤害事件确认。"));
+        "使用已校验的 DamageTriggerActor 原生周期事件；不会模拟按键、重放技能/动画或直接修改 HP。"));
 
     int enabled_ui = enabled ? 1 : 0;
     if (service->checkbox(service->user,
-            anomaly::sdk::StringView("启用伤害链式反应"), &enabled_ui) != 0) {
-        {
-            std::scoped_lock lock(g.mutex);
-            g.enabled = enabled_ui != 0;
-            LogLocked(g.enabled
-                ? "用户启用功能；从下一次新的自然伤害开始创建链。"
-                : "用户关闭功能；将请求停止所有活动链。");
-        }
+            anomaly::sdk::StringView("√ 启用"), &enabled_ui) != 0) {
+        std::scoped_lock lock(g.mutex);
+        g.enabled = enabled_ui != 0;
+        LogLocked(g.enabled
+            ? "用户启用功能；从下一次新的自然伤害开始创建链。"
+            : "用户关闭功能；将请求停止所有活动链。");
     }
 
     if (HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::input_uint32)>(
             service, offsetof(AnomalyUiServiceV1, input_uint32)) &&
         service->input_uint32 != nullptr) {
         if (service->input_uint32(service->user,
-                anomaly::sdk::StringView("额外结算次数"), &extra_count,
+                anomaly::sdk::StringView("伤害重复次数"), &extra_count,
                 kMinimumExtraCount, kMaximumExtraCount) != 0) {
             extra_count = ClampExtraCount(extra_count);
             std::scoped_lock lock(g.mutex);
@@ -714,7 +717,7 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
             service, offsetof(AnomalyUiServiceV1, slider_float)) &&
         service->slider_float != nullptr) {
         if (service->slider_float(service->user,
-                anomaly::sdk::StringView("结算速率（次/秒）"), &rate,
+                anomaly::sdk::StringView("连锁速率（次/秒）"), &rate,
                 kMinimumRate, kMaximumRate) != 0) {
             rate = ClampRate(rate);
             std::scoped_lock lock(g.mutex);
@@ -723,53 +726,27 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
     }
 
     char setting[160]{};
-    std::snprintf(setting, sizeof(setting), "当前设置：额外次数=%u；速率=%.3f 次/秒",
+    std::snprintf(setting, sizeof(setting), "当前设置：伤害重复次数=%u；速率=%.3f 次/秒",
         ClampExtraCount(extra_count), static_cast<double>(ClampRate(rate)));
     service->text(service->user, anomaly::sdk::StringView(setting));
+
+    service->text(service->user, anomaly::sdk::StringView(
+        bound ? "绑定=就绪" : "绑定=等待"));
+    service->text(service->user, anomaly::sdk::StringView(
+        !enabled ? "触发=已停止"
+                 : (trigger_active ? "触发=战斗中" : "触发=等待有效命中")));
     service->text(service->user, anomaly::sdk::StringView(status.c_str()));
 
-    if (HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::separator)>(
-            service, offsetof(AnomalyUiServiceV1, separator)) &&
-        service->separator != nullptr) {
-        service->separator(service->user);
-    }
+    char statistics[192]{};
+    std::snprintf(statistics, sizeof(statistics),
+        "伤害=%llu次 失败=%llu次 重放=%llu次",
+        static_cast<unsigned long long>(damage_count),
+        static_cast<unsigned long long>(failure_count),
+        static_cast<unsigned long long>(replay_count));
+    service->text(service->user, anomaly::sdk::StringView(statistics));
 
-    service->text(service->user, anomaly::sdk::StringView("最近链实例"));
-    if (chains.empty()) {
-        service->text(service->user, anomaly::sdk::StringView("尚无链实例；启用后等待新的有效命中。"));
-    } else {
-        const auto start = chains.size() > kMaximumChainRows
-            ? chains.size() - kMaximumChainRows : 0;
-        for (std::size_t index = start; index < chains.size(); ++index) {
-            const auto& row = chains[index];
-            char line[256]{};
-            std::snprintf(line, sizeof(line),
-                "链 #%llu | 原始命中 #%llu | 目标 #%llu | 已确认 %u/%u | %s%s",
-                static_cast<unsigned long long>(row.id),
-                static_cast<unsigned long long>(row.root_sequence),
-                static_cast<unsigned long long>(row.target_id),
-                row.confirmed, row.requested, ChainStateName(row.state),
-                row.awaiting_confirmation ? "（等待命中确认）" : "");
-            service->text(service->user, anomaly::sdk::StringView(line));
-        }
-    }
-
-    if (HasField<AnomalyUiServiceV1, decltype(AnomalyUiServiceV1::separator)>(
-            service, offsetof(AnomalyUiServiceV1, separator)) &&
-        service->separator != nullptr) {
-        service->separator(service->user);
-    }
-    service->text(service->user, anomaly::sdk::StringView("诊断日志"));
-    for (auto it = logs.rbegin(); it != logs.rend(); ++it) {
-        service->text(service->user, anomaly::sdk::StringView(it->c_str()));
-    }
-
-    if (service->button(service->user,
-            anomaly::sdk::StringView("停止全部链并关闭功能"), 0.0F, 0.0F) != 0) {
-        std::scoped_lock lock(g.mutex);
-        g.enabled = false;
-        LogLocked("用户请求停止全部链并关闭功能。");
-    }
+    // Detailed records stay out of the main UI. Use this action to export the
+    // bounded in-memory diagnostics to the plugin-scoped storage file.
     if (service->button(service->user,
             anomaly::sdk::StringView("导出诊断日志"), 0.0F, 0.0F) != 0) {
         std::scoped_lock lock(g.mutex);
@@ -777,7 +754,6 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
         LogLocked(std::string("用户请求导出诊断日志到 ") + kLogPath);
     }
 }
-
 }  // namespace
 
 ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
@@ -790,7 +766,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.builtin.nte-damage-chain-reaction"),
         anomaly::sdk::StringView("伤害链式反应"),
-        anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("0.1.1"),
+        anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("0.1.2"),
         Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }

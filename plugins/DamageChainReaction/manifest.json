@@ -5,7 +5,7 @@
   "description": "捕获本地玩家角色对敌人的原生 CharacterOnDamaged 命中。启用后，将经 Core 反射验证的 DamageTriggerActor 与 EffectContainer 绑定到首次命中的原目标，按设定速率逐次触发额外伤害；只有匹配到同一目标的新真实伤害事件才计数。速率不限制链的生命周期；不会重放输入、技能激活或动画，不会直接写入目标 HP。",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
