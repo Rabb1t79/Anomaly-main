@@ -40,12 +40,12 @@ jobs:
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-          add_library(damage_chain_reaction SHARED "$root/plugins/DamageChainReaction/plugin.cpp")
+          add_library(damage_chain_reaction SHARED "$root/plugins/DamageChainReaction/plugin.cpp" "$root/sdk/cpp/plugin_cxx_throw_bridge.cpp")
           target_include_directories(damage_chain_reaction PRIVATE "$root" "$root/include")
           target_compile_definitions(damage_chain_reaction PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
           target_link_libraries(damage_chain_reaction PRIVATE Shell32 Ole32)
           if(MSVC)
-            target_compile_options(damage_chain_reaction PRIVATE /utf-8 /W4 /permissive- /EHsc)
+            target_compile_options(damage_chain_reaction PRIVATE /utf-8 /W4 /permissive- /EHsc /Zc:threadSafeInit-)
           endif()
           add_executable(damage_chain_plugin_identity_test "$root/plugins/DamageChainReaction/tests/plugin_identity_test.cpp")
           target_include_directories(damage_chain_plugin_identity_test PRIVATE "$root/include")
@@ -115,9 +115,11 @@ jobs:
           }
 
           $package = Join-Path $env:GITHUB_WORKSPACE 'dist/DamageChainReaction-windows-x64'
-          New-Item -ItemType Directory -Path $package -Force | Out-Null
-          Copy-Item -LiteralPath $dll -Destination (Join-Path $package 'plugin.dll')
-          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'plugins/DamageChainReaction/manifest.json') -Destination (Join-Path $package 'manifest.json')
+          $pluginPackage = Join-Path $package 'DamageChainReaction'
+          New-Item -ItemType Directory -Path $pluginPackage -Force | Out-Null
+          Copy-Item -LiteralPath $dll -Destination (Join-Path $pluginPackage 'plugin.dll')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'plugins/DamageChainReaction/manifest.json') -Destination (Join-Path $pluginPackage 'manifest.json')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'plugins/DamageChainReaction/INSTALL.txt') -Destination (Join-Path $pluginPackage 'INSTALL.txt')
           Compress-Archive -Path (Join-Path $package '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/DamageChainReaction-windows-x64.zip') -Force
 
       - name: Upload plugin package
