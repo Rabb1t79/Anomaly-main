@@ -11150,6 +11150,13 @@ struct Ue5NteAdapter::State {
                 failure = "WholeVehicleData 的 VehicleID / Modules / SkinID / FishExtraData 字段校验失败";
                 return false;
             }
+            std::string saved_default_data_type;
+            if (!ReadReflectedObjectNameLocked(
+                    default_data_property.structure, saved_default_data_type) ||
+                saved_default_data_type != "VehicleModuleDefaultData") {
+                failure = "WholeVehicleData.FishExtraData 结构类型不是 VehicleModuleDefaultData";
+                return false;
+            }
 
             // Dump 5.6.1 gives WholeVehicleData size 0xC0. A TMap set element also
             // carries two 32-bit hash-link fields after the key/value pair. The existing
@@ -11215,11 +11222,13 @@ struct Ue5NteAdapter::State {
                         static_cast<std::size_t>(saved_vehicle_id_property.offset),
                     sizeof(record_vehicle_id));
 
-                if (map_key == requested_vehicle_id && record_vehicle_id != requested_vehicle_id) {
+                const bool key_matches = map_key == requested_vehicle_id;
+                const bool record_matches = record_vehicle_id == requested_vehicle_id;
+                if (key_matches != record_matches) {
                     failure = "玩家车辆存档的 TMap 键与 WholeVehicleData.VehicleID 不一致";
                     return false;
                 }
-                if (record_vehicle_id != requested_vehicle_id) continue;
+                if (!key_matches) continue;
 
                 const std::uint64_t value_delta =
                     static_cast<std::uint64_t>(slot) * static_cast<std::uint64_t>(map_view.stride) +
@@ -11261,6 +11270,17 @@ struct Ue5NteAdapter::State {
                 failure = "玩家车辆的 VehicleID / SkinID / FishExtraData 无法完整读取";
                 return false;
             }
+            std::uint32_t saved_skin_index{}, saved_skin_number{};
+            std::memcpy(&saved_skin_index, &saved.skin_id, sizeof(saved_skin_index));
+            std::memcpy(&saved_skin_number,
+                reinterpret_cast<const std::uint8_t*>(&saved.skin_id) + sizeof(saved_skin_index),
+                sizeof(saved_skin_number));
+            std::string resolved_skin_id;
+            if (!ResolveFNameLocked(saved_skin_index, saved_skin_number, resolved_skin_id) ||
+                resolved_skin_id.empty()) {
+                failure = "玩家车辆存档的 SkinID FName 无法解析";
+                return false;
+            }
 
             std::uintptr_t modules_array_address{};
             if (!AddAddress(matched_value, modules_property.offset, modules_array_address)) {
@@ -11281,6 +11301,19 @@ struct Ue5NteAdapter::State {
                 saved.module_ids.clear();
                 failure = "玩家改装 Modules 数组无法读取";
                 return false;
+            }
+            for (const auto raw_module_id : saved.module_ids) {
+                std::uint32_t module_name_index{}, module_name_number{};
+                std::memcpy(&module_name_index, &raw_module_id, sizeof(module_name_index));
+                std::memcpy(&module_name_number,
+                    reinterpret_cast<const std::uint8_t*>(&raw_module_id) + sizeof(module_name_index),
+                    sizeof(module_name_number));
+                std::string resolved_module_name;
+                if (!ResolveFNameLocked(module_name_index, module_name_number, resolved_module_name) ||
+                    resolved_module_name.empty()) {
+                    failure = "玩家存档的 Modules 中存在无法解析的 FName";
+                    return false;
+                }
             }
             saved.vehicle_id = stored_vehicle_id;
             return true;
@@ -11384,6 +11417,30 @@ struct Ue5NteAdapter::State {
                 failure = "UpdateAllModulesWithIDs 参数类型 / 大小 / 偏移未通过 Dump 5.6.1 校验";
                 return false;
             }
+            std::string update_default_data_type;
+            if (!ReadReflectedObjectNameLocked(
+                    default_data_parameter.structure, update_default_data_type) ||
+                update_default_data_type != "VehicleModuleDefaultData") {
+                failure = "UpdateAllModulesWithIDs.DefaultModuleData 结构类型不符";
+                return false;
+            }
+            const auto module_inner_offset = Layout(profile, "farrayProperty.inner", -1);
+            std::uintptr_t module_inner{};
+            std::string module_inner_type;
+            if (module_inner_offset < 0 ||
+                !ReadPointerAt(*memory, module_ids_parameter.property, module_inner_offset, module_inner) ||
+                module_inner == 0 ||
+                !ReadReflectedFieldClassNameLocked(module_inner, module_inner_type) ||
+                module_inner_type != "NameProperty") {
+                failure = "UpdateAllModulesWithIDs.VehicleModuleIDList 元素不是 FName";
+                return false;
+            }
+            ReflectedBoolParameter force_bool;
+            if (!ReadReflectedBoolParameterLocked(force_update_parameter, parms_size, force_bool) ||
+                force_bool.byte_offset < 0x10 || force_bool.byte_offset >= parms_size) {
+                failure = "UpdateAllModulesWithIDs.bForceUpdate bool mask 未通过校验";
+                return false;
+            }
 
             struct NativeArrayArgument {
                 std::uintptr_t data{};
@@ -11399,7 +11456,10 @@ struct Ue5NteAdapter::State {
                 module_ids_argument.data = reinterpret_cast<std::uintptr_t>(saved.module_ids.data());
             std::memcpy(parameters.data() + module_ids_parameter.offset,
                 &module_ids_argument, sizeof(module_ids_argument));
-            parameters[force_update_parameter.offset] = 1U;
+            const auto force_offset = static_cast<std::size_t>(force_bool.byte_offset);
+            parameters[force_offset] = static_cast<std::uint8_t>(
+                (parameters[force_offset] & static_cast<std::uint8_t>(~force_bool.field_mask)) |
+                force_bool.byte_mask);
             std::memcpy(parameters.data() + vehicle_id_parameter.offset,
                 &saved.vehicle_id, sizeof(saved.vehicle_id));
             std::memcpy(parameters.data() + skin_id_parameter.offset,
