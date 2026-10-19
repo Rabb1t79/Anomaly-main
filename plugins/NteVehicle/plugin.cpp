@@ -505,9 +505,20 @@ void Update() {
             std::scoped_lock lock(g_context.mutex);
             g_context.selected_vehicle_id = pending_vehicle_id;
             g_context.status = "已选择载具：" + pending_vehicle_id;
+            if (g_context.customization_page) {
+                g_context.customization_vehicle_id.clear();
+                g_context.customization_options.clear();
+                g_context.customization_skin_id.clear();
+                g_context.selected_module_overrides.clear();
+                g_context.refresh_customization_requested.store(true, std::memory_order_release);
+            }
         } else {
             SetStatus(StatusDescription("载具选择失败", status));
         }
+    }
+
+    if (g_context.refresh_customization_requested.exchange(false, std::memory_order_acq_rel)) {
+        RefreshCustomizationCatalogOnGameThread();
     }
 
     bool catalog_loaded{};
@@ -696,20 +707,26 @@ void Update() {
     }
 
     const bool summon_requested = g_context.summon.exchange(false, std::memory_order_acq_rel);
-    const bool summon_modified_requested = g_context.summon_modified.exchange(false, std::memory_order_acq_rel);
-    if (summon_requested || summon_modified_requested) {
+    const bool summon_customized_requested = g_context.summon_customized.exchange(false, std::memory_order_acq_rel);
+    if (summon_requested || summon_customized_requested) {
         AnomalyNteVehicleSummonRequestV1 request{};
         request.struct_size = sizeof(request);
         request.flags = ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
             ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER;
-        if (summon_modified_requested)
-            request.flags |= ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_OWNED_MODIFICATIONS;
+
         std::string selected_id;
         std::string selected_label;
+        std::string selected_skin_id;
+        std::string customization_vehicle_id;
+        std::vector<std::pair<std::uint32_t, std::string>> module_overrides;
+        std::vector<AnomalyNteVehicleModuleSelectionV1> module_selections;
         bool position_valid{};
         {
             std::scoped_lock lock(g_context.mutex);
             selected_id = g_context.selected_vehicle_id;
+            selected_skin_id = g_context.customization_skin_id;
+            customization_vehicle_id = g_context.customization_vehicle_id;
+            module_overrides = g_context.selected_module_overrides;
             position_valid = g_context.player_position_valid;
             const auto selected_index = std::ranges::find(g_context.vehicle_ids, selected_id);
             if (selected_index != g_context.vehicle_ids.end()) {
@@ -718,19 +735,50 @@ void Update() {
                     ? g_context.vehicle_labels[index] : selected_id;
             }
             if (position_valid) {
-                // The requested offset stays close to the player: X - 500, Y + 500, Z + 500.
+                // Keep the existing verified spawn position unchanged.
                 request.world_position[0] = g_context.player_snapshot.position[0] - 500.0;
                 request.world_position[1] = g_context.player_snapshot.position[1] + 500.0;
                 request.world_position[2] = g_context.player_snapshot.position[2] + 500.0;
             }
         }
+
         bool catalog_has_selection{};
         {
             std::scoped_lock lock(g_context.mutex);
             catalog_has_selection = !selected_id.empty() &&
                 std::ranges::find(g_context.vehicle_ids, selected_id) != g_context.vehicle_ids.end();
         }
-        if (!position_valid || !catalog_has_selection) {
+
+        std::string validation_error;
+        if (summon_customized_requested) {
+            if (customization_vehicle_id != selected_id) {
+                validation_error = "改装召唤失败：改造清单与当前选择的车型不一致，请重新打开清单";
+            } else if (selected_skin_id.empty()) {
+                validation_error = "改装召唤失败：尚未选择有效涂装";
+            } else {
+                request.flags |= ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION;
+                request.skin_id = anomaly::sdk::StringView(std::string_view(
+                    selected_skin_id.data(), selected_skin_id.size()));
+                module_selections.reserve(module_overrides.size());
+                for (const auto& override_entry : module_overrides) {
+                    AnomalyNteVehicleModuleSelectionV1 selection{};
+                    selection.struct_size = sizeof(selection);
+                    selection.module_type = override_entry.first;
+                    selection.module_id = anomaly::sdk::StringView(std::string_view(
+                        override_entry.second.data(), override_entry.second.size()));
+                    module_selections.push_back(selection);
+                }
+                request.module_selections = module_selections.empty()
+                    ? nullptr : module_selections.data();
+                request.module_selection_count =
+                    static_cast<std::uint32_t>(module_selections.size());
+            }
+        }
+
+        if (!validation_error.empty()) {
+            SetStatus(validation_error);
+            SetLastSummon(validation_error);
+        } else if (!position_valid || !catalog_has_selection) {
             const std::string reason = !position_valid
                 ? "召唤失败：玩家坐标当前无效"
                 : "召唤失败：当前选择未同步到 Host 载具目录";
@@ -748,17 +796,14 @@ void Update() {
                 const bool postcondition_verified =
                     !detail.empty() && detail.find(verified_prefix) == 0;
                 std::string result;
-                if (postcondition_verified && summon_modified_requested) {
+                if (postcondition_verified && summon_customized_requested) {
                     result = "改装载具召唤成功：" + detail;
                     SetStatus(result);
                     SetLastSummon(result);
                 } else if (postcondition_verified) {
-                    // Successful base summons stay silent; customized restores show their verified outcome.
                     SetStatus({});
                     SetLastSummon({});
                 } else {
-                    // An OK status without the Core's explicit postcondition marker is not
-                    // proof that a new vehicle exists; keep this diagnostic visible.
                     result = "召唤状态未验证：" + label + " (" + selected_id +
                         ")；Host 返回 OK，但没有明确的实际生成/后置验证标记";
                     if (!detail.empty()) result += "；Host 信息：" + detail;
@@ -767,7 +812,7 @@ void Update() {
                 }
             } else {
                 const auto reason = StatusDescription(
-                    summon_modified_requested ? "改装载具召唤失败" : "召唤失败", status);
+                    summon_customized_requested ? "改装载具召唤失败" : "召唤失败", status);
                 SetStatus(reason);
                 SetLastSummon(reason);
             }
