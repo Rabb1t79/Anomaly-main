@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 6u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 7u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -308,8 +308,15 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
-// Requires restoring the selected vehicle's saved player-owned module/skin configuration.
+// Legacy V6 request flag; retained for compatibility with existing plugin binaries.
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_OWNED_MODIFICATIONS (1u << 2u)
+// Applies the module and skin identifiers explicitly selected in the customization editor.
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_CUSTOM_SELECTION (1u << 3u)
+#define ANOMALY_NTE_VEHICLE_MODIFICATION_CATALOG_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_MODIFICATION_OPTION_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_MODIFICATION_OPTION_V1_IS_SKIN (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_MODIFICATION_OPTION_V1_IS_DEFAULT (1u << 2u)
+#define ANOMALY_NTE_VEHICLE_MODIFICATION_ID_MAX_UTF8_BYTES 128u
 typedef struct AnomalyNteVehicleSnapshotV1 {
     uint32_t struct_size;
     uint32_t flags;
@@ -336,7 +343,28 @@ typedef struct AnomalyNteVehicleSummonRequestV1 {
     uint32_t struct_size;
     uint32_t flags;
     double world_position[3];
+    // V7 append-only tail. Required only when HAS_CUSTOM_SELECTION is set.
+    AnomalyStringViewV1 customization_vehicle_id;
+    AnomalyStringViewV1 customization_skin_id;
+    const AnomalyStringViewV1* customization_module_ids;
+    uint32_t customization_module_count;
+    uint32_t customization_catalog_sequence;
 } AnomalyNteVehicleSummonRequestV1;
+
+typedef struct AnomalyNteVehicleModificationCatalogSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t sequence;
+    uint32_t entry_count;
+    uint32_t reserved;
+} AnomalyNteVehicleModificationCatalogSnapshotV1;
+
+typedef struct AnomalyNteVehicleModificationOptionV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t module_type;
+    uint32_t reserved;
+} AnomalyNteVehicleModificationOptionV1;
 
 typedef struct AnomalyNteVehicleServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
@@ -377,6 +405,16 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_fine_speed_tuning_enabled)(
         void* user, uint32_t enabled);
     AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
+    // V7: reads the current vehicle's runtime module/skin choices from validated DataTables.
+    // Calls are Game-thread-only. The returned sequence identifies one immutable catalog view.
+    AnomalyStatusV1 (ANOMALY_CALL *modification_catalog_snapshot)(
+        void* user, AnomalyStringViewV1 vehicle_id,
+        AnomalyNteVehicleModificationCatalogSnapshotV1* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *modification_option_at)(
+        void* user, AnomalyStringViewV1 vehicle_id, uint64_t sequence, uint32_t index,
+        AnomalyNteVehicleModificationOptionV1* option,
+        char* id_destination, size_t* inout_id_size,
+        char* label_destination, size_t* inout_label_size);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
