@@ -50,6 +50,7 @@ struct Context {
     std::mutex mutex;
     bool enabled{};
     bool export_requested{};
+    bool export_in_flight{};
     bool cursor_initialized{};
     std::uint32_t extra_count{kDefaultExtraCount};
     float rate{kDefaultRate};
@@ -58,6 +59,7 @@ struct Context {
     std::uint64_t failure_count{};
     std::uint64_t replay_count{};
     std::string status{"等待 Anomaly 原生伤害服务"};
+    std::string export_status{"尚未导出"};
     std::vector<ChainItem> chains;
     std::vector<std::string> log;
 } g;
@@ -89,6 +91,11 @@ const char* StatusName(const std::uint32_t status) noexcept {
     case ANOMALY_STATUS_V1_CANCELLED: return "CANCELLED";
     default: return "UNKNOWN_STATUS";
     }
+}
+
+std::string StatusDetail(const AnomalyStatusV1& status) {
+    if (status.message.data == nullptr || status.message.size == 0) return {};
+    return std::string(status.message.data, status.message.size);
 }
 
 void LogLocked(std::string message) {
@@ -446,39 +453,114 @@ std::string BuildExportText() {
     return output;
 }
 
+void CompleteExport(std::string status, std::string message) {
+    std::scoped_lock lock(g.mutex);
+    g.export_in_flight = false;
+    g.export_status = std::move(status);
+    LogLocked(std::move(message));
+}
+
+void ANOMALY_CALL ExportTask(void* callback_user, AnomalyGenerationHandleV1) {
+    const auto* host = static_cast<const AnomalyHostApiV1*>(callback_user);
+    if (host == nullptr) {
+        CompleteExport("日志导出失败：Host 不可用", "后台导出失败：Host 不可用。");
+        return;
+    }
+
+    try {
+        const anomaly::sdk::Host sdk_host(host);
+        const auto storage = sdk_host.Query<AnomalyStorageServiceV1>(
+            ANOMALY_STORAGE_SERVICE_V1_ID, ANOMALY_STORAGE_SERVICE_V1_VERSION);
+        if (!storage || storage->write_atomic == nullptr) {
+            CompleteExport(
+                "日志导出失败：存储服务不可用",
+                "后台导出失败：anomaly.storage 服务不可用。");
+            return;
+        }
+
+        // This callback is executed by anomaly.scheduler's worker, not from
+        // the Game/Render callbacks where synchronous state I/O is prohibited.
+        const std::string contents = BuildExportText();
+        const auto path = anomaly::sdk::StringView(kLogPath);
+        const AnomalyByteSpanV1 bytes{
+            reinterpret_cast<const std::uint8_t*>(contents.data()),
+            contents.size()};
+        const auto status = storage->write_atomic(storage->user, path, bytes);
+        if (status.code == ANOMALY_STATUS_V1_OK) {
+            CompleteExport(
+                std::string("日志已导出：") + kLogPath,
+                std::string("诊断日志已导出到插件存储文件：") + kLogPath);
+        } else {
+            const std::string detail = StatusDetail(status);
+            std::string user_status = std::string("日志导出失败：") + StatusName(status.code);
+            std::string message = std::string("后台日志写入失败：status=") +
+                StatusName(status.code);
+            if (!detail.empty()) {
+                user_status += "（" + detail + "）";
+                message += " reason=" + detail;
+            }
+            CompleteExport(std::move(user_status), std::move(message));
+        }
+    } catch (...) {
+        CompleteExport(
+            "日志导出失败：后台任务异常",
+            "后台日志导出任务发生未处理异常。");
+    }
+}
+
 void ProcessExport(const AnomalyHostApiV1* host) {
     bool requested{};
+    bool in_flight{};
     {
         std::scoped_lock lock(g.mutex);
         requested = g.export_requested;
         g.export_requested = false;
+        in_flight = g.export_in_flight;
     }
     if (!requested) return;
+    if (in_flight) {
+        std::scoped_lock lock(g.mutex);
+        g.export_status = "已有后台导出任务正在运行";
+        LogLocked("用户再次请求导出，但已有导出任务运行中；未重复排队。");
+        return;
+    }
     if (host == nullptr) {
-        Log("日志导出失败：Host 不可用。");
+        CompleteExport("日志导出失败：Host 不可用", "日志导出失败：Host 不可用。");
         return;
     }
 
     const anomaly::sdk::Host sdk_host(host);
-    const auto storage = sdk_host.Query<AnomalyStorageServiceV1>(
-        ANOMALY_STORAGE_SERVICE_V1_ID, ANOMALY_STORAGE_SERVICE_V1_VERSION);
-    if (!storage || storage->write_atomic == nullptr) {
-        Log("日志导出失败：anomaly.storage 服务不可用。");
-        SetStatus("日志导出失败：存储服务不可用");
+    const auto scheduler = sdk_host.Query<AnomalySchedulerServiceV1>(
+        ANOMALY_SCHEDULER_SERVICE_V1_ID, ANOMALY_SCHEDULER_SERVICE_V1_VERSION);
+    if (!scheduler || scheduler->schedule == nullptr) {
+        CompleteExport(
+            "日志导出失败：后台调度服务不可用",
+            "日志导出失败：anomaly.scheduler 服务不可用，无法安全地移出 Game/Render 线程。");
         return;
     }
-    const std::string contents = BuildExportText();
-    const auto path = anomaly::sdk::StringView(kLogPath);
-    const AnomalyByteSpanV1 bytes{
-        reinterpret_cast<const std::uint8_t*>(contents.data()),
-        contents.size()};
-    const auto status = storage->write_atomic(storage->user, path, bytes);
-    if (status.code == ANOMALY_STATUS_V1_OK) {
-        Log(std::string("诊断日志已导出到插件存储文件：") + kLogPath);
-        SetStatus(std::string("日志已导出：") + kLogPath);
-    } else {
-        Log(std::string("日志导出失败：status=") + StatusName(status.code));
-        SetStatus(std::string("日志导出失败：") + StatusName(status.code));
+
+    {
+        std::scoped_lock lock(g.mutex);
+        g.export_in_flight = true;
+        g.export_status = "正在后台导出日志…";
+        LogLocked("已将日志导出任务提交给 anomaly.scheduler Worker。");
+    }
+
+    AnomalyGenerationHandleV1 task{};
+    const auto scheduled = scheduler->schedule(
+        scheduler->user, 1U, ExportTask,
+        const_cast<AnomalyHostApiV1*>(host), &task);
+    if (scheduled.code != ANOMALY_STATUS_V1_OK) {
+        const std::string detail = StatusDetail(scheduled);
+        std::string user_status = std::string("日志导出任务启动失败：") +
+            StatusName(scheduled.code);
+        std::string message = std::string("后台任务排队失败：status=") +
+            StatusName(scheduled.code);
+        if (!detail.empty()) {
+            user_status += "（" + detail + "）";
+            message += " reason=" + detail;
+        }
+        CompleteExport(std::move(user_status), std::move(message));
     }
 }
 
@@ -486,6 +568,8 @@ void ResetState() {
     std::scoped_lock lock(g.mutex);
     g.enabled = false;
     g.export_requested = false;
+    g.export_in_flight = false;
+    g.export_status = "尚未导出";
     g.cursor_initialized = false;
     g.extra_count = kDefaultExtraCount;
     g.rate = kDefaultRate;
@@ -665,6 +749,7 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
     bool bound{};
     bool trigger_active{};
     std::string status;
+    std::string export_status;
     {
         std::scoped_lock lock(g.mutex);
         enabled = g.enabled;
@@ -674,6 +759,7 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
         failure_count = g.failure_count;
         replay_count = g.replay_count;
         status = g.status;
+        export_status = g.export_status;
         for (const auto& item : g.chains) {
             if (!item.terminal && item.target.id != 0 && item.target.generation != 0) {
                 bound = true;
@@ -736,6 +822,7 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
         !enabled ? "触发=已停止"
                  : (trigger_active ? "触发=战斗中" : "触发=等待有效命中")));
     service->text(service->user, anomaly::sdk::StringView(status.c_str()));
+    service->text(service->user, anomaly::sdk::StringView(export_status.c_str()));
 
     char statistics[192]{};
     std::snprintf(statistics, sizeof(statistics),
@@ -751,6 +838,7 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
             anomaly::sdk::StringView("导出诊断日志"), 0.0F, 0.0F) != 0) {
         std::scoped_lock lock(g.mutex);
         g.export_requested = true;
+        g.export_status = "已请求后台导出";
         LogLocked(std::string("用户请求导出诊断日志到 ") + kLogPath);
     }
 }
@@ -766,7 +854,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.builtin.nte-damage-chain-reaction"),
         anomaly::sdk::StringView("伤害链式反应"),
-        anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("0.1.2"),
+        anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("0.1.3"),
         Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
