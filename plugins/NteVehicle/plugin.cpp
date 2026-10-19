@@ -1063,11 +1063,201 @@ void DrawSummonTab(
         g_context.summon.store(true, std::memory_order_release);
     }
     DrawInlineGap(ui);
-    if (DrawButtonEnabled(ui, "召唤改装车辆", can_summon)) {
-        g_context.summon_modified.store(true, std::memory_order_release);
+    if (DrawButtonEnabled(ui, "改造清单", has_selected)) {
+        {
+            std::scoped_lock lock(g_context.mutex);
+            g_context.customization_page = true;
+            g_context.customization_vehicle_id.clear();
+            g_context.customization_options.clear();
+            g_context.customization_skin_id.clear();
+            g_context.selected_module_overrides.clear();
+            g_context.customization_status = "正在读取 " + selected + " 的实时改装目录";
+        }
+        g_context.refresh_customization_requested.store(true, std::memory_order_release);
     }
-    DrawText(ui, "改装召唤会读取玩家存档中的模块、涂装和附加配置；普通召唤保持原行为。");
+    DrawText(ui, "改造清单会读取所选车型实际可用的模块与涂装；未手动覆盖的模块槽位保留游戏默认配置。");
 }
+
+void DrawCustomizationTab(
+    const AnomalyUiServiceV1* ui,
+    const std::string& selected,
+    const std::vector<std::string>& ids,
+    const std::vector<std::string>& labels,
+    const std::vector<CustomizationOption>& options,
+    const std::vector<std::pair<std::uint32_t, std::string>>& module_overrides,
+    const std::string& customization_vehicle_id,
+    const std::string& skin_id,
+    const std::string& customization_status,
+    bool player_position_valid) {
+    const auto selected_index = std::ranges::find(ids, selected);
+    const bool has_selected = selected_index != ids.end();
+    std::string selected_label = selected;
+    if (has_selected) {
+        const auto index = static_cast<std::size_t>(selected_index - ids.begin());
+        if (index < labels.size() && !labels[index].empty()) selected_label = labels[index];
+    }
+    DrawText(ui, "改造清单 / " + selected_label);
+    if (DrawButtonEnabled(ui, "返回召唤清单", true)) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.customization_page = false;
+        return;
+    }
+    DrawInlineGap(ui);
+    if (DrawButtonEnabled(ui, "重新读取改装数据", true)) {
+        {
+            std::scoped_lock lock(g_context.mutex);
+            g_context.customization_vehicle_id.clear();
+            g_context.customization_options.clear();
+            g_context.customization_skin_id.clear();
+            g_context.selected_module_overrides.clear();
+            g_context.customization_status = "正在重新读取所选车型的改装目录";
+        }
+        g_context.refresh_customization_requested.store(true, std::memory_order_release);
+    }
+    DrawText(ui, customization_status);
+    if (!has_selected) {
+        DrawText(ui, "当前车型不在已读取的载具目录中，无法应用改装。");
+        return;
+    }
+    if (customization_vehicle_id != selected) {
+        DrawText(ui, "正在读取当前车型的改装选项；请等待数据加载完成后再召唤。");
+        return;
+    }
+    if (options.empty()) {
+        DrawText(ui, "没有取得可用的改装选项。请重新读取；若仍失败，请查看 Core 返回的目录校验诊断。");
+        return;
+    }
+
+    static constexpr std::array<std::string_view, 27> kModuleTypeNames{
+        "无", "发动机", "变速箱", "制动", "悬挂", "车身颜色模块",
+        "前包围", "侧裙", "后包围", "尾翼", "贴花", "轮毂",
+        "引擎盖", "车牌", "车顶", "轮胎", "附件", "限滑差速器 LSD",
+        "车身刚度", "Skin 模块", "内饰皮革颜色", "内饰缝线颜色",
+        "车辆铭牌", "轮胎烟雾", "轮胎痕迹", "拖钩", "ECU"
+    };
+    const auto override_for_type = [&](std::uint32_t module_type) -> std::string_view {
+        const auto found = std::ranges::find_if(module_overrides,
+            [module_type](const auto& entry) { return entry.first == module_type; });
+        return found == module_overrides.end()
+            ? std::string_view{} : std::string_view(found->second);
+    };
+    const auto draw_module_options = [&]() {
+        for (std::uint32_t type = 1; type < kModuleTypeNames.size(); ++type) {
+            bool has_options = false;
+            bool has_default = false;
+            for (const auto& option : options) {
+                if (option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE &&
+                    option.module_type == type) {
+                    has_options = true;
+                    has_default = has_default || option.is_default;
+                }
+            }
+            if (!has_options) continue;
+            DrawDivider(ui);
+            DrawText(ui, std::string(kModuleTypeNames[type]));
+            const std::string_view selected_option_id = override_for_type(type);
+            for (const auto& option : options) {
+                if (option.kind != ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE ||
+                    option.module_type != type) continue;
+                const bool explicit_selected = !selected_option_id.empty() &&
+                    selected_option_id == option.id;
+                const bool default_selected = selected_option_id.empty() && option.is_default;
+                std::string button_label;
+                if (explicit_selected) button_label = "[已选] ";
+                else if (default_selected) button_label = "[默认] ";
+                else button_label = "选择 ";
+                button_label += option.label.empty() ? option.id : option.label;
+                button_label += " (" + option.id + ")##custom-module-" +
+                    std::to_string(type) + "-" + option.id;
+                if (ui->button(ui->user, anomaly::sdk::StringView(button_label), 0.0F, 0.0F)) {
+                    std::scoped_lock lock(g_context.mutex);
+                    auto& overrides = g_context.selected_module_overrides;
+                    if (option.is_default) {
+                        std::erase_if(overrides, [type](const auto& entry) {
+                            return entry.first == type;
+                        });
+                    } else {
+                        const auto found = std::ranges::find_if(overrides,
+                            [type](const auto& entry) { return entry.first == type; });
+                        if (found == overrides.end()) overrides.emplace_back(type, option.id);
+                        else found->second = option.id;
+                    }
+                    g_context.customization_status = "已更新 " +
+                        std::string(kModuleTypeNames[type]) + " 的选择；召唤时将提交给游戏原生改装组件";
+                }
+            }
+            if (has_default && !selected_option_id.empty()) {
+                const std::string reset_label =
+                    "恢复默认##custom-reset-module-" + std::to_string(type);
+                if (DrawButtonEnabled(ui, reset_label, true)) {
+                    std::scoped_lock lock(g_context.mutex);
+                    std::erase_if(g_context.selected_module_overrides, [type](const auto& entry) {
+                        return entry.first == type;
+                    });
+                    g_context.customization_status = "已恢复 " +
+                        std::string(kModuleTypeNames[type]) + " 的游戏默认模块";
+                }
+            }
+        }
+    };
+    const auto draw_skin_options = [&]() {
+        DrawDivider(ui);
+        DrawText(ui, "涂装");
+        bool has_default_skin = false;
+        for (const auto& option : options) {
+            if (option.kind != ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN) continue;
+            has_default_skin = has_default_skin || option.is_default;
+            const bool current = skin_id == option.id;
+            std::string button_label = current ? "[当前] " : (option.is_default ? "[默认] " : "选择 ");
+            button_label += option.label.empty() ? option.id : option.label;
+            button_label += " (" + option.id + ")##custom-skin-" + option.id;
+            if (ui->button(ui->user, anomaly::sdk::StringView(button_label), 0.0F, 0.0F)) {
+                std::scoped_lock lock(g_context.mutex);
+                g_context.customization_skin_id = option.id;
+                g_context.customization_status = "已选择涂装：" + option.label + " (" + option.id + ")";
+            }
+        }
+        if (has_default_skin && !skin_id.empty()) {
+            if (DrawButtonEnabled(ui, "恢复默认涂装##custom-reset-skin", true)) {
+                const auto found = std::ranges::find_if(options, [](const CustomizationOption& option) {
+                    return option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN &&
+                        option.is_default;
+                });
+                if (found != options.end()) {
+                    std::scoped_lock lock(g_context.mutex);
+                    g_context.customization_skin_id = found->id;
+                    g_context.customization_status = "已恢复游戏默认涂装：" + found->label;
+                }
+            }
+        }
+    };
+
+    const bool child_api_available =
+        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_child),
+            sizeof(decltype(AnomalyUiServiceV1::end_child))) &&
+        ui->begin_child && ui->end_child;
+    if (child_api_available) {
+        const bool child_visible = ui->begin_child(ui->user,
+            anomaly::sdk::StringView("##vehicle-customization-options"), 0.0F, 350.0F, 0U) != 0;
+        if (child_visible) {
+            draw_skin_options();
+            draw_module_options();
+        }
+        ui->end_child(ui->user);
+    } else {
+        draw_skin_options();
+        draw_module_options();
+    }
+
+    DrawDivider(ui);
+    DrawText(ui, "仅手动选择的模块槽位会覆盖默认值；其他槽位使用游戏数据表的默认模块。");
+    const bool can_summon_customized = player_position_valid && has_selected &&
+        customization_vehicle_id == selected && !skin_id.empty();
+    if (DrawButtonEnabled(ui, "召唤改装车辆", can_summon_customized)) {
+        g_context.summon_customized.store(true, std::memory_order_release);
+    }
+}
+
 
 void DrawPerformanceTab(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
