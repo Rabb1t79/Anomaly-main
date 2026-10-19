@@ -7566,7 +7566,7 @@ struct Ue5NteAdapter::State {
                     L"/Script/HTGame.HTAbilitySpawnActor.OverrideEffectContainer",
                     override_container_function) ||
                 !FindExactObjectLocked(
-                    L"/Script/HTGame.DamageTriggerActor.K2_OnTriggerPeriodGamePlayEffect",
+                    L"/Script/HTGame.DamageTriggerActor.TriggerPeriodGamePlayEffectEvent",
                     period_function) ||
                 !ValidateNoParameterFunctionLocked(period_function) ||
                 !FindExactObjectLocked(
@@ -8263,7 +8263,7 @@ struct Ue5NteAdapter::State {
             damage_chain_reactions.push_back(chain);
             *out_chain = chain.handle;
             return Status(ANOMALY_STATUS_V1_OK,
-                "dump-validated native DamageTriggerActor context created; future calls invoke its period event, not captured GameplayEffect parameters");
+                "dump-validated DamageTriggerActor context created; queued calls use TriggerPeriodGamePlayEffectEvent, not captured GameplayEffect parameters");
         } catch (...) {
             std::scoped_lock lock(mutex);
             if (auto* native = FindNativeDamageChainLocked(native_handle); native != nullptr) {
@@ -8416,8 +8416,9 @@ struct Ue5NteAdapter::State {
                 std::uint64_t previous;
                 ~ProvenanceRestore() noexcept { g_active_damage_chain_reaction_id.Set(previous); }
             } provenance_restore{previous_provenance};
-            // The actor owns EventData.Target and its copied EffectContainer. This call
-            // executes the Dump-declared native period event, not an ASC ProcessEvent replay.
+            // The actor owns EventData.Target and its copied EffectContainer. Invoke the
+            // Dump-declared TriggerPeriodGamePlayEffectEvent entry point rather than directly
+            // calling the K2 blueprint callback or replaying captured ASC arguments.
             invoked = InvokeProcessEventGuarded(
                 process_event_invoker, trigger_actor, period_function, nullptr, 0);
         }
@@ -8454,10 +8455,10 @@ struct Ue5NteAdapter::State {
                 }
             }
             return Status(ANOMALY_STATUS_V1_OK,
-                "native period event produced a matching actual CharacterOnDamaged confirmation");
+                "TriggerPeriodGamePlayEffectEvent produced a matching actual CharacterOnDamaged confirmation");
         }
         return Status(ANOMALY_STATUS_V1_OK,
-            "native DamageTriggerActor period event dispatched; waiting for actual damage confirmation");
+            "TriggerPeriodGamePlayEffectEvent dispatched; waiting for actual damage confirmation");
     }
     AnomalyStatusV1 SnapshotDamageChainReaction(
         const AnomalyGenerationHandleV1 handle,
