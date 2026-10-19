@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "载具控制",
-  "description": "载具控制插件：提供载具召唤、性能调校、车轮摩擦控制及 Debug 诊断。",
+  "description": "载具控制插件：提供普通载具召唤、读取玩家已保存改装方案召唤、性能调校、车轮摩擦控制及 Debug 诊断。",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.9.9",
+  "version": "0.10.0",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -27,7 +27,7 @@
     },
     {
       "id": "anomaly.nte.vehicle",
-      "minVersion": 5
+      "minVersion": 6
     },
     {
       "id": "anomaly.nte.player",
