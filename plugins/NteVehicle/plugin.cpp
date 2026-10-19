@@ -54,6 +54,7 @@ struct Context {
     std::atomic_bool apply_other_torque{};
     std::atomic_bool reset{};
     std::atomic_bool summon{};
+    std::atomic_bool summon_modified{};
     std::atomic_bool friction_toggle{};
     std::atomic_bool started{};
     float speed_ratio{1.0F};
@@ -531,11 +532,15 @@ void Update() {
         }
     }
 
-    if (g_context.summon.exchange(false, std::memory_order_acq_rel)) {
+    const bool summon_requested = g_context.summon.exchange(false, std::memory_order_acq_rel);
+    const bool summon_modified_requested = g_context.summon_modified.exchange(false, std::memory_order_acq_rel);
+    if (summon_requested || summon_modified_requested) {
         AnomalyNteVehicleSummonRequestV1 request{};
         request.struct_size = sizeof(request);
         request.flags = ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
             ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER;
+        if (summon_modified_requested)
+            request.flags |= ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_OWNED_MODIFICATIONS;
         std::string selected_id;
         std::string selected_label;
         bool position_valid{};
@@ -580,8 +585,12 @@ void Update() {
                 const bool postcondition_verified =
                     !detail.empty() && detail.find(verified_prefix) == 0;
                 std::string result;
-                if (postcondition_verified) {
-                    // Successful summons stay silent; only failure or unverified states show a message.
+                if (postcondition_verified && summon_modified_requested) {
+                    result = "改装载具召唤成功：" + detail;
+                    SetStatus(result);
+                    SetLastSummon(result);
+                } else if (postcondition_verified) {
+                    // Successful base summons stay silent; customized restores show their verified outcome.
                     SetStatus({});
                     SetLastSummon({});
                 } else {
@@ -594,7 +603,8 @@ void Update() {
                     SetLastSummon(result);
                 }
             } else {
-                const auto reason = StatusDescription("召唤失败", status);
+                const auto reason = StatusDescription(
+                    summon_modified_requested ? "改装载具召唤失败" : "召唤失败", status);
                 SetStatus(reason);
                 SetLastSummon(reason);
             }
@@ -844,6 +854,11 @@ void DrawSummonTab(
     if (DrawButtonEnabled(ui, "召唤", can_summon)) {
         g_context.summon.store(true, std::memory_order_release);
     }
+    DrawInlineGap(ui);
+    if (DrawButtonEnabled(ui, "召唤改装车辆", can_summon)) {
+        g_context.summon_modified.store(true, std::memory_order_release);
+    }
+    DrawText(ui, "改装召唤会读取玩家存档中的模块、涂装和附加配置；普通召唤保持原行为。");
 }
 
 void DrawPerformanceTab(
@@ -1251,6 +1266,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.apply_other_torque.store(false, std::memory_order_release);
     g_context.reset.store(false, std::memory_order_release);
     g_context.summon.store(false, std::memory_order_release);
+    g_context.summon_modified.store(false, std::memory_order_release);
     g_context.friction_toggle.store(false, std::memory_order_release);
     g_context.refresh_catalog_requested.store(false, std::memory_order_release);
     g_context.speed_ratio = kLockedSpeedRatio;
@@ -1338,6 +1354,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("载具控制"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.9.9"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.10.0"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
