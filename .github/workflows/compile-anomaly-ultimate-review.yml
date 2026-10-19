@@ -1,0 +1,62 @@
+name: Compile supplied Anomaly Ultimate source (no manifest)
+
+on:
+  push:
+    branches:
+      - review/anomaly-ultimate-20261020
+    paths:
+      - '.github/workflows/compile-anomaly-ultimate-review.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated review branch
+        uses: actions/checkout@v4
+
+      - name: Configure standalone plugin build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S review-source/AnomalyUltimate -B .build/AnomalyUltimateReview -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed.' }
+
+      - name: Compile supplied source and SDK exception bridge
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build .build/AnomalyUltimateReview --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw 'MSVC compilation/link failed.' }
+
+      - name: Verify DLL exports and runtime descriptor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = Join-Path $env:GITHUB_WORKSPACE '.build/AnomalyUltimateReview/Release/plugin.dll'
+          $check = Join-Path $env:GITHUB_WORKSPACE '.build/AnomalyUltimateReview/Release/anomaly_ultimate_identity_check.exe'
+          if (!(Test-Path -LiteralPath $dll -PathType Leaf)) { throw "plugin.dll not found: $dll" }
+          & $check $dll
+          if ($LASTEXITCODE -ne 0) { throw 'DLL export/descriptor check failed.' }
+
+      - name: Package DLL only (manifest intentionally omitted)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = Join-Path $env:GITHUB_WORKSPACE '.build/AnomalyUltimateReview/Release/plugin.dll'
+          $stage = Join-Path $env:GITHUB_WORKSPACE 'dist/AnomalyUltimate'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -LiteralPath $dll -Destination (Join-Path $stage 'plugin.dll')
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'dist/AnomalyUltimate-plugin-only.zip') -Force
+
+      - name: Upload plugin DLL package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnomalyUltimate-plugin-only
+          path: dist/AnomalyUltimate-plugin-only.zip
+          if-no-files-found: error
+          retention-days: 14
