@@ -47,6 +47,13 @@ jobs:
           if(MSVC)
             target_compile_options(damage_chain_reaction PRIVATE /utf-8 /W4 /permissive- /EHsc)
           endif()
+          add_executable(damage_chain_plugin_identity_test "$root/plugins/DamageChainReaction/tests/plugin_identity_test.cpp")
+          target_include_directories(damage_chain_plugin_identity_test PRIVATE "$root/include")
+          target_compile_definitions(damage_chain_plugin_identity_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          if(MSVC)
+            target_compile_options(damage_chain_plugin_identity_test PRIVATE /utf-8 /W4 /permissive- /EHsc)
+          endif()
+
           set_target_properties(damage_chain_reaction PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
 
           enable_testing()
@@ -76,6 +83,18 @@ jobs:
           $b = Join-Path $env:GITHUB_WORKSPACE '.build/damage-chain-reaction'
           cmake --build $b --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw 'Damage Chain Reaction plugin/test build failed.' }
+
+      - name: Verify compiled plugin descriptor matches manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $b = Join-Path $env:GITHUB_WORKSPACE '.build/damage-chain-reaction'
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'plugins/DamageChainReaction/manifest.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $dll = Join-Path $b 'Release/plugin.dll'
+          $probe = Join-Path $b 'Release/damage_chain_plugin_identity_test.exe'
+          & $probe $dll $manifest.id $manifest.version
+          if ($LASTEXITCODE -ne 0) { throw 'Compiled plugin descriptor does not match its manifest.' }
 
       - name: Run deterministic scheduler and capability-policy tests
         shell: pwsh
