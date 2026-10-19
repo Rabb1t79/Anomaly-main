@@ -174,16 +174,24 @@ void AddChain(
     AnomalyGenerationHandleV1 handle{};
     const auto result = service->start_chain(service->user, &request, &handle);
     if (result.code != ANOMALY_STATUS_V1_OK || handle.id == 0) {
-        char line[320]{};
-        std::snprintf(line, sizeof(line),
-            "原始命中 #%llu 未建立链：status=%s(%u)。DamageTriggerActor/EffectContainer 原生配置验证未通过，详见 Core 诊断。",
-            static_cast<unsigned long long>(event.sequence),
-            StatusName(result.code), result.code);
+        std::string line = "原始命中 #" +
+            std::to_string(static_cast<unsigned long long>(event.sequence)) +
+            " 未建立链：status=" + StatusName(result.code) +
+            "(" + std::to_string(result.code) + ")。";
+        const std::string detail = StatusDetail(result);
+        if (!detail.empty()) {
+            line += " Core 返回详情：" + detail;
+        } else {
+            line += " Core 未返回可读详情；请查看同一时间点的 Core 诊断日志。";
+        }
         {
             std::scoped_lock lock(g.mutex);
             ++g.failure_count;
-            LogLocked(line);
+            LogLocked(std::move(line));
             g.status = std::string("未启动链：") + StatusName(result.code);
+            if (!detail.empty()) {
+                g.status += "（" + detail + "）";
+            }
         }
         return;
     }
