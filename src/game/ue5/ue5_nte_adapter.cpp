@@ -11494,9 +11494,10 @@ struct Ue5NteAdapter::State {
             std::memcpy(parameters.data() + modules_parameter.offset,
                 &modules_header, sizeof(modules_header));
             const auto force_offset = static_cast<std::size_t>(force_bool.byte_offset);
+            // Match the Host's other reflected bool writers: clear FieldMask, set ByteMask.
             parameters[force_offset] = static_cast<std::uint8_t>(
-                (parameters[force_offset] & static_cast<std::uint8_t>(~force_bool.byte_mask)) |
-                force_bool.field_mask);
+                (parameters[force_offset] & static_cast<std::uint8_t>(~force_bool.field_mask)) |
+                force_bool.byte_mask);
             std::memcpy(parameters.data() + vehicle_id_parameter.offset,
                 &saved.vehicle_id_name, sizeof(saved.vehicle_id_name));
             std::memcpy(parameters.data() + skin_id_parameter.offset,
