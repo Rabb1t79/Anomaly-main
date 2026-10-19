@@ -74,7 +74,7 @@ struct NteCharacterDamageCapture {
     std::uint64_t cached_trigger_ability_instance{};
     bool ability_spawn_context_valid{};
     bool event_tag_valid{};
-    bool cached_trigger_ability_instance_valid{};
+    bool cached_ability_instance_field_valid{};
     NteDamageCriticalState critical;
     NteDamageTags tags;
     // Set only when this capture is synchronously produced by the chain-reaction adapter.
