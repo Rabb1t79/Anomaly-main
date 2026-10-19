@@ -1499,11 +1499,8 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NteVehicle/manifest.json
         PACKAGE_NAME NteVehicle
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteVehicle")
-    anomaly_add_plugin(anomaly_builtin_nte_attack_replay
-        SOURCES plugins/NteAttackReplay/plugin.cpp
-        MANIFEST plugins/NteAttackReplay/manifest.json
-        PACKAGE_NAME NteAttackReplay
-        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NteAttackReplay")
+    # Legacy AttackReplay is reference-only under reference/legacy-plugins and is not
+    # registered as an active built-in plugin on the native damage-chain route.
     anomaly_add_plugin(anomaly_builtin_damage_chain_reaction
         SOURCES plugins/DamageChainReaction/plugin.cpp
         MANIFEST plugins/DamageChainReaction/manifest.json
@@ -1512,7 +1509,6 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     # Force MSVC to read these plugins’ Chinese UI strings as UTF-8.
     target_compile_options(anomaly_builtin_auto_fish PRIVATE /utf-8)
     target_compile_options(anomaly_builtin_nte_vehicle PRIVATE /utf-8)
-    target_compile_options(anomaly_builtin_nte_attack_replay PRIVATE /utf-8)
     target_compile_options(anomaly_builtin_damage_chain_reaction PRIVATE /utf-8)
     # 插件源码把中文直接写在字符串字面量里（非 locale），MSVC 需按 UTF-8 读源码并编码窄字符串。
     target_compile_options(anomaly_builtin_time_accel PRIVATE /utf-8)
@@ -1552,7 +1548,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
         anomaly_builtin_model_scale anomaly_builtin_auto_fish
-        anomaly_builtin_nte_vehicle anomaly_builtin_nte_attack_replay
+        anomaly_builtin_nte_vehicle
         anomaly_builtin_damage_chain_reaction)
     if(ANOMALY_BUILD_TEST_PLUGINS)
         list(APPEND ANOMALY_BUILTIN_PLUGIN_TARGETS
