@@ -42,7 +42,12 @@ int wmain(int argc, wchar_t** argv) {
         static_cast<int>(id.size()), id.data(),
         static_cast<int>(name.size()), name.data(),
         static_cast<int>(version.size()), version.data());
-    std::printf("exports: AnomalyPluginEntryV1=OK AnomalyPluginCxxThrowV1=OK\n");
+    if (id != "anomaly.local.ultimate") {
+        std::fprintf(stderr, "descriptor id mismatch: expected anomaly.local.ultimate\n");
+        FreeLibrary(image);
+        return 6;
+    }
+    std::printf("exports: AnomalyPluginEntryV1=OK AnomalyPluginCxxThrowV1=OK descriptor-id=OK\n");
     FreeLibrary(image);
     return 0;
 }
