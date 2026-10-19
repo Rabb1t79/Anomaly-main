@@ -854,7 +854,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.builtin.nte-damage-chain-reaction"),
         anomaly::sdk::StringView("伤害链式反应"),
-        anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("0.1.3"),
+        anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("0.1.4"),
         Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
