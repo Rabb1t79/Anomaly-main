@@ -6,12 +6,14 @@ on:
       - '**'
     paths:
       - 'plugins/DamageChainReaction/**'
+      - 'src/plugin/plugin_capability_policy.cpp'
       - '.github/workflows/build-nte-damage-chain-reaction.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'plugins/DamageChainReaction/**'
+      - 'src/plugin/plugin_capability_policy.cpp'
       - '.github/workflows/build-nte-damage-chain-reaction.yml'
   workflow_dispatch:
 
@@ -24,7 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure standalone plugin and RateQueue tests
+      - name: Configure standalone plugin and contract tests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -54,6 +56,16 @@ jobs:
             target_compile_options(damage_chain_rate_queue_test PRIVATE /utf-8 /W4 /permissive- /EHsc)
           endif()
           add_test(NAME damage_chain_rate_queue_test COMMAND damage_chain_rate_queue_test)
+
+          add_executable(damage_chain_capability_policy_test
+            "$root/plugins/DamageChainReaction/tests/capability_policy_test.cpp"
+            "$root/src/plugin/plugin_capability_policy.cpp")
+          target_include_directories(damage_chain_capability_policy_test PRIVATE "$root/include")
+          target_compile_definitions(damage_chain_capability_policy_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          if(MSVC)
+            target_compile_options(damage_chain_capability_policy_test PRIVATE /utf-8 /W4 /permissive- /EHsc)
+          endif()
+          add_test(NAME damage_chain_capability_policy_test COMMAND damage_chain_capability_policy_test)
           "@ | Set-Content -LiteralPath (Join-Path $src 'CMakeLists.txt') -Encoding UTF8
           cmake -S $src -B $b -G "Visual Studio 17 2022" -A x64
 
@@ -65,13 +77,13 @@ jobs:
           cmake --build $b --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw 'Damage Chain Reaction plugin/test build failed.' }
 
-      - name: Run deterministic RateQueue tests
+      - name: Run deterministic scheduler and capability-policy tests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $b = Join-Path $env:GITHUB_WORKSPACE '.build/damage-chain-reaction'
           ctest --test-dir $b -C Release --output-on-failure
-          if ($LASTEXITCODE -ne 0) { throw 'RateQueue tests failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Damage Chain Reaction contract tests failed.' }
 
       - name: Package plugin
         shell: pwsh

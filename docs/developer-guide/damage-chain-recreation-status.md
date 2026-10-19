@@ -212,3 +212,11 @@
 - 独立插件包： [DamageChainReaction-windows-x64.zip](sandbox:/mnt/data/DamageChainReaction-windows-x64.zip)，SHA-256 `a708006d8fa6bab19e08792985e2f6982c95fc791a0d27ee4025a4b6b112b381`；包内有 `plugin.dll`（48,640 bytes）和 manifest（ID `anomaly.builtin.nte-damage-chain-reaction`、版本 `0.1.0`）。
 - Runtime 探针整包： [DamageChainReactionRuntimeProbe-windows-x64.zip](sandbox:/mnt/data/DamageChainReactionRuntimeProbe-windows-x64.zip)，SHA-256 `a7c2d089ddf4e35d8cca788b07a9c851cddbc5198b5ca6d757b56fc7027c998d`；包含同次验证构建的 `Anomaly.Core.dll` 与 `plugins/DamageChainReaction/plugin.dll`（94,720 bytes），manifest ID/版本匹配。已检查整包，不含 `5.6.1`、`CppSDK`、Dump 目录或 `GObjects-Dump.txt`。
 - 上述哈希针对从 GitHub artifact 封装中解开的直接 ZIP；GitHub Actions artifact 本身的 digest 是外层包哈希。推荐先使用 Runtime 探针整包进行后续实机测试，因为 Core 与插件来自同一个通过构建/ABI 检查的源码提交。注意它仍是测试包，未完成实机伤害行为验收。
+
+## 2026-10-19：实机日志定位 capability 注册缺口
+
+- 收到 Runtime 日志：`anomaly.builtin.nte-damage-chain-reaction` 被 `unknown-capability` 与 `required-service-mapping-missing` 拒绝，触发插件启用失败。
+- 对照 `src/plugin/plugin_capability_policy.cpp` 后确认原因：Core 只登记了旧的 `nte-damage-chain` / `anomaly.nte.damage-chain`，没有登记当前独立实现使用的 `nte-damage-chain-reaction` / `anomaly.nte.damage-chain-reaction`。现已补齐新 capability 和一对一服务映射，不借用旧 service，也不回退到 damage-replay。
+- 新增回归测试，直接调用实际 `ResolvePluginCapabilityGrant`：当前 DCR manifest 必须通过；只带旧 capability 的 manifest 必须继续被拒绝。插件工作流会同时编译和执行此测试。
+- 同步核对时发现 `abi/anomaly-sdk-v1-windows-x64.json` 漏掉了 `apps/abi_snapshot/main.cpp` 已输出的 DCR 新请求/快照/服务结构、状态枚举、标志位与服务登记。下一步从 Windows CI 生成的快照中取得完整基线后再同步；不要凭手写偏移覆盖真实 ABI 快照。
+- 同一日志中的其他插件 `missing-cxx-throw-bridge` / `static-tls` 属于独立加载兼容问题，本次不声称已修复。DCR 实机伤害次数、目标绑定及 Actor 是否自主触发仍待游戏内验证。
