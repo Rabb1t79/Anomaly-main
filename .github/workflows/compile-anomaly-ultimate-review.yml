@@ -6,6 +6,7 @@ on:
       - review/anomaly-ultimate-20261020
     paths:
       - '.github/workflows/compile-anomaly-ultimate-review.yml'
+      - 'review-source/AnomalyUltimate/**'
   workflow_dispatch:
 
 permissions:
