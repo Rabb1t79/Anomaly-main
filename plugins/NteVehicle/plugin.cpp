@@ -13,6 +13,7 @@
 #include <cctype>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 namespace {
 
@@ -32,6 +33,14 @@ struct Snapshot {
     std::string vehicle_snapshot_status{"Host 尚未返回当前驾驶载具状态"};
 };
 
+struct CustomizationOption {
+    std::string id;
+    std::string label;
+    std::uint32_t kind{};
+    std::uint32_t module_type{};
+    bool is_default{};
+};
+
 struct Context {
     const AnomalyNteVehicleServiceV1* vehicle{};
     const AnomalyNtePlayerServiceV1* player{};
@@ -47,6 +56,14 @@ struct Context {
     std::vector<std::string> vehicle_ids;
     std::vector<std::string> vehicle_labels;
     std::uint64_t catalog_tick{};
+    bool customization_page{};
+    std::string customization_vehicle_id;
+    std::string customization_skin_id;
+    std::string customization_status{"尚未读取当前车型的改装数据"};
+    std::vector<CustomizationOption> customization_options;
+    std::vector<std::pair<std::uint32_t, std::string>> selected_module_overrides;
+    std::uint64_t customization_catalog_tick{};
+    std::atomic_bool refresh_customization_requested{};
     std::atomic_bool refresh_catalog_requested{};
     std::atomic_bool apply_speed{};
     std::atomic_bool apply_torque{};
@@ -54,7 +71,7 @@ struct Context {
     std::atomic_bool apply_other_torque{};
     std::atomic_bool reset{};
     std::atomic_bool summon{};
-    std::atomic_bool summon_modified{};
+    std::atomic_bool summon_customized{};
     std::atomic_bool friction_toggle{};
     std::atomic_bool started{};
     float speed_ratio{1.0F};
@@ -302,6 +319,152 @@ void RefreshCatalogOnGameThread() {
             vehicle->user, anomaly::sdk::StringView(selected_id));
         if (selected_status.code != ANOMALY_STATUS_V1_OK)
             SetStatus(StatusDescription("目录已读取，但 Host 未接受当前 RowName", selected_status));
+    }
+}
+
+void RefreshCustomizationCatalogOnGameThread() {
+    const auto* vehicle = g_context.vehicle;
+    std::string selected_id;
+    {
+        std::scoped_lock lock(g_context.mutex);
+        selected_id = g_context.selected_vehicle_id;
+    }
+    const bool callbacks_available =
+        vehicle != nullptr &&
+        HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::customization_catalog_snapshot)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, customization_catalog_snapshot)) &&
+        vehicle->customization_catalog_snapshot != nullptr &&
+        HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::customization_option_at)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, customization_option_at)) &&
+        vehicle->customization_option_at != nullptr;
+    if (!callbacks_available || selected_id.empty()) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.customization_options.clear();
+        g_context.customization_vehicle_id.clear();
+        g_context.customization_skin_id.clear();
+        g_context.selected_module_overrides.clear();
+        g_context.customization_status = selected_id.empty()
+            ? "请先从召唤清单中选择车型"
+            : "当前 Core 未发布 V7 改装目录接口；请更新 Runtime";
+        return;
+    }
+
+    AnomalyNteVehicleCustomizationCatalogSnapshotV1 before{};
+    before.struct_size = sizeof(before);
+    const auto before_status = vehicle->customization_catalog_snapshot(
+        vehicle->user, anomaly::sdk::StringView(selected_id), &before);
+    if (before_status.code != ANOMALY_STATUS_V1_OK ||
+        (before.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) == 0 ||
+        before.entry_count > 8192U) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.customization_options.clear();
+        g_context.customization_vehicle_id = selected_id;
+        g_context.customization_skin_id.clear();
+        g_context.selected_module_overrides.clear();
+        g_context.customization_status = StatusDescription("读取当前车型改装目录失败", before_status);
+        return;
+    }
+
+    std::vector<CustomizationOption> options;
+    options.reserve(before.entry_count);
+    for (std::uint32_t index = 0; index < before.entry_count; ++index) {
+        AnomalyNteVehicleCustomizationOptionV1 native_option{};
+        native_option.struct_size = sizeof(native_option);
+        const auto option_status = vehicle->customization_option_at(
+            vehicle->user, anomaly::sdk::StringView(selected_id), index, &native_option);
+        if (option_status.code != ANOMALY_STATUS_V1_OK ||
+            (native_option.flags & ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_VALID) == 0) {
+            std::scoped_lock lock(g_context.mutex);
+            g_context.customization_options.clear();
+            g_context.customization_vehicle_id = selected_id;
+            g_context.customization_skin_id.clear();
+            g_context.selected_module_overrides.clear();
+            g_context.customization_status = StatusDescription(
+                "读取改装目录选项失败（索引 " + std::to_string(index) + "）", option_status);
+            return;
+        }
+        const auto id_end = std::find(
+            std::begin(native_option.option_id), std::end(native_option.option_id), '\0');
+        const auto label_end = std::find(
+            std::begin(native_option.label), std::end(native_option.label), '\0');
+        if (id_end == std::end(native_option.option_id) ||
+            label_end == std::end(native_option.label) ||
+            id_end == std::begin(native_option.option_id) ||
+            (native_option.kind != ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE &&
+             native_option.kind != ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN) ||
+            (native_option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE &&
+             (native_option.module_type == 0 || native_option.module_type >= 27)) ||
+            (native_option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN &&
+             native_option.module_type != 0)) {
+            std::scoped_lock lock(g_context.mutex);
+            g_context.customization_options.clear();
+            g_context.customization_vehicle_id = selected_id;
+            g_context.customization_skin_id.clear();
+            g_context.selected_module_overrides.clear();
+            g_context.customization_status = "改装目录包含无效 ID、类型或未终止的 ABI 字符串";
+            return;
+        }
+        CustomizationOption option{};
+        option.id.assign(native_option.option_id, static_cast<std::size_t>(
+            id_end - std::begin(native_option.option_id)));
+        option.label.assign(native_option.label, static_cast<std::size_t>(
+            label_end - std::begin(native_option.label)));
+        option.kind = native_option.kind;
+        option.module_type = native_option.module_type;
+        option.is_default =
+            (native_option.flags & ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_DEFAULT) != 0;
+        options.push_back(std::move(option));
+    }
+
+    AnomalyNteVehicleCustomizationCatalogSnapshotV1 after{};
+    after.struct_size = sizeof(after);
+    const auto after_status = vehicle->customization_catalog_snapshot(
+        vehicle->user, anomaly::sdk::StringView(selected_id), &after);
+    if (after_status.code != ANOMALY_STATUS_V1_OK ||
+        (after.flags & ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID) == 0 ||
+        after.sequence != before.sequence || after.entry_count != options.size()) {
+        std::scoped_lock lock(g_context.mutex);
+        g_context.customization_options.clear();
+        g_context.customization_vehicle_id = selected_id;
+        g_context.customization_skin_id.clear();
+        g_context.selected_module_overrides.clear();
+        g_context.customization_status =
+            "读取改装目录期间车型数据发生变化；请重新打开「改造清单」";
+        return;
+    }
+
+    std::string default_skin;
+    for (const auto& option : options) {
+        if (option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN &&
+            option.is_default) {
+            default_skin = option.id;
+            break;
+        }
+    }
+    {
+        std::scoped_lock lock(g_context.mutex);
+        if (selected_id != g_context.selected_vehicle_id) return;
+        g_context.customization_options = std::move(options);
+        g_context.customization_vehicle_id = selected_id;
+        g_context.customization_skin_id = std::move(default_skin);
+        g_context.selected_module_overrides.clear();
+        g_context.customization_catalog_tick = after.sequence;
+        const auto module_count = std::ranges::count_if(
+            g_context.customization_options, [](const CustomizationOption& option) {
+                return option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE;
+            });
+        const auto skin_count = std::ranges::count_if(
+            g_context.customization_options, [](const CustomizationOption& option) {
+                return option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN;
+            });
+        g_context.customization_status = "已读取该车型实时改装选项：模块 " +
+            std::to_string(module_count) + " 项，涂装 " + std::to_string(skin_count) +
+            " 项；未选择的模块槽位沿用游戏数据表默认配置";
+        if (g_context.customization_skin_id.empty()) {
+            g_context.customization_status += "；该车型没有可自动识别的默认涂装，请手动选择涂装后召唤";
+        }
     }
 }
 
