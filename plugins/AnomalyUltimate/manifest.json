@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 2,
+  "id": "anomaly.ultimate",
+  "name": "Anomaly Ultimate",
+  "description": "Consolidated feature plugin: Chronos time control, Damage Replay, Volleyball Win and Developer GM.",
+  "author": "Anomaly",
+  "license": "AGPL-3.0-only",
+  "version": "1.0.0",
+  "entry": "plugin.dll",
+  "api": { "major": 1, "minMinor": 0, "maxMinor": 0 },
+  "games": ["nte"],
+  "builds": ["nte-*"],
+  "loadPhase": "game-ready",
+  "services": [
+    { "id": "anomaly.ui", "minVersion": 1 },
+    { "id": "anomaly.input", "minVersion": 1 },
+    { "id": "anomaly.config", "minVersion": 1 },
+    { "id": "anomaly.json", "minVersion": 1 },
+    { "id": "anomaly.ue5.framework", "minVersion": 1, "optional": true },
+    { "id": "anomaly.nte.combat", "minVersion": 1, "optional": true },
+    { "id": "anomaly.nte.skill-invocation", "minVersion": 1, "optional": true },
+    { "id": "anomaly.nte.attack-input", "minVersion": 1, "optional": true },
+    { "id": "anomaly.interop.signature", "minVersion": 1, "optional": true },
+    { "id": "anomaly.interop.patch", "minVersion": 1, "optional": true },
+    { "id": "anomaly.interop.hook", "minVersion": 1, "optional": true }
+  ],
+  "capabilities": [
+    "ui",
+    "input",
+    "configuration",
+    "json",
+    "game-events",
+    "nte-combat-read",
+    "nte-skill-invocation",
+    "nte-attack-input",
+    "interop-signature",
+    "interop-patch",
+    "interop-hook"
+  ]
+}
