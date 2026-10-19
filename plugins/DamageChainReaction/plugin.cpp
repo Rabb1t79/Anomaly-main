@@ -51,13 +51,15 @@ struct Context {
     bool enabled{};
     bool export_requested{};
     bool export_in_flight{};
+    AnomalyGenerationHandleV1 export_task{};
     bool cursor_initialized{};
     std::uint32_t extra_count{kDefaultExtraCount};
     float rate{kDefaultRate};
     std::uint64_t damage_cursor{};
-    std::uint64_t damage_count{};
+    std::uint64_t root_hit_count{};
+    std::uint64_t confirmed_extra_count{};
     std::uint64_t failure_count{};
-    std::uint64_t replay_count{};
+    std::uint64_t dispatch_count{};
     std::string status{"等待 Anomaly 原生伤害服务"};
     std::string export_status{"尚未导出"};
     std::vector<ChainItem> chains;
@@ -225,7 +227,7 @@ void ObserveSnapshotLocked(
             chain.queue.CommitSuccess(now);
         }
         chain.confirmed_seen = snapshot.confirmed_extra_count;
-        g.damage_count += delta;
+        g.confirmed_extra_count += delta;
 
         char line[256]{};
         std::snprintf(line, sizeof(line),
@@ -237,7 +239,7 @@ void ObserveSnapshotLocked(
     const auto observed_dispatches =
         (std::max)(chain.dispatch_seen, snapshot.dispatch_attempt_count);
     if (observed_dispatches > chain.dispatch_seen) {
-        g.replay_count += observed_dispatches - chain.dispatch_seen;
+        g.dispatch_count += observed_dispatches - chain.dispatch_seen;
         chain.dispatch_seen = observed_dispatches;
     }
     chain.core_state = snapshot.state;
@@ -427,7 +429,7 @@ void DrainDamageEvents(
         if (!enabled) continue;
         {
             std::scoped_lock lock(g.mutex);
-            ++g.damage_count;
+            ++g.root_hit_count;
         }
 
         // Core independently verifies HTAbilityCharacter identity and hostility, resolves
@@ -437,33 +439,95 @@ void DrainDamageEvents(
     }
 }
 
-std::string BuildExportText() {
-    std::string output;
-    {
-        std::scoped_lock lock(g.mutex);
-        output.reserve(2048);
-        output.append("Damage Chain Reaction - diagnostic log\n");
-        output.append("Extra count is additional to the original hit; successful counts require a matching CharacterOnDamaged event.\n");
-        output.append("Rate controls cadence only; chains do not expire due to elapsed time.\n\n");
-        for (const auto& line : g.log) {
-            output.append(line);
-            output.push_back('\n');
-        }
+bool BuildExportText(const AnomalyGenerationHandleV1 task, std::string& output) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.export_in_flight) return false;
+    if (g.export_task.id == 0) g.export_task = task;
+    if (!SameHandle(g.export_task, task)) return false;
+
+    const auto generated_epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto active_chains = std::count_if(g.chains.begin(), g.chains.end(),
+        [](const ChainItem& chain) { return !chain.terminal; });
+
+    output.clear();
+    output.reserve(4096);
+    output.append("Damage Chain Reaction - diagnostic report\n");
+    output.append("report_schema=1\n");
+    output.append("plugin_id=anomaly.builtin.nte-damage-chain-reaction\n");
+    output.append("plugin_version=0.1.3\n");
+    output.append("report_path=damage-chain-reaction.log\n");
+    output.append("generated_epoch_ms=");
+    output.append(std::to_string(generated_epoch_ms));
+    output.append("\nfeature_enabled=");
+    output.append(g.enabled ? "true" : "false");
+    output.append("\nconfigured_extra_count=");
+    output.append(std::to_string(g.extra_count));
+    output.append("\nconfigured_rate_per_second=");
+    output.append(std::to_string(static_cast<double>(g.rate)));
+    output.append("\neligible_root_hit_count=");
+    output.append(std::to_string(g.root_hit_count));
+    output.append("\nconfirmed_extra_damage_count=");
+    output.append(std::to_string(g.confirmed_extra_count));
+    output.append("\nnative_trigger_dispatch_count=");
+    output.append(std::to_string(g.dispatch_count));
+    output.append("\nfailure_count=");
+    output.append(std::to_string(g.failure_count));
+    output.append("\ntracked_chain_count=");
+    output.append(std::to_string(g.chains.size()));
+    output.append("\nactive_chain_count=");
+    output.append(std::to_string(active_chains));
+    output.append("\nretained_log_entry_count=");
+    output.append(std::to_string(g.log.size()));
+    output.append("\ncurrent_status=");
+    output.append(g.status);
+    output.append("\nexport_status=");
+    output.append(g.export_status);
+    output.append("\n\nNotes:\n");
+    output.append("- The original hit is not included in configured_extra_count.\n");
+    output.append("- confirmed_extra_damage_count increments only after a matching real damage event.\n");
+    output.append("- native_trigger_dispatch_count records dispatch attempts, not confirmed damage.\n");
+    output.append("- Rate controls cadence only; elapsed time does not expire a pending chain.\n");
+    output.append("- The event log below is bounded to the latest 200 entries.\n\nEvent log:\n");
+    for (const auto& line : g.log) {
+        output.append(line);
+        output.push_back('\n');
     }
-    return output;
+    return true;
 }
 
 void CompleteExport(std::string status, std::string message) {
     std::scoped_lock lock(g.mutex);
     g.export_in_flight = false;
+    g.export_task = {};
     g.export_status = std::move(status);
     LogLocked(std::move(message));
 }
 
-void ANOMALY_CALL ExportTask(void* callback_user, AnomalyGenerationHandleV1) {
+void CompleteExportTask(
+    const AnomalyGenerationHandleV1 task,
+    std::string status,
+    std::string message) {
+    std::scoped_lock lock(g.mutex);
+    if (!g.export_in_flight || !SameHandle(g.export_task, task)) return;
+    g.export_in_flight = false;
+    g.export_task = {};
+    g.export_status = std::move(status);
+    LogLocked(std::move(message));
+}
+
+void ANOMALY_CALL ExportTask(
+    void* callback_user,
+    const AnomalyGenerationHandleV1 task) {
     const auto* host = static_cast<const AnomalyHostApiV1*>(callback_user);
+    {
+        std::scoped_lock lock(g.mutex);
+        if (!g.export_in_flight) return;
+        if (g.export_task.id == 0) g.export_task = task;
+        if (!SameHandle(g.export_task, task)) return;
+    }
     if (host == nullptr) {
-        CompleteExport("日志导出失败：Host 不可用", "后台导出失败：Host 不可用。");
+        CompleteExportTask(task, "日志导出失败：Host 不可用", "后台导出失败：Host 不可用。");
         return;
     }
 
@@ -472,39 +536,43 @@ void ANOMALY_CALL ExportTask(void* callback_user, AnomalyGenerationHandleV1) {
         const auto storage = sdk_host.Query<AnomalyStorageServiceV1>(
             ANOMALY_STORAGE_SERVICE_V1_ID, ANOMALY_STORAGE_SERVICE_V1_VERSION);
         if (!storage || storage->write_atomic == nullptr) {
-            CompleteExport(
+            CompleteExportTask(
+                task,
                 "日志导出失败：存储服务不可用",
                 "后台导出失败：anomaly.storage 服务不可用。");
             return;
         }
 
-        // This callback is executed by anomaly.scheduler's worker, not from
-        // the Game/Render callbacks where synchronous state I/O is prohibited.
-        const std::string contents = BuildExportText();
+        // This callback runs on anomaly.scheduler's worker, away from the
+        // Game/Render callbacks where synchronous state I/O is prohibited.
+        std::string contents;
+        if (!BuildExportText(task, contents)) return;
         const auto path = anomaly::sdk::StringView(kLogPath);
         const AnomalyByteSpanV1 bytes{
             reinterpret_cast<const std::uint8_t*>(contents.data()),
             contents.size()};
         const auto status = storage->write_atomic(storage->user, path, bytes);
         if (status.code == ANOMALY_STATUS_V1_OK) {
-            CompleteExport(
+            CompleteExportTask(
+                task,
                 std::string("日志已导出：") + kLogPath,
-                std::string("诊断日志已导出到插件存储文件：") + kLogPath);
+                std::string("诊断报告已导出到插件存储文件：") + kLogPath);
         } else {
             const std::string detail = StatusDetail(status);
             std::string user_status = std::string("日志导出失败：") + StatusName(status.code);
-            std::string message = std::string("后台日志写入失败：status=") +
+            std::string message = std::string("后台报告写入失败：status=") +
                 StatusName(status.code);
             if (!detail.empty()) {
                 user_status += "（" + detail + "）";
                 message += " reason=" + detail;
             }
-            CompleteExport(std::move(user_status), std::move(message));
+            CompleteExportTask(task, std::move(user_status), std::move(message));
         }
     } catch (...) {
-        CompleteExport(
+        CompleteExportTask(
+            task,
             "日志导出失败：后台任务异常",
-            "后台日志导出任务发生未处理异常。");
+            "后台诊断报告导出任务发生未处理异常。");
     }
 }
 
@@ -561,6 +629,43 @@ void ProcessExport(const AnomalyHostApiV1* host) {
             message += " reason=" + detail;
         }
         CompleteExport(std::move(user_status), std::move(message));
+    } else {
+        bool cancel_task{};
+        {
+            std::scoped_lock lock(g.mutex);
+            if (g.export_in_flight) {
+                if (g.export_task.id == 0) g.export_task = task;
+                cancel_task = !SameHandle(g.export_task, task);
+            } else {
+                cancel_task = true;
+            }
+        }
+        if (cancel_task && scheduler->cancel != nullptr) {
+            static_cast<void>(scheduler->cancel(scheduler->user, task));
+        }
+    }
+}
+
+void CancelExportTask(const AnomalyHostApiV1* host) {
+    AnomalyGenerationHandleV1 task{};
+    {
+        std::scoped_lock lock(g.mutex);
+        g.export_requested = false;
+        g.export_in_flight = false;
+        task = g.export_task;
+        g.export_task = {};
+    }
+    if (task.id == 0 || task.generation == 0 || host == nullptr) return;
+    try {
+        const anomaly::sdk::Host sdk_host(host);
+        const auto scheduler = sdk_host.Query<AnomalySchedulerServiceV1>(
+            ANOMALY_SCHEDULER_SERVICE_V1_ID, ANOMALY_SCHEDULER_SERVICE_V1_VERSION);
+        if (scheduler && scheduler->cancel != nullptr) {
+            static_cast<void>(scheduler->cancel(scheduler->user, task));
+        }
+    } catch (...) {
+        // The task checks export_in_flight before reading state. If cancellation
+        // races with callback start, the detached generation is ignored.
     }
 }
 
@@ -569,14 +674,16 @@ void ResetState() {
     g.enabled = false;
     g.export_requested = false;
     g.export_in_flight = false;
+    g.export_task = {};
     g.export_status = "尚未导出";
     g.cursor_initialized = false;
     g.extra_count = kDefaultExtraCount;
     g.rate = kDefaultRate;
     g.damage_cursor = 0;
-    g.damage_count = 0;
+    g.root_hit_count = 0;
+    g.confirmed_extra_count = 0;
     g.failure_count = 0;
-    g.replay_count = 0;
+    g.dispatch_count = 0;
     g.status = "等待 Anomaly 原生伤害服务";
     g.chains.clear();
     g.log.clear();
@@ -609,6 +716,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* context) {
 
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     const auto* host = g.host;
+    CancelExportTask(host);
     if (host != nullptr) {
         const anomaly::sdk::Host sdk_host(host);
         const auto chain_service = sdk_host.Query<AnomalyNteDamageChainReactionServiceV1>(
@@ -743,9 +851,10 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
     bool enabled{};
     std::uint32_t extra_count{};
     float rate{};
-    std::uint64_t damage_count{};
+    std::uint64_t root_hit_count{};
+    std::uint64_t confirmed_extra_count{};
     std::uint64_t failure_count{};
-    std::uint64_t replay_count{};
+    std::uint64_t dispatch_count{};
     bool bound{};
     bool trigger_active{};
     std::string status;
@@ -755,9 +864,10 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
         enabled = g.enabled;
         extra_count = g.extra_count;
         rate = g.rate;
-        damage_count = g.damage_count;
+        root_hit_count = g.root_hit_count;
+        confirmed_extra_count = g.confirmed_extra_count;
         failure_count = g.failure_count;
-        replay_count = g.replay_count;
+        dispatch_count = g.dispatch_count;
         status = g.status;
         export_status = g.export_status;
         for (const auto& item : g.chains) {
@@ -824,12 +934,13 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* service) {
     service->text(service->user, anomaly::sdk::StringView(status.c_str()));
     service->text(service->user, anomaly::sdk::StringView(export_status.c_str()));
 
-    char statistics[192]{};
+    char statistics[256]{};
     std::snprintf(statistics, sizeof(statistics),
-        "伤害=%llu次 失败=%llu次 重放=%llu次",
-        static_cast<unsigned long long>(damage_count),
-        static_cast<unsigned long long>(failure_count),
-        static_cast<unsigned long long>(replay_count));
+        "原始命中=%llu次 已确认额外伤害=%llu次 触发调用=%llu次 失败=%llu次",
+        static_cast<unsigned long long>(root_hit_count),
+        static_cast<unsigned long long>(confirmed_extra_count),
+        static_cast<unsigned long long>(dispatch_count),
+        static_cast<unsigned long long>(failure_count));
     service->text(service->user, anomaly::sdk::StringView(statistics));
 
     // Detailed records stay out of the main UI. Use this action to export the
