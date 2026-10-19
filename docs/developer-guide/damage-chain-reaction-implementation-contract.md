@@ -136,3 +136,9 @@ With the feature disabled, one native attack produces one ordinary damage result
 - The checked-in `abi/anomaly-sdk-v1-windows-x64.json` was also found to omit DCR-specific request/snapshot/service structs, state enum, flags and service entry already emitted by `apps/abi_snapshot/main.cpp`. Regeneration from the Windows CI snapshot is the follow-up synchronization step; do not interpret this capability fix alone as end-to-end service registration or successful in-game damage.
 - The other logged `missing-cxx-throw-bridge` / `static-tls` denials belong to other plugin images and are not addressed by this change.
 - Actual in-game damage count, target binding and autonomous actor-trigger behavior remain unverified.
+## 2026-10-19 — generated ABI baseline synchronization
+
+- Recovered the complete ABI JSON emitted by successful Windows Core-validation run `39127512883` for source commit `8dd451f2abb7079a0ec2b275b025305186007888`. The ABI generator and public NTE SDK header are unchanged from that source commit.
+- Synchronized both tracked ABI manifests to that exact CI-generated snapshot (59,655 bytes; 129 constants, 41 enums, 119 structs, 47 services), including the new damage-chain-reaction service, state enum and request/snapshot/service structures.
+- The Core-validation and full Windows workflows now compare both tracked ABI manifests with the freshly generated SDK snapshot, normalizing CRLF only. They no longer silently overwrite the tracked files or compare the generated file only against itself.
+- This covers the ABI baseline and capability-policy contract, not in-game damage behavior, target binding, or autonomous actor-trigger semantics.

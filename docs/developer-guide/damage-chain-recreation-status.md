@@ -220,3 +220,9 @@
 - 新增回归测试，直接调用实际 `ResolvePluginCapabilityGrant`：当前 DCR manifest 必须通过；只带旧 capability 的 manifest 必须继续被拒绝。插件工作流会同时编译和执行此测试。
 - 同步核对时发现 `abi/anomaly-sdk-v1-windows-x64.json` 漏掉了 `apps/abi_snapshot/main.cpp` 已输出的 DCR 新请求/快照/服务结构、状态枚举、标志位与服务登记。下一步从 Windows CI 生成的快照中取得完整基线后再同步；不要凭手写偏移覆盖真实 ABI 快照。
 - 同一日志中的其他插件 `missing-cxx-throw-bridge` / `static-tls` 属于独立加载兼容问题，本次不声称已修复。DCR 实机伤害次数、目标绑定及 Actor 是否自主触发仍待游戏内验证。
+### ABI 基线同步与 CI 防回归（2026-10-19）
+
+- 从已成功的 Core ABI 验证工作流 `39127512883` 的构建日志中，恢复 SDK 工具生成的完整 JSON；其 ABI 生成器和公开 NTE SDK 头文件与当前分支一致。
+- 根 ABI 清单和 SDK 附带 ABI 清单均同步为同一份 CI 生成内容：59,655 字节，129 个常量、41 个枚举、119 个结构、47 个服务，包含 DCR 新服务、状态枚举及请求/快照/服务结构。
+- Core 校验和全量 Windows 工作流已改为比较两份已提交基线与当前构建生成的 ABI，仅规范化 CRLF；不会再由 CI 静默覆盖基线，也不会只做生成文件与自身的比较。
+- 这只证明 ABI 基线与 capability 策略的一致性；实机伤害次数、目标绑定、Actor 自主触发行为仍待验证。

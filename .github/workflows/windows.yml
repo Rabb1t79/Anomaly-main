@@ -105,10 +105,17 @@ jobs:
             $packagedHash = (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash
             if ($sourceHash -ne $packagedHash) { throw "SDK header drift: $relative" }
           }
-          $abiDir = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi'
-          New-Item -ItemType Directory -Path $abiDir -Force | Out-Null
-          Copy-Item -LiteralPath $generated -Destination (Join-Path $abiDir 'anomaly-sdk-v1-windows-x64.json') -Force
-          Copy-Item -LiteralPath $generated -Destination (Join-Path $env:GITHUB_WORKSPACE 'abi/anomaly-sdk-v1-windows-x64.json') -Force
+          # Compare tracked ABI baselines rather than silently overwriting them.
+          $generatedText = [IO.File]::ReadAllText($generated).Replace([string][char]13, '')
+          $abiPaths = @(
+            (Join-Path $env:GITHUB_WORKSPACE 'abi/anomaly-sdk-v1-windows-x64.json')
+            (Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json')
+          )
+          foreach ($abiPath in $abiPaths) {
+            if (!(Test-Path -LiteralPath $abiPath)) { throw "Checked-in ABI baseline is missing: $abiPath" }
+            $checkedInText = [IO.File]::ReadAllText($abiPath).Replace([string][char]13, '')
+            if ($checkedInText -cne $generatedText) { throw "Checked-in ABI baseline is stale: $abiPath." }
+          }
       - name: Stage CI runtime and tools
         if: github.ref_type != 'tag'
         shell: pwsh

@@ -65,13 +65,21 @@ jobs:
           $generated = Join-Path $env:RUNNER_TEMP 'nte-damage-chain-generated-abi.json'
           & $snapshot --write $generated
           if ($LASTEXITCODE -ne 0) { throw 'Could not generate ABI snapshot from the built SDK.' }
-          # The previous checker only compared a generated file to itself; parse it too,
-          # so malformed JSON (including trailing commas) cannot pass as a valid ABI.
+          # Validate JSON syntax and the snapshot tool's ABI token contract.
           Get-Content -LiteralPath $generated -Raw | ConvertFrom-Json | Out-Null
           & $snapshot --check $generated
           if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
-          # Temporary export for synchronizing the checked-in ABI manifests from this build.
-          $snapshotText = [IO.File]::ReadAllText($generated)
+          # Compare both tracked ABI baselines with this build's generated snapshot.
+          $snapshotText = [IO.File]::ReadAllText($generated).Replace([string][char]13, '')
+          $abiPaths = @(
+            (Join-Path $env:GITHUB_WORKSPACE 'abi/anomaly-sdk-v1-windows-x64.json')
+            (Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json')
+          )
+          foreach ($abiPath in $abiPaths) {
+            if (!(Test-Path -LiteralPath $abiPath)) { throw "Checked-in ABI baseline is missing: $abiPath" }
+            $checkedInText = [IO.File]::ReadAllText($abiPath).Replace([string][char]13, '')
+            if ($checkedInText -cne $snapshotText) { throw "Checked-in ABI baseline is stale: $abiPath." }
+          }
           $snapshotBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($snapshotText))
           for ($offset = 0; $offset -lt $snapshotBase64.Length; $offset += 2000) {
             $length = [Math]::Min(2000, $snapshotBase64.Length - $offset)
