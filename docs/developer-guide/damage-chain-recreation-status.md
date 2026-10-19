@@ -208,3 +208,7 @@
 - **全量 Windows 构建** [39127513011](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127513011)：成功，包括构建、ABI 快照与打包接口验证。
 - **Runtime 探针包** [39127512930](https://github.com/Rabb1t79/Anomaly-main/actions/runs/39127512930)：成功；它实际校验的是 `plugins/DamageChainReaction`，工件 SHA-256：`59c9a40a63dc44b56ee7196f02a332aeaa769ddcd8f391c6884f50c8107be080`。
 - 上述成功只证明该提交的构建、ABI 与包完整性检查通过，不是游戏实机效果证明。周期事件是否确实每次造成一次伤害、100 次是否完全兑现、目标是否稳定、是否存在 Actor 自主触发，仍未验证；生成后才写入容器/周期字段的生命周期风险依然开放。
+### 当前可下载测试包校验（2026-10-19）
+- 独立插件包： [DamageChainReaction-windows-x64.zip](sandbox:/mnt/data/DamageChainReaction-windows-x64.zip)，SHA-256 `a708006d8fa6bab19e08792985e2f6982c95fc791a0d27ee4025a4b6b112b381`；包内有 `plugin.dll`（48,640 bytes）和 manifest（ID `anomaly.builtin.nte-damage-chain-reaction`、版本 `0.1.0`）。
+- Runtime 探针整包： [DamageChainReactionRuntimeProbe-windows-x64.zip](sandbox:/mnt/data/DamageChainReactionRuntimeProbe-windows-x64.zip)，SHA-256 `a7c2d089ddf4e35d8cca788b07a9c851cddbc5198b5ca6d757b56fc7027c998d`；包含同次验证构建的 `Anomaly.Core.dll` 与 `plugins/DamageChainReaction/plugin.dll`（94,720 bytes），manifest ID/版本匹配。已检查整包，不含 `5.6.1`、`CppSDK`、Dump 目录或 `GObjects-Dump.txt`。
+- 上述哈希针对从 GitHub artifact 封装中解开的直接 ZIP；GitHub Actions artifact 本身的 digest 是外层包哈希。推荐先使用 Runtime 探针整包进行后续实机测试，因为 Core 与插件来自同一个通过构建/ABI 检查的源码提交。注意它仍是测试包，未完成实机伤害行为验收。
