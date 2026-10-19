@@ -216,6 +216,8 @@ void AddChain(
             request.extra_count,
             static_cast<double>(request.rate_milli) / 1000.0);
         LogLocked(line);
+        const std::string detail = StatusDetail(result);
+        if (!detail.empty()) LogLocked(std::string("Core 链初始化结果：") + detail.substr(0, 384));
         g.status = "已建立链，等待按速率应用并逐次确认";
     }
 }
