@@ -120,8 +120,8 @@ ADamageTriggerActor : AHTAbilitySpawnActor
 - 生成路径中，`BeginDeferredActorSpawnFromClass`/`FinishSpawningActor` 组成的生成 helper 会在独立配置函数写入 `EventData`、EffectContainer 与周期字段之前完成 spawn。这是应检查的生命周期时序风险，但 Dump 声明不提供 BeginPlay/定时器内部行为，尚不能断言一定会自动多触发。
 - 现有手动路径每个队列项调用 `K2_OnTriggerPeriodGamePlayEffect`；当前代码没有显式调用 `StartTriggerGamePlayEffect` 或 `TriggerPeriodGamePlayEffectEvent`。仍需确认真实运行时行为，不能仅凭函数名假设它只造成一次伤害或完全不会后台调度。
 
-## 2026-10-20 implementation follow-up: period-handler distinction
+## 2026-10-20 implementation follow-up: native flags and period handler
 
-- The implementation had treated `K2_OnTriggerPeriodGamePlayEffect` as the per-item trigger function. The Dump lists that K2 callback separately from `TriggerPeriodGamePlayEffectEvent` and `StartTriggerGamePlayEffect`; those declarations must not be conflated.
-- The new DCR route chooses `TriggerPeriodGamePlayEffectEvent` as the manually scheduled per-item entry, with Profile reflection/signature checks. It deliberately does not start an autonomous actor timer in parallel with the plugin's own rate queue, which could make extra-hit counts drift.
-- This resolves an implementation ambiguity using available Dump declarations, not the missing native method body. The route still needs in-game validation to confirm one invocation produces one real hit against `EventData.Target`; if not, preserve the exported diagnostics and continue from measured result rather than guessing another function.
+- `FunctionsInfo.json` provides a useful distinction beyond the generated class declaration: `K2_OnTriggerPeriodGamePlayEffect` is flagged `Final|Native|Public|BlueprintCallable`, while `TriggerPeriodGamePlayEffectEvent` is flagged `Event|Public|BlueprintEvent`; `StartTriggerGamePlayEffect` is `Final|Native|Public`.
+- The implementation keeps `K2_OnTriggerPeriodGamePlayEffect` as the per-item native invocation and validates it through current-profile reflection. The code does not invoke `TriggerPeriodGamePlayEffectEvent` as though it were a native method, and does not start an autonomous trigger timer in parallel with the plugin's own queue.
+- These flags establish the declared function categories, not their full runtime business semantics. The outstanding test remains: one guarded invocation must yield exactly one matching real damage event on `EventData.Target`; exported diagnostics should be used to distinguish dispatch failure from missing damage confirmation.
