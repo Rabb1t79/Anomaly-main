@@ -17313,7 +17313,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetOtherVehiclesEngineTorqueRatioThunk,
             VehicleSetOtherVehiclesMinSpeedRatioThunk,
             VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
-            VehicleRevokeFineSpeedAuthorizationThunk};
+            VehicleRevokeFineSpeedAuthorizationThunk,
+            VehicleCustomizationCatalogSnapshotThunk, VehicleCustomizationOptionAtThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -17736,6 +17737,22 @@ private:
         void* user, std::uint32_t index, char* destination, std::size_t* inout_size) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleCatalogLabelAt(index, destination, inout_size) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationCatalogSnapshotThunk(
+        void* user, AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleCustomizationCatalogSnapshot(
+            vehicle_row_id, snapshot) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleCustomizationOptionAtThunk(
+        void* user, AnomalyStringViewV1 vehicle_row_id, std::uint32_t index,
+        AnomalyNteVehicleCustomizationOptionV1* option) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->VehicleCustomizationOptionAt(
+            vehicle_row_id, index, option) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetSummonVehicleIdThunk(
