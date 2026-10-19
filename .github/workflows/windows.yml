@@ -144,7 +144,7 @@ jobs:
             @{ Name = 'AutoFish'; Id = 'b1ank.autofish'; Version = '0.1.15' },
             @{ Name = 'NteVehicle'; Id = 'anomaly.local.nte-vehicle'; Version = '0.9.9' },
             @{ Name = 'NteAttackReplay'; Id = 'anomaly.builtin.nte-attack-replay'; Version = '1.9.7' },
-            @{ Name = 'DamageChainReaction'; Id = 'anomaly.builtin.nte-damage-chain-reaction'; Version = '0.1.2' }
+            @{ Name = 'DamageChainReaction'; Id = 'anomaly.builtin.nte-damage-chain-reaction'; Version = '0.1.3' }
           )
           foreach ($plugin in $expectedPlugins) {
             $pluginRoot = Join-Path $runtimeRoot ("plugins/" + $plugin.Name)
