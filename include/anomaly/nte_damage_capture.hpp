@@ -69,6 +69,8 @@ struct NteCharacterDamageCapture {
     std::uintptr_t attacker{};
     std::uintptr_t saved_skill_cdo{};
     std::int32_t active_spec_handle{};
+    std::int32_t inherited_skill_level{};
+    bool ability_spawn_context_valid{};
     NteDamageCriticalState critical;
     NteDamageTags tags;
     // Set only when this capture is synchronously produced by the chain-reaction adapter.
