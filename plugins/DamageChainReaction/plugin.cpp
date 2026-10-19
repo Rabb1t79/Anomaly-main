@@ -385,7 +385,7 @@ void UpdateOneChain(
         } else if (dispatched && found->awaiting_confirmation) {
             char line[224]{};
             std::snprintf(line, sizeof(line),
-                "链 #%llu 已调用原生 TriggerPeriodGamePlayEffectEvent，等待真实伤害事件；调用不等于成功。",
+                "链 #%llu 已调用原生 K2_OnTriggerPeriodGamePlayEffect，等待真实伤害事件；调用不等于成功。",
                 static_cast<unsigned long long>(handle.id));
             LogLocked(line);
         }
