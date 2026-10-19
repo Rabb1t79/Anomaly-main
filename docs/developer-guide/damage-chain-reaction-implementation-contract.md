@@ -142,3 +142,9 @@ With the feature disabled, one native attack produces one ordinary damage result
 - Synchronized both tracked ABI manifests to that exact CI-generated snapshot (59,655 bytes; 129 constants, 41 enums, 119 structs, 47 services), including the new damage-chain-reaction service, state enum and request/snapshot/service structures.
 - The Core-validation and full Windows workflows now compare both tracked ABI manifests with the freshly generated SDK snapshot, normalizing CRLF only. They no longer silently overwrite the tracked files or compare the generated file only against itself.
 - This covers the ABI baseline and capability-policy contract, not in-game damage behavior, target binding, or autonomous actor-trigger semantics.
+
+## 2026-10-20 update — selected period event and report contents
+
+- The earlier implementation directly dispatched `DamageTriggerActor.K2_OnTriggerPeriodGamePlayEffect`. The Dump report separately declares `DamageTriggerActor.TriggerPeriodGamePlayEffectEvent`; the DCR Core adapter now validates and dispatches this named periodic handler instead of treating the K2 callback as equivalent.
+- This selection is grounded in the Dump declaration and current Core reflection validation, but its in-game result remains unproven. Do not mark damage-chain behavior verified until an exported report shows confirmed extra damage matching dispatches and the user confirms the actual target HP/gameplay result.
+- Exported diagnostic reports now record root-hit count, confirmed-extra-hit count, dispatch attempts, failures, active/tracked chain counts, current status, selected plugin version, and the retained log. Start/apply failures include the Core status message when provided. A dispatch attempt is not a successful damage result.
