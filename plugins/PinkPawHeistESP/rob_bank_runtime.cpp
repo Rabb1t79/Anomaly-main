@@ -86,8 +86,8 @@ constexpr std::ptrdiff_t kRobBankPointUidOffset = 2976;
 constexpr std::ptrdiff_t kRobBankPointKeyDoorIdOffset = 196;
 constexpr std::ptrdiff_t kRobBankAwardDropIdOffset = 3080;
 constexpr std::ptrdiff_t kRobBankCloneDataAssetItemOffset = 104;
-// AHTPlayerState::ClientRobBankKeyDoorDataArray in UE5-HT 5.6.1.
-constexpr std::ptrdiff_t kPlayerStateKeyDoorsOffset = 0x9A90;
+// AHTPlayerState::ClientRobBankKeyDoorDataArray; updated layout reported for the 2026-10-18 game update.
+constexpr std::ptrdiff_t kPlayerStateKeyDoorsOffset = 0x9A50;
 constexpr std::int32_t kMaximumKeyDoors = 4096;
 
 constexpr std::ptrdiff_t kDataTableRowMapOffset = 48;
@@ -95,8 +95,12 @@ constexpr std::size_t kDataTableRowStride = 24;
 constexpr std::size_t kDataTableRowPointerOffset = 8;
 constexpr std::int32_t kMaximumDataTableRows = 4096;
 constexpr std::ptrdiff_t kStaticItemNameOffset = 160;
-constexpr std::ptrdiff_t kStaticItemElementDataOffset = 440;
-constexpr std::ptrdiff_t kInstancedStructDataOffset = 8;
+// The FInstancedStruct starts at row + 0x1B8; its payload data pointer is at row + 0x1C0.
+constexpr std::ptrdiff_t kStaticItemElementDataOffset = 0x1B8;
+constexpr std::ptrdiff_t kInstancedStructDataOffset = 0x8;
+constexpr std::ptrdiff_t kStaticItemElementDataPointerOffset =
+    kStaticItemElementDataOffset + kInstancedStructDataOffset;
+static_assert(kStaticItemElementDataPointerOffset == 0x1C0);
 constexpr std::ptrdiff_t kRobBankItemValueOffset = 0;
 constexpr std::ptrdiff_t kRobBankItemCoinOffset = 4;
 constexpr std::string_view kAccessCardItemPrefix = "RobBankItem_G";
@@ -996,8 +1000,7 @@ struct RobBankRuntime::Impl final {
             std::int32_t pink_paw_coin_value{};
             const bool is_access_card = row_name.starts_with(kAccessCardItemPrefix);
             const bool values_resolved =
-                AddSignedAddress(row, kStaticItemElementDataOffset, address) &&
-                AddSignedAddress(address, kInstancedStructDataOffset, address) &&
+                AddSignedAddress(row, kStaticItemElementDataPointerOffset, address) &&
                 Read(address, element_data) && element_data != 0 &&
                 AddSignedAddress(element_data, kRobBankItemValueOffset, address) &&
                 Read(address, fons_value) &&

@@ -2865,6 +2865,9 @@ void DrawMenu(const AnomalyUiServiceV1* ui, const LootCache& loot_cache) {
                     "Teleport-pickup delay (ms): {0}", arguments));
             }
         }
+        if (changed_auto_teleport_pickup || changed_auto_teleport_pickup_delay) {
+            g_context.settings_dirty = true;
+        }
         const std::size_t visible_count = visible_loot.size();
         const std::string total = std::to_string(loot_cache.loot.size());
         const std::string visible_total = std::to_string(visible_count);
