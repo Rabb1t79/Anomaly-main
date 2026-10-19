@@ -11576,9 +11576,9 @@ struct Ue5NteAdapter::State {
     [[nodiscard]] bool ApplyVehicleConfigurationLocked(
         const std::uintptr_t spawned_vehicle,
         const VehicleBuildConfiguration& saved,
-        std::size_t& restored_module_count,
+        std::size_t& configured_module_count,
         std::string& failure) noexcept {
-        restored_module_count = 0;
+        configured_module_count = 0;
         failure.clear();
         try {
             if (spawned_vehicle == 0 || saved.vehicle_id == 0 ||
@@ -11722,6 +11722,59 @@ struct Ue5NteAdapter::State {
                 return false;
             }
 
+            // The supplied Dump declares UpdateVehicleMat(FName VehicleID, FName SkinID).
+            // Validate its owner and exact parameters before applying the selected skin.
+            std::uintptr_t update_mat_function{};
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.HTVehicleModificationComponent.UpdateVehicleMat",
+                    update_mat_function) || update_mat_function == 0) {
+                failure = "Dump 中声明的 UpdateVehicleMat 原生入口不可用";
+                return false;
+            }
+            std::uintptr_t update_mat_owner{};
+            std::uint8_t update_mat_num_parms{};
+            std::uint16_t update_mat_parms_size{};
+            std::uint16_t update_mat_return_offset{};
+            if (!ReadPointerAt(*memory, update_mat_function,
+                    Layout(profile, "object.outer"), update_mat_owner) ||
+                update_mat_owner != expected_module_manager_class ||
+                !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.numParms"),
+                    update_mat_num_parms) ||
+                !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.parmsSize"),
+                    update_mat_parms_size) ||
+                !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.returnValueOffset"),
+                    update_mat_return_offset) ||
+                update_mat_num_parms != 2 || update_mat_parms_size != 0x10 ||
+                update_mat_return_offset != 0xFFFFu) {
+                failure = "UpdateVehicleMat 的所属类 / NumParms / ParmsSize 与 Dump 不匹配";
+                return false;
+            }
+            ReflectedPropertyInfo update_mat_vehicle_id;
+            ReflectedPropertyInfo update_mat_skin_id;
+            if (!FindReflectedPropertyLocked(update_mat_function,
+                    "VehicleID", update_mat_vehicle_id, false) ||
+                update_mat_vehicle_id.type != "NameProperty" ||
+                update_mat_vehicle_id.element_size != 8 || update_mat_vehicle_id.offset != 0 ||
+                update_mat_vehicle_id.array_dim != 1 ||
+                !FindReflectedPropertyLocked(update_mat_function,
+                    "SkinID", update_mat_skin_id, false) ||
+                update_mat_skin_id.type != "NameProperty" ||
+                update_mat_skin_id.element_size != 8 || update_mat_skin_id.offset != 8 ||
+                update_mat_skin_id.array_dim != 1) {
+                failure = "UpdateVehicleMat.VehicleID/SkinID 未通过 Dump 5.6.1 参数校验";
+                return false;
+            }
+            std::array<std::uint8_t, 0x10> update_mat_parameters{};
+            std::memcpy(update_mat_parameters.data() + update_mat_vehicle_id.offset,
+                &saved.vehicle_id, sizeof(saved.vehicle_id));
+            std::memcpy(update_mat_parameters.data() + update_mat_skin_id.offset,
+                &saved.skin_id, sizeof(saved.skin_id));
+            if (!InvokeProcessEventGuarded(process_event_invoker, module_manager,
+                    update_mat_function, update_mat_parameters.data(), update_mat_parameters.size())) {
+                failure = "调用 HTVehicleModificationComponent.UpdateVehicleMat 失败";
+                return false;
+            }
+
             ReflectedPropertyInfo current_modules_property;
             if (!FindReflectedPropertyLocked(actual_module_manager_class,
                     "CurrentModuleIDList", current_modules_property, true) ||
@@ -11754,10 +11807,10 @@ struct Ue5NteAdapter::State {
             std::ranges::sort(expected_module_ids);
             std::ranges::sort(observed_module_ids);
             if (expected_module_ids != observed_module_ids) {
-                failure = "原生改装调用后 CurrentModuleIDList 与玩家存档不一致";
+                failure = "原生改装调用后 CurrentModuleIDList 与用户所选配置不一致";
                 return false;
             }
-            restored_module_count = saved.module_ids.size();
+            configured_module_count = saved.module_ids.size();
             return true;
         } catch (...) {
             failure = "应用用户选择的载具改装配置时发生异常";
@@ -11770,7 +11823,7 @@ struct Ue5NteAdapter::State {
         constexpr std::uint32_t kAllowedSummonFlags =
             ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
             ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER |
-            ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_OWNED_MODIFICATIONS;
+            ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION;
         if (request == nullptr || request->struct_size < sizeof(*request) ||
             (request->flags & (ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION |
                 ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER)) !=
@@ -11810,23 +11863,28 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "selected VehicleID is no longer in the current data table");
         }
 
-        const bool restore_owned_modifications =
-            (request->flags & ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_OWNED_MODIFICATIONS) != 0;
-        SavedVehicleConfiguration saved_configuration;
-        if (restore_owned_modifications) {
-            std::string saved_config_failure;
-            if (!ReadSavedVehicleConfigurationLocked(*selected, saved_configuration, saved_config_failure)) {
-                vehicle_summon_status_message = "改装召唤失败：" + saved_config_failure;
+        const bool apply_custom_configuration =
+            (request->flags & ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION) != 0;
+        VehicleBuildConfiguration selected_configuration;
+        if (apply_custom_configuration) {
+            std::string configuration_failure;
+            if (!BuildVehicleConfigurationLocked(
+                    *selected, *request, selected_configuration, configuration_failure)) {
+                vehicle_summon_status_message = "改装召唤失败：" + configuration_failure;
                 return Status(ANOMALY_STATUS_V1_FAILED, vehicle_summon_status_message.c_str());
             }
+        } else if (request->skin_id.data != nullptr || request->skin_id.size != 0 ||
+                   request->module_selections != nullptr || request->module_selection_count != 0) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT,
+                "普通召唤不能携带自定义改装选择");
         }
-        std::size_t restored_module_count{};
-        const auto apply_saved_modifications = [&](const std::uintptr_t spawned_actor) noexcept {
-            if (!restore_owned_modifications) return true;
+        std::size_t configured_module_count{};
+        const auto apply_custom_modifications = [&](const std::uintptr_t spawned_actor) noexcept {
+            if (!apply_custom_configuration) return true;
             std::string apply_failure;
-            if (!ApplySavedVehicleConfigurationLocked(
-                    spawned_actor, saved_configuration, restored_module_count, apply_failure)) {
-                vehicle_summon_status_message = "车辆已生成，但改装恢复失败：" + apply_failure;
+            if (!ApplyVehicleConfigurationLocked(
+                    spawned_actor, selected_configuration, configured_module_count, apply_failure)) {
+                vehicle_summon_status_message = "车辆已生成，但所选改装应用失败：" + apply_failure;
                 return false;
             }
             return true;
@@ -11842,7 +11900,7 @@ struct Ue5NteAdapter::State {
             const char* direct_spawn_failure{};
             if (SpawnVehicleDirectLocked(
                     direct_vehicle_class, direct_destination, direct_spawned, direct_spawn_failure)) {
-                if (!apply_saved_modifications(direct_spawned))
+                if (!apply_custom_modifications(direct_spawned))
                     return Status(ANOMALY_STATUS_V1_FAILED, vehicle_summon_status_message.c_str());
                 std::string class_name = "Vehicle";
                 std::uintptr_t class_object{};
@@ -11859,9 +11917,9 @@ struct Ue5NteAdapter::State {
                 vehicle_summon_status_message += "；目标位置=(" + std::to_string(direct_destination[0]) +
                     ", " + std::to_string(direct_destination[1]) + ", " + std::to_string(direct_destination[2]) +
                     ")；Actor.Owner 已核验为本地玩家 Pawn";
-                if (restore_owned_modifications) {
-                    vehicle_summon_status_message += "；玩家存档改装已提交原生应用函数并通过模块列表后置验证（模块数=" +
-                        std::to_string(restored_module_count) + "；SkinID 与附加数据已按存档传入）";
+                if (apply_custom_configuration) {
+                    vehicle_summon_status_message += "；用户所选改装已提交游戏原生函数并通过模块列表后置验证（模块数=" +
+                        std::to_string(configured_module_count) + "；SkinID 已传入 UpdateVehicleMat）";
                 }
                 return Status(ANOMALY_STATUS_V1_OK, vehicle_summon_status_message.c_str());
             }
@@ -11974,7 +12032,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_FAILED,
                 "vehicle position verified but Actor.Owner is not the local player pawn");
         }
-        if (!apply_saved_modifications(spawned))
+        if (!apply_custom_modifications(spawned))
             return Status(ANOMALY_STATUS_V1_FAILED, vehicle_summon_status_message.c_str());
         std::string class_name = "Vehicle";
         std::uintptr_t class_object{};
@@ -11991,9 +12049,9 @@ struct Ue5NteAdapter::State {
         vehicle_summon_status_message += "；目标位置=(" + std::to_string(destination[0]) +
             ", " + std::to_string(destination[1]) + ", " + std::to_string(destination[2]) +
             ")；Actor.Owner 已核验为本地玩家 Pawn";
-        if (restore_owned_modifications) {
-            vehicle_summon_status_message += "；玩家存档改装已提交原生应用函数并通过模块列表后置验证（模块数=" +
-                std::to_string(restored_module_count) + "；SkinID 与附加数据已按存档传入）";
+        if (apply_custom_configuration) {
+            vehicle_summon_status_message += "；用户所选改装已提交游戏原生函数并通过模块列表后置验证（模块数=" +
+                std::to_string(configured_module_count) + "；SkinID 已传入 UpdateVehicleMat）";
         }
         return Status(ANOMALY_STATUS_V1_OK, vehicle_summon_status_message.c_str());
     }
