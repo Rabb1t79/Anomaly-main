@@ -238,11 +238,10 @@
 - The package/build/identity checks do not establish in-game damage behavior. Still unverified: that each period-event dispatch causes exactly one matching real hit, no autonomous extra trigger occurs after actor spawn, target binding remains correct, separate targets have independent chains, pending work survives long stalls, and stopping/world changes safely cancel the chain. The post-`FinishSpawningActor` field-configuration order remains an open lifecycle question; do not patch it by intuition.
 - The `missing-cxx-throw-bridge` / `static-tls` messages in the user's log refer to other plugin images; they are not attributed to `DamageChainReaction` by that log.
 
-## 2026-10-20 — report-driven native period-entry correction
+## 2026-10-20 — native trigger metadata correction and report improvement
 
-- 工作分支：`fix/damage-chain-period-event-report-20261020`。本轮没有改动 Attack 分支，也没有调用旧 `anomaly.nte.damage-replay`。
-- 对照 Dump 候选报告时发现：`ADamageTriggerActor` 同时声明了 `StartTriggerGamePlayEffect`、`K2_OnTriggerPeriodGamePlayEffect` 和 `TriggerPeriodGamePlayEffectEvent`。之前 Core 只验证并调用 `K2_OnTriggerPeriodGamePlayEffect`，不能把这个 Blueprint/K2 回调和周期处理入口视为同一个函数。
-- 已将 DCR 路径的反射入口改为 `/Script/HTGame.DamageTriggerActor.TriggerPeriodGamePlayEffectEvent`，仍通过当前 Profile 的精确对象查找、零参数签名检查及受保护的 `ProcessEvent` invoker；没有添加版本内函数地址/偏移。
-- 保留插件管理的速率队列：每次调用之后，只有捕获到同一 World、攻击者、原目标、同一伤害来源的正向真实 `CharacterOnDamaged` 事件，才增加已确认额外伤害计数；未确认的派发不会自动记成功，也不会将用户要求改成技能/按键/动画重放。
-- 诊断导出已增强：报告包含原始合格命中、已确认额外伤害、原生触发调用、失败数、链状态及最近最多 200 条日志；Core 拒绝建链/触发时，日志会携带状态码之外的具体 `AnomalyStatusV1.message`，以便辨认是反射验证/目标配置失败，还是“调用进入但没有真实伤害确认”。
-- 这一更改是报告驱动的候选路线修正，不是实机成功声明。完整 Windows、Runtime probe 与独立插件/队列测试正在对新提交验证；仍需游戏中确认每次 `TriggerPeriodGamePlayEffectEvent` 是否恰好产生一次真实额外伤害，以及生成生命周期/多目标独立性是否符合要求。
+- 工作分支：`fix/damage-chain-period-event-report-20261020`。没有改动 Attack 分支，也没有调用弃用的 `anomaly.nte.damage-replay`。
+- 从 `5.6.1/Dumpspace/FunctionsInfo.json` 核对到 `ADamageTriggerActor` 的函数元数据：`K2_OnTriggerPeriodGamePlayEffect` 标记为 `Final|Native|Public|BlueprintCallable`；`TriggerPeriodGamePlayEffectEvent` 标记为 `Event|Public|BlueprintEvent`；`StartTriggerGamePlayEffect` 标记为 `Final|Native|Public`。因此不能仅按函数名把 BlueprintEvent 当成原生效果应用入口。
+- Core 当前保留对 `/Script/HTGame.DamageTriggerActor.K2_OnTriggerPeriodGamePlayEffect` 的精确反射查找和零参数签名验证，再通过受保护的 `ProcessEvent` invoker 调用。没有写入 Dump 里的版本内地址，也没有在没有生命周期证据的情况下额外启动原生定时器。
+- 导出报告已补齐计数摘要与 Core 错误详情：合格原始命中、真实确认的额外伤害、原生触发派发次数、失败次数、活动/跟踪链数、当前状态以及最近最多 200 条日志。建链或触发调用失败时会记录 `AnomalyStatusV1.message`，不再只剩状态码。
+- 仍不能声称效果已修好：元数据标志能区分 Native 函数与 BlueprintEvent，但不能证明该 Native 函数在当前运行时一定造成真实伤害。最终验收仍需游戏中确认额外命中和原目标 HP 变化；若仍失败，新的导出报告应能更准确定位 Core 失败阶段。
