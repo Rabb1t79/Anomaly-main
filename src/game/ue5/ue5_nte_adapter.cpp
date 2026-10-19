@@ -885,17 +885,34 @@ struct Ue5NteAdapter::State {
         bool vehicle_id_valid{};
         std::uintptr_t row{};
     };
-    struct SavedVehicleConfiguration {
+    struct VehicleBuildConfiguration {
         std::uint64_t vehicle_id{};
         std::uint64_t skin_id{};
         std::array<std::uint8_t, 0x1C> default_module_data{};
         std::vector<std::uint64_t> module_ids;
     };
+    struct VehicleCustomizationOption {
+        std::string id;
+        std::string label;
+        std::uint32_t kind{};
+        std::uint32_t module_type{};
+        std::uint32_t name_comparison_index{};
+        std::uint32_t name_number{};
+        std::uint64_t native_name{};
+        bool is_default{};
+    };
     std::vector<VehicleCatalogEntry> vehicle_catalog;
     std::uint64_t vehicle_catalog_generation{};
     std::uint64_t vehicle_catalog_sequence{};
     std::uintptr_t vehicle_catalog_table{};
+    std::uintptr_t vehicle_data_asset_object{};
     bool vehicle_catalog_valid{};
+    std::vector<VehicleCustomizationOption> vehicle_customization_options;
+    std::string vehicle_customization_vehicle_row_id;
+    std::uint64_t vehicle_customization_generation{};
+    std::uint64_t vehicle_customization_vehicle_sequence{};
+    std::uint64_t vehicle_customization_sequence{};
+    const char* vehicle_customization_failure_reason{"customization catalog has not been scanned"};
     const char* vehicle_catalog_failure_reason{"catalog has not been scanned"};
     // Names converted from FText are cached by canonical row key so explicit refreshes
     // do not allocate a fresh engine FString for every unchanged catalog row.
@@ -8429,7 +8446,7 @@ struct Ue5NteAdapter::State {
             if (row == 0 || vehicle_display_name_binding.function == 0 ||
                 vehicle_display_name_binding.class_default_object == 0 ||
                 name_property.type != "TextProperty" || name_property.element_size != 0x10 ||
-                name_property.offset != 0x58 ||
+                name_property.offset < 0 ||
                 !ReadableRange(*memory, row + static_cast<std::uintptr_t>(name_property.offset), 0x10)) {
                 return false;
             }
@@ -8699,7 +8716,12 @@ struct Ue5NteAdapter::State {
             vehicle_catalog = std::move(next);
             vehicle_catalog_generation = object_generation;
             vehicle_catalog_table = table;
+            vehicle_data_asset_object = vehicle_asset;
             vehicle_catalog_valid = true;
+            vehicle_customization_options.clear();
+            vehicle_customization_vehicle_row_id.clear();
+            vehicle_customization_generation = 0;
+            vehicle_customization_vehicle_sequence = 0;
             ++vehicle_catalog_sequence;
             if (vehicle_catalog_sequence == 0) ++vehicle_catalog_sequence;
             vehicle_catalog_failure_reason = "目录读取成功";
@@ -10646,6 +10668,366 @@ struct Ue5NteAdapter::State {
         if (index >= vehicle_catalog.size())
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "载具目录标签索引越界");
         return CopyString(vehicle_catalog[index].display_label, destination, inout_size);
+    }
+
+    [[nodiscard]] bool EnsureVehicleCustomizationCatalogLocked(
+        const VehicleCatalogEntry& selected) noexcept {
+        const auto fail = [this](const char* reason) noexcept {
+            vehicle_customization_failure_reason = reason;
+            return false;
+        };
+        try {
+            if (!selected.vehicle_id_valid || selected.vehicle_id_comparison_index == 0) {
+                return fail("所选载具没有可验证的 VehicleID，无法关联模块/涂装数据");
+            }
+            if (!NteVehicleProfileAvailable() || object_registry.items == 0 ||
+                !process_event_invoker ||
+                GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+                return fail("改装目录前置条件未通过：Profile、对象表、ProcessEvent 或 Game 线程不可用");
+            }
+            if (vehicle_customization_generation == object_generation &&
+                vehicle_customization_vehicle_sequence == vehicle_catalog_sequence &&
+                vehicle_customization_vehicle_row_id == selected.id) {
+                return true;
+            }
+            if (!EnsureVehicleCatalogLocked() || vehicle_data_asset_object == 0) {
+                return fail("无法取得已验证的 HTVehicleDataAsset");
+            }
+
+            std::uintptr_t asset_class{};
+            if (!ReadPointerAt(*memory, vehicle_data_asset_object,
+                    Layout(profile, "object.class"), asset_class)) {
+                return fail("无法读取 HTVehicleDataAsset 的运行时类");
+            }
+
+            const auto resolve_table = [&](const std::string_view property_name,
+                    const std::int32_t expected_offset,
+                    const std::string_view expected_row_name,
+                    std::uintptr_t& table_out,
+                    std::uintptr_t& row_struct_out,
+                    SparseMapView& view_out,
+                    std::vector<std::uint8_t>& elements_out) -> bool {
+                ReflectedPropertyInfo table_property;
+                if (!FindReflectedPropertyLocked(
+                        asset_class, property_name, table_property, true) ||
+                    table_property.type != "ObjectProperty" ||
+                    table_property.element_size != 8 ||
+                    table_property.offset != expected_offset ||
+                    table_property.array_dim != 1) {
+                    vehicle_customization_failure_reason =
+                        "HTVehicleDataAsset 数据表属性未通过 Dump 5.6.1 类型/大小/偏移校验";
+                    return false;
+                }
+                if (!ReadValue(*memory, vehicle_data_asset_object +
+                        static_cast<std::uintptr_t>(table_property.offset), table_out) ||
+                    table_out == 0) {
+                    vehicle_customization_failure_reason =
+                        "车型模块/涂装 DataTable 当前为空或不可读";
+                    return false;
+                }
+                std::string row_name;
+                if (!ReadPointerAt(*memory, table_out,
+                        Layout(profile, "dataTable.rowStruct"), row_struct_out) ||
+                    row_struct_out == 0 ||
+                    !ReadReflectedObjectNameLocked(row_struct_out, row_name) ||
+                    row_name != expected_row_name) {
+                    vehicle_customization_failure_reason =
+                        "改装 DataTable.RowStruct 与 Dump 5.6.1 声明不匹配";
+                    return false;
+                }
+                const auto row_map_offset = Layout(profile, "dataTable.rowMap", -1);
+                if (row_map_offset < 0 ||
+                    !ReadSparseMapViewLocked(
+                        table_out + static_cast<std::uintptr_t>(row_map_offset), view_out) ||
+                    view_out.num <= 0 || view_out.num > 16384 ||
+                    view_out.num_free < 0 || view_out.num_free > view_out.num ||
+                    view_out.stride <= 0 || view_out.stride > 4096) {
+                    vehicle_customization_failure_reason =
+                        "改装 DataTable.RowMap 的 sparse-map 布局或条目数未通过校验";
+                    return false;
+                }
+                const auto element_count = static_cast<std::size_t>(view_out.num);
+                const auto stride = static_cast<std::size_t>(view_out.stride);
+                if (element_count > (std::numeric_limits<std::size_t>::max)() / stride) {
+                    vehicle_customization_failure_reason = "改装 DataTable.RowMap 长度溢出";
+                    return false;
+                }
+                elements_out.assign(element_count * stride, 0);
+                if (!memory->Read(view_out.data, elements_out.data(), elements_out.size())) {
+                    vehicle_customization_failure_reason =
+                        "改装 DataTable.RowMap 元素数组不可读";
+                    return false;
+                }
+                return true;
+            };
+
+            std::vector<VehicleCustomizationOption> next;
+            const bool can_resolve_display_text = ValidateVehicleDisplayNameBindingLocked();
+            const auto scan_table = [&](const bool is_skin) -> bool {
+                std::uintptr_t table{}, row_struct{};
+                SparseMapView view{};
+                std::vector<std::uint8_t> elements;
+                if (!resolve_table(
+                        is_skin ? "VehicleSkinDataTable" : "DT_vehicleModuleData",
+                        is_skin ? 0x70 : 0x60,
+                        is_skin ? "VehicleSkinData" : "VehicleModuleData",
+                        table, row_struct, view, elements)) {
+                    return false;
+                }
+
+                ReflectedPropertyInfo id_property;
+                ReflectedPropertyInfo vehicle_id_property;
+                ReflectedPropertyInfo label_property;
+                if (!FindReflectedPropertyLocked(row_struct,
+                        is_skin ? "SkinID" : "ModuleID", id_property, true) ||
+                    id_property.type != "NameProperty" || id_property.element_size != 8 ||
+                    id_property.offset != 0x08 || id_property.array_dim != 1 ||
+                    !FindReflectedPropertyLocked(row_struct, "VehicleID",
+                        vehicle_id_property, true) ||
+                    vehicle_id_property.type != "NameProperty" ||
+                    vehicle_id_property.element_size != 8 ||
+                    vehicle_id_property.offset != 0x10 ||
+                    vehicle_id_property.array_dim != 1 ||
+                    !FindReflectedPropertyLocked(row_struct,
+                        is_skin ? "Name" : "ModuleName", label_property, true) ||
+                    label_property.type != "TextProperty" ||
+                    label_property.element_size != 0x10 ||
+                    label_property.offset != (is_skin ? 0x18 : 0x18) ||
+                    label_property.array_dim != 1) {
+                    vehicle_customization_failure_reason =
+                        "模块/涂装 ID、VehicleID 或 FText 字段未通过 Dump 5.6.1 校验";
+                    return false;
+                }
+
+                ReflectedPropertyInfo module_type_property{};
+                ReflectedPropertyInfo default_property{};
+                ReflectedBoolParameter default_bool{};
+                if (!is_skin) {
+                    if (!FindReflectedPropertyLocked(row_struct,
+                            "ModuleType", module_type_property, true) ||
+                        (module_type_property.type != "ByteProperty" &&
+                         module_type_property.type != "EnumProperty") ||
+                        module_type_property.element_size != 1 ||
+                        module_type_property.offset != 0x60 ||
+                        module_type_property.array_dim != 1 ||
+                        !FindReflectedPropertyLocked(row_struct,
+                            "bWasDefault", default_property, true) ||
+                        default_property.type != "BoolProperty" ||
+                        default_property.element_size != 1 ||
+                        default_property.offset != 0x61 ||
+                        default_property.array_dim != 1 ||
+                        !ReadReflectedBoolParameterLocked(default_property, 0xD0, default_bool)) {
+                        vehicle_customization_failure_reason =
+                            "VehicleModuleData.ModuleType/bWasDefault 未通过 Dump 5.6.1 校验";
+                        return false;
+                    }
+                } else {
+                    if (!FindReflectedPropertyLocked(row_struct,
+                            "bDefault", default_property, true) ||
+                        default_property.type != "BoolProperty" ||
+                        default_property.element_size != 1 ||
+                        default_property.offset != 0x38 ||
+                        default_property.array_dim != 1 ||
+                        !ReadReflectedBoolParameterLocked(default_property, 0xC8, default_bool)) {
+                        vehicle_customization_failure_reason =
+                            "VehicleSkinData.bDefault 未通过 Dump 5.6.1 校验";
+                        return false;
+                    }
+                }
+
+                for (std::int32_t slot = 0; slot < view.num; ++slot) {
+                    const auto u_slot = static_cast<std::uint32_t>(slot);
+                    if ((view.flags[static_cast<std::size_t>(u_slot) / 32U] &
+                            (1U << (u_slot & 31U))) == 0) {
+                        continue;
+                    }
+                    const auto* element = elements.data() +
+                        static_cast<std::size_t>(slot) * static_cast<std::size_t>(view.stride);
+                    std::uintptr_t row{};
+                    std::memcpy(&row, element + view.row_offset, sizeof(row));
+                    const auto required_row_bytes = static_cast<std::size_t>(
+                        (std::max)(id_property.offset + 8,
+                            vehicle_id_property.offset + 8));
+                    if (row == 0 || required_row_bytes == 0 ||
+                        !ReadableRange(*memory, row, required_row_bytes)) {
+                        continue;
+                    }
+
+                    std::uint32_t vehicle_comparison{}, vehicle_number{};
+                    std::uint32_t id_comparison{}, id_number{};
+                    if (!ReadValue(*memory,
+                            row + static_cast<std::uintptr_t>(vehicle_id_property.offset),
+                            vehicle_comparison) ||
+                        !ReadValue(*memory,
+                            row + static_cast<std::uintptr_t>(vehicle_id_property.offset) + 4U,
+                            vehicle_number) ||
+                        vehicle_comparison != selected.vehicle_id_comparison_index ||
+                        vehicle_number != selected.vehicle_id_number ||
+                        !ReadValue(*memory,
+                            row + static_cast<std::uintptr_t>(id_property.offset), id_comparison) ||
+                        !ReadValue(*memory,
+                            row + static_cast<std::uintptr_t>(id_property.offset) + 4U, id_number)) {
+                        continue;
+                    }
+                    std::string option_id;
+                    if (!ResolveFNameLocked(id_comparison, id_number, option_id) ||
+                        option_id.empty() || option_id == "None" ||
+                        option_id.size() >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+                        continue;
+                    }
+                    std::uint8_t default_byte{};
+                    if (!ReadValue(*memory,
+                            row + static_cast<std::uintptr_t>(default_bool.byte_offset),
+                            default_byte)) {
+                        vehicle_customization_failure_reason =
+                            "无法读取改装目录中的默认选项标记";
+                        return false;
+                    }
+                    const bool is_default = (default_byte & default_bool.byte_mask) != 0;
+                    std::string label;
+                    if (!can_resolve_display_text ||
+                        !ResolveVehicleDisplayNameLocked(row, label_property, label) ||
+                        label.empty()) {
+                        label = option_id;
+                    }
+                    VehicleCustomizationOption option{};
+                    option.id = std::move(option_id);
+                    option.label = std::move(label);
+                    option.kind = is_skin
+                        ? ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN
+                        : ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE;
+                    option.module_type = 0;
+                    option.name_comparison_index = id_comparison;
+                    option.name_number = id_number;
+                    option.native_name = static_cast<std::uint64_t>(id_comparison) |
+                        (static_cast<std::uint64_t>(id_number) << 32U);
+                    option.is_default = is_default;
+                    if (!is_skin) {
+                        std::uint8_t module_type{};
+                        if (!ReadValue(*memory,
+                                row + static_cast<std::uintptr_t>(module_type_property.offset),
+                                module_type)) {
+                            vehicle_customization_failure_reason =
+                                "无法读取 VehicleModuleData.ModuleType";
+                            return false;
+                        }
+                        // EVehicleModuleType 0 (None) and 27 (Max) are sentinels in Dump 5.6.1.
+                        if (module_type == 0U || module_type >= 27U) continue;
+                        option.module_type = module_type;
+                    }
+                    next.push_back(std::move(option));
+                }
+                return true;
+            };
+
+            if (!scan_table(false) || !scan_table(true)) {
+                return false;
+            }
+            std::ranges::sort(next, [](const auto& lhs, const auto& rhs) {
+                if (lhs.kind != rhs.kind) return lhs.kind < rhs.kind;
+                if (lhs.module_type != rhs.module_type) return lhs.module_type < rhs.module_type;
+                if (lhs.is_default != rhs.is_default) return lhs.is_default > rhs.is_default;
+                if (lhs.label != rhs.label) return lhs.label < rhs.label;
+                return lhs.id < rhs.id;
+            });
+            next.erase(std::unique(next.begin(), next.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.kind == rhs.kind && lhs.module_type == rhs.module_type && lhs.id == rhs.id;
+            }), next.end());
+
+            vehicle_customization_options = std::move(next);
+            vehicle_customization_vehicle_row_id = selected.id;
+            vehicle_customization_generation = object_generation;
+            vehicle_customization_vehicle_sequence = vehicle_catalog_sequence;
+            ++vehicle_customization_sequence;
+            if (vehicle_customization_sequence == 0) ++vehicle_customization_sequence;
+            vehicle_customization_failure_reason = "改装模块和涂装目录已从当前游戏 DataTable 校验读取";
+            return true;
+        } catch (...) {
+            vehicle_customization_options.clear();
+            vehicle_customization_vehicle_row_id.clear();
+            vehicle_customization_generation = 0;
+            vehicle_customization_vehicle_sequence = 0;
+            vehicle_customization_failure_reason = "读取实时改装目录时发生异常";
+            return false;
+        }
+    }
+
+    AnomalyStatusV1 VehicleCustomizationCatalogSnapshot(
+        const AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot) noexcept {
+        if (snapshot == nullptr || snapshot->struct_size < sizeof(*snapshot) ||
+            vehicle_row_id.data == nullptr || vehicle_row_id.size == 0 ||
+            vehicle_row_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "改装目录请求参数无效");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "改装目录读取必须在 Game 线程执行");
+        }
+        std::scoped_lock lock(mutex);
+        if (!EnsureVehicleCatalogLocked()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        }
+        const std::string_view requested{vehicle_row_id.data, vehicle_row_id.size};
+        const auto selected = std::ranges::find(
+            vehicle_catalog, requested, &VehicleCatalogEntry::id);
+        if (selected == vehicle_catalog.end()) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "改装目录所请求的车型 RowName 不在当前 DT_VehicleData 中");
+        }
+        if (!EnsureVehicleCustomizationCatalogLocked(*selected)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_customization_failure_reason);
+        }
+        snapshot->struct_size = sizeof(*snapshot);
+        snapshot->flags = ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID;
+        snapshot->sequence = vehicle_customization_sequence;
+        snapshot->entry_count = static_cast<std::uint32_t>(vehicle_customization_options.size());
+        snapshot->reserved = 0;
+        return Status(ANOMALY_STATUS_V1_OK, vehicle_customization_failure_reason);
+    }
+
+    AnomalyStatusV1 VehicleCustomizationOptionAt(
+        const AnomalyStringViewV1 vehicle_row_id,
+        const std::uint32_t index,
+        AnomalyNteVehicleCustomizationOptionV1* option) noexcept {
+        if (option == nullptr || option->struct_size < sizeof(*option) ||
+            vehicle_row_id.data == nullptr || vehicle_row_id.size == 0 ||
+            vehicle_row_id.size >= ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "改装选项请求参数无效");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "改装选项读取必须在 Game 线程执行");
+        }
+        std::scoped_lock lock(mutex);
+        if (!EnsureVehicleCatalogLocked()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_catalog_failure_reason);
+        }
+        const std::string_view requested{vehicle_row_id.data, vehicle_row_id.size};
+        const auto selected = std::ranges::find(
+            vehicle_catalog, requested, &VehicleCatalogEntry::id);
+        if (selected == vehicle_catalog.end()) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "改装选项对应的车型 RowName 已失效");
+        }
+        if (!EnsureVehicleCustomizationCatalogLocked(*selected)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, vehicle_customization_failure_reason);
+        }
+        if (index >= vehicle_customization_options.size()) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "改装选项索引越界");
+        }
+        const auto& source = vehicle_customization_options[index];
+        if (source.id.size() >= sizeof(option->option_id) ||
+            source.label.size() >= sizeof(option->label)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "改装选项 ID 或标签超出 ABI 缓冲区");
+        }
+        const auto caller_size = option->struct_size;
+        std::memset(option, 0, sizeof(*option));
+        option->struct_size = static_cast<std::uint32_t>((std::min)(
+            static_cast<std::size_t>(caller_size), sizeof(*option)));
+        option->flags = ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_VALID |
+            (source.is_default ? ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_DEFAULT : 0U);
+        option->kind = source.kind;
+        option->module_type = source.module_type;
+        std::memcpy(option->option_id, source.id.data(), source.id.size());
+        std::memcpy(option->label, source.label.data(), source.label.size());
+        return Status(ANOMALY_STATUS_V1_OK);
     }
 
     AnomalyStatusV1 VehicleSetSummonVehicleId(const AnomalyStringViewV1 id) noexcept {
