@@ -45,12 +45,18 @@ int wmain(int argc, wchar_t** argv) {
         return 3;
     }
 
+    if (GetProcAddress(image, "AnomalyPluginCxxThrowV1") == nullptr) {
+        std::fprintf(stderr, "AnomalyPluginCxxThrowV1 exception bridge export not found\n");
+        FreeLibrary(image);
+        return 4;
+    }
+
     const auto entry = reinterpret_cast<AnomalyPluginEntryV1Fn>(
         GetProcAddress(image, "AnomalyPluginEntryV1"));
     if (entry == nullptr) {
         std::fprintf(stderr, "AnomalyPluginEntryV1 export not found\n");
         FreeLibrary(image);
-        return 4;
+        return 5;
     }
 
     AnomalyPluginDescriptorV1 descriptor{};
@@ -60,13 +66,13 @@ int wmain(int argc, wchar_t** argv) {
         std::fprintf(stderr, "AnomalyPluginEntryV1 returned status %u\n",
             static_cast<unsigned>(status.code));
         FreeLibrary(image);
-        return 5;
+        return 6;
     }
     if (descriptor.struct_size < sizeof(descriptor)) {
         std::fprintf(stderr, "plugin descriptor struct_size is too small: %u\n",
             static_cast<unsigned>(descriptor.struct_size));
         FreeLibrary(image);
-        return 6;
+        return 7;
     }
 
     const std::string_view actual_id = TextView(descriptor.id);
@@ -78,7 +84,7 @@ int wmain(int argc, wchar_t** argv) {
             static_cast<int>(actual_id.size()), actual_id.data() == nullptr ? "" : actual_id.data(),
             static_cast<int>(actual_version.size()), actual_version.data() == nullptr ? "" : actual_version.data());
         FreeLibrary(image);
-        return 7;
+        return 8;
     }
 
     std::printf("validated plugin descriptor: %s@%s\n",
