@@ -1044,12 +1044,20 @@ struct Ue5NteAdapter::State {
         std::array<std::uint8_t, kGameplayEffectReplayMaxParameterBytes> parameters{};
         CapturedGameplayTagArrays gameplay_tags{};
     };
+    struct DamageTriggerSpawnContext {
+        std::uintptr_t saved_skill_cdo{};
+        std::int32_t trigger_ability_handle{};
+        std::int32_t inherited_skill_level{};
+        bool valid{};
+    };
+
     struct DamageRecord {
         AnomalyNteDamageEventV1 event{};
         float raw_damage{};
-        // Freeze local-player possession evidence at hit time; do not bind a chain root
-        // to whichever playable character happens to be active when Replay is requested.
+        // Freeze local-player possession and validated ability-spawn context at hit
+        // time; do not reconstruct them from a later active character/skill.
         bool attacker_was_local_player_pawn{};
+        DamageTriggerSpawnContext spawn_context{};
         ReplayEffectContext replay{};
     };
 
@@ -4197,15 +4205,18 @@ struct Ue5NteAdapter::State {
     }
 
     void RecordDamageEventLocked(
-        AnomalyNteDamageEventV1 event, const float raw_damage = 0.0F,
-        const ReplayEffectContext* replay_context = nullptr,
-        const bool attacker_was_local_player_pawn = false) noexcept {
+        AnomalyNteDamageEventV1 event,
+        const float raw_damage,
+        const ReplayEffectContext* replay_context,
+        const bool attacker_was_local_player_pawn,
+        const DamageTriggerSpawnContext& spawn_context) noexcept {
         event.struct_size = sizeof(event);
         event.sequence = ++damage_event_sequence;
         DamageRecord record{};
         record.event = event;
         record.raw_damage = raw_damage;
         record.attacker_was_local_player_pawn = attacker_was_local_player_pawn;
+        record.spawn_context = spawn_context;
         if (replay_context != nullptr) record.replay = *replay_context;
         if (damage_event_count == kDamageEventCapacity) {
             damage_events[damage_event_start] = record;
@@ -6161,25 +6172,58 @@ struct Ue5NteAdapter::State {
         damage.attacker = attacker;
         damage.critical = synchronous_critical;
         damage.damage_chain_reaction_id = g_active_damage_chain_reaction_id.Get();
+        // AHTAbilitySpawnActor exposes its trigger ability context at spawn time.
+        // Only preserve those values when the causer really derives from that class
+        // and all reflected fields plus the ability CDO validate against this Dump.
         std::uintptr_t saved_skill_cdo{};
-        std::int32_t active_spec_handle{};
-        const auto trigger_handle_offset = Layout(
-            profile, "abilitySpawnActor.triggerAbilityHandle", -1);
-        const auto saved_skill_offset = Layout(
-            profile, "abilitySpawnActor.savedTriggerSkillCDO", -1);
-        if (damage_causer != 0 && trigger_handle_offset >= 0) {
-            static_cast<void>(ReadValue(
-                *memory,
-                damage_causer + static_cast<std::uintptr_t>(trigger_handle_offset),
-                active_spec_handle));
-            if (active_spec_handle < 0) active_spec_handle = 0;
+        std::int32_t trigger_ability_handle{};
+        std::int32_t inherited_skill_level{};
+        bool ability_spawn_context_valid{};
+        std::uintptr_t spawn_actor_base{}, gameplay_ability_base{}, damage_causer_class{};
+        const auto object_class_offset = Layout(profile, "object.class", -1);
+        ReflectedPropertyInfo trigger_handle_property, saved_skill_property, skill_level_property;
+        if (damage_causer != 0 && object_class_offset >= 0 &&
+            FindExactObjectLocked(L"/Script/HTGame.HTAbilitySpawnActor", spawn_actor_base) &&
+            FindExactObjectLocked(L"/Script/HTGame.HTGameplayAbility", gameplay_ability_base) &&
+            ReadPointerAt(*memory, damage_causer, object_class_offset, damage_causer_class) &&
+            IsClassDerivedFromLocked(damage_causer_class, spawn_actor_base) &&
+            FindReflectedPropertyLocked(damage_causer_class, "TriggerAbilityHandle",
+                trigger_handle_property, true) &&
+            trigger_handle_property.type == "StructProperty" &&
+            trigger_handle_property.element_size == sizeof(std::int32_t) &&
+            trigger_handle_property.offset == 0x488 &&
+            trigger_handle_property.array_dim == 1 &&
+            FindReflectedPropertyLocked(damage_causer_class, "SavedTriggerSkillCDO",
+                saved_skill_property, true) &&
+            saved_skill_property.type == "ObjectProperty" &&
+            saved_skill_property.element_size == sizeof(std::uintptr_t) &&
+            saved_skill_property.offset == 0x490 &&
+            saved_skill_property.array_dim == 1 &&
+            FindReflectedPropertyLocked(damage_causer_class, "InheritedSkillLevel",
+                skill_level_property, true) &&
+            skill_level_property.type == "IntProperty" &&
+            skill_level_property.element_size == sizeof(std::int32_t) &&
+            skill_level_property.offset == 0x4A0 &&
+            skill_level_property.array_dim == 1) {
+            std::uintptr_t handle_address{}, saved_skill_address{}, level_address{};
+            std::uintptr_t saved_skill_class{};
+            if (AddAddress(damage_causer, trigger_handle_property.offset, handle_address) &&
+                AddAddress(damage_causer, saved_skill_property.offset, saved_skill_address) &&
+                AddAddress(damage_causer, skill_level_property.offset, level_address) &&
+                ReadValue(*memory, handle_address, trigger_ability_handle) &&
+                ReadValue(*memory, saved_skill_address, saved_skill_cdo) &&
+                ReadValue(*memory, level_address, inherited_skill_level) &&
+                trigger_ability_handle > 0 && saved_skill_cdo != 0 &&
+                ReadableRange(*memory, saved_skill_cdo, 0x20U) &&
+                ReadPointerAt(*memory, saved_skill_cdo, object_class_offset, saved_skill_class) &&
+                IsClassDerivedFromLocked(saved_skill_class, gameplay_ability_base)) {
+                ability_spawn_context_valid = true;
+            }
         }
-        if (damage_causer != 0 && saved_skill_offset >= 0) {
-            static_cast<void>(ReadPointerAt(
-                *memory, damage_causer, saved_skill_offset, saved_skill_cdo));
-        }
-        damage.saved_skill_cdo = saved_skill_cdo;
-        damage.active_spec_handle = active_spec_handle;
+        damage.saved_skill_cdo = ability_spawn_context_valid ? saved_skill_cdo : 0;
+        damage.active_spec_handle = ability_spawn_context_valid ? trigger_ability_handle : 0;
+        damage.inherited_skill_level = ability_spawn_context_valid ? inherited_skill_level : 0;
+        damage.ability_spawn_context_valid = ability_spawn_context_valid;
         damage.tags = CaptureNteDamageTags(damage_event + bindings.damage_tags_offset,
             [this](std::uintptr_t address, void* destination, std::size_t size) {
                 return memory->Read(address, destination, size);
@@ -7048,11 +7092,131 @@ struct Ue5NteAdapter::State {
             [](const double value) { return std::isfinite(value); });
     }
 
+    [[nodiscard]] bool ConfigureNativeDamageTriggerActorSpawnContextLocked(
+        const std::uintptr_t actor,
+        const std::uintptr_t actor_class,
+        const std::uintptr_t instigator,
+        const std::uintptr_t target,
+        const DamageTriggerSpawnContext& spawn_context,
+        const bool write_values) noexcept {
+        try {
+            if (actor == 0 || actor_class == 0 || instigator == 0 || target == 0 ||
+                !ReadableRange(*memory, actor, 0x20U)) {
+                return false;
+            }
+
+            ReflectedPropertyInfo event_data, event_instigator, event_target;
+            if (!FindReflectedPropertyLocked(actor_class, "EventData", event_data, true) ||
+                event_data.type != "StructProperty" || event_data.element_size != 0xB0 ||
+                event_data.offset != 0x3D8 || event_data.structure == 0 ||
+                !FindReflectedPropertyLocked(event_data.structure, "Instigator",
+                    event_instigator, false) ||
+                event_instigator.type != "ObjectProperty" ||
+                event_instigator.element_size != sizeof(std::uintptr_t) ||
+                event_instigator.offset != 0x08 ||
+                !FindReflectedPropertyLocked(event_data.structure, "Target",
+                    event_target, false) ||
+                event_target.type != "ObjectProperty" ||
+                event_target.element_size != sizeof(std::uintptr_t) ||
+                event_target.offset != 0x10) {
+                return false;
+            }
+
+            std::uintptr_t instigator_address{}, target_address{};
+            if (!AddAddress(actor,
+                    static_cast<std::int64_t>(event_data.offset) + event_instigator.offset,
+                    instigator_address) ||
+                !AddAddress(actor,
+                    static_cast<std::int64_t>(event_data.offset) + event_target.offset,
+                    target_address)) {
+                return false;
+            }
+            if (write_values &&
+                (!memory->Write(instigator_address, &instigator, sizeof(instigator)) ||
+                 !memory->Write(target_address, &target, sizeof(target)))) {
+                return false;
+            }
+            std::uintptr_t instigator_readback{}, target_readback{};
+            if (!ReadValue(*memory, instigator_address, instigator_readback) ||
+                !ReadValue(*memory, target_address, target_readback) ||
+                instigator_readback != instigator || target_readback != target) {
+                return false;
+            }
+
+            if (spawn_context.valid) {
+                std::uintptr_t gameplay_ability_base{}, saved_skill_class{};
+                ReflectedPropertyInfo trigger_handle_property, saved_skill_property,
+                    skill_level_property;
+                const auto object_class_offset = Layout(profile, "object.class", -1);
+                if (spawn_context.trigger_ability_handle <= 0 ||
+                    spawn_context.saved_skill_cdo == 0 || object_class_offset < 0 ||
+                    !ReadableRange(*memory, spawn_context.saved_skill_cdo, 0x20U) ||
+                    !FindExactObjectLocked(L"/Script/HTGame.HTGameplayAbility",
+                        gameplay_ability_base) ||
+                    !ReadPointerAt(*memory, spawn_context.saved_skill_cdo,
+                        object_class_offset, saved_skill_class) ||
+                    !IsClassDerivedFromLocked(saved_skill_class, gameplay_ability_base) ||
+                    !FindReflectedPropertyLocked(actor_class, "TriggerAbilityHandle",
+                        trigger_handle_property, true) ||
+                    trigger_handle_property.type != "StructProperty" ||
+                    trigger_handle_property.element_size != sizeof(std::int32_t) ||
+                    trigger_handle_property.offset != 0x488 ||
+                    trigger_handle_property.array_dim != 1 ||
+                    !FindReflectedPropertyLocked(actor_class, "SavedTriggerSkillCDO",
+                        saved_skill_property, true) ||
+                    saved_skill_property.type != "ObjectProperty" ||
+                    saved_skill_property.element_size != sizeof(std::uintptr_t) ||
+                    saved_skill_property.offset != 0x490 ||
+                    saved_skill_property.array_dim != 1 ||
+                    !FindReflectedPropertyLocked(actor_class, "InheritedSkillLevel",
+                        skill_level_property, true) ||
+                    skill_level_property.type != "IntProperty" ||
+                    skill_level_property.element_size != sizeof(std::int32_t) ||
+                    skill_level_property.offset != 0x4A0 ||
+                    skill_level_property.array_dim != 1) {
+                    return false;
+                }
+
+                std::uintptr_t handle_address{}, saved_skill_address{}, level_address{};
+                if (!AddAddress(actor, trigger_handle_property.offset, handle_address) ||
+                    !AddAddress(actor, saved_skill_property.offset, saved_skill_address) ||
+                    !AddAddress(actor, skill_level_property.offset, level_address)) {
+                    return false;
+                }
+                if (write_values &&
+                    (!memory->Write(handle_address, &spawn_context.trigger_ability_handle,
+                        sizeof(spawn_context.trigger_ability_handle)) ||
+                     !memory->Write(saved_skill_address, &spawn_context.saved_skill_cdo,
+                        sizeof(spawn_context.saved_skill_cdo)) ||
+                     !memory->Write(level_address, &spawn_context.inherited_skill_level,
+                        sizeof(spawn_context.inherited_skill_level)))) {
+                    return false;
+                }
+                std::int32_t handle_readback{}, level_readback{};
+                std::uintptr_t saved_skill_readback{};
+                if (!ReadValue(*memory, handle_address, handle_readback) ||
+                    !ReadValue(*memory, saved_skill_address, saved_skill_readback) ||
+                    !ReadValue(*memory, level_address, level_readback) ||
+                    handle_readback != spawn_context.trigger_ability_handle ||
+                    saved_skill_readback != spawn_context.saved_skill_cdo ||
+                    level_readback != spawn_context.inherited_skill_level) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
     [[nodiscard]] bool SpawnNativeDamageTriggerActorLocked(
         const std::uintptr_t actor_class,
         const std::uintptr_t world_context,
         const std::uintptr_t owner,
         const std::array<double, 3>& location,
+        const std::uintptr_t instigator,
+        const std::uintptr_t target,
+        const DamageTriggerSpawnContext& spawn_context,
         std::uintptr_t& spawned,
         std::uintptr_t& destroy_function) noexcept {
         spawned = 0;
@@ -7182,6 +7346,16 @@ struct Ue5NteAdapter::State {
             std::memcpy(&spawned, begin_parameters.data() + 0x88, sizeof(spawned));
             if (spawned == 0) return false;
 
+            // Dump marks EventData and the ability context as ExposeOnSpawn. Populate
+            // them while deferred so construction/BeginPlay sees the correct target.
+            if (!ConfigureNativeDamageTriggerActorSpawnContextLocked(
+                    spawned, actor_class, instigator, target, spawn_context, true)) {
+                static_cast<void>(InvokeProcessEventGuarded(
+                    process_event_invoker, spawned, destroy_function, nullptr, 0));
+                spawned = 0;
+                return false;
+            }
+
             alignas(16) std::array<std::uint8_t, 0x80> finish_parameters{};
             std::memcpy(finish_parameters.data(), &spawned, sizeof(spawned));
             std::memcpy(finish_parameters.data() + 0x10, transform.data(), transform.size());
@@ -7221,6 +7395,7 @@ struct Ue5NteAdapter::State {
         const std::uintptr_t effect_class,
         const std::uintptr_t target_type_class,
         const std::uintptr_t override_container_function,
+        const DamageTriggerSpawnContext& spawn_context,
         const std::uint32_t interval_milliseconds,
         const std::uint32_t repeat_count,
         const bool unbounded_lifetime = false) noexcept {
@@ -7229,38 +7404,12 @@ struct Ue5NteAdapter::State {
                 effect_class == 0 || target_type_class == 0 ||
                 override_container_function == 0) return false;
 
-            ReflectedPropertyInfo event_data, effect_container;
-            if (!FindReflectedPropertyLocked(actor_class, "EventData", event_data, true) ||
-                event_data.type != "StructProperty" || event_data.element_size != 0xB0 ||
-                event_data.offset != 0x3D8 || event_data.structure == 0 ||
+            ReflectedPropertyInfo effect_container;
+            if (!ConfigureNativeDamageTriggerActorSpawnContextLocked(
+                    actor, actor_class, attacker, victim, spawn_context, false) ||
                 !FindReflectedPropertyLocked(actor_class, "EffectContainer", effect_container, true) ||
                 effect_container.type != "StructProperty" || effect_container.element_size != 0x28 ||
                 effect_container.offset != 0x3A8 || effect_container.structure == 0) {
-                return false;
-            }
-
-            ReflectedPropertyInfo event_instigator, event_target;
-            if (!FindReflectedPropertyLocked(event_data.structure, "Instigator", event_instigator, false) ||
-                event_instigator.type != "ObjectProperty" || event_instigator.element_size != 8 ||
-                event_instigator.offset != 0x08 ||
-                !FindReflectedPropertyLocked(event_data.structure, "Target", event_target, false) ||
-                event_target.type != "ObjectProperty" || event_target.element_size != 8 ||
-                event_target.offset != 0x10) {
-                return false;
-            }
-            std::uintptr_t instigator_address{}, target_address{};
-            if (!AddAddress(actor, static_cast<std::int64_t>(event_data.offset) + event_instigator.offset,
-                    instigator_address) ||
-                !AddAddress(actor, static_cast<std::int64_t>(event_data.offset) + event_target.offset,
-                    target_address) ||
-                !memory->Write(instigator_address, &attacker, sizeof(attacker)) ||
-                !memory->Write(target_address, &victim, sizeof(victim))) {
-                return false;
-            }
-            std::uintptr_t instigator_readback{}, target_readback{};
-            if (!ReadValue(*memory, instigator_address, instigator_readback) ||
-                !ReadValue(*memory, target_address, target_readback) ||
-                instigator_readback != attacker || target_readback != victim) {
                 return false;
             }
 
@@ -7584,8 +7733,8 @@ struct Ue5NteAdapter::State {
 
             std::uintptr_t trigger_actor{};
             if (!SpawnNativeDamageTriggerActorLocked(
-                    damage_trigger_class, attacker, attacker, location,
-                    trigger_actor, destroy_function) ||
+                    damage_trigger_class, attacker, attacker, location, attacker, victim,
+                    root.spawn_context, trigger_actor, destroy_function) ||
                 trigger_actor == 0) {
                 return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                     "native DamageTriggerActor spawn ABI failed validation");
@@ -7607,7 +7756,7 @@ struct Ue5NteAdapter::State {
             }
             if (!ConfigureNativeDamageTriggerActorLocked(
                     trigger_actor, spawned_class, attacker, victim, effect_class,
-                    target_type_class, override_container_function,
+                    target_type_class, override_container_function, root.spawn_context,
                     request->interval_milliseconds, request->repeat_count,
                     externally_scheduled)) {
                 cleanup_spawned();
@@ -8263,7 +8412,9 @@ struct Ue5NteAdapter::State {
             damage_chain_reactions.push_back(chain);
             *out_chain = chain.handle;
             return Status(ANOMALY_STATUS_V1_OK,
-                "dump-validated native DamageTriggerActor context created; queue calls K2_OnTriggerPeriodGamePlayEffect, not captured GameplayEffect parameters");
+                root.spawn_context.valid
+                    ? "DamageTriggerActor ExposeOnSpawn target and validated source ability context were set before FinishSpawningActor; queue calls the native K2 trigger and confirms only real damage"
+                    : "DamageTriggerActor ExposeOnSpawn target was set before FinishSpawningActor; source ability-spawn context was unavailable; queue calls the native K2 trigger and confirms only real damage");
         } catch (...) {
             std::scoped_lock lock(mutex);
             if (auto* native = FindNativeDamageChainLocked(native_handle); native != nullptr) {
@@ -8556,7 +8707,9 @@ struct Ue5NteAdapter::State {
         const bool critical_valid,
         const bool partial,
         const std::uint64_t capture_tick_sequence,
-        const std::uint64_t damage_chain_reaction_id) noexcept {
+        const std::uint64_t damage_chain_reaction_id,
+        const std::int32_t inherited_skill_level,
+        const bool ability_spawn_context_valid) noexcept {
         const auto drop = [this]() noexcept {
             ++damage_dropped_count;
             damage_capture_drop_count.fetch_add(1, std::memory_order_relaxed);
@@ -8631,9 +8784,14 @@ struct Ue5NteAdapter::State {
                     confirmed_chain = candidate_chain;
                 }
             }
+            const DamageTriggerSpawnContext spawn_context{
+                ability_spawn_context_valid ? saved_skill_cdo : 0,
+                ability_spawn_context_valid ? active_spec_handle : 0,
+                ability_spawn_context_valid ? inherited_skill_level : 0,
+                ability_spawn_context_valid};
             RecordDamageEventLocked(event, damage,
                 has_replay_context ? &replay_context : nullptr,
-                attacker_was_local_player_character);
+                attacker_was_local_player_character, spawn_context);
             if (confirmed_chain != nullptr) {
                 confirmed_chain->awaiting_confirmation = false;
                 confirmed_chain->last_confirmed_damage_sequence = damage_event_sequence;
@@ -8692,7 +8850,8 @@ struct Ue5NteAdapter::State {
             damage.damage, damage.source_index, damage.source_serial,
             damage.victim, damage.attacker, damage.saved_skill_cdo, damage.active_spec_handle,
             critical, critical_valid, damage.tags.partial || !critical_valid,
-            capture_tick_sequence, damage.damage_chain_reaction_id);
+            capture_tick_sequence, damage.damage_chain_reaction_id,
+            damage.inherited_skill_level, damage.ability_spawn_context_valid);
     }
 
     void RefreshEntityCache(
