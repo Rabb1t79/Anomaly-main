@@ -62,7 +62,7 @@ jobs:
 
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           if ($manifest.id -ne 'anomaly.builtin.nte-damage-chain-reaction' -or
-              $manifest.version -ne '0.1.2' -or $manifest.entry -ne 'plugin.dll') {
+              $manifest.version -ne '0.1.5' -or $manifest.entry -ne 'plugin.dll') {
             throw 'Runtime probe Damage Chain Reaction manifest does not match the expected identity/version.'
           }
 
