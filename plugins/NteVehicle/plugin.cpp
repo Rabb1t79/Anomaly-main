@@ -1464,6 +1464,12 @@ void Draw(const AnomalyUiServiceV1* ui) {
     std::string last_summon;
     std::vector<std::string> ids;
     std::vector<std::string> labels;
+    std::vector<CustomizationOption> customization_options;
+    std::vector<std::pair<std::uint32_t, std::string>> module_overrides;
+    std::string customization_vehicle_id;
+    std::string customization_skin_id;
+    std::string customization_status;
+    bool customization_page{};
     float ratio;
     float torque_ratio;
     float other_speed_ratio;
@@ -1481,6 +1487,12 @@ void Draw(const AnomalyUiServiceV1* ui) {
         last_summon = g_context.last_summon;
         ids = g_context.vehicle_ids;
         labels = g_context.vehicle_labels;
+        customization_options = g_context.customization_options;
+        module_overrides = g_context.selected_module_overrides;
+        customization_vehicle_id = g_context.customization_vehicle_id;
+        customization_skin_id = g_context.customization_skin_id;
+        customization_status = g_context.customization_status;
+        customization_page = g_context.customization_page;
         ratio = g_context.speed_ratio;
         torque_ratio = g_context.engine_torque_ratio;
         other_speed_ratio = g_context.other_speed_ratio;
@@ -1596,7 +1608,13 @@ void Draw(const AnomalyUiServiceV1* ui) {
     }
 
     if (active_tab == 0) {
-        DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
+        if (customization_page) {
+            DrawCustomizationTab(ui, selected, ids, labels, customization_options,
+                module_overrides, customization_vehicle_id, customization_skin_id,
+                customization_status, player_position_valid);
+        } else {
+            DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
+        }
     } else if (active_tab == 1) {
         DrawPerformanceTab(ui, snap, ratio, debug_unlocked, fine_speed_tuning_enabled,
             torque_ratio, other_speed_ratio, other_speed_floor_ratio, other_torque_ratio);
@@ -1651,7 +1669,15 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
         !HasField<AnomalyNteVehicleServiceV1,
             decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_engine_torque_ratio)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)) ||
-        !vehicle->set_other_vehicles_engine_torque_ratio || !player->snapshot) {
+        !vehicle->set_other_vehicles_engine_torque_ratio ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::customization_catalog_snapshot)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, customization_catalog_snapshot)) ||
+        !vehicle->customization_catalog_snapshot ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::customization_option_at)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, customization_option_at)) ||
+        !vehicle->customization_option_at || !player->snapshot) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
 
@@ -1664,9 +1690,10 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.apply_other_torque.store(false, std::memory_order_release);
     g_context.reset.store(false, std::memory_order_release);
     g_context.summon.store(false, std::memory_order_release);
-    g_context.summon_modified.store(false, std::memory_order_release);
+    g_context.summon_customized.store(false, std::memory_order_release);
     g_context.friction_toggle.store(false, std::memory_order_release);
     g_context.refresh_catalog_requested.store(false, std::memory_order_release);
+    g_context.refresh_customization_requested.store(false, std::memory_order_release);
     g_context.speed_ratio = kLockedSpeedRatio;
     g_context.engine_torque_ratio = 1.0F;
     g_context.other_speed_ratio = 1.0F;
@@ -1681,6 +1708,13 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.catalog_filter.clear();
     g_context.vehicle_ids.clear();
     g_context.vehicle_labels.clear();
+    g_context.customization_page = false;
+    g_context.customization_vehicle_id.clear();
+    g_context.customization_skin_id.clear();
+    g_context.customization_status = "尚未读取当前车型的改装数据";
+    g_context.customization_options.clear();
+    g_context.selected_module_overrides.clear();
+    g_context.customization_catalog_tick = 0;
     g_context.last_summon.clear();
     g_context.status = "正在读取 Host 验证的运行时 Vehicle 目录";
     g_context.player_position_valid = false;
