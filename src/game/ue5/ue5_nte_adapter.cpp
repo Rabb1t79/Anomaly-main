@@ -891,12 +891,28 @@ struct Ue5NteAdapter::State {
         std::array<std::uint8_t, 0x1C> default_module_data{};
         std::vector<std::uint64_t> module_ids;
     };
+    struct VehicleModificationOption {
+        std::string id;
+        std::string display_label;
+        std::uint64_t id_name{};
+        std::uint32_t module_type{};
+        bool is_skin{};
+        bool is_default{};
+    };
     std::vector<VehicleCatalogEntry> vehicle_catalog;
     std::uint64_t vehicle_catalog_generation{};
     std::uint64_t vehicle_catalog_sequence{};
     std::uintptr_t vehicle_catalog_table{};
     bool vehicle_catalog_valid{};
     const char* vehicle_catalog_failure_reason{"catalog has not been scanned"};
+    std::vector<VehicleModificationOption> vehicle_modification_catalog;
+    std::string vehicle_modification_catalog_vehicle_id;
+    std::uint64_t vehicle_modification_catalog_sequence{};
+    std::uint64_t vehicle_modification_catalog_generation{};
+    std::uintptr_t vehicle_modification_module_table{};
+    std::uintptr_t vehicle_modification_skin_table{};
+    bool vehicle_modification_catalog_valid{};
+    std::string vehicle_modification_catalog_failure_reason{"改造目录尚未读取"};
     // Names converted from FText are cached by canonical row key so explicit refreshes
     // do not allocate a fresh engine FString for every unchanged catalog row.
     std::unordered_map<std::string, std::string> vehicle_display_name_cache;
@@ -2781,6 +2797,14 @@ struct Ue5NteAdapter::State {
         vehicle_catalog_generation = 0;
         vehicle_catalog_table = 0;
         vehicle_catalog_valid = false;
+        vehicle_modification_catalog.clear();
+        vehicle_modification_catalog_vehicle_id.clear();
+        vehicle_modification_catalog_sequence = 0;
+        vehicle_modification_catalog_generation = 0;
+        vehicle_modification_module_table = 0;
+        vehicle_modification_skin_table = 0;
+        vehicle_modification_catalog_valid = false;
+        vehicle_modification_catalog_failure_reason = "对象注册表改变，改造目录已失效";
         selected_summon_vehicle_id.clear();
         attack_input_bindings = {};
         map_landmark_next_refresh_sequence = 0;
@@ -8429,7 +8453,7 @@ struct Ue5NteAdapter::State {
             if (row == 0 || vehicle_display_name_binding.function == 0 ||
                 vehicle_display_name_binding.class_default_object == 0 ||
                 name_property.type != "TextProperty" || name_property.element_size != 0x10 ||
-                name_property.offset != 0x58 ||
+                name_property.offset < 0 ||
                 !ReadableRange(*memory, row + static_cast<std::uintptr_t>(name_property.offset), 0x10)) {
                 return false;
             }
