@@ -43,6 +43,14 @@ bool IsKeyboardReleaseMessage(UINT message) noexcept {
     return message == WM_KEYUP || message == WM_SYSKEYUP;
 }
 
+bool IsAltKeyMessage(UINT message, WPARAM wparam) noexcept {
+    if (message != WM_KEYDOWN && message != WM_KEYUP &&
+        message != WM_SYSKEYDOWN && message != WM_SYSKEYUP) {
+        return false;
+    }
+    return wparam == VK_MENU || wparam == VK_LMENU || wparam == VK_RMENU;
+}
+
 bool IsTextMessage(UINT message) noexcept {
     switch (message) {
     case WM_CHAR:
@@ -383,7 +391,6 @@ LRESULT CALLBACK EmbeddedWindowProc(HWND window, UINT message, WPARAM wparam, LP
         ImGui::GetCurrentContext() != nullptr) {
         // A locked window remains visible while menus are collapsed, but it
         // never owns input. The menu gate therefore precedes all ImGui flags.
-        const bool menus_expanded = !anomaly::HostUiMenusCollapsed();
         const ImGuiIO& io = ImGui::GetIO();
         const bool capture_mouse = anomaly::HostUiMenusCaptureMouse();
         // An independently visible Host window must be able to consume keyboard
@@ -397,6 +404,7 @@ LRESULT CALLBACK EmbeddedWindowProc(HWND window, UINT message, WPARAM wparam, LP
         const bool mouse_message = IsMouseMessage(message);
         const bool raw_mouse = message == WM_INPUT && IsRawMouseInput(lparam);
         const bool keyboard_message = IsKeyboardMessage(message);
+        const bool alt_message = IsAltKeyMessage(message, wparam);
         const bool text_message = IsTextMessage(message);
         const bool ime_message = IsImeMessage(message);
         const bool clipboard_message = IsClipboardMessage(message);
@@ -424,7 +432,7 @@ LRESULT CALLBACK EmbeddedWindowProc(HWND window, UINT message, WPARAM wparam, LP
         // Keep ImGui's key state coherent across a menu transition. Release
         // messages are forwarded without ever being consumed by the game.
         const bool forward_keyboard = keyboard_message &&
-            (capture_keyboard || IsKeyboardReleaseMessage(message));
+            (alt_message || capture_keyboard || IsKeyboardReleaseMessage(message));
         const bool forward_text = text_message && capture_text;
         const bool forward_ime = ime_message && capture_mouse;
         const bool forward_clipboard = clipboard_message && capture_text;
@@ -445,7 +453,9 @@ LRESULT CALLBACK EmbeddedWindowProc(HWND window, UINT message, WPARAM wparam, LP
             if (forward_clipboard && message == WM_PASTE) QueueClipboardText(ImGui::GetIO());
         }
 
-        if (capture_keyboard && keyboard_message) return TRUE;
+        // Preserve the game's native Alt cursor toggle even when text fields
+        // request keyboard capture from the overlay.
+        if (capture_keyboard && keyboard_message && !alt_message) return TRUE;
         if (capture_text && (text_message || clipboard_message ||
                              (ime_message && IsImeTextMessage(message)))) {
             return TRUE;
