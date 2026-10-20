@@ -257,6 +257,11 @@ std::uintptr_t g_scan_hits[16]{};
 int g_scan_hit_count{};
 int g_scan_scanned_ranges{};
 std::uint64_t g_scan_bytes{};
+// thunk 内部分解结果：thunk 里每个 call/jmp 目标，以及各自被调用的次数
+std::uintptr_t g_scan_targets[8]{};
+int g_scan_target_count{};
+int g_scan_target_hits[8]{};
+std::uintptr_t g_scan_target_first[8][3]{};
 AnomalyGenerationHandleV1 g_scan_task{};
 bool g_scan_logged{};
 const AnomalySignatureServiceV1* g_signature{};
@@ -558,15 +563,60 @@ void ANOMALY_CALL ScanTaskRun(void*, AnomalyGenerationHandleV1) {
         target = g_scan_target;
     }
     if (target == 0) return;
+
+    // 先扫直接调用者（上一版已做，通常为 0：该地址是 ProcessEvent 专用 thunk）。
     std::uintptr_t hits[16]{};
     std::uintptr_t ranges = 0;
     std::uint64_t bytes = 0;
     const int count = ScanDirectCallers(target, hits, 16, &ranges, &bytes);
+
+    // 再反汇编 thunk 前 0x200 字节，取出它内部的 call/jmp 目标（真正的 C++ 实现）。
+    std::uintptr_t calls[8]{};
+    int call_count = 0;
+    {
+        const HMODULE mod = GetModuleHandleA("HTGame.exe");
+        const std::uintptr_t mb = reinterpret_cast<std::uintptr_t>(mod);
+        std::uint8_t code[0x200]{};
+        if (mb != 0 && SafeCopyBlock(target, code, sizeof(code))) {
+            for (std::size_t i = 0; i + 5 <= sizeof(code) && call_count < 8; ++i) {
+                if (code[i] != 0xE8 && code[i] != 0xE9) continue;
+                std::int32_t rel = 0;
+                std::memcpy(&rel, code + i + 1, sizeof(rel));
+                const std::uintptr_t dest =
+                    target + i + 5 + static_cast<std::intptr_t>(rel);
+                if (dest < mb || dest >= mb + 0x11000000ULL) continue;
+                bool dup = false;
+                for (int k = 0; k < call_count; ++k) {
+                    if (calls[k] == dest) { dup = true; break; }
+                }
+                if (!dup) calls[call_count++] = dest;
+            }
+        }
+    }
+
+    // 对每个 thunk 内部目标扫调用者。
+    int target_hits[8]{};
+    std::uintptr_t target_first[8][3]{};
+    for (int t = 0; t < call_count; ++t) {
+        std::uintptr_t sub[16]{};
+        std::uintptr_t sub_ranges = 0;
+        std::uint64_t sub_bytes = 0;
+        const int n = ScanDirectCallers(calls[t], sub, 16, &sub_ranges, &sub_bytes);
+        target_hits[t] = n;
+        for (int k = 0; k < n && k < 3; ++k) target_first[t][k] = sub[k];
+    }
+
     std::scoped_lock lock(g_scan_mutex);
     g_scan_hit_count = count;
     g_scan_scanned_ranges = static_cast<int>(ranges);
     g_scan_bytes = bytes;
     for (int i = 0; i < 16; ++i) g_scan_hits[i] = hits[i];
+    g_scan_target_count = call_count;
+    for (int t = 0; t < 8; ++t) {
+        g_scan_targets[t] = calls[t];
+        g_scan_target_hits[t] = target_hits[t];
+        for (int k = 0; k < 3; ++k) g_scan_target_first[t][k] = target_first[t][k];
+    }
     g_scan_done = true;
 }
 
@@ -1339,11 +1389,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.8.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.8.1：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.8.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.8.1, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
@@ -1440,17 +1490,36 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
         if (g_scan_logged && g_core != nullptr && g_core->log != nullptr) {
             const HMODULE mod = GetModuleHandleA("HTGame.exe");
             const std::uintptr_t mb = reinterpret_cast<std::uintptr_t>(mod);
-            char text[512]{};
+            char text[900]{};
             int n = std::snprintf(text, sizeof(text),
-                                  "damage-chain: scan target=0x%llX ranges=%d bytes=%llu hits=%d",
+                                  "damage-chain: scan thunk=0x%llX ranges=%d bytes=%llu direct=%d",
                                   static_cast<unsigned long long>(target), ranges,
                                   static_cast<unsigned long long>(bytes), count);
-            for (int i = 0; i < count && i < 8 && n > 0 &&
-                            static_cast<std::size_t>(n) + 24 < sizeof(text);
-                 ++i) {
+            int tcount = 0;
+            std::uintptr_t tgt[8]{};
+            int thits[8]{};
+            std::uintptr_t tfirst[8][3]{};
+            {
+                std::scoped_lock lock(g_scan_mutex);
+                tcount = g_scan_target_count;
+                for (int i = 0; i < 8; ++i) {
+                    tgt[i] = g_scan_targets[i];
+                    thits[i] = g_scan_target_hits[i];
+                    for (int k = 0; k < 3; ++k) tfirst[i][k] = g_scan_target_first[i][k];
+                }
+            }
+            for (int t = 0; t < tcount; ++t) {
+                if (n <= 0 || static_cast<std::size_t>(n) + 80 >= sizeof(text)) break;
                 n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
-                                   " [rva=0x%llX]",
-                                   static_cast<unsigned long long>(hits[i] - mb));
+                                   " {impl rva=0x%llX n=%d",
+                                   static_cast<unsigned long long>(tgt[t] - mb), thits[t]);
+                for (int k = 0; k < 3 && thits[t] > k; ++k) {
+                    if (static_cast<std::size_t>(n) + 30 >= sizeof(text)) break;
+                    n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
+                                       ",0x%llX",
+                                       static_cast<unsigned long long>(tfirst[t][k] - mb));
+                }
+                n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n), "}");
             }
             g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
         }
