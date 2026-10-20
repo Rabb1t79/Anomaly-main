@@ -1080,6 +1080,7 @@ void DrawCustomizationTab(
         g_context.refresh_customization_requested.store(true, std::memory_order_release);
     }
     DrawText(ui, customization_status);
+    if (!last_summon.empty()) DrawText(ui, "最近召唤状态：" + last_summon);
     if (!has_selected) {
         DrawText(ui, "当前车型不在已读取的载具目录中，无法应用改装。");
         return;
@@ -1258,7 +1259,6 @@ void DrawCustomizationTab(
     } else if (skin_id.empty()) {
         DrawText(ui, "该车型尚无有效涂装选择；请在「涂装」类别中选择一项。");
     }
-    if (!last_summon.empty()) DrawText(ui, "最近召唤状态：" + last_summon);
 }
 
 
