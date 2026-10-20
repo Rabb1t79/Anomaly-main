@@ -1,0 +1,143 @@
+name: Build AnomalyDamageChain
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'plugins/AnomalyDamageChain/**'
+      - 'include/anomaly/sdk/**'
+      - 'sdk/cpp/plugin_cxx_throw_bridge.cpp'
+      - '.github/workflows/build-anomaly-damage-chain.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'plugins/AnomalyDamageChain/**'
+      - 'include/anomaly/sdk/**'
+      - 'sdk/cpp/plugin_cxx_throw_bridge.cpp'
+      - '.github/workflows/build-anomaly-damage-chain.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure standalone MSVC plugin build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $sourceDir = Join-Path $env:GITHUB_WORKSPACE '.build/anomaly-damage-chain-src'
+          $buildDir = Join-Path $env:GITHUB_WORKSPACE '.build/anomaly-damage-chain'
+          New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
+          $cmakeLists = @'
+          cmake_minimum_required(VERSION 3.22)
+          project(AnomalyDamageChainStandalone LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(ANOMALY_SOURCE_ROOT "@ROOT@")
+          add_library(anomaly_damage_chain SHARED
+            "${ANOMALY_SOURCE_ROOT}/plugins/AnomalyDamageChain/plugin.cpp"
+            "${ANOMALY_SOURCE_ROOT}/sdk/cpp/plugin_cxx_throw_bridge.cpp")
+          target_include_directories(anomaly_damage_chain PRIVATE
+            "${ANOMALY_SOURCE_ROOT}/include")
+          target_compile_definitions(anomaly_damage_chain PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          if(MSVC)
+            target_compile_options(anomaly_damage_chain PRIVATE
+              /W4 /permissive- /EHsc /Zc:threadSafeInit-)
+          endif()
+          set_target_properties(anomaly_damage_chain PROPERTIES
+            OUTPUT_NAME "plugin"
+            PREFIX "")
+          '@
+          $cmakeLists = $cmakeLists.Replace('@ROOT@', $root)
+          Set-Content -LiteralPath (Join-Path $sourceDir 'CMakeLists.txt') -Value $cmakeLists -Encoding UTF8
+          cmake -S $sourceDir -B $buildDir -G "Visual Studio 17 2022" -A x64
+
+      - name: Build plugin DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $buildDir = Join-Path $env:GITHUB_WORKSPACE '.build/anomaly-damage-chain'
+          cmake --build $buildDir --config Release --parallel 4
+          $dll = Join-Path $buildDir 'Release/plugin.dll'
+          if (!(Test-Path -LiteralPath $dll)) {
+            throw "plugin.dll was not produced: $dll"
+          }
+
+      - name: Validate manifest, x64 image, and required exports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE
+          $manifestPath = Join-Path $root 'plugins/AnomalyDamageChain/manifest.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.id -ne 'anomaly.local.damage-chain') {
+            throw "Unexpected manifest ID: $($manifest.id)"
+          }
+          if ($manifest.entry -ne 'plugin.dll') {
+            throw "Unexpected plugin entry: $($manifest.entry)"
+          }
+          $dll = Join-Path $root '.build/anomaly-damage-chain/Release/plugin.dll'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (!(Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe was not found: $vswhere" }
+          $vsPath = & $vswhere -latest -products '*' -property installationPath
+          if (!$vsPath) { throw 'Visual Studio installation could not be located.' }
+          $msvcRoot = Join-Path $vsPath 'VC/Tools/MSVC'
+          $msvc = Get-ChildItem -LiteralPath $msvcRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if ($null -eq $msvc) { throw 'MSVC tool directory was not found.' }
+          $dumpbin = Join-Path $msvc.FullName 'bin/Hostx64/x64/dumpbin.exe'
+          if (!(Test-Path -LiteralPath $dumpbin)) { throw "dumpbin.exe was not found: $dumpbin" }
+          $headers = & $dumpbin /nologo /headers $dll | Out-String
+          if ($headers -notmatch '8664 machine \(x64\)') { throw 'The plugin DLL is not an x64 PE image.' }
+          $exports = & $dumpbin /nologo /exports $dll | Out-String
+          foreach ($symbol in @('AnomalyPluginEntryV1', 'AnomalyPluginCxxThrowV1')) {
+            if ($exports -notmatch [regex]::Escape($symbol)) {
+              throw "Required export is missing: $symbol"
+            }
+          }
+          Write-Host "Manifest identity: $($manifest.id) v$($manifest.version)"
+          Write-Host 'Verified x64 PE image and exports: AnomalyPluginEntryV1, AnomalyPluginCxxThrowV1'
+
+      - name: Package plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $env:GITHUB_WORKSPACE
+          $dll = Join-Path $root '.build/anomaly-damage-chain/Release/plugin.dll'
+          $manifest = Join-Path $root 'plugins/AnomalyDamageChain/manifest.json'
+          $package = Join-Path $root 'dist/AnomalyDamageChain-windows-x64'
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          Copy-Item -LiteralPath $dll -Destination (Join-Path $package 'plugin.dll') -Force
+          Copy-Item -LiteralPath $manifest -Destination (Join-Path $package 'manifest.json') -Force
+          $dllHash = (Get-FileHash -LiteralPath (Join-Path $package 'plugin.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifestHash = (Get-FileHash -LiteralPath (Join-Path $package 'manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "source_commit=$env:GITHUB_SHA"
+            "plugin_id=anomaly.local.damage-chain"
+            "version=$((Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).version)"
+            "plugin_dll_sha256=$dllHash"
+            "manifest_sha256=$manifestHash"
+          ) | Set-Content -LiteralPath (Join-Path $package 'BUILD-INFO.txt') -Encoding UTF8
+          $archive = Join-Path $root 'dist/AnomalyDamageChain-windows-x64.zip'
+          Compress-Archive -Path (Join-Path $package '*') -DestinationPath $archive -Force
+          if (!(Test-Path -LiteralPath $archive)) { throw 'Plugin package ZIP was not produced.' }
+          Get-FileHash -LiteralPath $archive -Algorithm SHA256 | Format-List
+
+      - name: Upload plugin package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnomalyDamageChain-windows-x64
+          path: dist/AnomalyDamageChain-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
