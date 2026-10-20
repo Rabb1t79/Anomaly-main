@@ -64,7 +64,7 @@ constexpr std::uintptr_t kProcessEventVtableIndex = 76;   // 0x4C
 constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 
 // ---- 配置 ----
-constexpr int kConfVersion = 4;  // v3: 目标改为技能激活 RPC
+constexpr int kConfVersion = 5;  // v3: 目标改为技能激活 RPC
 constexpr const char* kConfFile = "damage-chain.conf";
 constexpr const char* kLogFile = "damage-chain-capture.txt";
 constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByActor";
@@ -213,6 +213,14 @@ const AnomalyUe5NamesServiceV1* g_names{};
 const AnomalyNteCombatServiceV1* g_combat{};
 
 std::uintptr_t g_apply_ufunc{};  // ServerActivateGameEffectsWithClassByActor 的 UFunction
+const AnomalySignatureServiceV1* g_signature{};
+std::uintptr_t g_objects_accessor{};  // ue5.GObjects 访问器地址
+std::uintptr_t g_objects_global{};    // 其中 mov rax,[rip+x] 指向的全局变量地址
+
+// Profile 的 ue5.GObjects 特征码：mov rax,[rip+disp32]; mov rcx,[rax+rcx*8];
+// mov rax,[rcx+rdx*8]; ret —— 即 TUObjectArray 的 chunk 查找。
+constexpr const char* kGObjectsPattern =
+    "48 8B 05 ?? ?? ?? ?? 48 8B 0C C8 48 8B 04 D1 C3";
 AnomalyGenerationHandleV1 g_events_handle{};
 AnomalyGenerationHandleV1 g_hotkey_toggle{};
 
@@ -320,6 +328,32 @@ bool ContainsIgnoreCase(const char* text, const char* needle) {
     return false;
 }
 
+// TWeakObjectPtr<T> = { int32 ObjectIndex; int32 ObjectSerialNumber }（8 字节，不是指针）。
+// 通过 GUObjectArray 的 chunked 数组解析成真实对象指针；序列号不匹配或读取失败返回 0。
+std::uintptr_t ResolveWeakObject(std::int32_t index, std::int32_t serial) {
+    if (g_objects_global == 0 || index <= 0) return 0;
+    std::uintptr_t chunk_array = 0;
+    if (!SafeReadPtr(g_objects_global, &chunk_array) || chunk_array < 0x10000) return 0;
+    const std::uint32_t chunk_index = static_cast<std::uint32_t>(index) >> 16;
+    const std::uint32_t within = static_cast<std::uint32_t>(index) & 0xFFFFu;
+    std::uintptr_t chunk = 0;
+    if (!SafeReadPtr(chunk_array + static_cast<std::uintptr_t>(chunk_index) * sizeof(void*),
+                     &chunk) ||
+        chunk < 0x10000) {
+        return 0;
+    }
+    // FUObjectItem: Object(0x00) Flags(0x08) ClusterRootIndex(0x0C) SerialNumber(0x10)，步长 0x18。
+    const std::uintptr_t item = chunk + static_cast<std::uintptr_t>(within) * 0x18u;
+    std::uintptr_t object = 0;
+    if (!SafeReadPtr(item, &object) || object < 0x10000) return 0;
+    if (serial != 0) {
+        std::uint32_t item_serial = 0;
+        if (!SafeReadU32(item + 0x10, &item_serial)) return 0;
+        if (static_cast<std::int32_t>(item_serial) != serial) return 0;
+    }
+    return object;
+}
+
 bool InvokeProcessEvent(std::uintptr_t object, std::uintptr_t function, void* parameters) {
     if (object < 0x10000 || function < 0x10000) return false;
     std::uintptr_t vtable = 0;
@@ -385,13 +419,21 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
 
     // 从伤害事件里取：伤害 GE、施害者、受害者。
     const auto base = reinterpret_cast<std::uintptr_t>(parameters);
-    std::uintptr_t ge = 0;
+    std::uint32_t ge_index = 0;
+    std::uint32_t ge_serial = 0;
     std::uintptr_t instigator = 0;
     std::uintptr_t victim = 0;
-    if (!SafeReadPtr(base + kDamageEventGeOffset, &ge) ||
+    if (!SafeReadU32(base + kDamageEventGeOffset, &ge_index) ||
+        !SafeReadU32(base + kDamageEventGeOffset + 4, &ge_serial) ||
         !SafeReadPtr(base + kDamageEventInstigatorOffset, &instigator) ||
-        !SafeReadPtr(base + kDamageEventVictimOffset, &victim) || ge < 0x10000 ||
-        victim < 0x10000) {
+        !SafeReadPtr(base + kDamageEventVictimOffset, &victim) || victim < 0x10000) {
+        ++g_state.params_rejected;
+        return;
+    }
+    // DamageGEDef 是 TWeakObjectPtr，必须经 GUObjectArray 解析成真实对象。
+    const std::uintptr_t ge = ResolveWeakObject(static_cast<std::int32_t>(ge_index),
+                                                static_cast<std::int32_t>(ge_serial));
+    if (ge < 0x10000) {
         ++g_state.params_rejected;
         return;
     }
@@ -892,6 +934,8 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     g_process_event = view.Query<AnomalyUe5ProcessEventServiceV1>(
         ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_ID, ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_VERSION).get();
     g_names = view.Query<AnomalyUe5NamesServiceV1>(ANOMALY_UE5_NAMES_SERVICE_V1_ID, 1u).get();
+    g_signature = view.Query<AnomalySignatureServiceV1>(ANOMALY_SIGNATURE_SERVICE_V1_ID,
+                                                      ANOMALY_SIGNATURE_SERVICE_V1_VERSION).get();
     g_combat = view.Query<AnomalyNteCombatServiceV1>(ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
                                                      ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION).get();
 
@@ -906,19 +950,36 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
 
     g_state.candidate_count = static_cast<int>(kDefaultDamageNameCount);
 
+    // 解析 GUObjectArray 全局（用于 TWeakObjectPtr 解析）。
+    if (g_signature != nullptr && g_signature->resolve != nullptr) {
+        std::uintptr_t addr = 0;
+        if (g_signature
+                ->resolve(g_signature->user, StringView("HTGame.exe"), StringView(".text"),
+                          StringView(kGObjectsPattern), &addr)
+                .code == ANOMALY_STATUS_V1_OK &&
+            addr >= 0x10000) {
+            g_objects_accessor = addr;
+            std::uint32_t disp = 0;
+            if (SafeReadU32(addr + 3, &disp)) {
+                g_objects_global = addr + 7 + static_cast<std::intptr_t>(
+                                                    static_cast<std::int32_t>(disp));
+            }
+        }
+    }
+
     if (g_process_event != nullptr && g_process_event->subscribe != nullptr &&
         g_events_handle.id == 0) {
         g_process_event->subscribe(g_process_event->user, &OnProcessEvent, nullptr,
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.4.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.5.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.4.0, candidates=%d hook=%d np=%d gf=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.5.0, candidates=%d hook=%d np=%d gf=%d gobj=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
-                      g_state.zero_prediction, g_state.ge_filter);
+                      g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     return anomaly::sdk::Ok();
@@ -968,6 +1029,10 @@ void ANOMALY_CALL Unload(void*) {
     g_process_event = nullptr;
     g_names = nullptr;
     g_combat = nullptr;
+    g_signature = nullptr;
+    g_apply_ufunc = 0;
+    g_objects_accessor = 0;
+    g_objects_global = 0;
     g_fn_name_cache.clear();
     g_name_cache.clear();
     g_state = State{};
