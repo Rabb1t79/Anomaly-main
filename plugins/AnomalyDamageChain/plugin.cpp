@@ -238,6 +238,7 @@ const AnomalyUe5NamesServiceV1* g_names{};
 const AnomalyNteCombatServiceV1* g_combat{};
 
 std::uintptr_t g_apply_ufunc{};  // ServerActivateGameEffectsWithClassByActor 的 UFunction
+std::unordered_map<std::uintptr_t, std::uintptr_t> g_class_fn_cache;
 const AnomalySignatureServiceV1* g_signature{};
 std::uintptr_t g_objects_accessor{};  // ue5.GObjects 访问器地址
 std::uintptr_t g_objects_global{};    // 其中 mov rax,[rip+x] 指向的全局变量地址
@@ -335,10 +336,38 @@ const char* ResolveName(std::uint32_t name_id) {
     return inserted.first->second.c_str();
 }
 
+// 兜底：在类对象自身的内存里扫描"像 UField"的指针，再沿 Next 链找目标名字。
+// 不依赖 Children/SuperStruct 的具体偏移，能容忍布局变化。
+std::uintptr_t ScanClassForFunction(std::uintptr_t cls, const char* wanted) {
+    if (cls < 0x10000 || wanted == nullptr) return 0;
+    for (std::uintptr_t off = 0; off < 0x600; off += sizeof(void*)) {
+        std::uintptr_t cand = 0;
+        if (!SafeReadPtr(cls + off, &cand) || cand < 0x10000) continue;
+        std::uint32_t id = 0;
+        if (!SafeReadU32(cand + kNamePrivateOffset, &id) || id == 0) continue;
+        const char* n = ResolveName(id);
+        if (n == nullptr || n[0] == '\0') continue;
+        if (std::strcmp(n, wanted) == 0) return cand;
+        std::uintptr_t cur = cand;
+        for (int guard = 0; guard < 4096; ++guard) {
+            std::uintptr_t next = 0;
+            if (!SafeReadPtr(cur + kUFieldNextOffset, &next) || next < 0x10000) break;
+            cur = next;
+            std::uint32_t nid = 0;
+            if (!SafeReadU32(cur + kNamePrivateOffset, &nid) || nid == 0) continue;
+            const char* nn = ResolveName(nid);
+            if (nn != nullptr && nn[0] != '\0' && std::strcmp(nn, wanted) == 0) return cur;
+        }
+    }
+    return 0;
+}
+
 // 沿 SuperStruct 继承链，在每个类的 Children 链里按名字找 UFunction。
 // 必须走继承链：原生函数在父类（AHTAbilityCharacter）上，蓝图子类本身没有。
 std::uintptr_t FindFunctionInClass(std::uintptr_t cls, const char* wanted) {
     if (cls < 0x10000 || wanted == nullptr) return 0;
+    auto cached = g_class_fn_cache.find(cls);
+    if (cached != g_class_fn_cache.end()) return cached->second;
     for (int depth = 0; depth < 64 && cls >= 0x10000; ++depth) {
         std::uintptr_t field = 0;
         if (SafeReadPtr(cls + kUStructChildrenOffset, &field)) {
@@ -354,6 +383,11 @@ std::uintptr_t FindFunctionInClass(std::uintptr_t cls, const char* wanted) {
                 if (!SafeReadPtr(field + kUFieldNextOffset, &next)) break;
                 field = next;
             }
+        }
+        const std::uintptr_t scanned = ScanClassForFunction(cls, wanted);
+        if (scanned >= 0x10000) {
+            if (g_class_fn_cache.size() < 4096) g_class_fn_cache.emplace(cls, scanned);
+            return scanned;
         }
         std::uintptr_t super = 0;
         if (!SafeReadPtr(cls + kUStructSuperOffset, &super)) break;
@@ -1132,11 +1166,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.7.2：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.7.3：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.2, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.3, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
