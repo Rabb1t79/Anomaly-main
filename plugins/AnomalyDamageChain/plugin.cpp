@@ -3,29 +3,31 @@
 // 效果：玩家操控角色命中怪物后，对同一次伤害连续重复判定 N 次（可调），
 //       形成「打一下、连续掉血多次」的链式反应。
 //
-// 机制（只依赖本版游戏实际可用的服务）：
-//   anomaly.ue5.process-event  —— 钩 UObject::ProcessEvent，拿到每次 UFunction 调用的
-//                                  (object, function, parameters)
-//   anomaly.ue5.names          —— 把 function 的 FName 解析成字符串
-//   anomaly.ue5.objects/world  —— 诊断用（对象/世界快照）
-//   anomaly.core               —— 日志（向 Core 写入本插件状态，便于相互印证）
-//   anomaly.storage/scheduler/input/ui —— 配置、任务、热键、界面
+// 线程与重入纪律（很关键：上一版在 ProcessEvent 钩子内调用宿主服务，导致游戏卡死）：
+//   * ProcessEvent 回调里只允许「读内存 + 查本地缓存」，绝不调用任何宿主服务；
+//   * 所有宿主调用（names.resolve_utf8 / storage / scheduler）只在
+//     Update（Game 线程、钩子外）或 Start/Stop/Unload（生命周期线程）执行；
+//   * Draw（Render 线程）只读 Update 预先构建的快照，不做宿主调用、不做文件 I/O。
 //
-// 关于 anomaly.nte.combat：它在主菜单时不可用（依赖 nte.player，世界指针为空），
-// 进世界后才会就绪。它只提供伤害事件（attacker/victim/数值），没有"重新判定"的入口，
-// 所以本插件把它作为可选的状态/印证信号（战斗流=就绪、战斗事件=N），
-// 而真正的重放走 ue5.process-event 拿到可再次调用的 (object, function, parameters)。
+// 为什么重放走 anomaly.ue5.process-event：anomaly.nte.combat 只给事件数据
+// （attacker/victim/数值），不提供「可再次调用」的入口；重放必须拿到
+// (object, function, parameters)。
+//
+// 为什么不用 names.find_utf8：它是 names 服务 v2 才有的字段，本机宿主只有 v1，
+// 反查恒失败（运行时日志 names=0）。改为「resolve_utf8 得到名字后与候选表比对」，
+// 并把解析延迟到 Update，避开钩子重入。
 //
 // 关键布局（game dump 5.6.1-new 证据）：
-//   UObject::NamePrivate         = +0x18（FName index 在 +0）
-//   UObject vtable ProcessEvent  = slot 0x4C (76)
-//   UFunction::ParmsSize         = +0xB6 (182)，uint16
+//   UObject::NamePrivate        = +0x18（FName index 在 +0）
+//   UObject::ClassPrivate       = +0x10
+//   UObject vtable ProcessEvent = slot 0x4C (76)
+//   UFunction::ParmsSize        = +0xB6 (182)，uint16
 //
-// 重放：命中后复制参数区（大小取自 UFunction::ParmsSize），每个 Game tick 重放一次，
-//       天然错开、不叠加同帧多重伤害；replaying 守卫防止无限递归。
-//
-// 诊断：界面「捕获诊断」会实时列出实战中经过 ProcessEvent 的函数名与次数，
-//       若默认候选名未命中，可从该列表直接读出真实的伤害函数名。
+// 伤害入口（来自实战 ProcessEvent 捕获，非猜测）：捕获 203 个函数名里，
+// 只有 ServerActivateGameEffectsWithClassByActor 是真正施加 GameplayEffect 的入口；
+// OnCharacterAttackedCallBack / OnOwningCharacterAttacked / HandleOnHpAttributeChange2 /
+// HandlePlayerCharacterHPChanged 都是通知，重放不扣血。捕获里根本没有 OnDamaged /
+// ReceiveDamage / TakeDamage，旧候选表永远命中不了。
 
 #include "anomaly/sdk/cpp.hpp"
 
@@ -57,6 +59,7 @@ using anomaly::sdk::StringView;
 
 // ---- 布局（dump 证据） ----
 constexpr std::uintptr_t kNamePrivateOffset = 0x18;
+constexpr std::uintptr_t kClassPrivateOffset = 0x10;
 constexpr std::uintptr_t kProcessEventVtableIndex = 76;   // 0x4C
 constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 
@@ -64,48 +67,35 @@ constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 constexpr int kConfVersion = 1;
 constexpr const char* kConfFile = "damage-chain.conf";
 constexpr const char* kLogFile = "damage-chain-capture.txt";
+constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByActor";
 constexpr std::uint32_t kMaxRepeat = 512;
 constexpr std::size_t kMaxParams = 1024;
+constexpr std::size_t kMaxDisplayRows = 12;
 
-// 伤害候选函数名（来自实战 ProcessEvent 捕获 damage-chain-capture.txt，非猜测）。
-//
-// 捕获结论（203 个函数名里与伤害相关的全部条目）：
-//   ServerActivateGameEffectsWithClassByActor   4  ← 真正施加 GameplayEffect 的入口（Server RPC）
-//   OnCharacterAttackedCallBack                 3  ← 等待受击异步任务的回调（通知）
-//   OnOwningCharacterAttacked                   3  ← Boss 逻辑监听（通知）
-//   OnCharacterAttacked_<hash>                  3  ← 蓝图委托签名
-//   HandleOnHpAttributeChange2                  7  ← HP 属性变化通知（通知）
-//   OnRep_HPCurrent / HandlePlayerCharacterHPChanged   ≈ 复制/语音通知（通知）
-//
-// 关键：捕获里**根本没有** OnDamaged / ReceiveDamage / TakeDamage / BPOnTakeDamage，
-// 这就是早期候选表永不命中的原因。能"再判定一次"的只有 GE 施加入口。
-//
-// dump 证据（5.6.1-new/CppSDK/SDK/HTGame_parameters.hpp:2485）：
-//   void AHTAbilityCharacter::ServerActivateGameEffectsWithClassByActor(
-//       const AActor* SourceObj,            // +0x00
-//       const UGameplayEffect* GameplayEffect, // +0x08
-//       const FBufferData& ModifyData,      // +0x10 (0x58)
-//       EBuffEventType BuffEventType,       // +0x68
-//       const FPredictionKey& PredictionKey);// +0x6C (0x10)   ParmsSize=0x80
 constexpr const char* kDefaultDamageNames[] = {
-    "ServerActivateGameEffectsWithClassByActor",  // 主目标：GE 施加（伤害/增益共用，需按 GE 类名过滤）
-    "OnCharacterAttackedCallBack",                // 兜底
-    "OnOwningCharacterAttacked",                  // 兜底
-    "OnCharacterAttacked",                        // 兜底（蓝图委托基名）
-    // 旧候选保留（若某些角色/怪物走另一条路径仍可命中）
+    kGeFunctionName,  // 主目标：真正施加 GameplayEffect 的 Server RPC
+    "OnCharacterAttackedCallBack",
+    "OnOwningCharacterAttacked",
+    "OnCharacterAttacked",
     "OnDamaged",
     "ReceiveDamage",
     "TakeDamage",
     "BPOnTakeDamage",
     "ReceiveOnTakeDamage",
 };
+constexpr std::size_t kDefaultDamageNameCount =
+    sizeof(kDefaultDamageNames) / sizeof(kDefaultDamageNames[0]);
 
 // ServerActivateGameEffectsWithClassByActor 的 GameplayEffect 指针在参数区 +0x08。
+// dump: HTGame_parameters.hpp:2485，ParmsSize 0x80。
 constexpr std::size_t kGeParamOffset = 0x08;
 
-struct CaptureEntry {
-    std::uint32_t name_id{};
-    std::uint32_t count{};
+// name_match 缓存值
+enum : std::uint8_t {
+    kNamePending = 0,
+    kNameMatch = 1,
+    kNameNoMatch = 2,
+    kNameMatchGe = 3,  // 命中且是 GE 施加入口（需要按 GE 类名过滤）
 };
 
 struct PendingReplay {
@@ -114,7 +104,29 @@ struct PendingReplay {
     std::array<std::uint8_t, kMaxParams> params{};
     std::size_t params_size{};
     std::uint32_t remaining{};
+    std::uint32_t ge_class_name_id{};
     bool valid{};
+};
+
+struct DisplayRow {
+    char name[72]{};
+    std::uint32_t count{};
+};
+
+struct DisplaySnapshot {
+    DisplayRow rows[kMaxDisplayRows]{};
+    std::size_t row_count{};
+    char status[512]{};
+    std::uint64_t events{};
+    std::uint64_t matched{};
+    std::uint64_t replayed{};
+    std::uint64_t failed{};
+    std::uint64_t params_rejected{};
+    std::uint64_t ge_skipped{};
+    std::uint64_t combat_events{};
+    int combat_available{};
+    int hook_ready{};
+    int candidate_count{};
 };
 
 struct State {
@@ -122,7 +134,7 @@ struct State {
     int enabled{1};
     std::uint32_t repeat_count{8};
     int capture_enabled{1};
-    int ge_filter{1};  // 仅重放"伤害类" GameplayEffect（按 GE 类名含 damage/dmg/hurt 判断）
+    int ge_filter{1};
 
     // 统计
     std::uint64_t events{};
@@ -130,31 +142,32 @@ struct State {
     std::uint64_t replayed{};
     std::uint64_t failed{};
     std::uint64_t params_rejected{};
-    std::uint64_t ge_skipped{};   // GE 过滤跳过的次数（非伤害类）
-
-    // 战斗流（anomaly.nte.combat，可选；主菜单时可能未就绪，进世界后可用）
-    int combat_available{};
-    std::uint64_t combat_events{};
-    std::uint64_t combat_cursor{};
-
-    // 匹配：不再依赖 names.find_utf8（v2 才有的反查，本机宿主只有 v1，反查恒失败）。
-    // 改为在回调里用 resolve_utf8 得到的字符串与候选表直接比对，按 name_id 缓存结果。
-    std::unordered_map<std::uint32_t, std::uint8_t> name_match;  // 1=命中 2=不命中
-    std::uint32_t resolved_names{};
+    std::uint64_t ge_skipped{};
+    int candidate_count{};
 
     // 重放
     PendingReplay pending;
     int replaying{};
 
-    // 捕获统计
+    // 名称匹配缓存 + 待解析队列（仅 Game 线程访问）
+    std::unordered_map<std::uint32_t, std::uint8_t> name_match;
+    std::vector<std::uint32_t> pending_names;
+
+    // 捕获统计（仅 Game 线程访问）
     std::unordered_map<std::uint32_t, std::uint32_t> capture_counts;
-    std::uint64_t function_cache_size{};
+
+    // 战斗流
+    int combat_available{};
+    std::uint64_t combat_events{};
+    std::uint64_t combat_cursor{};
 
     char status[512]{};
 };
 
 State g_state;
-std::mutex g_mutex;
+std::mutex g_state_mutex;    // 保护 g_state（钩子与 Update/Draw 共享的统计）
+std::mutex g_display_mutex;  // 保护 g_display
+DisplaySnapshot g_display;
 
 const AnomalyUiServiceV1* g_ui{};
 const AnomalyCoreServiceV1* g_core{};
@@ -168,16 +181,25 @@ const AnomalyNteCombatServiceV1* g_combat{};
 AnomalyGenerationHandleV1 g_events_handle{};
 AnomalyGenerationHandleV1 g_hotkey_toggle{};
 
-// function 指针 -> FName index 缓存；name_id -> 字符串缓存
+// 仅 Game 线程使用（Update / Start）
 std::unordered_map<std::uintptr_t, std::uint32_t> g_fn_name_cache;
 std::unordered_map<std::uint32_t, std::string> g_name_cache;
-std::mutex g_name_mutex;  // 保护 g_name_cache（Game/Render 双线程访问）
+
+// 导出：Draw 只置标志，Update 构建内容并调度写入
+std::mutex g_export_mutex;
+std::string g_export_text;
+bool g_export_pending{};
+bool g_export_requested{};
+AnomalyGenerationHandleV1 g_export_task{};
 
 void SetStatus(const char* fmt, ...) {
+    char buffer[512]{};
     va_list ap;
     va_start(ap, fmt);
-    std::vsnprintf(g_state.status, sizeof(g_state.status), fmt, ap);
+    std::vsnprintf(buffer, sizeof(buffer), fmt, ap);
     va_end(ap);
+    std::scoped_lock lock(g_state_mutex);
+    std::memcpy(g_state.status, buffer, sizeof(g_state.status));
 }
 
 bool SafeReadU32(std::uintptr_t address, std::uint32_t* out) {
@@ -210,7 +232,7 @@ bool SafeReadPtr(std::uintptr_t address, std::uintptr_t* out) {
     }
 }
 
-// 解析 UFunction 的 FName index（带缓存）。
+// 只读内存，可在钩子内调用。
 std::uint32_t FunctionNameId(std::uintptr_t function) {
     if (function < 0x10000) return 0;
     auto it = g_fn_name_cache.find(function);
@@ -221,10 +243,17 @@ std::uint32_t FunctionNameId(std::uintptr_t function) {
     return id;
 }
 
-// name_id -> 字符串（带缓存）。
-const char* NameOf(std::uint32_t name_id) {
+// 只读内存，可在钩子内调用。
+std::uint32_t ObjectNameId(std::uintptr_t object) {
+    if (object < 0x10000) return 0;
+    std::uint32_t id = 0;
+    if (!SafeReadU32(object + kNamePrivateOffset, &id)) return 0;
+    return id;
+}
+
+// 只在 Game 线程（Update / Start）调用；绝不从钩子或渲染线程调用。
+const char* ResolveName(std::uint32_t name_id) {
     if (name_id == 0 || g_names == nullptr || g_names->resolve_utf8 == nullptr) return "";
-    std::scoped_lock lock(g_name_mutex);
     auto it = g_name_cache.find(name_id);
     if (it != g_name_cache.end()) return it->second.c_str();
     if (g_name_cache.size() > 8192) return "";
@@ -234,33 +263,8 @@ const char* NameOf(std::uint32_t name_id) {
         g_name_cache.emplace(name_id, std::string());
         return "";
     }
-    std::string s(buf);  // 宿主保证 null 结尾
-    auto inserted = g_name_cache.emplace(name_id, std::move(s));
+    auto inserted = g_name_cache.emplace(name_id, std::string(buf));
     return inserted.first->second.c_str();
-}
-
-// 候选名精确匹配（大小写敏感，与 UE FName 一致）。结果按 name_id 缓存，避免重复解析。
-bool NameEquals(std::uint32_t name_id, const char* wanted) {
-    if (name_id == 0 || wanted == nullptr) return false;
-    const char* name = NameOf(name_id);
-    return name != nullptr && name[0] != '\0' && std::strcmp(name, wanted) == 0;
-}
-
-bool IsDamageName(std::uint32_t name_id) {
-    if (name_id == 0) return false;
-    auto it = g_state.name_match.find(name_id);
-    if (it != g_state.name_match.end()) return it->second == 1;
-    bool match = false;
-    for (const char* wanted : kDefaultDamageNames) {
-        if (NameEquals(name_id, wanted)) {
-            match = true;
-            break;
-        }
-    }
-    if (g_state.name_match.size() < 65536) {
-        g_state.name_match.emplace(name_id, match ? 1 : 2);
-    }
-    return match;
 }
 
 bool ContainsIgnoreCase(const char* text, const char* needle) {
@@ -281,26 +285,6 @@ bool ContainsIgnoreCase(const char* text, const char* needle) {
     return false;
 }
 
-// 判断参数区 +0x08 处的 GameplayEffect 是否"伤害类"。
-// UObject 布局：Class @ +0x10，NamePrivate(FName index) @ +0x18（dump 核实）。
-bool IsDamageGameplayEffect(const void* parameters) {
-    if (parameters == nullptr) return false;
-    std::uintptr_t ge = 0;
-    if (!SafeReadPtr(reinterpret_cast<std::uintptr_t>(parameters) + kGeParamOffset, &ge) ||
-        ge < 0x10000) {
-        return false;
-    }
-    std::uintptr_t cls = 0;
-    if (!SafeReadPtr(ge + 0x10, &cls) || cls < 0x10000) return false;
-    std::uint32_t name_id = 0;
-    if (!SafeReadU32(cls + 0x18, &name_id) || name_id == 0) return false;
-    const char* name = NameOf(name_id);
-    if (name == nullptr || name[0] == '\0') return false;
-    return ContainsIgnoreCase(name, "damage") || ContainsIgnoreCase(name, "dmg") ||
-           ContainsIgnoreCase(name, "hurt");
-}
-
-// 通过 UObject vtable 槽位调用 ProcessEvent（x64: rcx=this, rdx=Function, r8=Parms）。
 bool InvokeProcessEvent(std::uintptr_t object, std::uintptr_t function, void* parameters) {
     if (object < 0x10000 || function < 0x10000) return false;
     std::uintptr_t vtable = 0;
@@ -319,91 +303,135 @@ bool InvokeProcessEvent(std::uintptr_t object, std::uintptr_t function, void* pa
     }
 }
 
-void CaptureName(std::uint32_t name_id) {
-    if (!g_state.capture_enabled || name_id == 0) return;
-    auto it = g_state.capture_counts.find(name_id);
-    if (it == g_state.capture_counts.end()) {
-        if (g_state.capture_counts.size() < 4096) g_state.capture_counts.emplace(name_id, 1);
-    } else if (it->second < 0xFFFFFFFFu) {
-        ++it->second;
-    }
-}
-
+// ---------------------------------------------------------------------------
+// ProcessEvent 回调：只读内存 + 本地缓存，不调用任何宿主服务。
+// ---------------------------------------------------------------------------
 void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t function,
                                  void* parameters) {
     if (!g_state.enabled) return;
-    const std::uint32_t name_id = FunctionNameId(function);
+    std::scoped_lock lock(g_state_mutex);
+    ++g_state.events;
 
-    {
-        std::scoped_lock lock(g_mutex);
-        ++g_state.events;
-        CaptureName(name_id);
+    const std::uint32_t name_id = FunctionNameId(function);
+    if (name_id == 0) return;
+
+    if (g_state.capture_enabled && g_state.capture_counts.size() < 4096) {
+        auto it = g_state.capture_counts.find(name_id);
+        if (it == g_state.capture_counts.end()) {
+            g_state.capture_counts.emplace(name_id, 1);
+        } else if (it->second < 0xFFFFFFFFu) {
+            ++it->second;
+        }
     }
 
-    if (!IsDamageName(name_id)) return;
-    if (g_state.replaying) return;
-    if (g_state.pending.valid) return;  // 已有一条链在跑
-
-    // GE 施加入口同时承载伤害与增益/治疗等，只对"伤害类" GE 重放，避免把 buff 也乘 N 倍。
-    if (g_state.ge_filter &&
-        NameEquals(name_id, "ServerActivateGameEffectsWithClassByActor") &&
-        !IsDamageGameplayEffect(parameters)) {
-        std::scoped_lock lock(g_mutex);
-        ++g_state.ge_skipped;
+    auto cached = g_state.name_match.find(name_id);
+    if (cached == g_state.name_match.end()) {
+        // 首次见到：排队等 Update 解析，本事件丢弃（下一次攻击起可匹配）。
+        if (g_state.pending_names.size() < 8192) g_state.pending_names.push_back(name_id);
+        g_state.name_match.emplace(name_id, kNamePending);
         return;
     }
+    if (cached->second != kNameMatch && cached->second != kNameMatchGe) return;
+    if (g_state.replaying || g_state.pending.valid) return;
 
     std::uint16_t parms_size = 0;
     if (parameters == nullptr || !SafeReadU16(function + kFunctionParmsSizeOffset, &parms_size) ||
         parms_size == 0 || parms_size > kMaxParams) {
-        std::scoped_lock lock(g_mutex);
         ++g_state.params_rejected;
-        SetStatus("命中 %s，但参数区不可用（ParmsSize=%u）", NameOf(name_id),
-                  static_cast<unsigned>(parms_size));
         return;
     }
 
-    {
-        std::scoped_lock lock(g_mutex);
-        ++g_state.matched;
-        g_state.pending.object = object;
-        g_state.pending.function = function;
-        g_state.pending.params_size = parms_size;
-        std::memcpy(g_state.pending.params.data(), parameters, parms_size);
-        g_state.pending.remaining = g_state.repeat_count;
-        g_state.pending.valid = true;
-        SetStatus("命中 %s：开始重放 %u 次", NameOf(name_id), g_state.repeat_count);
-    }
+    ++g_state.matched;
+    g_state.pending.object = object;
+    g_state.pending.function = function;
+    g_state.pending.params_size = parms_size;
+    std::memcpy(g_state.pending.params.data(), parameters, parms_size);
+    g_state.pending.remaining = g_state.repeat_count;
+    g_state.pending.ge_class_name_id = 0;
+    g_state.pending.valid = true;
 
-    // 向 Core 写入一条可相互印证的事件
-    if (g_core != nullptr && g_core->log != nullptr) {
-        char line[192]{};
-        std::snprintf(line, sizeof(line), "damage-chain: hit %s, replay %u",
-                      NameOf(name_id), g_state.repeat_count);
-        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(line));
+    // 记录 GE 类名 id（只读内存）；类名过滤推迟到 PumpReplay（Game 线程）。
+    if (cached->second == kNameMatchGe && g_state.ge_filter) {
+        std::uintptr_t ge = 0;
+        if (SafeReadPtr(reinterpret_cast<std::uintptr_t>(parameters) + kGeParamOffset, &ge) &&
+            ge >= 0x10000) {
+            std::uintptr_t cls = 0;
+            if (SafeReadPtr(ge + kClassPrivateOffset, &cls) && cls >= 0x10000) {
+                g_state.pending.ge_class_name_id = ObjectNameId(cls);
+            }
+        }
     }
 }
 
-// 每 tick 重放一次（错开，避免同帧多重伤害）。
+// ---------------------------------------------------------------------------
+// Update：Game 线程，钩子之外。所有宿主调用集中在这里。
+// ---------------------------------------------------------------------------
+void ResolvePendingNames() {
+    for (std::size_t round = 0; round < 4; ++round) {
+        std::vector<std::uint32_t> batch;
+        {
+            std::scoped_lock lock(g_state_mutex);
+            if (g_state.pending_names.empty()) return;
+            batch.swap(g_state.pending_names);
+        }
+        for (const std::uint32_t name_id : batch) {
+            const char* name = ResolveName(name_id);
+            std::uint8_t result = kNameNoMatch;
+            if (name != nullptr && name[0] != '\0') {
+                for (const char* wanted : kDefaultDamageNames) {
+                    if (std::strcmp(name, wanted) == 0) {
+                        result = (std::strcmp(wanted, kGeFunctionName) == 0) ? kNameMatchGe
+                                                                              : kNameMatch;
+                        break;
+                    }
+                }
+            }
+            std::scoped_lock lock(g_state_mutex);
+            g_state.name_match[name_id] = result;
+        }
+    }
+}
+
+// 判断 pending 里的 GE 是否伤害类（Game 线程调用）。
+bool PendingGeIsDamage() {
+    const std::uint32_t id = g_state.pending.ge_class_name_id;
+    if (id == 0) return true;  // 读不到类名就不过滤，交给用户开关决定
+    const char* name = ResolveName(id);
+    if (name == nullptr || name[0] == '\0') return true;
+    return ContainsIgnoreCase(name, "damage") || ContainsIgnoreCase(name, "dmg") ||
+           ContainsIgnoreCase(name, "hurt");
+}
+
 void PumpReplay() {
     PendingReplay local;
     {
-        std::scoped_lock lock(g_mutex);
+        std::scoped_lock lock(g_state_mutex);
         if (!g_state.pending.valid || g_state.pending.remaining == 0) return;
         local = g_state.pending;
+    }
+    // 宿主调用（ResolveName）必须在锁外，避免持锁等待宿主。
+    if (local.ge_class_name_id != 0 && g_state.ge_filter && !PendingGeIsDamage()) {
+        std::scoped_lock lock(g_state_mutex);
+        ++g_state.ge_skipped;
+        g_state.pending.valid = false;
+        g_state.pending.remaining = 0;
+        return;
+    }
+    {
+        std::scoped_lock lock(g_state_mutex);
+        if (!g_state.pending.valid || g_state.pending.remaining == 0) return;
         --g_state.pending.remaining;
         g_state.replaying = 1;
     }
     const bool ok = InvokeProcessEvent(local.object, local.function, local.params.data());
     {
-        std::scoped_lock lock(g_mutex);
+        std::scoped_lock lock(g_state_mutex);
         g_state.replaying = 0;
         if (ok) {
             ++g_state.replayed;
         } else {
             ++g_state.failed;
             g_state.pending.remaining = 0;
-            SetStatus("重放失败（vtable/参数失效）");
         }
         if (g_state.pending.remaining == 0) {
             g_state.pending.valid = false;
@@ -413,36 +441,145 @@ void PumpReplay() {
     }
 }
 
-// 战斗流：anomaly.nte.combat 在主菜单时未就绪（nte.player 世界指针为空），进世界后可用。
-// 这里只做状态回显与计数，用于确认伤害流是否真的在跑。
+// 战斗流：anomaly.nte.combat 在主菜单时未就绪，进世界后可用。只做状态回显与计数。
 void PollCombat() {
-    if (g_combat == nullptr) {
-        g_state.combat_available = 0;
-        return;
-    }
-    if (g_combat->latest_damage_sequence == nullptr || g_combat->next_damage_event == nullptr) {
+    if (g_combat == nullptr || g_combat->latest_damage_sequence == nullptr ||
+        g_combat->next_damage_event == nullptr) {
+        std::scoped_lock lock(g_state_mutex);
         g_state.combat_available = 0;
         return;
     }
     const std::uint64_t latest = g_combat->latest_damage_sequence(g_combat->user);
     if (latest == 0) return;
-    g_state.combat_available = 1;
+    std::uint64_t cursor = 0;
+    {
+        std::scoped_lock lock(g_state_mutex);
+        g_state.combat_available = 1;
+        cursor = g_state.combat_cursor;
+    }
     for (int budget = 0; budget < 32; ++budget) {
-        AnomalyNteDamageEventV1 ev{};
-        ev.struct_size = sizeof(ev);
-        const auto status = g_combat->next_damage_event(g_combat->user, g_state.combat_cursor, &ev);
-        if (status.code != ANOMALY_STATUS_V1_OK) break;
-        g_state.combat_cursor = ev.sequence;
+        AnomalyNteDamageEventV1 event{};
+        event.struct_size = sizeof(event);
+        if (g_combat->next_damage_event(g_combat->user, cursor, &event).code !=
+            ANOMALY_STATUS_V1_OK) {
+            break;
+        }
+        cursor = event.sequence;
+        std::scoped_lock lock(g_state_mutex);
+        g_state.combat_cursor = cursor;
         ++g_state.combat_events;
+    }
+}
+
+// 构建 Draw 用的快照（Game 线程）。
+void BuildDisplay() {
+    DisplaySnapshot snapshot;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> rows;
+    {
+        std::scoped_lock lock(g_state_mutex);
+        snapshot.events = g_state.events;
+        snapshot.matched = g_state.matched;
+        snapshot.replayed = g_state.replayed;
+        snapshot.failed = g_state.failed;
+        snapshot.params_rejected = g_state.params_rejected;
+        snapshot.ge_skipped = g_state.ge_skipped;
+        snapshot.combat_events = g_state.combat_events;
+        snapshot.combat_available = g_state.combat_available;
+        snapshot.candidate_count = g_state.candidate_count;
+        std::memcpy(snapshot.status, g_state.status, sizeof(snapshot.status));
+        rows.reserve(g_state.capture_counts.size());
+        for (const auto& kv : g_state.capture_counts) rows.emplace_back(kv.first, kv.second);
+    }
+    std::sort(rows.begin(), rows.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    snapshot.hook_ready = g_events_handle.id != 0 ? 1 : 0;
+    for (const auto& row : rows) {
+        if (snapshot.row_count >= kMaxDisplayRows) break;
+        const char* name = ResolveName(row.first);
+        if (name == nullptr || name[0] == '\0') continue;
+        DisplayRow& out = snapshot.rows[snapshot.row_count++];
+        std::snprintf(out.name, sizeof(out.name), "%s", name);
+        out.count = row.second;
+    }
+    std::scoped_lock lock(g_display_mutex);
+    g_display = snapshot;
+}
+
+// 导出：Update 构建文本并调度到 worker 线程写盘。
+void ANOMALY_CALL ExportTaskRun(void*, AnomalyGenerationHandleV1) {
+    std::string text;
+    {
+        std::scoped_lock lock(g_export_mutex);
+        if (!g_export_pending) return;
+        text.swap(g_export_text);
+        g_export_pending = false;
+    }
+    if (g_storage == nullptr || g_storage->write_atomic == nullptr) return;
+    AnomalyByteSpanV1 span{};
+    span.data = reinterpret_cast<const std::uint8_t*>(text.data());
+    span.size = text.size();
+    g_storage->write_atomic(g_storage->user, StringView(kLogFile), span);
+}
+
+void ServiceExport() {
+    bool requested = false;
+    {
+        std::scoped_lock lock(g_export_mutex);
+        requested = g_export_requested;
+        if (requested) g_export_requested = false;
+    }
+    if (!requested) return;
+    if (g_storage == nullptr || g_storage->write_atomic == nullptr) {
+        SetStatus("storage 不可用，无法导出");
+        return;
+    }
+    if (g_scheduler == nullptr || g_scheduler->schedule == nullptr) {
+        SetStatus("scheduler 不可用，无法导出");
+        return;
+    }
+    std::string text;
+    text.reserve(4096);
+    text += "Damage Chain Reaction - ProcessEvent capture\n";
+    {
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> rows;
+        {
+            std::scoped_lock lock(g_state_mutex);
+            rows.reserve(g_state.capture_counts.size());
+            for (const auto& kv : g_state.capture_counts) rows.emplace_back(kv.first, kv.second);
+        }
+        std::sort(rows.begin(), rows.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        for (const auto& row : rows) {
+            const char* name = ResolveName(row.first);
+            if (name == nullptr || name[0] == '\0') continue;
+            char line[320]{};
+            std::snprintf(line, sizeof(line), "%-56s %u\n", name, row.second);
+            text += line;
+        }
+    }
+    {
+        std::scoped_lock lock(g_export_mutex);
+        g_export_text.swap(text);
+        g_export_pending = true;
+    }
+    AnomalyGenerationHandleV1 task{};
+    if (g_scheduler->schedule(g_scheduler->user, 0, &ExportTaskRun, nullptr, &task).code ==
+        ANOMALY_STATUS_V1_OK) {
+        g_export_task = task;
+        SetStatus("已提交导出任务（%s）", kLogFile);
+    } else {
+        std::scoped_lock lock(g_export_mutex);
+        g_export_pending = false;
+        SetStatus("调度导出失败");
     }
 }
 
 // --------------------------- 配置 ------------------------------------------
 std::size_t FormatConfig(char* text, std::size_t capacity) {
-    const int n = std::snprintf(text, capacity,
-                                "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\n",
-                                kConfVersion, g_state.enabled, g_state.repeat_count,
-                                g_state.capture_enabled, g_state.ge_filter);
+    const int n = std::snprintf(
+        text, capacity,
+        "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\n", kConfVersion,
+        g_state.enabled, g_state.repeat_count, g_state.capture_enabled, g_state.ge_filter);
     if (n <= 0) return 0;
     const std::size_t size = static_cast<std::size_t>(n);
     return size < capacity ? size : capacity - 1;
@@ -466,7 +603,8 @@ void LoadConfig() {
     span.size = sizeof(text) - 1;
     std::size_t size = span.size;
     if (g_storage->read(g_storage->user, StringView(kConfFile), span, &size).code !=
-            ANOMALY_STATUS_V1_OK || size == 0) {
+            ANOMALY_STATUS_V1_OK ||
+        size == 0) {
         return;
     }
     text[size < sizeof(text) ? size : sizeof(text) - 1] = '\0';
@@ -480,14 +618,17 @@ void LoadConfig() {
             *eq = '\0';
             const char* key = line;
             const char* value = eq + 1;
-            if (std::strcmp(key, "conf_version") == 0) version = std::atoi(value);
-            else if (std::strcmp(key, "enabled") == 0) g_state.enabled = std::atoi(value) != 0;
-            else if (std::strcmp(key, "repeat_count") == 0)
+            if (std::strcmp(key, "conf_version") == 0) {
+                version = std::atoi(value);
+            } else if (std::strcmp(key, "enabled") == 0) {
+                g_state.enabled = std::atoi(value) != 0;
+            } else if (std::strcmp(key, "repeat_count") == 0) {
                 g_state.repeat_count = static_cast<std::uint32_t>(std::strtoul(value, nullptr, 10));
-            else if (std::strcmp(key, "capture") == 0)
+            } else if (std::strcmp(key, "capture") == 0) {
                 g_state.capture_enabled = std::atoi(value) != 0;
-            else if (std::strcmp(key, "ge_filter") == 0)
+            } else if (std::strcmp(key, "ge_filter") == 0) {
                 g_state.ge_filter = std::atoi(value) != 0;
+            }
         }
         line = (next != nullptr) ? next + 1 : nullptr;
     }
@@ -495,76 +636,9 @@ void LoadConfig() {
         g_state.enabled = 1;
         g_state.repeat_count = 8;
         g_state.capture_enabled = 1;
+        g_state.ge_filter = 1;
     }
     if (g_state.repeat_count > kMaxRepeat) g_state.repeat_count = kMaxRepeat;
-}
-
-// --------------------------- 捕获诊断 --------------------------------------
-// 注意：框架禁止在 Game/Render 回调里做同步 state I/O
-// （scoped_platform_services: "plugin state I/O is unavailable from game or render callbacks"）。
-// 导出按钮在 Draw（Render 域）触发，因此必须经 anomaly.scheduler 投递到 worker 线程再写。
-std::mutex g_export_mutex;
-std::string g_export_text;
-bool g_export_pending{};
-AnomalyGenerationHandleV1 g_export_task{};
-
-void ANOMALY_CALL ExportTaskRun(void*, AnomalyGenerationHandleV1) {
-    std::string text;
-    {
-        std::scoped_lock lock(g_export_mutex);
-        if (!g_export_pending) return;
-        text.swap(g_export_text);
-        g_export_pending = false;
-    }
-    if (g_storage == nullptr || g_storage->write_atomic == nullptr) return;
-    AnomalyByteSpanV1 span{};
-    span.data = reinterpret_cast<const std::uint8_t*>(text.data());
-    span.size = text.size();
-    g_storage->write_atomic(g_storage->user, StringView(kLogFile), span);
-}
-
-void ExportCapture() {
-    if (g_storage == nullptr || g_storage->write_atomic == nullptr) {
-        SetStatus("storage 不可用，无法导出");
-        return;
-    }
-    if (g_scheduler == nullptr || g_scheduler->schedule == nullptr) {
-        SetStatus("scheduler 不可用，无法导出");
-        return;
-    }
-    std::string text;
-    text.reserve(4096);
-    text += "Damage Chain Reaction - ProcessEvent capture\n";
-    {
-        std::scoped_lock lock(g_mutex);
-        std::vector<CaptureEntry> rows;
-        rows.reserve(g_state.capture_counts.size());
-        for (const auto& kv : g_state.capture_counts) rows.push_back({kv.first, kv.second});
-        std::sort(rows.begin(), rows.end(),
-                  [](const CaptureEntry& a, const CaptureEntry& b) { return a.count > b.count; });
-        for (const auto& r : rows) {
-            const char* name = NameOf(r.name_id);
-            if (name == nullptr || name[0] == '\0') continue;
-            char line[320]{};
-            std::snprintf(line, sizeof(line), "%-56s %u\n", name, r.count);
-            text += line;
-        }
-    }
-    {
-        std::scoped_lock lock(g_export_mutex);
-        g_export_text.swap(text);
-        g_export_pending = true;
-    }
-    AnomalyGenerationHandleV1 task{};
-    const auto status = g_scheduler->schedule(g_scheduler->user, 0, &ExportTaskRun, nullptr, &task);
-    if (status.code == ANOMALY_STATUS_V1_OK) {
-        g_export_task = task;
-        SetStatus("已提交导出任务（%s）", kLogFile);
-    } else {
-        std::scoped_lock lock(g_export_mutex);
-        g_export_pending = false;
-        SetStatus("调度导出失败（%u）", status.code);
-    }
 }
 
 // --------------------------- 热键 -------------------------------------------
@@ -591,12 +665,17 @@ void ReleaseHotkey() {
     g_hotkey_toggle = AnomalyGenerationHandleV1{};
 }
 
-// --------------------------- 绘制 -------------------------------------------
+// --------------------------- 绘制（Render 线程，只读快照） -------------------
 void Text(const AnomalyUiServiceV1* ui, const char* s) {
     if (HAS(ui, text) && s != nullptr) ui->text(ui->user, StringView(s));
 }
 
 void DrawMain(const AnomalyUiServiceV1* ui) {
+    DisplaySnapshot snapshot;
+    {
+        std::scoped_lock lock(g_display_mutex);
+        snapshot = g_display;
+    }
     char line[320]{};
 
     if (HAS(ui, checkbox)) ui->checkbox(ui->user, StringView("启用"), &g_state.enabled);
@@ -615,60 +694,44 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
     }
 
     std::snprintf(line, sizeof(line), "Hook=%s 事件=%llu 命中=%llu 重放=%llu 失败=%llu",
-                  g_events_handle.id != 0 ? "就绪" : "未就绪",
-                  static_cast<unsigned long long>(g_state.events),
-                  static_cast<unsigned long long>(g_state.matched),
-                  static_cast<unsigned long long>(g_state.replayed),
-                  static_cast<unsigned long long>(g_state.failed));
+                  snapshot.hook_ready ? "就绪" : "未就绪",
+                  static_cast<unsigned long long>(snapshot.events),
+                  static_cast<unsigned long long>(snapshot.matched),
+                  static_cast<unsigned long long>(snapshot.replayed),
+                  static_cast<unsigned long long>(snapshot.failed));
     Text(ui, line);
 
-    std::snprintf(line, sizeof(line), "候选名=%u  参数拒绝=%llu",
-                  g_state.resolved_names,
-                  static_cast<unsigned long long>(g_state.params_rejected));
+    std::snprintf(line, sizeof(line), "候选名=%d 参数拒绝=%llu GE跳过=%llu",
+                  snapshot.candidate_count,
+                  static_cast<unsigned long long>(snapshot.params_rejected),
+                  static_cast<unsigned long long>(snapshot.ge_skipped));
     Text(ui, line);
 
     std::snprintf(line, sizeof(line), "战斗流=%s 战斗事件=%llu",
-                  g_state.combat_available ? "就绪" : "未就绪",
-                  static_cast<unsigned long long>(g_state.combat_events));
+                  snapshot.combat_available ? "就绪" : "未就绪",
+                  static_cast<unsigned long long>(snapshot.combat_events));
     Text(ui, line);
 
     if (HAS(ui, checkbox))
         ui->checkbox(ui->user, StringView("仅重放伤害类 GE"), &g_state.ge_filter);
-    if (g_state.ge_skipped != 0) {
-        std::snprintf(line, sizeof(line), "GE 过滤跳过=%llu",
-                      static_cast<unsigned long long>(g_state.ge_skipped));
-        Text(ui, line);
-    }
 
-    if (g_state.status[0] != '\0') Text(ui, g_state.status);
+    if (snapshot.status[0] != '\0') Text(ui, snapshot.status);
 
     if (HAS(ui, separator)) ui->separator(ui->user);
 
     if (HAS(ui, checkbox))
         ui->checkbox(ui->user, StringView("捕获诊断（列出实战函数名）"), &g_state.capture_enabled);
     if (HAS(ui, button) && ui->button(ui->user, StringView("导出捕获日志##dc-exp"), 150.0F, 0.0F)) {
-        ExportCapture();
+        std::scoped_lock lock(g_export_mutex);
+        g_export_requested = true;
     }
 
-    // 列出出现次数最多的函数名（帮助定位真实伤害函数）
-    std::vector<CaptureEntry> rows;
-    {
-        std::scoped_lock lock(g_mutex);
-        rows.reserve(g_state.capture_counts.size());
-        for (const auto& kv : g_state.capture_counts) rows.push_back({kv.first, kv.second});
-    }
-    std::sort(rows.begin(), rows.end(),
-              [](const CaptureEntry& a, const CaptureEntry& b) { return a.count > b.count; });
-    std::size_t shown = 0;
-    for (const auto& r : rows) {
-        if (shown >= 12) break;
-        const char* name = NameOf(r.name_id);
-        if (name == nullptr || name[0] == '\0') continue;
-        std::snprintf(line, sizeof(line), "%s  (%u)", name, r.count);
+    for (std::size_t i = 0; i < snapshot.row_count; ++i) {
+        std::snprintf(line, sizeof(line), "%s  (%u)", snapshot.rows[i].name,
+                      snapshot.rows[i].count);
         Text(ui, line);
-        ++shown;
     }
-    if (rows.empty()) Text(ui, "（尚无捕获）");
+    if (snapshot.row_count == 0) Text(ui, "（尚无捕获）");
 }
 
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui_v1) {
@@ -716,13 +779,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     LoadConfig();
     RegisterHotkey();
 
-    // 候选名不预解析：本机宿主 names 只有 v1（无 find_utf8），反查恒失败。
-    // 改为在 ProcessEvent 回调里用 resolve_utf8 得到的字符串精确比对（见 IsDamageName）。
-    const bool has_resolver =
-        g_names != nullptr && g_names->resolve_utf8 != nullptr;
-    g_state.resolved_names = has_resolver
-        ? static_cast<std::uint32_t>(sizeof(kDefaultDamageNames) / sizeof(kDefaultDamageNames[0]))
-        : 0u;
+    g_state.candidate_count = static_cast<int>(kDefaultDamageNameCount);
 
     if (g_process_event != nullptr && g_process_event->subscribe != nullptr &&
         g_events_handle.id == 0) {
@@ -730,32 +787,35 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载：候选名 %u 个，Hook=%s", g_state.resolved_names,
+    SetStatus("已加载：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
-        char line[192]{};
-        std::snprintf(line, sizeof(line), "damage-chain: start, names=%u hook=%d",
-                      g_state.resolved_names, g_events_handle.id != 0 ? 1 : 0);
-        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(line));
+        char text[192]{};
+        std::snprintf(text, sizeof(text), "damage-chain: start, candidates=%d hook=%d",
+                      g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0);
+        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     return anomaly::sdk::Ok();
 }
 
-AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
-    {
-        std::scoped_lock lock(g_mutex);
-        g_state.pending.valid = false;
-        g_state.pending.remaining = 0;
-    }
+void CancelExportTask() {
     if (g_scheduler != nullptr && g_scheduler->cancel != nullptr && g_export_task.id != 0) {
         g_scheduler->cancel(g_scheduler->user, g_export_task);
         g_export_task = AnomalyGenerationHandleV1{};
     }
+    std::scoped_lock lock(g_export_mutex);
+    g_export_pending = false;
+    g_export_requested = false;
+    g_export_text.clear();
+}
+
+AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     {
-        std::scoped_lock lock(g_export_mutex);
-        g_export_pending = false;
-        g_export_text.clear();
+        std::scoped_lock lock(g_state_mutex);
+        g_state.pending.valid = false;
+        g_state.pending.remaining = 0;
     }
+    CancelExportTask();
     if (g_process_event != nullptr && g_process_event->unsubscribe != nullptr &&
         g_events_handle.id != 0) {
         g_process_event->unsubscribe(g_process_event->user, g_events_handle);
@@ -767,15 +827,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
 }
 
 void ANOMALY_CALL Unload(void*) {
-    if (g_scheduler != nullptr && g_scheduler->cancel != nullptr && g_export_task.id != 0) {
-        g_scheduler->cancel(g_scheduler->user, g_export_task);
-        g_export_task = AnomalyGenerationHandleV1{};
-    }
-    {
-        std::scoped_lock lock(g_export_mutex);
-        g_export_pending = false;
-        g_export_text.clear();
-    }
+    CancelExportTask();
     if (g_process_event != nullptr && g_process_event->unsubscribe != nullptr &&
         g_events_handle.id != 0) {
         g_process_event->unsubscribe(g_process_event->user, g_events_handle);
@@ -796,8 +848,15 @@ void ANOMALY_CALL Unload(void*) {
 }
 
 void ANOMALY_CALL Update(void*, double) {
-    PollCombat();
+    ResolvePendingNames();
+    ServiceExport();
     PumpReplay();
+    PollCombat();
+
+    // 每 ~30 tick 刷新一次显示快照，控制排序/解析开销；首帧也构建一次。
+    static std::uint32_t tick = 0;
+    ++tick;
+    if (tick == 1u || (tick % 30u) == 0u) BuildDisplay();
 }
 
 }  // namespace
