@@ -1201,9 +1201,9 @@ bool ConsumeHostUiManagementExpansionRequest() noexcept {
 }
 
 bool HostUiMenusCaptureMouse() noexcept {
-    // The framework menu owns the cursor while expanded. A registered window with
-    // NO_COLLAPSE can remain independently open, so keep overlay mouse capture
-    // active for that window even when Insert folds the rest of Anomaly.
+    // The framework menu owns the cursor while expanded. A window explicitly
+    // marked KEEP_VISIBLE_WHEN_MENUS_COLLAPSED also keeps overlay mouse capture
+    // active when Insert folds the rest of Anomaly.
     return !g_menus_collapsed.load() ||
         g_host_independent_window_capture.load(std::memory_order_acquire);
 }
