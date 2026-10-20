@@ -12,6 +12,9 @@ namespace {
 using anomaly::sdk::Host;
 using anomaly::sdk::StringView;
 
+// ImGui Cond_FirstUseEver：窗口尺寸只在首次出现时应用。
+constexpr std::uint32_t kCondFirstUseEver = 4u;
+
 // ---- 服务 ----
 const AnomalyHostApiV1* g_host{};
 const AnomalyCoreServiceV1* g_core{};
@@ -399,52 +402,54 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
     if (g_conf.enabled != 0) Pump();
 }
 
-void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) noexcept {
-    if (ui == nullptr) ui = g_ui;
-    if (ui == nullptr) return;
-    // 生命周期：只强制要求 begin/end/text 这三个必需方法。
-    // input_uint32 / checkbox 属可选，服务表里可能没有，不能因为它们缺失就整窗不画。
-    if (ui->begin_window == nullptr || ui->end_window == nullptr || ui->text == nullptr) {
-        return;
-    }
-    if (ui->struct_size < offsetof(AnomalyUiServiceV1, end_window) +
-                              sizeof(ui->end_window)) {
-        return;
-    }
-    if (ui->begin_window(ui->user, anomaly::sdk::StringView("Damage Chain Reaction"),
-                         nullptr, 0u) == 0) {
-        return;
+#define HAS(service, member) \
+    ((service) != nullptr && (service)->member != nullptr)
+
+void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui_v1) noexcept {
+    const AnomalyUiServiceV1* ui = (ui_v1 != nullptr) ? ui_v1 : g_ui;
+    if (!HAS(ui, begin_window) || !HAS(ui, end_window)) return;
+
+    if (HAS(ui, set_next_window_size)) {
+        ui->set_next_window_size(ui->user, 612.0F, 172.0F, kCondFirstUseEver);
     }
 
-    char buf[192]{};
-    std::snprintf(buf, sizeof(buf), "状态: %s",
-                  g_hook_handle.id != 0 ? (g_armed ? "循环中" : "已挂钩") : "等待挂钩");
-    ui->text(ui->user, anomaly::sdk::StringView(buf));
+    // 生命周期：end_window 必须无条件调用，即使 begin_window 返回 0，
+    // 否则框架的 UI 栈不平衡，后续帧会失效。
+    int open = 1;
+    if (ui->begin_window(ui->user, anomaly::sdk::StringView("倍攻连锁反应"), &open, 0u) != 0) {
+        char buf[192]{};
 
-    std::uint32_t rate = static_cast<std::uint32_t>(g_conf.rate > 0 ? g_conf.rate : 1);
-    if (ui->input_uint32 != nullptr &&
-        ui->input_uint32(ui->user, anomaly::sdk::StringView("每秒次数（速率）"), &rate, 1u,
-                         5u) != 0) {
-        if (rate < 1u) rate = 1u;
-        if (rate > 120u) rate = 120u;
-        g_conf.rate = static_cast<int>(rate);
-        g_period_ms = 1000.0 / static_cast<double>(rate);
+        int enabled = g_conf.enabled;
+        if (HAS(ui, checkbox) &&
+            ui->checkbox(ui->user, anomaly::sdk::StringView("倍攻连锁反应"), &enabled) != 0) {
+            g_conf.enabled = enabled;
+        }
+
+        int chain = g_conf.enabled;
+        if (HAS(ui, checkbox) &&
+            ui->checkbox(ui->user, anomaly::sdk::StringView("启用"), &chain) != 0) {
+            g_conf.enabled = chain;
+        }
+
+        std::uint32_t rate = static_cast<std::uint32_t>(g_conf.rate > 0 ? g_conf.rate : 1);
+        if (HAS(ui, input_uint32) &&
+            ui->input_uint32(ui->user, anomaly::sdk::StringView("伤害重复次数"), &rate, 1u,
+                             10u) != 0) {
+            if (rate < 1u) rate = 1u;
+            if (rate > 200u) rate = 200u;
+            g_conf.rate = static_cast<int>(rate);
+            g_period_ms = 1000.0 / static_cast<double>(rate);
+        }
+
+        std::snprintf(buf, sizeof(buf), "绑定=%s  触发=%s",
+                      g_hook_handle.id != 0 ? "就绪" : "未就绪",
+                      g_armed ? "战斗中" : "待机");
+        if (HAS(ui, text)) ui->text(ui->user, anomaly::sdk::StringView(buf));
+
+        std::snprintf(buf, sizeof(buf), "伤害=%llu  失败=%llu  重放=%llu", g_hits, g_faults,
+                      g_pulses);
+        if (HAS(ui, text)) ui->text(ui->user, anomaly::sdk::StringView(buf));
     }
-
-    std::snprintf(buf, sizeof(buf), "速率: %d 次/秒    间隔: %.1f ms", g_conf.rate,
-                  g_period_ms);
-    ui->text(ui->user, anomaly::sdk::StringView(buf));
-
-    int enabled = g_conf.enabled;
-    if (ui->checkbox != nullptr &&
-        ui->checkbox(ui->user, anomaly::sdk::StringView("启用多段伤害"), &enabled) != 0) {
-        g_conf.enabled = enabled;
-    }
-
-    std::snprintf(buf, sizeof(buf), "命中: %llu    已补发: %llu    失效停止: %llu", g_hits,
-                  g_pulses, g_faults);
-    ui->text(ui->user, anomaly::sdk::StringView(buf));
-
     ui->end_window(ui->user);
 }
 
@@ -458,7 +463,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.1.2"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.2.0"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
