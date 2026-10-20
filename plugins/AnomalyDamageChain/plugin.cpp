@@ -137,8 +137,9 @@ struct State {
     std::uint64_t combat_events{};
     std::uint64_t combat_cursor{};
 
-    // 匹配名 id 集合（启动时由 names 服务解析）
-    std::vector<std::uint32_t> damage_name_ids;
+    // 匹配：不再依赖 names.find_utf8（v2 才有的反查，本机宿主只有 v1，反查恒失败）。
+    // 改为在回调里用 resolve_utf8 得到的字符串与候选表直接比对，按 name_id 缓存结果。
+    std::unordered_map<std::uint32_t, std::uint8_t> name_match;  // 1=命中 2=不命中
     std::uint32_t resolved_names{};
 
     // 重放
@@ -238,16 +239,29 @@ const char* NameOf(std::uint32_t name_id) {
     return inserted.first->second.c_str();
 }
 
-bool IsDamageName(std::uint32_t name_id) {
-    if (name_id == 0) return false;
-    for (std::uint32_t id : g_state.damage_name_ids) {
-        if (id == name_id) return true;
-    }
-    return false;
+// 候选名精确匹配（大小写敏感，与 UE FName 一致）。结果按 name_id 缓存，避免重复解析。
+bool NameEquals(std::uint32_t name_id, const char* wanted) {
+    if (name_id == 0 || wanted == nullptr) return false;
+    const char* name = NameOf(name_id);
+    return name != nullptr && name[0] != '\0' && std::strcmp(name, wanted) == 0;
 }
 
-// ServerActivateGameEffectsWithClassByActor 的 name_id（用于只对它应用 GE 类名过滤）。
-std::uint32_t g_server_ge_name_id{};
+bool IsDamageName(std::uint32_t name_id) {
+    if (name_id == 0) return false;
+    auto it = g_state.name_match.find(name_id);
+    if (it != g_state.name_match.end()) return it->second == 1;
+    bool match = false;
+    for (const char* wanted : kDefaultDamageNames) {
+        if (NameEquals(name_id, wanted)) {
+            match = true;
+            break;
+        }
+    }
+    if (g_state.name_match.size() < 65536) {
+        g_state.name_match.emplace(name_id, match ? 1 : 2);
+    }
+    return match;
+}
 
 bool ContainsIgnoreCase(const char* text, const char* needle) {
     if (text == nullptr || needle == nullptr || *needle == '\0') return false;
@@ -331,7 +345,8 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     if (g_state.pending.valid) return;  // 已有一条链在跑
 
     // GE 施加入口同时承载伤害与增益/治疗等，只对"伤害类" GE 重放，避免把 buff 也乘 N 倍。
-    if (g_state.ge_filter && g_server_ge_name_id != 0 && name_id == g_server_ge_name_id &&
+    if (g_state.ge_filter &&
+        NameEquals(name_id, "ServerActivateGameEffectsWithClassByActor") &&
         !IsDamageGameplayEffect(parameters)) {
         std::scoped_lock lock(g_mutex);
         ++g_state.ge_skipped;
@@ -607,9 +622,8 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
                   static_cast<unsigned long long>(g_state.failed));
     Text(ui, line);
 
-    std::snprintf(line, sizeof(line), "匹配名=%u/%zu  参数拒绝=%llu",
+    std::snprintf(line, sizeof(line), "候选名=%u  参数拒绝=%llu",
                   g_state.resolved_names,
-                  sizeof(kDefaultDamageNames) / sizeof(kDefaultDamageNames[0]),
                   static_cast<unsigned long long>(g_state.params_rejected));
     Text(ui, line);
 
@@ -702,25 +716,13 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     LoadConfig();
     RegisterHotkey();
 
-    // 解析候选伤害函数名 -> name_id（find_utf8 是 names v2 字段，需按 struct_size 判断）
-    const bool has_find =
-        g_names != nullptr &&
-        g_names->struct_size >=
-            offsetof(AnomalyUe5NamesServiceV1, find_utf8) + sizeof(g_names->find_utf8) &&
-        g_names->find_utf8 != nullptr;
-    if (has_find) {
-        for (const char* name : kDefaultDamageNames) {
-            std::uint32_t id = 0;
-            if (g_names->find_utf8(g_names->user, StringView(name), &id).code ==
-                    ANOMALY_STATUS_V1_OK && id != 0) {
-                g_state.damage_name_ids.push_back(id);
-                ++g_state.resolved_names;
-                if (std::strcmp(name, "ServerActivateGameEffectsWithClassByActor") == 0) {
-                    g_server_ge_name_id = id;
-                }
-            }
-        }
-    }
+    // 候选名不预解析：本机宿主 names 只有 v1（无 find_utf8），反查恒失败。
+    // 改为在 ProcessEvent 回调里用 resolve_utf8 得到的字符串精确比对（见 IsDamageName）。
+    const bool has_resolver =
+        g_names != nullptr && g_names->resolve_utf8 != nullptr;
+    g_state.resolved_names = has_resolver
+        ? static_cast<std::uint32_t>(sizeof(kDefaultDamageNames) / sizeof(kDefaultDamageNames[0]))
+        : 0u;
 
     if (g_process_event != nullptr && g_process_event->subscribe != nullptr &&
         g_events_handle.id == 0) {
@@ -728,7 +730,7 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载：匹配名 %u 个，Hook=%s", g_state.resolved_names,
+    SetStatus("已加载：候选名 %u 个，Hook=%s", g_state.resolved_names,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char line[192]{};
