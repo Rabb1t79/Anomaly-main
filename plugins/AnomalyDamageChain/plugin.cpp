@@ -51,6 +51,7 @@ double g_next_due{};
 bool g_armed{};
 unsigned long long g_hits{};
 unsigned long long g_pulses{};
+unsigned long long g_faults{};
 
 void LogInfo(const char* text) {
     if (g_core == nullptr || g_core->log == nullptr || text == nullptr) return;
@@ -286,6 +287,18 @@ void EnsureHook() {
     LogInfo(buf);
 }
 
+// 补发调用的护栏：延迟调用可能踩到游戏已清理的容器（实测 TArray.Data 为空但 Num>0）。
+// 用一个 SEH 帧就地拦截，失败即停止循环，不再让异常穿透到游戏。
+// 注意：本函数内不能有需要析构的局部对象，否则 __try 不可用。
+int CallReplayGuarded() {
+    __try {
+        reinterpret_cast<void (*)()>(g_replay)();
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 void Pump() {
     if (!g_armed || g_replay == nullptr || g_original == nullptr) return;
     if (g_now_ms < g_next_due) return;
@@ -295,7 +308,13 @@ void Pump() {
         g_armed = false;  // 目标已不存在，停止循环
         return;
     }
-    reinterpret_cast<void (*)()>(g_replay)();
+    if (CallReplayGuarded() == 0) {
+        // 目标状态已失效：停止循环，避免反复触发同一处失效访问。
+        g_armed = false;
+        ++g_faults;
+        LogInfo("damage-chain: replay hit invalid state, chain stopped");
+        return;
+    }
     g_next_due = g_now_ms + g_period_ms;
     ++g_pulses;
 }
@@ -398,7 +417,8 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) noexcept {
         g_conf.enabled = enabled;
     }
 
-    std::snprintf(buf, sizeof(buf), "命中: %llu    已补发: %llu", g_hits, g_pulses);
+    std::snprintf(buf, sizeof(buf), "命中: %llu    已补发: %llu    失效停止: %llu", g_hits,
+                  g_pulses, g_faults);
     ui->text(ui->user, anomaly::sdk::StringView(buf));
 
     ui->end_window(ui->user);
@@ -414,7 +434,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.0.2"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.1.0"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
