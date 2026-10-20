@@ -2,11 +2,11 @@
   "schemaVersion": 2,
   "id": "anomaly.local.nte-vehicle",
   "name": "载具控制",
-  "description": "载具控制插件：提供普通载具召唤、读取所选车型实时改装目录并按用户选择召唤改装车辆、性能调校、车轮摩擦控制及 Debug 诊断。",
+  "description": "载具控制插件：支持 K 键独立菜单、按车型选择模块/涂装并召唤改装载具，以及性能调校和车轮摩擦控制。",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",
   "audience": "developer",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "entry": "plugin.dll",
   "api": {
     "major": 1,
@@ -26,6 +26,10 @@
       "minVersion": 1
     },
     {
+      "id": "anomaly.input",
+      "minVersion": 1
+    },
+    {
       "id": "anomaly.nte.vehicle",
       "minVersion": 7
     },
@@ -36,6 +40,7 @@
   ],
   "capabilities": [
     "ui",
+    "input",
     "nte-vehicle",
     "nte-player-snapshot"
   ]
