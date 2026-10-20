@@ -386,11 +386,13 @@ LRESULT CALLBACK EmbeddedWindowProc(HWND window, UINT message, WPARAM wparam, LP
         const bool menus_expanded = !anomaly::HostUiMenusCollapsed();
         const ImGuiIO& io = ImGui::GetIO();
         const bool capture_mouse = anomaly::HostUiMenusCaptureMouse();
-        const bool capture_keyboard = menus_expanded && io.WantCaptureKeyboard;
-        // WantTextInput is the explicit desktop/mobile text-input signal. On
-        // desktop ImGui versions it is commonly false for InputText, while
-        // WantCaptureKeyboard is true, so accept either signal for text.
-        const bool capture_text = menus_expanded &&
+        // An independently visible Host window must be able to consume keyboard
+        // input for focused controls even while Insert has folded the main menu.
+        // When no widget wants keyboard/text, native game input remains untouched.
+        const bool capture_keyboard = capture_mouse && io.WantCaptureKeyboard;
+        // WantTextInput is the explicit text-input signal. Desktop ImGui commonly
+        // reports WantCaptureKeyboard instead for InputText, so accept either.
+        const bool capture_text = capture_mouse &&
             (io.WantTextInput || io.WantCaptureKeyboard);
         const bool mouse_message = IsMouseMessage(message);
         const bool raw_mouse = message == WM_INPUT && IsRawMouseInput(lparam);
@@ -422,9 +424,9 @@ LRESULT CALLBACK EmbeddedWindowProc(HWND window, UINT message, WPARAM wparam, LP
         // Keep ImGui's key state coherent across a menu transition. Release
         // messages are forwarded without ever being consumed by the game.
         const bool forward_keyboard = keyboard_message &&
-            ((menus_expanded && capture_keyboard) || IsKeyboardReleaseMessage(message));
+            (capture_keyboard || IsKeyboardReleaseMessage(message));
         const bool forward_text = text_message && capture_text;
-        const bool forward_ime = ime_message && menus_expanded;
+        const bool forward_ime = ime_message && capture_mouse;
         const bool forward_clipboard = clipboard_message && capture_text;
         if (forward_keyboard || forward_text || forward_ime || forward_clipboard ||
             focus_message) {
