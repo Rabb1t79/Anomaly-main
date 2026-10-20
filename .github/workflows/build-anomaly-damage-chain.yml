@@ -51,7 +51,8 @@ jobs:
             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/out/AnomalyDamageChain/$<CONFIG>"
             ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/AnomalyDamageChain/$<CONFIG>"
           )
-          '@.Replace('__ANOMALY_SOURCE_ROOT__', $root)
+          '@
+          $cmakeLists = $cmakeLists.Replace('__ANOMALY_SOURCE_ROOT__', $root)
           Set-Content -LiteralPath (Join-Path $srcDir 'CMakeLists.txt') -Value $cmakeLists -Encoding utf8
           cmake -S $srcDir -B $buildDir -G 'Visual Studio 17 2022' -A x64
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed: $LASTEXITCODE" }
