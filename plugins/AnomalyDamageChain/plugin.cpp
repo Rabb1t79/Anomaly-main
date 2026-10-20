@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -73,10 +74,25 @@ bool LooksLikeLiveObject(const void* p) {
     return vtbl >= base && vtbl < base + 0x12000000ull;
 }
 
+// 读一个指针字段，越界时返回 0 而不是抛异常。
+std::uintptr_t ReadField(const void* base, std::size_t offset) {
+    if (base == nullptr) return 0;
+    std::uintptr_t value = 0;
+    __try {
+        value = *reinterpret_cast<const std::uintptr_t*>(
+            static_cast<const unsigned char*>(base) + offset);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return value;
+}
+
 extern "C" void OnBurstHit() {
-    // 原函数自身会跳过 rdx/r8 为空的调用；这类调用不能进重放队列，
-    // 否则补发时会在 [rdx+0xa8] 处访问空指针。
+    // 参数本身为空：原函数会自行跳过，不能入队。
     if (g_capture.reg[1] == 0 || g_capture.reg[2] == 0) return;
+    // 空挥判定：原函数从 [rdx+0xa8] 取命中目标，取不到就走无目标分支。
+    // 这类调用不产生伤害，若入队会在补发时访问空指针（实测会崩）。
+    if (ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8) == 0) return;
     g_armed = true;
     g_next_due = g_now_ms + g_period_ms;
     ++g_hits;
@@ -308,6 +324,10 @@ void Pump() {
         g_armed = false;  // 目标已不存在，停止循环
         return;
     }
+    if (ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8) == 0) {
+        g_armed = false;  // 命中目标已被清空（目标死亡/离开），停止循环
+        return;
+    }
     if (CallReplayGuarded() == 0) {
         // 目标状态已失效：停止循环，避免反复触发同一处失效访问。
         g_armed = false;
@@ -382,11 +402,12 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
 void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) noexcept {
     if (ui == nullptr) ui = g_ui;
     if (ui == nullptr) return;
-    // 生命周期：先确认服务表与所需方法齐备，再按 begin/end 成对使用。
-    // open 传 nullptr 表示不提供关闭按钮，窗口常驻，避免每帧重建局部标志。
-    if (ui->begin_window == nullptr || ui->end_window == nullptr ||
-        ui->text == nullptr || ui->checkbox == nullptr || ui->input_uint32 == nullptr ||
-        ui->struct_size < offsetof(AnomalyUiServiceV1, end_window) +
+    // 生命周期：只强制要求 begin/end/text 这三个必需方法。
+    // input_uint32 / checkbox 属可选，服务表里可能没有，不能因为它们缺失就整窗不画。
+    if (ui->begin_window == nullptr || ui->end_window == nullptr || ui->text == nullptr) {
+        return;
+    }
+    if (ui->struct_size < offsetof(AnomalyUiServiceV1, end_window) +
                               sizeof(ui->end_window)) {
         return;
     }
@@ -401,7 +422,8 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) noexcept {
     ui->text(ui->user, anomaly::sdk::StringView(buf));
 
     std::uint32_t rate = static_cast<std::uint32_t>(g_conf.rate > 0 ? g_conf.rate : 1);
-    if (ui->input_uint32(ui->user, anomaly::sdk::StringView("每秒次数（速率）"), &rate, 1u,
+    if (ui->input_uint32 != nullptr &&
+        ui->input_uint32(ui->user, anomaly::sdk::StringView("每秒次数（速率）"), &rate, 1u,
                          5u) != 0) {
         if (rate < 1u) rate = 1u;
         if (rate > 120u) rate = 120u;
@@ -409,11 +431,13 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) noexcept {
         g_period_ms = 1000.0 / static_cast<double>(rate);
     }
 
-    std::snprintf(buf, sizeof(buf), "间隔: %.1f ms", g_period_ms);
+    std::snprintf(buf, sizeof(buf), "速率: %d 次/秒    间隔: %.1f ms", g_conf.rate,
+                  g_period_ms);
     ui->text(ui->user, anomaly::sdk::StringView(buf));
 
     int enabled = g_conf.enabled;
-    if (ui->checkbox(ui->user, anomaly::sdk::StringView("启用多段伤害"), &enabled) != 0) {
+    if (ui->checkbox != nullptr &&
+        ui->checkbox(ui->user, anomaly::sdk::StringView("启用多段伤害"), &enabled) != 0) {
         g_conf.enabled = enabled;
     }
 
@@ -434,7 +458,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.1.0"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.1.2"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
