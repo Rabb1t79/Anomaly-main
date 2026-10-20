@@ -250,6 +250,22 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER\": ");
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_SUMMON_V1_RESERVED_OWNED_MODIFICATIONS\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SUMMON_V1_RESERVED_OWNED_MODIFICATIONS);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_VALID\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_VALID);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_DEFAULT\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_DEFAULT);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN);
+    output.append(",\n    \"ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES\": ");
+    AppendUnsigned(output, ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES);
     output.append(",\n    \"ANOMALY_NTE_NAVIGATION_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_NTE_NAVIGATION_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION\": ");
@@ -1798,12 +1814,48 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteVehicleCustomizationCatalogSnapshotV1",
+        sizeof(AnomalyNteVehicleCustomizationCatalogSnapshotV1),
+        alignof(AnomalyNteVehicleCustomizationCatalogSnapshotV1),
+        {{"struct_size", offsetof(AnomalyNteVehicleCustomizationCatalogSnapshotV1, struct_size)},
+         {"flags", offsetof(AnomalyNteVehicleCustomizationCatalogSnapshotV1, flags)},
+         {"sequence", offsetof(AnomalyNteVehicleCustomizationCatalogSnapshotV1, sequence)},
+         {"entry_count", offsetof(AnomalyNteVehicleCustomizationCatalogSnapshotV1, entry_count)},
+         {"reserved", offsetof(AnomalyNteVehicleCustomizationCatalogSnapshotV1, reserved)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteVehicleCustomizationOptionV1",
+        sizeof(AnomalyNteVehicleCustomizationOptionV1),
+        alignof(AnomalyNteVehicleCustomizationOptionV1),
+        {{"struct_size", offsetof(AnomalyNteVehicleCustomizationOptionV1, struct_size)},
+         {"flags", offsetof(AnomalyNteVehicleCustomizationOptionV1, flags)},
+         {"kind", offsetof(AnomalyNteVehicleCustomizationOptionV1, kind)},
+         {"module_type", offsetof(AnomalyNteVehicleCustomizationOptionV1, module_type)},
+         {"option_id", offsetof(AnomalyNteVehicleCustomizationOptionV1, option_id)},
+         {"label", offsetof(AnomalyNteVehicleCustomizationOptionV1, label)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteVehicleModuleSelectionV1",
+        sizeof(AnomalyNteVehicleModuleSelectionV1),
+        alignof(AnomalyNteVehicleModuleSelectionV1),
+        {{"struct_size", offsetof(AnomalyNteVehicleModuleSelectionV1, struct_size)},
+         {"module_type", offsetof(AnomalyNteVehicleModuleSelectionV1, module_type)},
+         {"module_id", offsetof(AnomalyNteVehicleModuleSelectionV1, module_id)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNteVehicleSummonRequestV1",
         sizeof(AnomalyNteVehicleSummonRequestV1),
         alignof(AnomalyNteVehicleSummonRequestV1),
         {{"struct_size", offsetof(AnomalyNteVehicleSummonRequestV1, struct_size)},
          {"flags", offsetof(AnomalyNteVehicleSummonRequestV1, flags)},
-         {"world_position", offsetof(AnomalyNteVehicleSummonRequestV1, world_position)}},
+         {"world_position", offsetof(AnomalyNteVehicleSummonRequestV1, world_position)},
+         {"skin_id", offsetof(AnomalyNteVehicleSummonRequestV1, skin_id)},
+         {"module_selections", offsetof(AnomalyNteVehicleSummonRequestV1, module_selections)},
+         {"module_selection_count", offsetof(AnomalyNteVehicleSummonRequestV1, module_selection_count)},
+         {"reserved", offsetof(AnomalyNteVehicleSummonRequestV1, reserved)}},
         false);
     AppendStruct(
         output,
@@ -1827,7 +1879,19 @@ std::string BuildSnapshot() {
          {"set_other_vehicles_top_speed_ratio",
           offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)},
          {"set_other_vehicles_engine_torque_ratio",
-          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)}},
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_engine_torque_ratio)},
+         {"set_other_vehicles_min_speed_ratio",
+          offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_min_speed_ratio)},
+         {"authorize_fine_speed_tuning",
+          offsetof(AnomalyNteVehicleServiceV1, authorize_fine_speed_tuning)},
+         {"set_fine_speed_tuning_enabled",
+          offsetof(AnomalyNteVehicleServiceV1, set_fine_speed_tuning_enabled)},
+         {"revoke_fine_speed_authorization",
+          offsetof(AnomalyNteVehicleServiceV1, revoke_fine_speed_authorization)},
+         {"customization_catalog_snapshot",
+          offsetof(AnomalyNteVehicleServiceV1, customization_catalog_snapshot)},
+         {"customization_option_at",
+          offsetof(AnomalyNteVehicleServiceV1, customization_option_at)}},
         false);
     AppendStruct(
         output,
