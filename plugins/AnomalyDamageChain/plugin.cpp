@@ -85,8 +85,16 @@ constexpr std::size_t kOnDamagedAmountOffset = 0x00;
 constexpr std::size_t kOnDamagedGeOffset = 0x130;
 constexpr std::size_t kOnDamagedInstigatorOffset = 0x138;
 constexpr std::size_t kOnDamagedCauserOffset = 0x140;
-// FHTDamageEvent 里 FPointDamageEvent::Damage 位于 +0x08
-constexpr std::size_t kDamageEventAmountOffset = 0x08;
+// FHTDamageEvent 继承链：FDamageEvent 是多态结构（有虚析构与 GetBestHitInfo），
+// 因此 +0x00 是 vtable、+0x08 是 TSubclassOf<UDamageType>、+0x10 才是 float Damage。
+// 用 dump 字段尺寸反推可对上 DamageGEDef=0x138：
+//   0x18 + FHitResult(0x108) = 0x120, +0x0C ShotDirection = 0x12C,
+//   +0x08 BoneName = 0x134, 对齐到 0x138 ✓
+constexpr std::size_t kDamageEventAmountOffset = 0x10;
+constexpr std::size_t kDamageEventHitInfoOffset = 0x18;
+constexpr std::size_t kDamageEventHitInfoSize = 0x108;
+constexpr std::size_t kDamageEventTagsOffset = 0x148;
+constexpr std::size_t kDamageEventTagsSize = 0x20;
 constexpr std::uint32_t kMaxRepeat = 512;
 constexpr std::size_t kMaxParams = 1024;
 constexpr std::size_t kMaxDisplayRows = 12;
@@ -561,18 +569,34 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
 
     ++g_state.matched;
     g_state.pending = PendingReplay{};
-    g_state.pending.mode = 2;  // 待 Update 里解析 OnDamaged 再组装 params
+    g_state.pending.mode = 2;  // 待 Update 里解析 OnDamaged 的 UFunction
     g_state.pending.raw_victim = victim;
     g_state.pending.raw_instigator = instigator;
     g_state.pending.raw_ge = ge;
+    g_state.pending.params_size = kOnDamagedParamsSize;
     g_state.pending.remaining = g_state.repeat_count;
     g_state.pending.valid = true;
     g_state.last_match_name_id = name_id;
 
-    float amount = 0.0F;
-    if (SafeReadU32(base + kDamageEventAmountOffset,
-                    reinterpret_cast<std::uint32_t*>(&amount))) {
-        g_state.pending.raw_damage = amount;
+    // 直接按 AHTAbilityCharacter::OnDamaged 的参数布局组包（偏移来自 dump）。
+    {
+        auto* out = g_state.pending.params.data();
+        std::memset(out, 0, kOnDamagedParamsSize);
+        float amount = 0.0F;
+        if (SafeReadU32(base + kDamageEventAmountOffset,
+                        reinterpret_cast<std::uint32_t*>(&amount))) {
+            g_state.pending.raw_damage = amount;
+            std::memcpy(out + kOnDamagedAmountOffset, &amount, sizeof(amount));
+        }
+        // HitInfo 与 DamageTags 直接从原始伤害事件拷过来，保持这次判定的真实上下文。
+        std::memcpy(out + 0x08, reinterpret_cast<const void*>(base + kDamageEventHitInfoOffset),
+                    kDamageEventHitInfoSize);
+        std::memcpy(out + 0x110, reinterpret_cast<const void*>(base + kDamageEventTagsOffset),
+                    kDamageEventTagsSize);
+        std::memcpy(out + kOnDamagedGeOffset, &ge, sizeof(ge));
+        std::memcpy(out + kOnDamagedInstigatorOffset, &instigator, sizeof(instigator));
+        const std::uintptr_t causer = 0;
+        std::memcpy(out + kOnDamagedCauserOffset, &causer, sizeof(causer));
     }
 
     // 记录受害者/GE 类名（只读内存），用于诊断显示。
@@ -672,21 +696,12 @@ void ResolvePendingDamage() {
         ++g_state.failed;
         return;
     }
-    // 组装 AHTAbilityCharacter::OnDamaged 的参数区。
+    // 参数区已在 OnProcessEvent 里按 dump 布局组好，这里只补 function/object。
     PendingReplay rebuilt = local;
     rebuilt.mode = 1;
     rebuilt.object = local.raw_victim;
     rebuilt.function = fn;
     rebuilt.params_size = kOnDamagedParamsSize;
-    rebuilt.ge_class_name_id = local.ge_class_name_id;
-    auto* out = rebuilt.params.data();
-    std::memset(out, 0, kOnDamagedParamsSize);
-    std::memcpy(out + kOnDamagedAmountOffset, &local.raw_damage, sizeof(local.raw_damage));
-    std::memcpy(out + kOnDamagedGeOffset, &local.raw_ge, sizeof(local.raw_ge));
-    std::memcpy(out + kOnDamagedInstigatorOffset, &local.raw_instigator,
-                sizeof(local.raw_instigator));
-    const std::uintptr_t causer = 0;
-    std::memcpy(out + kOnDamagedCauserOffset, &causer, sizeof(causer));
 
     const std::uint32_t fn_id = ObjectNameId(fn);
     {
@@ -1187,11 +1202,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.7.5：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.7.6：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.5, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.6, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
