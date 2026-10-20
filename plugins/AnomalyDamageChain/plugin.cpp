@@ -1568,3 +1568,5 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
                    StringView("1.0.0"), Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
+
+// Standalone build trigger; no runtime behavior change.
