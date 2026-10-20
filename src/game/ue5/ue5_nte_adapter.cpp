@@ -11534,18 +11534,15 @@ struct Ue5NteAdapter::State {
                         break;
                     }
                 }
-            }
-            if (selected_skin != nullptr) {
-                build.skin_id = selected_skin->native_name;
-                if (build.skin_id == 0) {
-                    failure = "所选 SkinID 为 None，拒绝调用原生改装函数";
+                if (selected_skin == nullptr) {
+                    failure = "当前车型没有可验证的默认涂装，请先在改造清单中选择涂装";
                     return false;
                 }
-            } else {
-                // A model may expose module options without any skin row or marked default.
-                // In that case, apply module selections with FName(None) and skip material
-                // replacement so the game-generated vehicle keeps its initialized appearance.
-                build.skin_id = 0;
+            }
+            build.skin_id = selected_skin->native_name;
+            if (build.skin_id == 0) {
+                failure = "所选 SkinID 为 None，拒绝调用原生改装函数";
+                return false;
             }
 
             // Start from this model's game-defined default module records. The plugin sends only
@@ -11634,7 +11631,7 @@ struct Ue5NteAdapter::State {
         failure.clear();
         try {
             if (spawned_vehicle == 0 || saved.vehicle_id == 0 ||
-                saved.module_ids.size() > 128U) {
+                saved.module_ids.size() > 128U || saved.skin_id == 0) {
                 failure = "生成的车辆或用户自定义配置参数无效";
                 return false;
             }
@@ -11774,60 +11771,57 @@ struct Ue5NteAdapter::State {
                 return false;
             }
 
-            if (saved.skin_id != 0) {
-                // The supplied Dump declares UpdateVehicleMat(FName VehicleID, FName SkinID).
-                // Validate its owner and exact parameters before applying the selected skin.
-                std::uintptr_t update_mat_function{};
-                if (!FindExactObjectLocked(
-                        L"/Script/HTGame.HTVehicleModificationComponent.UpdateVehicleMat",
-                        update_mat_function) || update_mat_function == 0) {
-                    failure = "Dump 中声明的 UpdateVehicleMat 原生入口不可用";
-                    return false;
-                }
-                std::uintptr_t update_mat_owner{};
-                std::uint8_t update_mat_num_parms{};
-                std::uint16_t update_mat_parms_size{};
-                std::uint16_t update_mat_return_offset{};
-                if (!ReadPointerAt(*memory, update_mat_function,
-                        Layout(profile, "object.outer"), update_mat_owner) ||
-                    update_mat_owner != expected_module_manager_class ||
-                    !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.numParms"),
-                        update_mat_num_parms) ||
-                    !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.parmsSize"),
-                        update_mat_parms_size) ||
-                    !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.returnValueOffset"),
-                        update_mat_return_offset) ||
-                    update_mat_num_parms != 2 || update_mat_parms_size != 0x10 ||
-                    update_mat_return_offset != 0xFFFFu) {
-                    failure = "UpdateVehicleMat 的所属类 / NumParms / ParmsSize 与 Dump 不匹配";
-                    return false;
-                }
-                ReflectedPropertyInfo update_mat_vehicle_id;
-                ReflectedPropertyInfo update_mat_skin_id;
-                if (!FindReflectedPropertyLocked(update_mat_function,
-                        "VehicleID", update_mat_vehicle_id, false) ||
-                    update_mat_vehicle_id.type != "NameProperty" ||
-                    update_mat_vehicle_id.element_size != 8 || update_mat_vehicle_id.offset != 0 ||
-                    update_mat_vehicle_id.array_dim != 1 ||
-                    !FindReflectedPropertyLocked(update_mat_function,
-                        "SkinID", update_mat_skin_id, false) ||
-                    update_mat_skin_id.type != "NameProperty" ||
-                    update_mat_skin_id.element_size != 8 || update_mat_skin_id.offset != 8 ||
-                    update_mat_skin_id.array_dim != 1) {
-                    failure = "UpdateVehicleMat.VehicleID/SkinID 未通过 Dump 5.6.1 参数校验";
-                    return false;
-                }
-                std::array<std::uint8_t, 0x10> update_mat_parameters{};
-                std::memcpy(update_mat_parameters.data() + update_mat_vehicle_id.offset,
-                    &saved.vehicle_id, sizeof(saved.vehicle_id));
-                std::memcpy(update_mat_parameters.data() + update_mat_skin_id.offset,
-                    &saved.skin_id, sizeof(saved.skin_id));
-                if (!InvokeProcessEventGuarded(process_event_invoker, module_manager,
-                        update_mat_function, update_mat_parameters.data(), update_mat_parameters.size())) {
-                    failure = "调用 HTVehicleModificationComponent.UpdateVehicleMat 失败";
-                    return false;
-                }
-
+            // The supplied Dump declares UpdateVehicleMat(FName VehicleID, FName SkinID).
+            // Validate its owner and exact parameters before applying the selected skin.
+            std::uintptr_t update_mat_function{};
+            if (!FindExactObjectLocked(
+                    L"/Script/HTGame.HTVehicleModificationComponent.UpdateVehicleMat",
+                    update_mat_function) || update_mat_function == 0) {
+                failure = "Dump 中声明的 UpdateVehicleMat 原生入口不可用";
+                return false;
+            }
+            std::uintptr_t update_mat_owner{};
+            std::uint8_t update_mat_num_parms{};
+            std::uint16_t update_mat_parms_size{};
+            std::uint16_t update_mat_return_offset{};
+            if (!ReadPointerAt(*memory, update_mat_function,
+                    Layout(profile, "object.outer"), update_mat_owner) ||
+                update_mat_owner != expected_module_manager_class ||
+                !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.numParms"),
+                    update_mat_num_parms) ||
+                !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.parmsSize"),
+                    update_mat_parms_size) ||
+                !ReadValue(*memory, update_mat_function + Layout(profile, "ufunction.returnValueOffset"),
+                    update_mat_return_offset) ||
+                update_mat_num_parms != 2 || update_mat_parms_size != 0x10 ||
+                update_mat_return_offset != 0xFFFFu) {
+                failure = "UpdateVehicleMat 的所属类 / NumParms / ParmsSize 与 Dump 不匹配";
+                return false;
+            }
+            ReflectedPropertyInfo update_mat_vehicle_id;
+            ReflectedPropertyInfo update_mat_skin_id;
+            if (!FindReflectedPropertyLocked(update_mat_function,
+                    "VehicleID", update_mat_vehicle_id, false) ||
+                update_mat_vehicle_id.type != "NameProperty" ||
+                update_mat_vehicle_id.element_size != 8 || update_mat_vehicle_id.offset != 0 ||
+                update_mat_vehicle_id.array_dim != 1 ||
+                !FindReflectedPropertyLocked(update_mat_function,
+                    "SkinID", update_mat_skin_id, false) ||
+                update_mat_skin_id.type != "NameProperty" ||
+                update_mat_skin_id.element_size != 8 || update_mat_skin_id.offset != 8 ||
+                update_mat_skin_id.array_dim != 1) {
+                failure = "UpdateVehicleMat.VehicleID/SkinID 未通过 Dump 5.6.1 参数校验";
+                return false;
+            }
+            std::array<std::uint8_t, 0x10> update_mat_parameters{};
+            std::memcpy(update_mat_parameters.data() + update_mat_vehicle_id.offset,
+                &saved.vehicle_id, sizeof(saved.vehicle_id));
+            std::memcpy(update_mat_parameters.data() + update_mat_skin_id.offset,
+                &saved.skin_id, sizeof(saved.skin_id));
+            if (!InvokeProcessEventGuarded(process_event_invoker, module_manager,
+                    update_mat_function, update_mat_parameters.data(), update_mat_parameters.size())) {
+                failure = "调用 HTVehicleModificationComponent.UpdateVehicleMat 失败";
+                return false;
             }
 
             ReflectedPropertyInfo current_modules_property;
@@ -11974,10 +11968,7 @@ struct Ue5NteAdapter::State {
                     ")；Actor.Owner 已核验为本地玩家 Pawn";
                 if (apply_custom_configuration) {
                     vehicle_summon_status_message += "；用户所选改装已提交游戏原生函数并通过模块列表后置验证（模块数=" +
-                        std::to_string(configured_module_count) +
-                        (selected_configuration.skin_id != 0
-                            ? "；所选涂装已提交给 UpdateVehicleMat）"
-                            : "；未指定涂装，保留游戏生成车辆原涂装）");
+                        std::to_string(configured_module_count) + "；SkinID 已传入 UpdateVehicleMat）";
                 }
                 return Status(ANOMALY_STATUS_V1_OK, vehicle_summon_status_message.c_str());
             }
@@ -12109,10 +12100,7 @@ struct Ue5NteAdapter::State {
             ")；Actor.Owner 已核验为本地玩家 Pawn";
         if (apply_custom_configuration) {
             vehicle_summon_status_message += "；用户所选改装已提交游戏原生函数并通过模块列表后置验证（模块数=" +
-                std::to_string(configured_module_count) +
-                        (selected_configuration.skin_id != 0
-                            ? "；所选涂装已提交给 UpdateVehicleMat）"
-                            : "；未指定涂装，保留游戏生成车辆原涂装）");
+                std::to_string(configured_module_count) + "；SkinID 已传入 UpdateVehicleMat）";
         }
         return Status(ANOMALY_STATUS_V1_OK, vehicle_summon_status_message.c_str());
     }
