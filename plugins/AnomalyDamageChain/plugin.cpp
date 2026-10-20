@@ -570,6 +570,16 @@ void ANOMALY_CALL ScanTaskRun(void*, AnomalyGenerationHandleV1) {
     std::uint64_t bytes = 0;
     const int count = ScanDirectCallers(target, hits, 16, &ranges, &bytes);
 
+    // 把 thunk 前 0x400 字节写到文件，供本地用真正的反汇编器分析。
+    if (g_storage != nullptr && g_storage->write_atomic != nullptr) {
+        std::uint8_t dump[0x400]{};
+        if (SafeCopyBlock(target, dump, sizeof(dump))) {
+            AnomalyByteSpanV1 span{};
+            span.data = dump;
+            span.size = sizeof(dump);
+            g_storage->write_atomic(g_storage->user, StringView("thunk.bin"), span);
+        }
+    }
     // 再反汇编 thunk 前 0x200 字节，取出它内部的 call/jmp 目标（真正的 C++ 实现）。
     std::uintptr_t calls[8]{};
     int call_count = 0;
@@ -1389,11 +1399,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.8.1：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.8.2：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.8.1, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.8.2, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
