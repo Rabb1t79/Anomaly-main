@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 5u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 8u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -308,6 +308,15 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
+// Bit 2 was used by an abandoned saved-player-configuration path and is reserved.
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_RESERVED_OWNED_MODIFICATIONS (1u << 2u)
+// Applies the explicitly selected module and skin IDs in this request. Does not read player save data.
+#define ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION (1u << 3u)
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_VALID (1u << 0u)
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_DEFAULT (1u << 1u)
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE 1u
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN 2u
+#define ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES 256u
 typedef struct AnomalyNteVehicleSnapshotV1 {
     uint32_t struct_size;
     uint32_t flags;
@@ -330,10 +339,38 @@ typedef struct AnomalyNteVehicleCatalogSnapshotV1 {
     uint32_t reserved;
 } AnomalyNteVehicleCatalogSnapshotV1;
 
+typedef struct AnomalyNteVehicleCustomizationCatalogSnapshotV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t sequence;
+    uint32_t entry_count;
+    uint32_t reserved;
+} AnomalyNteVehicleCustomizationCatalogSnapshotV1;
+
+typedef struct AnomalyNteVehicleCustomizationOptionV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint32_t kind;        // MODULE or SKIN
+    uint32_t module_type; // EVehicleModuleType for MODULE; 0 for SKIN
+    char option_id[ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES + 1u];
+    char label[ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES + 1u];
+} AnomalyNteVehicleCustomizationOptionV1;
+
+typedef struct AnomalyNteVehicleModuleSelectionV1 {
+    uint32_t struct_size;
+    uint32_t module_type;
+    AnomalyStringViewV1 module_id;
+} AnomalyNteVehicleModuleSelectionV1;
+
 typedef struct AnomalyNteVehicleSummonRequestV1 {
     uint32_t struct_size;
     uint32_t flags;
     double world_position[3];
+    // V7 tail: ignored for ordinary summon. Used only with APPLY_CUSTOM_CONFIGURATION.
+    AnomalyStringViewV1 skin_id;
+    const AnomalyNteVehicleModuleSelectionV1* module_selections;
+    uint32_t module_selection_count;
+    uint32_t reserved;
 } AnomalyNteVehicleSummonRequestV1;
 
 typedef struct AnomalyNteVehicleServiceV1 {
@@ -366,7 +403,8 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // 两个回调只能在 Game 线程运行，且会在修改前校验实时 Actor 与运动组件实例。
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_top_speed_ratio)(void* user, float ratio);
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(void* user, float ratio);
-    // V4 tail extension: minimum speed factor for non-player vehicle instances only.
+    // V4 tail extension: configure the minimum user-facing speed factor for non-player instances only.
+    // Kept after the original V4 fields so existing service-table offsets remain stable.
     AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_min_speed_ratio)(void* user, float ratio);
     // V5: Core-validated fixed-key authorization and independent enforcement for fine current-vehicle speed tuning.
     AnomalyStatusV1 (ANOMALY_CALL *authorize_fine_speed_tuning)(
@@ -374,6 +412,17 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *set_fine_speed_tuning_enabled)(
         void* user, uint32_t enabled);
     AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
+    // V7: reads live DT_vehicleModuleData and VehicleSkinDataTable for a selected DT_VehicleData row.
+    // These callbacks run on the Game thread and only expose options validated against the supplied Dump.
+    AnomalyStatusV1 (ANOMALY_CALL *customization_catalog_snapshot)(
+        void* user, AnomalyStringViewV1 vehicle_row_id,
+        AnomalyNteVehicleCustomizationCatalogSnapshotV1* snapshot);
+    AnomalyStatusV1 (ANOMALY_CALL *customization_option_at)(
+        void* user, AnomalyStringViewV1 vehicle_row_id, uint32_t index,
+        AnomalyNteVehicleCustomizationOptionV1* option);
+    // V8: invokes the Dump-validated RepairSelf(true) on the current driven wheeled vehicle.
+    // Game-thread-only; returns NOT_FOUND when no wheeled vehicle is currently driven.
+    AnomalyStatusV1 (ANOMALY_CALL *repair_current_vehicle)(void* user);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
