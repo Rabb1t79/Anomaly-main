@@ -80,6 +80,7 @@ struct Context {
     std::atomic_bool summon_customized{};
     std::atomic_bool friction_toggle{};
     std::atomic_bool started{};
+    std::atomic_uint32_t durability_last_status_code{ANOMALY_STATUS_V1_NOT_FOUND};
     float speed_ratio{1.0F};
     float engine_torque_ratio{1.0F};
     float other_speed_ratio{1.0F};
@@ -453,6 +454,29 @@ void Update() {
             g_context.window_service->user, g_context.menu_window_handle);
         if (toggle_status.code != ANOMALY_STATUS_V1_OK) {
             SetStatus(StatusDescription("K 快捷键切换载具菜单失败", toggle_status));
+        }
+    }
+
+    // Keep the current wheeled vehicle at maximum durability by calling Dump-validated
+    // RepairSelf(true) on every Game Update. Core resolves and validates the current vehicle
+    // each time; the plugin does not keep a stale actor pointer.
+    if (HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::repair_current_vehicle)>(
+                g_context.vehicle,
+                offsetof(AnomalyNteVehicleServiceV1, repair_current_vehicle)) &&
+        g_context.vehicle->repair_current_vehicle != nullptr) {
+        const auto durability_status = g_context.vehicle->repair_current_vehicle(
+            g_context.vehicle->user);
+        const auto previous_code = g_context.durability_last_status_code.exchange(
+            durability_status.code, std::memory_order_acq_rel);
+        if (durability_status.code != ANOMALY_STATUS_V1_OK &&
+            durability_status.code != ANOMALY_STATUS_V1_NOT_FOUND &&
+            previous_code != durability_status.code) {
+            SetStatus(StatusDescription("当前载具耐久保持满值失败", durability_status));
+        } else if (durability_status.code == ANOMALY_STATUS_V1_OK &&
+                   previous_code != ANOMALY_STATUS_V1_OK &&
+                   previous_code != ANOMALY_STATUS_V1_NOT_FOUND) {
+            SetStatus("当前陆地载具耐久保护已恢复");
         }
     }
 
@@ -1297,6 +1321,10 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
+    DrawText(ui, "当前陆地载具耐久：自动保持满值（默认启用）");
+    DrawText(ui, "依赖 Dump 已校验的 RepairSelf(true)；当前 Dump 未确认水上载具的等价修复入口。");
+
+    DrawDivider(ui);
     DrawText(ui, "发动机外部扭矩倍率");
     if (ui->slider_float(ui->user, anomaly::sdk::StringView("发动机扭矩倍率"),
                          &torque_ratio, 0.05F, 20.0F)) {
@@ -1354,14 +1382,14 @@ void DrawDebugPanel(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
     const std::string& status, const std::string& selected,
     std::size_t catalog_size, bool player_position_valid) {
-    DrawText(ui, "构建标记：NTE Vehicle 0.10.1 / 2026-10-20-independent-menu");
-    DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v7");
+    DrawText(ui, "构建标记：NTE Vehicle 0.10.2 / 2026-10-20-durability-guard");
+    DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v8");
     DrawText(ui, "Plugin ID：anomaly.local." + std::string("nte-vehicle"));
     DrawText(ui, "Manifest：schemaVersion=2 / entry=plugin.dll / loadPhase=game-ready / games=nte / builds=nte-*");
-    DrawText(ui, "Required services：anomaly.ui v1 / anomaly.input v1 / anomaly.window v1 / anomaly.nte.vehicle v7 / anomaly.nte.player v1");
+    DrawText(ui, "Required services：anomaly.ui v1 / anomaly.input v1 / anomaly.window v1 / anomaly.nte.vehicle v8 / anomaly.nte.player v1");
     DrawText(ui, "Capabilities：ui / input / nte-vehicle / nte-player-snapshot / per-vehicle-customization-catalog / selected-modification-summon");
     DrawText(ui, "创建日期：2026-10-14");
-    DrawText(ui, "修改状态：独立 K 菜单、分类改装选项与自定义召唤链路；游戏内结果待实测");
+    DrawText(ui, "修改状态：独立 K 菜单、改装车辆召唤、0–10 倍车速滑块与当前陆地载具自动满耐久；游戏内结果待实测");
     DrawText(ui, "Host 状态：" + (status.empty() ? std::string("暂无状态消息") : status));
     // An empty diagnostic string means the Host snapshot callback returned OK.
     // Do not label this success path as "Host 未提供快照状态"; use the validity flag
@@ -1545,7 +1573,11 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
         !HasField<AnomalyNteVehicleServiceV1,
             decltype(AnomalyNteVehicleServiceV1::customization_option_at)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, customization_option_at)) ||
-        !vehicle->customization_option_at || !player->snapshot) {
+        !vehicle->customization_option_at ||
+        !HasField<AnomalyNteVehicleServiceV1,
+            decltype(AnomalyNteVehicleServiceV1::repair_current_vehicle)>(
+                vehicle, offsetof(AnomalyNteVehicleServiceV1, repair_current_vehicle)) ||
+        !vehicle->repair_current_vehicle || !player->snapshot) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE);
     }
 
@@ -1584,6 +1616,8 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.friction_toggle.store(false, std::memory_order_release);
     g_context.refresh_catalog_requested.store(false, std::memory_order_release);
     g_context.refresh_customization_requested.store(false, std::memory_order_release);
+    g_context.durability_last_status_code.store(
+        ANOMALY_STATUS_V1_NOT_FOUND, std::memory_order_release);
     g_context.speed_ratio = kDefaultSpeedRatio;
     g_context.engine_torque_ratio = 1.0F;
     g_context.other_speed_ratio = 1.0F;
@@ -1697,6 +1731,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("载具控制"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.10.1"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.10.2"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
