@@ -416,9 +416,36 @@ void LoadConfig() {
 }
 
 // --------------------------- 捕获诊断 --------------------------------------
+// 注意：框架禁止在 Game/Render 回调里做同步 state I/O
+// （scoped_platform_services: "plugin state I/O is unavailable from game or render callbacks"）。
+// 导出按钮在 Draw（Render 域）触发，因此必须经 anomaly.scheduler 投递到 worker 线程再写。
+std::mutex g_export_mutex;
+std::string g_export_text;
+bool g_export_pending{};
+AnomalyGenerationHandleV1 g_export_task{};
+
+void ANOMALY_CALL ExportTaskRun(void*, AnomalyGenerationHandleV1) {
+    std::string text;
+    {
+        std::scoped_lock lock(g_export_mutex);
+        if (!g_export_pending) return;
+        text.swap(g_export_text);
+        g_export_pending = false;
+    }
+    if (g_storage == nullptr || g_storage->write_atomic == nullptr) return;
+    AnomalyByteSpanV1 span{};
+    span.data = reinterpret_cast<const std::uint8_t*>(text.data());
+    span.size = text.size();
+    g_storage->write_atomic(g_storage->user, StringView(kLogFile), span);
+}
+
 void ExportCapture() {
     if (g_storage == nullptr || g_storage->write_atomic == nullptr) {
         SetStatus("storage 不可用，无法导出");
+        return;
+    }
+    if (g_scheduler == nullptr || g_scheduler->schedule == nullptr) {
+        SetStatus("scheduler 不可用，无法导出");
         return;
     }
     std::string text;
@@ -439,14 +466,20 @@ void ExportCapture() {
             text += line;
         }
     }
-    AnomalyByteSpanV1 span{};
-    span.data = reinterpret_cast<const std::uint8_t*>(text.data());
-    span.size = text.size();
-    if (g_storage->write_atomic(g_storage->user, StringView(kLogFile), span).code ==
-        ANOMALY_STATUS_V1_OK) {
-        SetStatus("已导出 %s（%zu 字节）", kLogFile, text.size());
+    {
+        std::scoped_lock lock(g_export_mutex);
+        g_export_text.swap(text);
+        g_export_pending = true;
+    }
+    AnomalyGenerationHandleV1 task{};
+    const auto status = g_scheduler->schedule(g_scheduler->user, 0, &ExportTaskRun, nullptr, &task);
+    if (status.code == ANOMALY_STATUS_V1_OK) {
+        g_export_task = task;
+        SetStatus("已提交导出任务（%s）", kLogFile);
     } else {
-        SetStatus("导出失败");
+        std::scoped_lock lock(g_export_mutex);
+        g_export_pending = false;
+        SetStatus("调度导出失败（%u）", status.code);
     }
 }
 
@@ -632,6 +665,15 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
         g_state.pending.valid = false;
         g_state.pending.remaining = 0;
     }
+    if (g_scheduler != nullptr && g_scheduler->cancel != nullptr && g_export_task.id != 0) {
+        g_scheduler->cancel(g_scheduler->user, g_export_task);
+        g_export_task = AnomalyGenerationHandleV1{};
+    }
+    {
+        std::scoped_lock lock(g_export_mutex);
+        g_export_pending = false;
+        g_export_text.clear();
+    }
     if (g_process_event != nullptr && g_process_event->unsubscribe != nullptr &&
         g_events_handle.id != 0) {
         g_process_event->unsubscribe(g_process_event->user, g_events_handle);
@@ -643,6 +685,15 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
 }
 
 void ANOMALY_CALL Unload(void*) {
+    if (g_scheduler != nullptr && g_scheduler->cancel != nullptr && g_export_task.id != 0) {
+        g_scheduler->cancel(g_scheduler->user, g_export_task);
+        g_export_task = AnomalyGenerationHandleV1{};
+    }
+    {
+        std::scoped_lock lock(g_export_mutex);
+        g_export_pending = false;
+        g_export_text.clear();
+    }
     if (g_process_event != nullptr && g_process_event->unsubscribe != nullptr &&
         g_events_handle.id != 0) {
         g_process_event->unsubscribe(g_process_event->user, g_events_handle);
