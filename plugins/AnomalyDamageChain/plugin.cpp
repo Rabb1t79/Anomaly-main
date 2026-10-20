@@ -32,6 +32,7 @@
 #include "anomaly/sdk/cpp.hpp"
 
 #include <windows.h>
+#include <intrin.h>
 
 #include <algorithm>
 #include <array>
@@ -253,6 +254,12 @@ std::mutex g_scan_mutex;
 bool g_scan_requested{};
 bool g_scan_done{};
 std::uintptr_t g_scan_target{};
+std::uintptr_t g_exec_starts[8]{};
+std::uintptr_t g_exec_ends[8]{};
+int g_exec_count{};
+// 记录 (function name_id -> 首次调用方 rva)
+std::unordered_map<std::uint32_t, std::uintptr_t> g_caller_rva;
+bool g_caller_dirty{};
 std::uintptr_t g_scan_hits[16]{};
 int g_scan_hit_count{};
 int g_scan_scanned_ranges{};
@@ -502,6 +509,21 @@ int CollectExecRanges(std::uintptr_t base, std::uintptr_t* starts, std::uintptr_
         ++count;
     }
     return count;
+}
+
+// 在栈上向上找第一个落在 HTGame.exe 可执行段内的返回地址。
+std::uintptr_t FindGameReturnAddress() {
+    if (g_exec_count <= 0) return 0;
+    std::uintptr_t* p = reinterpret_cast<std::uintptr_t*>(_AddressOfReturnAddress());
+    for (int i = 0; i < 1024; ++i) {
+        std::uintptr_t value = 0;
+        if (!SafeReadPtr(reinterpret_cast<std::uintptr_t>(p + i), &value)) break;
+        if (value < 0x10000) continue;
+        for (int r = 0; r < g_exec_count; ++r) {
+            if (value >= g_exec_starts[r] && value < g_exec_ends[r]) return value;
+        }
+    }
+    return 0;
 }
 
 // 块级安全拷贝：一次 SEH 保护拷整块，之后在本地缓冲里紧凑扫描。
@@ -794,6 +816,14 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     }
 
     ++g_state.matched;
+    // 埋点：记录是谁（RVA）调用了这个伤害事件 UFunction。
+    if (g_exec_count > 0) {
+        const std::uintptr_t caller = FindGameReturnAddress();
+        if (caller != 0 && g_caller_rva.find(name_id) == g_caller_rva.end()) {
+            g_caller_rva.emplace(name_id, caller);
+            g_caller_dirty = true;
+        }
+    }
     g_state.pending = PendingReplay{};
     g_state.pending.mode = 2;  // 待 Update 里解析 OnDamaged 的 UFunction
     g_state.pending.raw_victim = victim;
@@ -1428,6 +1458,10 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     RegisterHotkey();
 
     g_state.candidate_count = static_cast<int>(kDefaultDamageNameCount);
+    if (const HMODULE ht = GetModuleHandleA("HTGame.exe")) {
+        g_exec_count = CollectExecRanges(reinterpret_cast<std::uintptr_t>(ht), g_exec_starts,
+                                         g_exec_ends, 8);
+    }
 
     // 解析 GUObjectArray 全局（用于 TWeakObjectPtr 解析）。
     if (g_signature != nullptr && g_signature->resolve != nullptr) {
@@ -1452,11 +1486,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.9.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v2.0.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.9.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
@@ -1531,6 +1565,25 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
         PumpReplay();
     }
     PollCombat();
+
+    // 调用方埋点：有新记录时写一条日志。
+    if (g_caller_dirty) {
+        g_caller_dirty = false;
+        const HMODULE mod = GetModuleHandleA("HTGame.exe");
+        const std::uintptr_t mb = reinterpret_cast<std::uintptr_t>(mod);
+        char text[512]{};
+        int n = std::snprintf(text, sizeof(text), "damage-chain: callers");
+        for (const auto& kv : g_caller_rva) {
+            if (n <= 0 || static_cast<std::size_t>(n) + 96 >= sizeof(text)) break;
+            const char* name = ResolveName(kv.first);
+            n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
+                               " %s@0x%llX", (name != nullptr && name[0]) ? name : "?",
+                               static_cast<unsigned long long>(kv.second - mb));
+        }
+        if (g_core != nullptr && g_core->log != nullptr) {
+            g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+        }
+    }
 
     // 扫描完成后把结果写进日志（只写一次）。
     if (!g_scan_logged) {
