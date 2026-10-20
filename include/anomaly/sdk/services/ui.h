@@ -3,6 +3,9 @@
 
 #define ANOMALY_UI_SERVICE_V1_ID "anomaly.ui"
 #define ANOMALY_UI_SERVICE_V1_VERSION 1u
+// Passed only to AnomalyUiServiceV1.begin_window. Keeps this plugin window
+// expanded and mouse-interactive while the global Anomaly menus are collapsed.
+#define ANOMALY_UI_WINDOW_V1_PINNED (1u << 31u)
 #define ANOMALY_RGBA_V1(red, green, blue, alpha) \
     ((uint32_t)(red) | ((uint32_t)(green) << 8u) | \
      ((uint32_t)(blue) << 16u) | ((uint32_t)(alpha) << 24u))
