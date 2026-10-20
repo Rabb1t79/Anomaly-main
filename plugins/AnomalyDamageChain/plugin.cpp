@@ -72,6 +72,7 @@ constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByAct
 // 反射遍历：用怪物对象的 Class 找 OnDamaged 这个 UFunction（不依赖 RVA/特征码）。
 // Profile layout 证据：object.class=0x10、object.nameOffset=0x18、ufield.next=0x28、
 // ufunction.execFunction=0xD8。UStruct::Children 取 UE5 标准 0x38。
+constexpr std::uintptr_t kUStructSuperOffset = 0x30;   // UStruct::SuperStruct
 constexpr std::uintptr_t kUStructChildrenOffset = 0x38;
 constexpr std::uintptr_t kUFieldNextOffset = 0x28;
 constexpr std::uintptr_t kUFunctionExecOffset = 216;
@@ -334,42 +335,65 @@ const char* ResolveName(std::uint32_t name_id) {
     return inserted.first->second.c_str();
 }
 
-// 在给定 UClass 的 Children 链里按名字找 UFunction。
+// 沿 SuperStruct 继承链，在每个类的 Children 链里按名字找 UFunction。
+// 必须走继承链：原生函数在父类（AHTAbilityCharacter）上，蓝图子类本身没有。
 std::uintptr_t FindFunctionInClass(std::uintptr_t cls, const char* wanted) {
     if (cls < 0x10000 || wanted == nullptr) return 0;
-    std::uintptr_t field = 0;
-    if (!SafeReadPtr(cls + kUStructChildrenOffset, &field)) return 0;
-    for (int guard = 0; guard < 8192 && field >= 0x10000; ++guard) {
-        const std::uint32_t name_id = ObjectNameId(field);
-        if (name_id != 0) {
-            const char* name = ResolveName(name_id);
-            if (name != nullptr && name[0] != '\0' && std::strcmp(name, wanted) == 0) return field;
+    for (int depth = 0; depth < 64 && cls >= 0x10000; ++depth) {
+        std::uintptr_t field = 0;
+        if (SafeReadPtr(cls + kUStructChildrenOffset, &field)) {
+            for (int guard = 0; guard < 8192 && field >= 0x10000; ++guard) {
+                const std::uint32_t name_id = ObjectNameId(field);
+                if (name_id != 0) {
+                    const char* name = ResolveName(name_id);
+                    if (name != nullptr && name[0] != '\0' && std::strcmp(name, wanted) == 0) {
+                        return field;
+                    }
+                }
+                std::uintptr_t next = 0;
+                if (!SafeReadPtr(field + kUFieldNextOffset, &next)) break;
+                field = next;
+            }
         }
-        std::uintptr_t next = 0;
-        if (!SafeReadPtr(field + kUFieldNextOffset, &next)) break;
-        field = next;
+        std::uintptr_t super = 0;
+        if (!SafeReadPtr(cls + kUStructSuperOffset, &super)) break;
+        cls = super;
     }
     return 0;
 }
 
-// 日志用：列出某个类的前几个子函数名，确认遍历是否正确。
+// 日志用：打印整条继承链以及每级的前几个子函数名。
 void LogClassChildren(std::uintptr_t cls, char* out, std::size_t cap) {
     out[0] = '\0';
-    if (cls < 0x10000) return;
-    std::uintptr_t field = 0;
-    if (!SafeReadPtr(cls + kUStructChildrenOffset, &field)) return;
     std::size_t used = 0;
-    for (int i = 0; i < 8 && field >= 0x10000; ++i) {
-        const std::uint32_t id = ObjectNameId(field);
-        const char* n = id ? ResolveName(id) : "";
-        if (n != nullptr && n[0] != '\0') {
-            const int w = std::snprintf(out + used, cap - used, "%s%s", used ? "," : "", n);
-            if (w > 0) used += static_cast<std::size_t>(w);
-            if (used + 2 >= cap) break;
+    for (int depth = 0; depth < 6 && cls >= 0x10000; ++depth) {
+        const char* cname = ResolveName(ObjectNameId(cls));
+        const int w0 = std::snprintf(out + used, cap - used, "%s[%s:", used ? " " : "",
+                                     (cname != nullptr && cname[0]) ? cname : "?");
+        if (w0 > 0) used += static_cast<std::size_t>(w0);
+        if (used + 4 >= cap) break;
+
+        std::uintptr_t field = 0;
+        if (SafeReadPtr(cls + kUStructChildrenOffset, &field)) {
+            for (int i2 = 0; i2 < 5 && field >= 0x10000; ++i2) {
+                const char* n = ResolveName(ObjectNameId(field));
+                if (n != nullptr && n[0] != '\0') {
+                    const int w = std::snprintf(out + used, cap - used, "%s%s", i2 ? "," : "", n);
+                    if (w > 0) used += static_cast<std::size_t>(w);
+                    if (used + 3 >= cap) break;
+                }
+                std::uintptr_t next = 0;
+                if (!SafeReadPtr(field + kUFieldNextOffset, &next)) break;
+                field = next;
+            }
         }
-        std::uintptr_t next = 0;
-        if (!SafeReadPtr(field + kUFieldNextOffset, &next)) break;
-        field = next;
+        const int w2 = std::snprintf(out + used, cap - used, "]");
+        if (w2 > 0) used += static_cast<std::size_t>(w2);
+        if (used + 4 >= cap) break;
+
+        std::uintptr_t super = 0;
+        if (!SafeReadPtr(cls + kUStructSuperOffset, &super)) break;
+        cls = super;
     }
 }
 
@@ -1108,11 +1132,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.7.1：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.7.2：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.1, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.2, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
