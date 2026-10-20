@@ -18,7 +18,7 @@
 
 namespace {
 
-// 非 DEBUG 状态下的倍率策略：固定 10x；所有精细倍率路径均在调用 Host 前再次校验。
+// 车速倍率固定为 10x；无密码输入与解锁步骤。
 constexpr float kLockedSpeedRatio = 10.0F;
 constexpr float kFineSpeedRatioMin = 0.50F;
 constexpr float kFineSpeedRatioMax = 10.0F;
@@ -158,7 +158,6 @@ void ReleaseMenuHotkey(Context& context) noexcept {
     context.menu_hotkey_handle = {};
 }
 
-// 使用可移植 SHA-256 校验 DEBUG 解锁密钥；插件二进制只保存摘要，不保存密钥明文。
 
 
 void SetStatus(std::string text) {
@@ -408,7 +407,7 @@ void RefreshCustomizationCatalogOnGameThread() {
         g_context.customization_skin_id.clear();
         g_context.selected_module_overrides.clear();
         g_context.customization_status =
-            "读取改装目录期间车型数据发生变化；请重新打开「改造清单」";
+            "读取改装目录期间车型数据发生变化；请重新打开「改装载具清单」";
         return;
     }
 
@@ -1244,14 +1243,15 @@ void DrawCustomizationTab(
 
     DrawDivider(ui);
     DrawText(ui, "仅手动选择的模块槽位会覆盖默认值；其他槽位使用游戏数据表的默认模块。");
-    const bool can_summon_customized = player_position_valid && has_selected &&
+    const bool can_summon_customized = has_selected &&
         customization_vehicle_id == selected && !skin_id.empty();
+    if (!player_position_valid) {
+        DrawText(ui, "当前玩家位置快照无效；可以提交请求，但 Host 会拒绝未验证坐标的召唤。");
+    }
     if (DrawButtonEnabled(ui, "召唤改装车辆", can_summon_customized)) {
         SetStatus("已提交改装召唤请求");
         SetLastSummon("改装召唤请求已提交");
         g_context.summon_customized.store(true, std::memory_order_release);
-    } else if (!player_position_valid) {
-        DrawText(ui, "当前玩家位置快照无效，暂时无法召唤。");
     } else if (!has_selected) {
         DrawText(ui, "请先从召唤清单选择车型。");
     } else if (customization_vehicle_id != selected) {
@@ -1376,7 +1376,7 @@ void DrawDebugPanel(
         (selected.empty() ? std::string("无") : selected));
 
     DrawDivider(ui);
-    DrawText(ui, "车速倍率策略：固定 10.0x（Debug 密钥与精细倍率入口已移除）");
+    DrawText(ui, "车速倍率固定为 10.0x");
 }
 
 void DrawContents(const AnomalyUiServiceV1* ui) {
@@ -1394,7 +1394,6 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
     std::string customization_skin_id;
     std::string customization_status;
     bool customization_page{};
-    float ratio;
     float torque_ratio;
     float other_speed_ratio;
     float other_speed_floor_ratio;
@@ -1415,7 +1414,6 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
         customization_skin_id = g_context.customization_skin_id;
         customization_status = g_context.customization_status;
         customization_page = g_context.customization_page;
-        ratio = g_context.speed_ratio;
         torque_ratio = g_context.engine_torque_ratio;
         other_speed_ratio = g_context.other_speed_ratio;
         other_speed_floor_ratio = g_context.other_speed_floor_ratio;
