@@ -259,6 +259,7 @@ std::uintptr_t g_exec_ends[8]{};
 int g_exec_count{};
 // 记录 (function name_id -> 首次调用方 rva)
 std::unordered_map<std::uint32_t, std::uintptr_t> g_caller_rva;
+std::uintptr_t g_process_event_addr{};
 bool g_caller_dirty{};
 std::uintptr_t g_scan_hits[16]{};
 int g_scan_hit_count{};
@@ -511,22 +512,34 @@ int CollectExecRanges(std::uintptr_t base, std::uintptr_t* starts, std::uintptr_
     return count;
 }
 
-// 在栈上向上找第一个落在 HTGame.exe 可执行段内的返回地址。
+// 在栈上找"返回地址"，判据必须同时满足：
+//   1) 该值落在 HTGame.exe 的可执行段内
+//   2) 它前面 5 字节是 E8，且 rel32 精确指向 ProcessEvent
+// 这样可排除栈上残留的无关代码指针。
 std::uintptr_t FindGameReturnAddress() {
-    if (g_exec_count <= 0) return 0;
+    if (g_exec_count <= 0 || g_process_event_addr == 0) return 0;
+    const std::uintptr_t pe_va = g_process_event_addr;
     std::uintptr_t* p = reinterpret_cast<std::uintptr_t*>(_AddressOfReturnAddress());
     for (int i = 0; i < 1024; ++i) {
         std::uintptr_t value = 0;
         if (!SafeReadPtr(reinterpret_cast<std::uintptr_t>(p + i), &value)) break;
         if (value < 0x10000) continue;
+        bool in_exec = false;
         for (int r = 0; r < g_exec_count; ++r) {
-            if (value >= g_exec_starts[r] && value < g_exec_ends[r]) return value;
+            if (value >= g_exec_starts[r] && value < g_exec_ends[r]) { in_exec = true; break; }
         }
+        if (!in_exec) continue;
+        std::uint32_t opcode = 0;
+        if (!SafeReadU32(value - 5, &opcode) || (opcode & 0xFFu) != 0xE8u) continue;
+        std::int32_t rel = 0;
+        if (!SafeReadU32(value - 4, reinterpret_cast<std::uint32_t*>(&rel))) continue;
+        if (value + static_cast<std::intptr_t>(rel) != pe_va) continue;
+        return value;
     }
     return 0;
 }
 
-// 块级安全拷贝：一次 SEH 保护拷整块，之后在本地缓冲里紧凑扫描。
+// 块级安全拷贝：一次 SEH 保护拷整块// 块级安全拷贝：一次 SEH 保护拷整块，之后在本地缓冲里紧凑扫描。
 bool SafeCopyBlock(std::uintptr_t src, void* dst, std::size_t size) {
     if (dst == nullptr || size == 0) return false;
     __try {
@@ -1458,6 +1471,16 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     RegisterHotkey();
 
     g_state.candidate_count = static_cast<int>(kDefaultDamageNameCount);
+    if (g_signature != nullptr && g_signature->resolve != nullptr) {
+        std::uintptr_t pe = 0;
+        if (g_signature
+                ->resolve(g_signature->user, StringView("HTGame.exe"), StringView(".text"),
+                          StringView("40 55 56 57 41 54 41 55 41 56 41 57 48 81 EC 00 01 00 00"),
+                          &pe)
+                .code == ANOMALY_STATUS_V1_OK) {
+            g_process_event_addr = pe;
+        }
+    }
     if (const HMODULE ht = GetModuleHandleA("HTGame.exe")) {
         g_exec_count = CollectExecRanges(reinterpret_cast<std::uintptr_t>(ht), g_exec_starts,
                                          g_exec_ends, 8);
@@ -1486,11 +1509,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v2.0.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v2.0.1：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.1, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
