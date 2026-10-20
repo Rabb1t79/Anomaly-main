@@ -382,7 +382,8 @@
       "values": {
         "ANOMALY_WINDOW_V1_NONE": 0,
         "ANOMALY_WINDOW_V1_NO_SAVED_SETTINGS": 1,
-        "ANOMALY_WINDOW_V1_NO_COLLAPSE": 2
+        "ANOMALY_WINDOW_V1_NO_COLLAPSE": 2,
+        "ANOMALY_WINDOW_V1_KEEP_VISIBLE_WHEN_MENUS_COLLAPSED": 4
       }
     },
     "AnomalyGlyphRangeV1": {
