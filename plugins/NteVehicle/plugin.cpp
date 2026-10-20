@@ -413,13 +413,17 @@ void RefreshCustomizationCatalogOnGameThread() {
     }
 
     std::string default_skin;
+    std::string fallback_skin;
     for (const auto& option : options) {
-        if (option.kind == ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN &&
-            option.is_default) {
+        if (option.kind != ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN) continue;
+        if (fallback_skin.empty()) fallback_skin = option.id;
+        if (option.is_default) {
             default_skin = option.id;
             break;
         }
     }
+    const bool used_fallback_skin = default_skin.empty() && !fallback_skin.empty();
+    if (default_skin.empty()) default_skin = std::move(fallback_skin);
     {
         std::scoped_lock lock(g_context.mutex);
         if (selected_id != g_context.selected_vehicle_id) return;
@@ -439,8 +443,12 @@ void RefreshCustomizationCatalogOnGameThread() {
         g_context.customization_status = "已读取该车型实时改装选项：模块 " +
             std::to_string(module_count) + " 项，涂装 " + std::to_string(skin_count) +
             " 项；未选择的模块槽位沿用游戏数据表默认配置";
-        if (g_context.customization_skin_id.empty()) {
-            g_context.customization_status += "；该车型没有可自动识别的默认涂装，请手动选择涂装后召唤";
+        if (used_fallback_skin) {
+            g_context.customization_status += "；该车型没有标记默认涂装，已暂选首个有效涂装，可在下方更改";
+        } else if (g_context.customization_skin_id.empty() && skin_count == 0) {
+            g_context.customization_status += "；该车型没有可用涂装选项，改装召唤将保留游戏生成车辆原涂装";
+        } else if (g_context.customization_skin_id.empty()) {
+            g_context.customization_status += "；该车型没有标记默认涂装，请在下方选择涂装";
         }
     }
 }
@@ -745,12 +753,12 @@ void Update() {
         if (summon_customized_requested) {
             if (customization_vehicle_id != selected_id) {
                 validation_error = "改装召唤失败：改造清单与当前选择的车型不一致，请重新打开清单";
-            } else if (selected_skin_id.empty()) {
-                validation_error = "改装召唤失败：尚未选择有效涂装";
             } else {
                 request.flags |= ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION;
-                request.skin_id = anomaly::sdk::StringView(std::string_view(
-                    selected_skin_id.data(), selected_skin_id.size()));
+                if (!selected_skin_id.empty()) {
+                    request.skin_id = anomaly::sdk::StringView(std::string_view(
+                        selected_skin_id.data(), selected_skin_id.size()));
+                }
                 module_selections.reserve(module_overrides.size());
                 for (const auto& override_entry : module_overrides) {
                     AnomalyNteVehicleModuleSelectionV1 selection{};
@@ -1272,7 +1280,7 @@ void DrawCustomizationTab(
     DrawDivider(ui);
     DrawText(ui, "仅手动选择的模块槽位会覆盖默认值；其他槽位使用游戏数据表的默认模块。");
     const bool can_summon_customized = has_selected &&
-        customization_vehicle_id == selected && !skin_id.empty();
+        customization_vehicle_id == selected && !options.empty();
     if (!player_position_valid) {
         DrawText(ui, "当前玩家位置快照无效；可以提交请求，但 Host 会拒绝未验证坐标的召唤。");
     }
@@ -1382,7 +1390,7 @@ void DrawDebugPanel(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
     const std::string& status, const std::string& selected,
     std::size_t catalog_size, bool player_position_valid) {
-    DrawText(ui, "构建标记：NTE Vehicle 0.10.2 / 2026-10-20-durability-guard");
+    DrawText(ui, "构建标记：NTE Vehicle 0.10.3 / 2026-10-20-durability-guard");
     DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v8");
     DrawText(ui, "Plugin ID：anomaly.local." + std::string("nte-vehicle"));
     DrawText(ui, "Manifest：schemaVersion=2 / entry=plugin.dll / loadPhase=game-ready / games=nte / builds=nte-*");
@@ -1731,6 +1739,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("载具控制"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.10.2"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.10.3"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
