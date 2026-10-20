@@ -24,6 +24,7 @@ namespace {
 
 std::atomic_bool g_menus_collapsed{};
 std::atomic_bool g_menu_state_pending{true};
+std::atomic_bool g_pinned_plugin_window_active{};
 std::atomic_bool g_management_expansion_requested{};
 std::atomic_bool g_developer_mode{};
 std::atomic<PlatformInputCapturePolicy> g_input_capture_policy{
@@ -327,11 +328,11 @@ bool DrawPluginWindowChrome(
         }
         if (state.pinned) ImGui::FocusWindow(&window);
     }
-    if (DrawPluginWindowChromeButton(window,
+    if (open != nullptr && DrawPluginWindowChromeButton(window,
             ImRect(Offset(origin, close_x, 6.0F),
                 Offset(origin, close_x + kPluginWindowActionSize, 6.0F + kPluginWindowActionSize)),
             "#ANOMALY_PLUGIN_WINDOW_CLOSE", PluginWindowChromeGlyph::Close,
-            open != nullptr ? "Close window" : "This window cannot be closed", open != nullptr)) {
+            "Close window", true)) {
         *open = 0;
     }
     ImGui::PopClipRect();
@@ -420,6 +421,8 @@ void ANOMALY_CALL SetNextWindowSize(void*, float width, float height, std::uint3
 
 int ANOMALY_CALL BeginWindow(
     void*, AnomalyStringViewV1 title, int* open, std::uint32_t flags) {
+    const bool pin_while_menus_collapsed = (flags & ANOMALY_UI_WINDOW_V1_PINNED) != 0;
+    flags &= ~ANOMALY_UI_WINDOW_V1_PINNED;
     const std::string id = Copy(title);
     std::string text = id;
     if (id.find("###") == std::string::npos) {
@@ -434,6 +437,7 @@ int ANOMALY_CALL BeginWindow(
             ImGuiWindowFlags_NoScrollWithMouse;
         if (existing != nullptr) {
             PluginWindowChromeState& chrome = g_plugin_window_chrome[existing->ID];
+            if (pin_while_menus_collapsed) chrome.pinned = true;
             const bool collapse_changed = SynchronizePluginWindowHostCollapse(chrome, *existing);
             if (IsPluginWindowCollapsed(chrome) ||
                 (collapse_changed &&
@@ -472,6 +476,10 @@ int ANOMALY_CALL BeginWindow(
     ImGuiWindow* const window = ImGui::GetCurrentWindow();
     if (window == nullptr) return 0;
     PluginWindowChromeState& chrome = g_plugin_window_chrome[window->ID];
+    if (pin_while_menus_collapsed) {
+        chrome.pinned = true;
+        g_pinned_plugin_window_active.store(true, std::memory_order_release);
+    }
     const bool collapse_changed = SynchronizePluginWindowHostCollapse(chrome, *window);
     if (collapse_changed) SetPluginWindowSizeFromChromeState(*window, chrome);
     const bool body_auto_fit_pending = chrome.body_auto_fit_frames_x > 0 ||
@@ -1182,12 +1190,11 @@ bool ConsumeHostUiManagementExpansionRequest() noexcept {
 }
 
 bool HostUiMenusCaptureMouse() noexcept {
-    // While the platform menu is expanded the cursor must always be owned by
-    // the overlay. The Automatic policy's WantCaptureMouse gate deadlocks here:
-    // when the game hides the cursor it never lands on an ImGui window, so
-    // capture stays false, NoMouse is set, ImGui ignores the mouse, and
-    // WantCaptureMouse can never become true again.
-    return !g_menus_collapsed.load();
+    // Keep mouse routing enabled when a plugin explicitly pins its in-game
+    // window, even if Insert has collapsed the global Anomaly menu collection.
+    // Otherwise Automatic capture sets NoMouse and the pinned window cannot be clicked.
+    return !g_menus_collapsed.load() ||
+        g_pinned_plugin_window_active.load(std::memory_order_acquire);
 }
 
 void SetHostUiInputCapturePolicy(const PlatformInputCapturePolicy policy) noexcept {
@@ -1221,6 +1228,7 @@ void SetHostUiCurrentWindowLocked(const bool locked) noexcept {
 }
 
 void PrepareHostUiFrame() noexcept {
+    g_pinned_plugin_window_active.store(false, std::memory_order_release);
     g_apply_menu_state.Set(g_menu_state_pending.exchange(false));
     g_frame_menus_collapsed.Set(g_menus_collapsed.load());
 }
