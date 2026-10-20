@@ -281,6 +281,9 @@ AnomalyGenerationHandleV1 g_scan_task{};
 bool g_dump_done{};
 bool g_scan_logged{};
 const AnomalySignatureServiceV1* g_signature{};
+const AnomalyHookServiceV1* g_hook{};
+void* g_pe_original{};
+AnomalyGenerationHandleV1 g_pe_hook{};
 std::uintptr_t g_objects_accessor{};  // ue5.GObjects 访问器地址
 std::uintptr_t g_objects_global{};    // 其中 mov rax,[rip+x] 指向的全局变量地址
 
@@ -1468,12 +1471,80 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     g_names = view.Query<AnomalyUe5NamesServiceV1>(ANOMALY_UE5_NAMES_SERVICE_V1_ID, 1u).get();
     g_signature = view.Query<AnomalySignatureServiceV1>(ANOMALY_SIGNATURE_SERVICE_V1_ID,
                                                       ANOMALY_SIGNATURE_SERVICE_V1_VERSION).get();
+    g_hook = view.Query<AnomalyHookServiceV1>(ANOMALY_HOOK_SERVICE_V1_ID,
+                                              ANOMALY_HOOK_SERVICE_V1_VERSION).get();
     g_combat = view.Query<AnomalyNteCombatServiceV1>(ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
                                                      ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION).get();
 
     g_state = State{};
     *context = &g_state;
     return anomaly::sdk::Ok();
+}
+
+// 自挂钩：框架的 ue5.process-event 在本版本不可用（ProcessEvent 入口前 5 字节被
+// 改成了 jmp，导致框架的特征码与 ABI 校验同时失败）。这里绕开框架服务，自己定位并挂钩。
+//
+// 依据（实测）：ProcessEvent 真实 RVA 0x18AACF0，入口 5 字节为 E9 跳转；
+// 从 +0x13 起是原函数体 lea rbp,[rsp+0x30] / mov [rbp+0x128],rbx / 栈 cookie 序列。
+// 该片段不受入口补丁影响，可稳定定位。
+constexpr const char* kProcessEventBodyPattern =
+    "48 8D 6C 24 30 48 89 9D 28 01 00 00 48 8B 05 ?? ?? ?? ?? "
+    "48 33 C5 48 89 85 C0 00 00 00";
+constexpr std::uintptr_t kProcessEventBodyOffset = 0x13;  // 函数体相对入口的偏移
+
+using ProcessEventFn = void (*)(void*, void*, void*);
+
+void ANOMALY_CALL ProcessEventDetour(void* object, void* function, void* parameters) {
+    if (function != nullptr) {
+        OnProcessEvent(nullptr, reinterpret_cast<std::uintptr_t>(object),
+                       reinterpret_cast<std::uintptr_t>(function), parameters);
+    }
+    if (g_pe_original != nullptr) {
+        reinterpret_cast<ProcessEventFn>(g_pe_original)(object, function, parameters);
+    }
+}
+
+// 若框架没给 process-event，就自己挂一个。
+void EnsureSelfHook() {
+    if (g_events_handle.id != 0 || g_pe_hook.id != 0) return;
+    if (g_hook == nullptr || g_hook->create == nullptr) return;
+    if (g_signature == nullptr || g_signature->resolve == nullptr) return;
+
+    std::uintptr_t body = 0;
+    if (g_signature
+            ->resolve(g_signature->user, StringView("HTGame.exe"), StringView(".text"),
+                      StringView(kProcessEventBodyPattern), &body)
+            .code != ANOMALY_STATUS_V1_OK ||
+        body < kProcessEventBodyOffset + 0x10000) {
+        return;
+    }
+    const std::uintptr_t target = body - kProcessEventBodyOffset;
+
+    AnomalyHookRequestV1 request{};
+    request.struct_size = sizeof(request);
+    request.kind = ANOMALY_HOOK_V1_FUNCTION;
+    request.target = target;
+    request.detour = reinterpret_cast<void*>(&ProcessEventDetour);
+    request.label = StringView("damage-chain.process-event");
+
+    std::uintptr_t original = 0;
+    AnomalyGenerationHandleV1 handle{};
+    if (g_hook->create(g_hook->user, &request, &original, &handle).code !=
+        ANOMALY_STATUS_V1_OK) {
+        return;
+    }
+    g_pe_original = reinterpret_cast<void*>(original);
+    g_pe_hook = handle;
+    SetStatus("已自行挂钩 ProcessEvent（RVA 0x%llX）",
+              static_cast<unsigned long long>(target));
+    if (g_core != nullptr && g_core->log != nullptr) {
+        char text[200]{};
+        std::snprintf(text, sizeof(text),
+                      "damage-chain: self hook installed at rva=0x%llX",
+                      static_cast<unsigned long long>(target - reinterpret_cast<std::uintptr_t>(
+                          GetModuleHandleA("HTGame.exe"))));
+        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+    }
 }
 
 // 服务在 Load 时可能还没注册（游戏刚启动）。这里在每帧补查一次，
@@ -1548,11 +1619,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v2.0.3：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v2.1.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.3, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v2.1.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
@@ -1606,6 +1677,8 @@ void ANOMALY_CALL Unload(void*) {
     g_names = nullptr;
     g_combat = nullptr;
     g_signature = nullptr;
+    g_hook = nullptr;
+    g_pe_original = nullptr;
     g_apply_ufunc = 0;
     g_objects_accessor = 0;
     g_objects_global = 0;
@@ -1616,6 +1689,7 @@ void ANOMALY_CALL Unload(void*) {
 
 void ANOMALY_CALL Update(void*, double delta_seconds) {
     EnsureServices();
+    EnsureSelfHook();
     ResolvePendingNames();
     ResolvePendingDamage();
     ServiceExport();
@@ -1742,6 +1816,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    StringView("anomaly.local.damage-chain"),
                    StringView("Damage Chain Reaction"), StringView("Anomaly"),
-                   StringView("2.0.3"), Load, Start, Stop, Unload, Update, Draw};
+                   StringView("2.1.0"), Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
