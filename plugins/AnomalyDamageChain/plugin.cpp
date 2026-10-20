@@ -72,8 +72,8 @@ constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByAct
 // 反射遍历：用怪物对象的 Class 找 OnDamaged 这个 UFunction（不依赖 RVA/特征码）。
 // Profile layout 证据：object.class=0x10、object.nameOffset=0x18、ufield.next=0x28、
 // ufunction.execFunction=0xD8。UStruct::Children 取 UE5 标准 0x38。
-constexpr std::uintptr_t kUStructSuperOffset = 0x30;   // UStruct::SuperStruct
-constexpr std::uintptr_t kUStructChildrenOffset = 0x38;
+constexpr std::uintptr_t kUStructSuperOffset = 0x40;   // Profile: ustruct.superStruct = 64
+constexpr std::uintptr_t kUStructChildrenOffset = 0x48;  // Profile: ustruct.children = 72
 constexpr std::uintptr_t kUFieldNextOffset = 0x28;
 constexpr std::uintptr_t kUFunctionExecOffset = 216;
 constexpr const char* kOnDamagedName = "OnDamaged";
@@ -1166,11 +1166,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.7.3：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.7.4：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.3, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.4, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
