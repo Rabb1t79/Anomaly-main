@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 7u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 8u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -420,6 +420,9 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *customization_option_at)(
         void* user, AnomalyStringViewV1 vehicle_row_id, uint32_t index,
         AnomalyNteVehicleCustomizationOptionV1* option);
+    // V8: invokes the Dump-validated RepairSelf(true) on the current driven wheeled vehicle.
+    // Game-thread-only; returns NOT_FOUND when no wheeled vehicle is currently driven.
+    AnomalyStatusV1 (ANOMALY_CALL *repair_current_vehicle)(void* user);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
