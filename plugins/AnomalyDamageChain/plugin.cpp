@@ -56,6 +56,16 @@ bool g_armed{};
 // 被钩函数的调用方返回地址（stub 入口的 [rsp]），用于静态定位调用链。
 std::uintptr_t g_burst_caller{};
 bool g_burst_caller_logged{};
+// 诊断：统计所有进入被钩函数的调用，而不只是通过过滤的。
+unsigned long long g_call_total{};
+unsigned long long g_call_null_args{};
+unsigned long long g_call_no_target{};
+unsigned long long g_call_valid{};
+std::uintptr_t g_sample_rdx{};
+std::uintptr_t g_sample_r8{};
+std::uintptr_t g_sample_target{};
+std::uintptr_t g_sample_caller{};
+bool g_sample_ready{};
 unsigned long long g_hits{};
 unsigned long long g_pulses{};
 unsigned long long g_faults{};
@@ -94,15 +104,33 @@ std::uintptr_t ReadField(const void* base, std::size_t offset) {
 }
 
 extern "C" void OnBurstHit() {
-    // 参数本身为空：原函数会自行跳过，不能入队。
-    if (g_capture.reg[1] == 0 || g_capture.reg[2] == 0) return;
-    // 空挥判定：原函数从 [rdx+0xa8] 取命中目标，取不到就走无目标分支。
-    // 这类调用不产生伤害，若入队会在补发时访问空指针（实测会崩）。
-    if (ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8) == 0) return;
-    // 记录调用方（命中时进入本函数的那条返回地址），仅首次。
-    if (g_burst_caller == 0 && g_capture.entry_rsp != 0) {
-        g_burst_caller = ReadField(reinterpret_cast<const void*>(g_capture.entry_rsp), 0);
+    ++g_call_total;
+
+    const std::uintptr_t caller =
+        g_capture.entry_rsp != 0
+            ? ReadField(reinterpret_cast<const void*>(g_capture.entry_rsp), 0)
+            : 0;
+    if (g_burst_caller == 0 && caller != 0) g_burst_caller = caller;
+
+    // 第一次调用时留一份样本，供离线分析参数形态。
+    if (!g_sample_ready) {
+        g_sample_ready = true;
+        g_sample_rdx = g_capture.reg[1];
+        g_sample_r8 = g_capture.reg[2];
+        g_sample_target = ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8);
+        g_sample_caller = caller;
     }
+
+    if (g_capture.reg[1] == 0 || g_capture.reg[2] == 0) {
+        ++g_call_null_args;
+        return;
+    }
+    if (ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8) == 0) {
+        ++g_call_no_target;
+        return;
+    }
+
+    ++g_call_valid;
     g_armed = true;
     g_next_due = g_now_ms + g_period_ms;
     ++g_hits;
@@ -405,6 +433,23 @@ void ANOMALY_CALL Unload(void*) {
 void ANOMALY_CALL Update(void*, double delta_seconds) {
     g_now_ms += (delta_seconds > 0.0 ? delta_seconds : 0.0) * 1000.0;
 
+    {
+        static int tick = 0;
+        if ((tick++ % 300) == 0 && g_call_total != 0) {
+            const HMODULE m2 = GetModuleHandleA("HTGame.exe");
+            const std::uintptr_t b2 = reinterpret_cast<std::uintptr_t>(m2);
+            char t2[320]{};
+            std::snprintf(t2, sizeof(t2),
+                          "damage-chain: calls total=%llu valid=%llu nullargs=%llu "
+                          "notarget=%llu caller=0x%llX",
+                          g_call_total, g_call_valid, g_call_null_args, g_call_no_target,
+                          static_cast<unsigned long long>(b2 != 0 && g_burst_caller != 0
+                                                              ? g_burst_caller - b2
+                                                              : 0));
+            LogInfo(t2);
+        }
+    }
+
     if (!g_burst_caller_logged && g_burst_caller != 0) {
         g_burst_caller_logged = true;
         const HMODULE mod = GetModuleHandleA("HTGame.exe");
@@ -481,7 +526,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.2.1"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.2.2"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
