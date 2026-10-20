@@ -22,6 +22,7 @@
     { "id": "anomaly.ue5.names", "minVersion": 1, "optional": true },
     { "id": "anomaly.ue5.objects", "minVersion": 1, "optional": true },
     { "id": "anomaly.ue5.world", "minVersion": 1, "optional": true },
+    { "id": "anomaly.nte.combat", "minVersion": 1, "optional": true },
     { "id": "anomaly.interop.signature", "minVersion": 1, "optional": true },
     { "id": "anomaly.interop.hook", "minVersion": 1, "optional": true },
     { "id": "anomaly.interop.patch", "minVersion": 1, "optional": true }
@@ -36,6 +37,7 @@
     "ue5-names",
     "ue5-objects",
     "ue5-world",
+    "nte-combat-read",
     "interop-signature",
     "interop-hook",
     "interop-patch"

@@ -11,9 +11,10 @@
 //   anomaly.core               —— 日志（向 Core 写入本插件状态，便于相互印证）
 //   anomaly.storage/scheduler/input/ui —— 配置、任务、热键、界面
 //
-// 为什么不用 anomaly.nte.combat：本版游戏里该特性的伤害采集不可用
-//   （运行时日志 damageCapture.capturedEvents = 0、eventLayoutReady = false），
-//   依赖它的事件流不会触发。因此改为直接 ProcessEvent 捕获 + vtable 重放。
+// 关于 anomaly.nte.combat：它在主菜单时不可用（依赖 nte.player，世界指针为空），
+// 进世界后才会就绪。它只提供伤害事件（attacker/victim/数值），没有"重新判定"的入口，
+// 所以本插件把它作为可选的状态/印证信号（战斗流=就绪、战斗事件=N），
+// 而真正的重放走 ue5.process-event 拿到可再次调用的 (object, function, parameters)。
 //
 // 关键布局（game dump 5.6.1-new 证据）：
 //   UObject::NamePrivate         = +0x18（FName index 在 +0）
@@ -112,6 +113,11 @@ struct State {
     std::uint64_t failed{};
     std::uint64_t params_rejected{};
 
+    // 战斗流（anomaly.nte.combat，可选；主菜单时可能未就绪，进世界后可用）
+    int combat_available{};
+    std::uint64_t combat_events{};
+    std::uint64_t combat_cursor{};
+
     // 匹配名 id 集合（启动时由 names 服务解析）
     std::vector<std::uint32_t> damage_name_ids;
     std::uint32_t resolved_names{};
@@ -137,6 +143,7 @@ const AnomalyStorageServiceV1* g_storage{};
 const AnomalySchedulerServiceV1* g_scheduler{};
 const AnomalyUe5ProcessEventServiceV1* g_process_event{};
 const AnomalyUe5NamesServiceV1* g_names{};
+const AnomalyNteCombatServiceV1* g_combat{};
 
 AnomalyGenerationHandleV1 g_events_handle{};
 AnomalyGenerationHandleV1 g_hotkey_toggle{};
@@ -324,6 +331,30 @@ void PumpReplay() {
     }
 }
 
+// 战斗流：anomaly.nte.combat 在主菜单时未就绪（nte.player 世界指针为空），进世界后可用。
+// 这里只做状态回显与计数，用于确认伤害流是否真的在跑。
+void PollCombat() {
+    if (g_combat == nullptr) {
+        g_state.combat_available = 0;
+        return;
+    }
+    if (g_combat->latest_damage_sequence == nullptr || g_combat->next_damage_event == nullptr) {
+        g_state.combat_available = 0;
+        return;
+    }
+    const std::uint64_t latest = g_combat->latest_damage_sequence(g_combat->user);
+    if (latest == 0) return;
+    g_state.combat_available = 1;
+    for (int budget = 0; budget < 32; ++budget) {
+        AnomalyNteDamageEventV1 ev{};
+        ev.struct_size = sizeof(ev);
+        const auto status = g_combat->next_damage_event(g_combat->user, g_state.combat_cursor, &ev);
+        if (status.code != ANOMALY_STATUS_V1_OK) break;
+        g_state.combat_cursor = ev.sequence;
+        ++g_state.combat_events;
+    }
+}
+
 // --------------------------- 配置 ------------------------------------------
 std::size_t FormatConfig(char* text, std::size_t capacity) {
     const int n = std::snprintf(text, capacity,
@@ -480,6 +511,11 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
                   static_cast<unsigned long long>(g_state.params_rejected));
     Text(ui, line);
 
+    std::snprintf(line, sizeof(line), "战斗流=%s 战斗事件=%llu",
+                  g_state.combat_available ? "就绪" : "未就绪",
+                  static_cast<unsigned long long>(g_state.combat_events));
+    Text(ui, line);
+
     if (g_state.status[0] != '\0') Text(ui, g_state.status);
 
     if (HAS(ui, separator)) ui->separator(ui->user);
@@ -544,6 +580,8 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     g_process_event = view.Query<AnomalyUe5ProcessEventServiceV1>(
         ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_ID, ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_VERSION).get();
     g_names = view.Query<AnomalyUe5NamesServiceV1>(ANOMALY_UE5_NAMES_SERVICE_V1_ID, 1u).get();
+    g_combat = view.Query<AnomalyNteCombatServiceV1>(ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
+                                                     ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION).get();
 
     g_state = State{};
     *context = &g_state;
@@ -618,12 +656,14 @@ void ANOMALY_CALL Unload(void*) {
     g_scheduler = nullptr;
     g_process_event = nullptr;
     g_names = nullptr;
+    g_combat = nullptr;
     g_fn_name_cache.clear();
     g_name_cache.clear();
     g_state = State{};
 }
 
 void ANOMALY_CALL Update(void*, double) {
+    PollCombat();
     PumpReplay();
 }
 

@@ -3,27 +3,33 @@
 玩家操控任意角色命中任意怪物后，对**同一次伤害**连续重复判定 N 次（可调），
 形成「打一下、连续掉血多次」的链式反应。
 
-## 为什么这样做
+## 关于 anomaly.nte.combat 的更正
 
-本版游戏（`5.6.1-0+UE5-HT`）里，框架的 `anomaly.nte.combat` 伤害采集**不可用**：
+先前版本 README 曾断言 `anomaly.nte.combat` 不可用，**那是错的**。核对了框架运行日志的
+`profile.ready` 记录，实际情况是：
 
+```json
+{"id":"nte.player","available":false,"diagnostics":["nte-player-layout-v1: world pointer is null"]}
+{"id":"nte.combat","available":false,"unavailableDependencies":["nte.player"]}
+diagnostics: [..., "service anomaly.nte.player initially unavailable: nte.player feature unavailable"]
 ```
-运行时日志 anomaly-runtime.log：
-"damageCapture":{"eventLayoutReady":false,"nativeHookAttempted":false,
-                 "nativeHookReady":false,"capturedEvents":0,...}
-```
 
-同时 `nte.player` / `nte.attack-input` / `nte.skill-invocation` / `nte.skills` 全部 `available=false`。
-所以任何依赖 `nte.combat` 事件流或技能/输入服务的实现都不会触发。
+`nte.combat` 不可用**只是因为启动时还在主菜单、`nte.player` 的世界指针为空**（诊断措辞是
+"initially"）。进入世界后 `nte.player` / `nte.combat` 会就绪——这也是 NTE Combat Demo 能用的原因。
 
-本插件只用**实际可用**的服务：
+因此本插件把 `anomaly.nte.combat` 作为**可选服务**接回来了，用于：
 
-| 服务 | 用途 |
-|---|---|
-| `anomaly.ue5.process-event` | 钩 `UObject::ProcessEvent`，拿到每次 UFunction 调用 |
-| `anomaly.ue5.names` | 把 UFunction 的 FName 解析成字符串 |
-| `anomaly.core` | 写日志（向 Core 写入本插件状态，便于相互印证） |
-| `anomaly.ui` / `input` / `storage` / `scheduler` | 界面、热键、配置、任务 |
+- 界面显示 `战斗流=就绪/未就绪` 与 `战斗事件=N`（确认框架伤害流真的在跑）；
+- 与 process-event 的命中数互相印证（两条独立信号）。
+
+**但重放仍然走 `ue5.process-event`**：`nte.combat` 只给事件数据（attacker/victim/伤害值），
+不提供可重放的调用入口；要"再判定一次"，必须拿到 `(object, function, parameters)`。
+
+## 为什么重放走 ProcessEvent
+
+本版游戏里 `nte.player` / `nte.attack-input` / `nte.skill-invocation` / `nte.skills` 在主菜单时
+均不可用，且 `nte.combat` 只读事件、无重放入口。唯一能拿到"可再次调用目标"的通道是
+`anomaly.ue5.process-event`（钩 `UObject::ProcessEvent`，给出 object/function/parameters）。
 
 ## 机制
 
