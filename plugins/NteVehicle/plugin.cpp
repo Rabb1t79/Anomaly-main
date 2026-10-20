@@ -20,8 +20,6 @@ namespace {
 
 // 车速倍率固定为 10x；无密码输入与解锁步骤。
 constexpr float kLockedSpeedRatio = 10.0F;
-constexpr float kFineSpeedRatioMin = 0.50F;
-constexpr float kFineSpeedRatioMax = 10.0F;
 
 struct Snapshot {
     std::uint32_t flags{};
