@@ -66,6 +66,14 @@ std::uintptr_t g_sample_r8{};
 std::uintptr_t g_sample_target{};
 std::uintptr_t g_sample_caller{};
 bool g_sample_ready{};
+
+// 链式判定期间持有的对象引用。UE 用 GC 而非引用计数，阻止回收的手段是
+// 在 UObject::ObjectFlags（Profile: object.flags = 8）上置 RF_MarkAsRootSet。
+// 值来源：UE ObjectMacros.h 的 EObjectFlags 枚举，RF_MarkAsRootSet = 0x80。
+constexpr std::uintptr_t kObjectFlagsOffset = 8;
+constexpr std::uint32_t kRfMarkAsRootSet = 0x80u;
+void* g_rooted[4]{};
+int g_rooted_count{};
 unsigned long long g_hits{};
 unsigned long long g_pulses{};
 unsigned long long g_faults{};
@@ -131,6 +139,7 @@ extern "C" void OnBurstHit() {
     }
 
     ++g_call_valid;
+    HoldArgs();
     g_armed = true;
     g_next_due = g_now_ms + g_period_ms;
     ++g_hits;
@@ -341,6 +350,45 @@ void EnsureHook() {
     LogInfo(buf);
 }
 
+// 给对象打上/清除 RF_MarkAsRootSet 标记。仅在确认是 UObject（虚表在游戏映像内）时操作。
+bool SetRootFlag(void* object, bool on) {
+    if (!LooksLikeLiveObject(object)) return false;
+    __try {
+        auto* flags = reinterpret_cast<std::uint32_t*>(
+            static_cast<unsigned char*>(object) + kObjectFlagsOffset);
+        if (on) {
+            *flags |= kRfMarkAsRootSet;
+        } else {
+            *flags &= ~kRfMarkAsRootSet;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void ClearRoots() {
+    for (int i = 0; i < g_rooted_count; ++i) {
+        if (g_rooted[i] != nullptr) SetRootFlag(g_rooted[i], false);
+        g_rooted[i] = nullptr;
+    }
+    g_rooted_count = 0;
+}
+
+// 把参与本次判定的 4 个参数对象钉住，避免补发时已被回收。
+void HoldArgs() {
+    ClearRoots();
+    std::uintptr_t args[4] = {g_capture.reg[0], g_capture.reg[1], g_capture.reg[2],
+                              g_capture.reg[3]};
+    for (int i = 0; i < 4; ++i) {
+        auto* p = reinterpret_cast<void*>(args[i]);
+        if (p == nullptr) continue;
+        if (SetRootFlag(p, true)) {
+            g_rooted[g_rooted_count++] = p;
+        }
+    }
+}
+
 // 补发调用的护栏：延迟调用可能踩到游戏已清理的容器（实测 TArray.Data 为空但 Num>0）。
 // 用一个 SEH 帧就地拦截，失败即停止循环，不再让异常穿透到游戏。
 // 注意：本函数内不能有需要析构的局部对象，否则 __try 不可用。
@@ -360,15 +408,18 @@ void Pump() {
     if (!LooksLikeLiveObject(reinterpret_cast<const void*>(g_capture.reg[1])) ||
         !LooksLikeLiveObject(reinterpret_cast<const void*>(g_capture.reg[2]))) {
         g_armed = false;  // 目标已不存在，停止循环
+        ClearRoots();
         return;
     }
     if (ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8) == 0) {
         g_armed = false;  // 命中目标已被清空（目标死亡/离开），停止循环
+        ClearRoots();
         return;
     }
     if (CallReplayGuarded() == 0) {
         // 目标状态已失效：停止循环，避免反复触发同一处失效访问。
         g_armed = false;
+        ClearRoots();
         ++g_faults;
         LogInfo("damage-chain: replay hit invalid state, chain stopped");
         return;
@@ -409,11 +460,13 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
 
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     g_armed = false;
+    ClearRoots();
     return anomaly::sdk::Ok();
 }
 
 void ANOMALY_CALL Unload(void*) {
     g_armed = false;
+    ClearRoots();
     if (g_hook_handle.id != 0 && g_hook != nullptr && g_hook->release != nullptr) {
         g_hook->release(g_hook->user, g_hook_handle);
     }
@@ -462,7 +515,13 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
     }
     if (g_stub == nullptr) BuildStubs();
     EnsureHook();
-    if (g_conf.enabled != 0) Pump();
+    if (g_conf.enabled != 0) {
+        Pump();
+    } else if (g_armed) {
+        // 用户关闭时立刻停止并释放持有的引用。
+        g_armed = false;
+        ClearRoots();
+    }
 }
 
 #define HAS(service, member) \
@@ -526,7 +585,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.2.2"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.3.0"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
