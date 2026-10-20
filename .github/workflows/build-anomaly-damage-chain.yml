@@ -41,9 +41,15 @@ jobs:
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_CXX_EXTENSIONS OFF)
-          add_library(anomaly_damage_chain SHARED "__ANOMALY_SOURCE_ROOT__/plugins/AnomalyDamageChain/plugin.cpp")
+          add_library(anomaly_damage_chain SHARED
+            "__ANOMALY_SOURCE_ROOT__/plugins/AnomalyDamageChain/plugin.cpp"
+            "__ANOMALY_SOURCE_ROOT__/sdk/cpp/plugin_cxx_throw_bridge.cpp"
+          )
           target_include_directories(anomaly_damage_chain PRIVATE "__ANOMALY_SOURCE_ROOT__/include")
           target_compile_definitions(anomaly_damage_chain PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+          if(MSVC)
+            target_compile_options(anomaly_damage_chain PRIVATE /W4 /permissive- /EHsc /Zc:threadSafeInit-)
+          endif()
           set_target_properties(anomaly_damage_chain PROPERTIES
             OUTPUT_NAME "plugin"
             PREFIX ""
