@@ -1683,6 +1683,9 @@ AnomalyGenerationHandleV1 GenerationHandle(
 
 constexpr std::uint32_t kHostWindowNoCollapse = 1U << 5U;
 constexpr std::uint32_t kHostWindowNoSavedSettings = 1U << 8U;
+// Private transport flag consumed by HostUiService before ImGui::Begin. This bit
+// must never be forwarded as a native ImGuiWindowFlags value.
+constexpr std::uint32_t kHostWindowKeepVisibleWhenMenusCollapsed = 1U << 31U;
 constexpr std::uint32_t kHostWindowFirstUse = 4U;
 
 std::uint32_t ToHostUiWindowFlags(const std::uint32_t flags) noexcept {
@@ -1690,6 +1693,9 @@ std::uint32_t ToHostUiWindowFlags(const std::uint32_t flags) noexcept {
     if ((flags & ANOMALY_WINDOW_V1_NO_COLLAPSE) != 0) result |= kHostWindowNoCollapse;
     if ((flags & ANOMALY_WINDOW_V1_NO_SAVED_SETTINGS) != 0) {
         result |= kHostWindowNoSavedSettings;
+    }
+    if ((flags & ANOMALY_WINDOW_V1_KEEP_VISIBLE_WHEN_MENUS_COLLAPSED) != 0) {
+        result |= kHostWindowKeepVisibleWhenMenusCollapsed;
     }
     return result;
 }
