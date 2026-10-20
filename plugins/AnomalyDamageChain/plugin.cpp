@@ -53,6 +53,9 @@ AnomalyGenerationHandleV1 g_hook_handle{};
 double g_period_ms{1000.0 / 15.0};
 double g_next_due{};
 bool g_armed{};
+// 被钩函数的调用方返回地址（stub 入口的 [rsp]），用于静态定位调用链。
+std::uintptr_t g_burst_caller{};
+bool g_burst_caller_logged{};
 unsigned long long g_hits{};
 unsigned long long g_pulses{};
 unsigned long long g_faults{};
@@ -96,6 +99,10 @@ extern "C" void OnBurstHit() {
     // 空挥判定：原函数从 [rdx+0xa8] 取命中目标，取不到就走无目标分支。
     // 这类调用不产生伤害，若入队会在补发时访问空指针（实测会崩）。
     if (ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8) == 0) return;
+    // 记录调用方（命中时进入本函数的那条返回地址），仅首次。
+    if (g_burst_caller == 0 && g_capture.entry_rsp != 0) {
+        g_burst_caller = ReadField(reinterpret_cast<const void*>(g_capture.entry_rsp), 0);
+    }
     g_armed = true;
     g_next_due = g_now_ms + g_period_ms;
     ++g_hits;
@@ -397,6 +404,17 @@ void ANOMALY_CALL Unload(void*) {
 
 void ANOMALY_CALL Update(void*, double delta_seconds) {
     g_now_ms += (delta_seconds > 0.0 ? delta_seconds : 0.0) * 1000.0;
+
+    if (!g_burst_caller_logged && g_burst_caller != 0) {
+        g_burst_caller_logged = true;
+        const HMODULE mod = GetModuleHandleA("HTGame.exe");
+        const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mod);
+        char buf[192]{};
+        std::snprintf(buf, sizeof(buf), "damage-chain: burst caller rva=0x%llX",
+                      static_cast<unsigned long long>(base != 0 ? g_burst_caller - base
+                                                                : g_burst_caller));
+        LogInfo(buf);
+    }
     if (g_stub == nullptr) BuildStubs();
     EnsureHook();
     if (g_conf.enabled != 0) Pump();
@@ -463,7 +481,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.2.0"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.2.1"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
