@@ -848,6 +848,7 @@ struct Ue5NteAdapter::State {
         VehicleFunctionBinding set_max_engine_torque{};
         VehicleFunctionBinding summon_vehicle{};
         VehicleFunctionBinding set_wheel_friction{};
+        VehicleFunctionBinding repair_self{};
         std::uintptr_t set_delayed_velocity_restore{};
         std::uintptr_t current_vehicle_receiver{};
         std::uint64_t object_generation{};
@@ -8179,6 +8180,7 @@ struct Ue5NteAdapter::State {
             const bool float_return = mode == "FloatReturn";
             const bool float_input = mode == "FloatInput";
             const bool bool_input = mode == "BoolInput";
+            const bool repair_refresh_display = mode == "RepairRefreshDisplay";
             const bool name_input = mode == "NameInput";
             const bool no_args = mode == "NoArgs";
             if (no_args) {
@@ -8188,7 +8190,7 @@ struct Ue5NteAdapter::State {
             } else if (object_return || float_return) {
                 const std::uint16_t expected_size = object_return ? 8u : 4u;
                 if (num_parms != 1 || parms_size != expected_size || return_offset == 0xFFFFu) return false;
-            } else if (float_input || bool_input || name_input) {
+            } else if (float_input || bool_input || repair_refresh_display || name_input) {
                 const std::uint16_t expected_size = name_input ? 8u : (float_input ? 4u : 1u);
                 if (num_parms != 1 || parms_size != expected_size || return_offset != 0xFFFFu) return false;
             } else {
@@ -8208,6 +8210,8 @@ struct Ue5NteAdapter::State {
             const bool expected_input =
                 (float_input && info.type == "FloatProperty" && info.element_size == 4) ||
                 (bool_input && info.type == "BoolProperty" && info.element_size == 1) ||
+                (repair_refresh_display && info.name == "RefreshDisplay" &&
+                    info.type == "BoolProperty" && info.element_size == 1) ||
                 (name_input && info.name == "VehicleID" &&
                     info.type == "NameProperty" && info.element_size == 8);
             if (!expected_return && !expected_input) return false;
@@ -9053,6 +9057,7 @@ struct Ue5NteAdapter::State {
             static constexpr std::array<std::string_view, 1> controller_outer{"HTPlayerController"};
             static constexpr std::array<std::string_view, 1> player_character_outer{"HTPlayerCharacter"};
             static constexpr std::array<std::string_view, 1> vehicle_outer{"HTWheeledVehicleBase"};
+            static constexpr std::array<std::string_view, 1> drivable_outer{"HTWheeledVehicleDrivable"};
             static constexpr std::array<std::string_view, 1> movement_outer{"HTVehicleMovementComponent"};
 
             if (vehicle_bindings.current_vehicle.function == 0) {
@@ -9069,6 +9074,10 @@ struct Ue5NteAdapter::State {
             if (vehicle_bindings.set_top_speed_ratio.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("SetTopSpeedRatio", vehicle_outer,
                     "FloatInput", vehicle_bindings.set_top_speed_ratio));
+            }
+            if (vehicle_bindings.repair_self.function == 0) {
+                static_cast<void>(FindVehicleFunctionLocked("RepairSelf", drivable_outer,
+                    "RepairRefreshDisplay", vehicle_bindings.repair_self));
             }
             if (vehicle_bindings.speed_kmh.function == 0) {
                 static_cast<void>(FindVehicleFunctionLocked("GetForwardSpeedKmH", movement_outer,
@@ -9626,6 +9635,46 @@ struct Ue5NteAdapter::State {
         std::scoped_lock lock(mutex);
         vehicle_fine_speed_authorized = false;
         vehicle_fine_speed_tuning_enabled = false;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    // Dump 5.6.1: HTWheeledVehicleDrivable::RepairSelf(bool RefreshDisplay), one BoolProperty byte.
+    // Resolve the live current vehicle on every call; never reuse a previous vehicle's object.
+    AnomalyStatusV1 VehicleRepairCurrentDurability() noexcept {
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire))
+            return Status(ANOMALY_STATUS_V1_FAILED, "vehicle repair must run on Game thread");
+
+        std::scoped_lock lock(mutex);
+        if (!RefreshVehicleLocked())
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "current driving vehicle is unavailable");
+        if (vehicle_is_water)
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "Dump 5.6.1 does not expose a validated water-vehicle repair entry point");
+        if (current_vehicle_object == 0 ||
+            !ObjectClassChainContainsLocked(current_vehicle_object, "HTWheeledVehicleDrivable"))
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "current vehicle is not a validated HTWheeledVehicleDrivable");
+
+        auto& repair = vehicle_bindings.repair_self;
+        if (repair.function == 0) {
+            static constexpr std::array<std::string_view, 1> drivable_outer{
+                "HTWheeledVehicleDrivable"};
+            static_cast<void>(FindVehicleFunctionLocked(
+                "RepairSelf", drivable_outer, "RepairRefreshDisplay", repair));
+        }
+        if (repair.function == 0 || repair.parms_size != 1U ||
+            repair.parameter_offset >= repair.parms_size || repair.has_return) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTGame.HTWheeledVehicleDrivable.RepairSelf(bool RefreshDisplay) failed Dump ABI validation");
+        }
+
+        std::array<std::uint8_t, 1> parameters{};
+        parameters[repair.parameter_offset] = 1U;
+        if (!InvokeProcessEventGuarded(process_event_invoker, current_vehicle_object,
+                repair.function, parameters.data(), repair.parms_size)) {
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "HTWheeledVehicleDrivable.RepairSelf ProcessEvent failed");
+        }
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
@@ -17314,7 +17363,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleSetOtherVehiclesMinSpeedRatioThunk,
             VehicleAuthorizeFineSpeedThunk, VehicleSetFineSpeedTuningEnabledThunk,
             VehicleRevokeFineSpeedAuthorizationThunk,
-            VehicleCustomizationCatalogSnapshotThunk, VehicleCustomizationOptionAtThunk};
+            VehicleCustomizationCatalogSnapshotThunk, VehicleCustomizationOptionAtThunk,
+            VehicleRepairCurrentDurabilityThunk};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -17656,6 +17706,13 @@ private:
         void* user, float ratio) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSetTopSpeedRatio(ratio) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleRepairCurrentDurabilityThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease
+            ? static_cast<State*>(lease.User())->VehicleRepairCurrentDurability()
+            : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleAuthorizeFineSpeedThunk(
