@@ -64,7 +64,7 @@ constexpr std::uintptr_t kProcessEventVtableIndex = 76;   // 0x4C
 constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 
 // ---- 配置 ----
-constexpr int kConfVersion = 3;  // v3: 目标改为技能激活 RPC
+constexpr int kConfVersion = 4;  // v3: 目标改为技能激活 RPC
 constexpr const char* kConfFile = "damage-chain.conf";
 constexpr const char* kLogFile = "damage-chain-capture.txt";
 constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByActor";
@@ -77,10 +77,33 @@ constexpr std::size_t kMaxDisplayRows = 12;
 // 服务器 43.144.211.30:30031 / 113.250.24.242:10012），客户端没有任何 UFunction
 // 会施加怪物伤害；唯一能让服务端重新执行一次伤害判定的客户端动作，是重新激活攻击技能。
 // 实测 ServerActivateGameEffectsWithClassByActor 只承载 Buff_*（玩家增益），不是伤害链路。
+// 伤害检测：这两个函数的参数里带完整 FHTDamageEvent（含 DamageGEDef 与目标角色）。
+// dump 证据（5.6.1-new/CppSDK/SDK/HTGame_parameters.hpp:146887）：
+//   struct HTGameplayEffectTask_CharacterAttacked_OnCharacterAttackedCallBack {
+//       FHTDamageEvent DamageEvent;            // +0x000 (0x170)
+//       AHTAbilityCharacter* Instigator;       // +0x170
+//       AHTAbilityCharacter* DamagedCharacter; // +0x178
+//   };  ParmsSize 0x180
+// FHTDamageEvent::DamageGEDef 位于 +0x138（dump 布局）。
 constexpr const char* kDefaultDamageNames[] = {
-    "HTServerTryActivateAbilityWithData",  // 游戏自定义的技能激活 RPC
-    "ServerTryActivateAbility",            // GAS 标准激活 RPC
+    "OnCharacterAttackedCallBack",
+    "OnOwningCharacterAttacked",
 };
+
+// 伤害事件参数布局
+constexpr std::size_t kDamageEventGeOffset = 0x138;   // FHTDamageEvent::DamageGEDef
+constexpr std::size_t kDamageEventInstigatorOffset = 0x170;
+constexpr std::size_t kDamageEventVictimOffset = 0x178;
+
+// 施加 GE 的参数布局（ServerActivateGameEffectsWithClassByActor，ParmsSize 0x80）
+constexpr std::size_t kApplySourceOffset = 0x00;
+constexpr std::size_t kApplyGeOffset = 0x08;
+constexpr std::size_t kApplyBufferOffset = 0x10;   // FBufferData(0x58)
+constexpr std::size_t kApplyBufferLevelOffset = 0x10 + 0x28;
+constexpr std::size_t kApplyBufferDurationOffset = 0x10 + 0x2C;
+constexpr std::size_t kApplyBufferStacksOffset = 0x10 + 0x38;
+constexpr std::size_t kApplyEventTypeOffset = 0x68;
+constexpr std::size_t kApplyParamsSize = 0x80;
 constexpr std::size_t kDefaultDamageNameCount =
     sizeof(kDefaultDamageNames) / sizeof(kDefaultDamageNames[0]);
 
@@ -97,13 +120,15 @@ enum : std::uint8_t {
 };
 
 struct PendingReplay {
-    std::uintptr_t object{};
-    std::uintptr_t function{};
+    std::uintptr_t object{};          // 重放时的 this
+    std::uintptr_t function{};        // 重放时调用的 UFunction
     std::array<std::uint8_t, kMaxParams> params{};
     std::size_t params_size{};
     std::uint32_t remaining{};
     std::uint32_t ge_class_name_id{};
     std::uint32_t object_class_name_id{};
+    std::uint32_t victim_class_name_id{};
+    int mode{};                       // 0=原样重放调用 1=把伤害 GE 施加到目标
     bool valid{};
 };
 
@@ -187,6 +212,7 @@ const AnomalyUe5ProcessEventServiceV1* g_process_event{};
 const AnomalyUe5NamesServiceV1* g_names{};
 const AnomalyNteCombatServiceV1* g_combat{};
 
+std::uintptr_t g_apply_ufunc{};  // ServerActivateGameEffectsWithClassByActor 的 UFunction
 AnomalyGenerationHandleV1 g_events_handle{};
 AnomalyGenerationHandleV1 g_hotkey_toggle{};
 
@@ -340,44 +366,71 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
         g_state.name_match.emplace(name_id, kNamePending);
         return;
     }
-    if (cached->second != kNameMatch && cached->second != kNameMatchGe) return;
+    // 观察到 GE 施加函数的 UFunction 指针就记下来，供后面把伤害 GE 施加到目标。
+    if (cached->second == kNameMatchGe) {
+        g_apply_ufunc = function;
+        return;
+    }
+    if (cached->second != kNameMatch) return;
     if (g_state.replaying || g_state.pending.valid) return;
     if (g_state.repeat_count == 0) return;  // 0 次时不要留下永久 pending
+    if (g_apply_ufunc == 0) return;         // 还没见过 GE 施加函数，无法重放
 
     std::uint16_t parms_size = 0;
     if (parameters == nullptr || !SafeReadU16(function + kFunctionParmsSizeOffset, &parms_size) ||
-        parms_size == 0 || parms_size > kMaxParams) {
+        parms_size < kDamageEventVictimOffset + sizeof(void*) || parms_size > kMaxParams) {
+        ++g_state.params_rejected;
+        return;
+    }
+
+    // 从伤害事件里取：伤害 GE、施害者、受害者。
+    const auto base = reinterpret_cast<std::uintptr_t>(parameters);
+    std::uintptr_t ge = 0;
+    std::uintptr_t instigator = 0;
+    std::uintptr_t victim = 0;
+    if (!SafeReadPtr(base + kDamageEventGeOffset, &ge) ||
+        !SafeReadPtr(base + kDamageEventInstigatorOffset, &instigator) ||
+        !SafeReadPtr(base + kDamageEventVictimOffset, &victim) || ge < 0x10000 ||
+        victim < 0x10000) {
         ++g_state.params_rejected;
         return;
     }
 
     ++g_state.matched;
-    g_state.pending.object = object;
-    g_state.pending.function = function;
-    g_state.pending.params_size = parms_size;
-    std::memcpy(g_state.pending.params.data(), parameters, parms_size);
+    g_state.pending = PendingReplay{};
+    g_state.pending.mode = 1;
+    g_state.pending.object = victim;          // 施加到受害者身上
+    g_state.pending.function = g_apply_ufunc; // ServerActivateGameEffectsWithClassByActor
+    g_state.pending.params_size = kApplyParamsSize;
     g_state.pending.remaining = g_state.repeat_count;
-    g_state.pending.ge_class_name_id = 0;
-    g_state.pending.object_class_name_id = 0;
     g_state.pending.valid = true;
     g_state.last_match_name_id = name_id;
 
-    // 记录类名 id（只读内存）；真正的名字解析与过滤推迟到 Update。
+    // 组装施加参数：SourceObj、GameplayEffect、FBufferData(nLevel=1,nStacks=1,fDuration=0)、
+    // BuffEventType=0、PredictionKey 全零（不携带客户端预测）。
+    auto* out = g_state.pending.params.data();
+    std::memset(out, 0, kApplyParamsSize);
+    std::memcpy(out + kApplySourceOffset, &instigator, sizeof(instigator));
+    std::memcpy(out + kApplyGeOffset, &ge, sizeof(ge));
+    const std::int32_t level = 1;
+    const std::int32_t stacks = 1;
+    const float duration = 0.0F;
+    std::memcpy(out + kApplyBufferLevelOffset, &level, sizeof(level));
+    std::memcpy(out + kApplyBufferStacksOffset, &stacks, sizeof(stacks));
+    std::memcpy(out + kApplyBufferDurationOffset, &duration, sizeof(duration));
+    const std::uint8_t buff_event_type = 0;
+    std::memcpy(out + kApplyEventTypeOffset, &buff_event_type, sizeof(buff_event_type));
+
+    // 记录受害者/GE 类名（只读内存），用于诊断显示。
     {
         std::uintptr_t cls = 0;
-        if (SafeReadPtr(object + kClassPrivateOffset, &cls) && cls >= 0x10000) {
+        if (SafeReadPtr(victim + kClassPrivateOffset, &cls) && cls >= 0x10000) {
             g_state.pending.object_class_name_id = ObjectNameId(cls);
         }
-    }
-    if (cached->second == kNameMatchGe) {
-        std::uintptr_t ge = 0;
-        if (SafeReadPtr(reinterpret_cast<std::uintptr_t>(parameters) + kGeParamOffset, &ge) &&
-            ge >= 0x10000) {
-            std::uintptr_t cls = 0;
-            if (SafeReadPtr(ge + kClassPrivateOffset, &cls) && cls >= 0x10000) {
-                g_state.pending.ge_class_name_id = ObjectNameId(cls);
-                g_state.last_ge_name_id = g_state.pending.ge_class_name_id;
-            }
+        std::uintptr_t ge_cls = 0;
+        if (SafeReadPtr(ge + kClassPrivateOffset, &ge_cls) && ge_cls >= 0x10000) {
+            g_state.pending.ge_class_name_id = ObjectNameId(ge_cls);
+            g_state.last_ge_name_id = g_state.pending.ge_class_name_id;
         }
     }
 }
@@ -397,11 +450,14 @@ void ResolvePendingNames() {
             const char* name = ResolveName(name_id);
             std::uint8_t result = kNameNoMatch;
             if (name != nullptr && name[0] != '\0') {
-                for (const char* wanted : kDefaultDamageNames) {
-                    if (std::strcmp(name, wanted) == 0) {
-                        result = (std::strcmp(wanted, kGeFunctionName) == 0) ? kNameMatchGe
-                                                                              : kNameMatch;
-                        break;
+                if (std::strcmp(name, kGeFunctionName) == 0) {
+                    result = kNameMatchGe;  // GE 施加入口：只记指针，不触发重放
+                } else {
+                    for (const char* wanted : kDefaultDamageNames) {
+                        if (std::strcmp(name, wanted) == 0) {
+                            result = kNameMatch;  // 伤害事件：解析并重放
+                            break;
+                        }
                     }
                 }
             }
@@ -856,11 +912,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.3.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.4.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.3.0, candidates=%d hook=%d np=%d gf=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.4.0, candidates=%d hook=%d np=%d gf=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
