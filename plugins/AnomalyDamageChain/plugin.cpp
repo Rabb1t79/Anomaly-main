@@ -258,9 +258,15 @@ std::uintptr_t g_exec_starts[8]{};
 std::uintptr_t g_exec_ends[8]{};
 int g_exec_count{};
 // 记录 (function name_id -> 首次调用方 rva)
+struct StackCandidate {
+    std::uintptr_t return_va{};
+    std::uintptr_t call_target{};
+};
+
 std::unordered_map<std::uint32_t, std::uintptr_t> g_caller_rva;
 std::uintptr_t g_process_event_addr{};
 bool g_caller_dirty{};
+std::vector<StackCandidate> g_caller_candidates;
 std::uintptr_t g_scan_hits[16]{};
 int g_scan_hit_count{};
 int g_scan_scanned_ranges{};
@@ -512,15 +518,13 @@ int CollectExecRanges(std::uintptr_t base, std::uintptr_t* starts, std::uintptr_
     return count;
 }
 
-// 在栈上找"返回地址"，判据必须同时满足：
-//   1) 该值落在 HTGame.exe 的可执行段内
-//   2) 它前面 5 字节是 E8，且 rel32 精确指向 ProcessEvent
-// 这样可排除栈上残留的无关代码指针。
-std::uintptr_t FindGameReturnAddress() {
-    if (g_exec_count <= 0 || g_process_event_addr == 0) return 0;
-    const std::uintptr_t pe_va = g_process_event_addr;
+// 收集栈上所有"像返回地址"的候选：值在 HTGame 可执行段内，且前 5 字节是 E8。
+// 同时读出那条 call 的目标地址，便于判定它调用的是哪个模块。
+int CollectStackCandidates(StackCandidate* out, int capacity) {
+    if (g_exec_count <= 0 || capacity <= 0) return 0;
     std::uintptr_t* p = reinterpret_cast<std::uintptr_t*>(_AddressOfReturnAddress());
-    for (int i = 0; i < 1024; ++i) {
+    int count = 0;
+    for (int i = 0; i < 1024 && count < capacity; ++i) {
         std::uintptr_t value = 0;
         if (!SafeReadPtr(reinterpret_cast<std::uintptr_t>(p + i), &value)) break;
         if (value < 0x10000) continue;
@@ -533,10 +537,11 @@ std::uintptr_t FindGameReturnAddress() {
         if (!SafeReadU32(value - 5, &opcode) || (opcode & 0xFFu) != 0xE8u) continue;
         std::int32_t rel = 0;
         if (!SafeReadU32(value - 4, reinterpret_cast<std::uint32_t*>(&rel))) continue;
-        if (value + static_cast<std::intptr_t>(rel) != pe_va) continue;
-        return value;
+        out[count].return_va = value;
+        out[count].call_target = value + static_cast<std::intptr_t>(rel);
+        ++count;
     }
-    return 0;
+    return count;
 }
 
 // 块级安全拷贝：一次 SEH 保护拷整块// 块级安全拷贝：一次 SEH 保护拷整块，之后在本地缓冲里紧凑扫描。
@@ -830,10 +835,13 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
 
     ++g_state.matched;
     // 埋点：记录是谁（RVA）调用了这个伤害事件 UFunction。
-    if (g_exec_count > 0) {
-        const std::uintptr_t caller = FindGameReturnAddress();
-        if (caller != 0 && g_caller_rva.find(name_id) == g_caller_rva.end()) {
-            g_caller_rva.emplace(name_id, caller);
+    if (g_exec_count > 0 && g_caller_rva.find(name_id) == g_caller_rva.end()) {
+        StackCandidate cands[6]{};
+        const int nc = CollectStackCandidates(cands, 6);
+        if (nc > 0) {
+            g_caller_candidates.clear();
+            for (int k = 0; k < nc; ++k) g_caller_candidates.push_back(cands[k]);
+            g_caller_rva.emplace(name_id, cands[0].return_va);
             g_caller_dirty = true;
         }
     }
@@ -1509,11 +1517,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v2.0.1：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v2.0.2：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.1, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.2, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
@@ -1594,7 +1602,7 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
         g_caller_dirty = false;
         const HMODULE mod = GetModuleHandleA("HTGame.exe");
         const std::uintptr_t mb = reinterpret_cast<std::uintptr_t>(mod);
-        char text[512]{};
+        char text[1024]{};
         int n = std::snprintf(text, sizeof(text), "damage-chain: callers");
         for (const auto& kv : g_caller_rva) {
             if (n <= 0 || static_cast<std::size_t>(n) + 96 >= sizeof(text)) break;
@@ -1602,6 +1610,14 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
             n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
                                " %s@0x%llX", (name != nullptr && name[0]) ? name : "?",
                                static_cast<unsigned long long>(kv.second - mb));
+        }
+        // 候选栈帧：返回地址 RVA <- 该 call 的目标 RVA（>0x10D43000 表示目标在别处）
+        for (const auto& c : g_caller_candidates) {
+            if (n <= 0 || static_cast<std::size_t>(n) + 64 >= sizeof(text)) break;
+            n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
+                               " [0x%llX<-0x%llX]",
+                               static_cast<unsigned long long>(c.return_va - mb),
+                               static_cast<unsigned long long>(c.call_target - mb));
         }
         if (g_core != nullptr && g_core->log != nullptr) {
             g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
@@ -1694,6 +1710,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    StringView("anomaly.local.damage-chain"),
                    StringView("Damage Chain Reaction"), StringView("Anomaly"),
-                   StringView("1.0.0"), Load, Start, Stop, Unload, Update, Draw};
+                   StringView("2.0.2"), Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
