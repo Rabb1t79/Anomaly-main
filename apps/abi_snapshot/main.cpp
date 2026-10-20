@@ -674,7 +674,9 @@ std::string BuildSnapshot() {
         alignof(AnomalyWindowFlagsV1),
         {{"ANOMALY_WINDOW_V1_NONE", ANOMALY_WINDOW_V1_NONE},
          {"ANOMALY_WINDOW_V1_NO_SAVED_SETTINGS", ANOMALY_WINDOW_V1_NO_SAVED_SETTINGS},
-         {"ANOMALY_WINDOW_V1_NO_COLLAPSE", ANOMALY_WINDOW_V1_NO_COLLAPSE}},
+         {"ANOMALY_WINDOW_V1_NO_COLLAPSE", ANOMALY_WINDOW_V1_NO_COLLAPSE},
+         {"ANOMALY_WINDOW_V1_KEEP_VISIBLE_WHEN_MENUS_COLLAPSED",
+          ANOMALY_WINDOW_V1_KEEP_VISIBLE_WHEN_MENUS_COLLAPSED}},
         false);
     AppendEnum(
         output,
@@ -1891,7 +1893,9 @@ std::string BuildSnapshot() {
          {"customization_catalog_snapshot",
           offsetof(AnomalyNteVehicleServiceV1, customization_catalog_snapshot)},
          {"customization_option_at",
-          offsetof(AnomalyNteVehicleServiceV1, customization_option_at)}},
+          offsetof(AnomalyNteVehicleServiceV1, customization_option_at)},
+         {"repair_current_vehicle",
+          offsetof(AnomalyNteVehicleServiceV1, repair_current_vehicle)}},
         false);
     AppendStruct(
         output,

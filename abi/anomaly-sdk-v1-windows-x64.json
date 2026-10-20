@@ -50,7 +50,7 @@
     "ANOMALY_NTE_MAP_LANDMARKS_SERVICE_V1_VERSION": 1,
     "ANOMALY_NTE_MAP_LANDMARK_V1_ID_MAX_BYTES": 128,
     "ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES": 2048,
-    "ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION": 7,
+    "ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION": 8,
     "ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION": 1,
     "ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES": 128,
     "ANOMALY_NTE_VEHICLE_V1_VALID": 1,
@@ -390,7 +390,8 @@
       "values": {
         "ANOMALY_WINDOW_V1_NONE": 0,
         "ANOMALY_WINDOW_V1_NO_SAVED_SETTINGS": 1,
-        "ANOMALY_WINDOW_V1_NO_COLLAPSE": 2
+        "ANOMALY_WINDOW_V1_NO_COLLAPSE": 2,
+        "ANOMALY_WINDOW_V1_KEEP_VISIBLE_WHEN_MENUS_COLLAPSED": 4
       }
     },
     "AnomalyGlyphRangeV1": {
@@ -1560,7 +1561,7 @@
       }
     },
     "AnomalyNteVehicleServiceV1": {
-      "size": 168,
+      "size": 176,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
@@ -1584,7 +1585,8 @@
         "set_fine_speed_tuning_enabled": 136,
         "revoke_fine_speed_authorization": 144,
         "customization_catalog_snapshot": 152,
-        "customization_option_at": 160
+        "customization_option_at": 160,
+        "repair_current_vehicle": 168
       }
     },
     "AnomalyNteAttackInputRequestV1": {
