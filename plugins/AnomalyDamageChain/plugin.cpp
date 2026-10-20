@@ -78,6 +78,9 @@ unsigned long long g_hits{};
 unsigned long long g_pulses{};
 unsigned long long g_faults{};
 
+// Forward declaration: the call site precedes the implementation below.
+void HoldArgs();
+
 void LogInfo(const char* text) {
     if (g_core == nullptr || g_core->log == nullptr || text == nullptr) return;
     g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
