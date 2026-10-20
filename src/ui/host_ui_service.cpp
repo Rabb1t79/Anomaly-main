@@ -23,6 +23,7 @@ namespace anomaly {
 namespace {
 
 std::atomic_bool g_menus_collapsed{};
+std::atomic_bool g_host_independent_window_capture{};
 std::atomic_bool g_menu_state_pending{true};
 std::atomic_bool g_management_expansion_requested{};
 std::atomic_bool g_developer_mode{};
@@ -51,6 +52,7 @@ struct PluginWindowChromeState {
     bool manually_collapsed{};
     bool host_collapsed{};
     bool pinned{};
+    bool host_independent{};
     bool auto_fit_after_expand{};
     bool auto_fit_recovery{};
     std::uint8_t body_auto_fit_frames_x{};
@@ -106,6 +108,19 @@ bool SynchronizePluginWindowHostCollapse(
     PluginWindowChromeState& state, const ImGuiWindow& window) noexcept {
     const bool was_collapsed = IsPluginWindowCollapsed(state);
     const bool host_was_collapsed = state.host_collapsed;
+    // WindowService's existing NO_COLLAPSE flag means this window is independent
+    // of the global Insert/menu-fold state, not merely that its title bar lacks a
+    // collapse affordance.
+    const bool requested_host_independent =
+        (window.Flags & ImGuiWindowFlags_NoCollapse) != 0;
+    if (requested_host_independent) {
+        state.host_independent = true;
+        state.pinned = true;
+        g_host_independent_window_capture.store(true, std::memory_order_release);
+    } else if (state.host_independent) {
+        state.host_independent = false;
+        state.pinned = false;
+    }
     state.host_collapsed =
         g_frame_menus_collapsed.Get() && !state.pinned && !IsWindowLocked(window.ID);
     const bool collapsed = IsPluginWindowCollapsed(state);
@@ -320,7 +335,10 @@ bool DrawPluginWindowChrome(
             ImRect(Offset(origin, pin_x, 6.0F),
                 Offset(origin, pin_x + kPluginWindowActionSize, 6.0F + kPluginWindowActionSize)),
             "#ANOMALY_PLUGIN_WINDOW_PIN", PluginWindowChromeGlyph::Pin,
-            state.pinned ? "Remove from top" : "Keep above other plugin windows", true, state.pinned)) {
+            state.host_independent
+                ? "This window stays open when the Anomaly menus collapse"
+                : (state.pinned ? "Remove from top" : "Keep above other plugin windows"),
+            !state.host_independent, state.pinned)) {
         state.pinned = !state.pinned;
         if (SynchronizePluginWindowHostCollapse(state, window)) {
             SetPluginWindowSizeFromChromeState(window, state);
@@ -1182,12 +1200,11 @@ bool ConsumeHostUiManagementExpansionRequest() noexcept {
 }
 
 bool HostUiMenusCaptureMouse() noexcept {
-    // While the platform menu is expanded the cursor must always be owned by
-    // the overlay. The Automatic policy's WantCaptureMouse gate deadlocks here:
-    // when the game hides the cursor it never lands on an ImGui window, so
-    // capture stays false, NoMouse is set, ImGui ignores the mouse, and
-    // WantCaptureMouse can never become true again.
-    return !g_menus_collapsed.load();
+    // The framework menu owns the cursor while expanded. A registered window with
+    // NO_COLLAPSE can remain independently open, so keep overlay mouse capture
+    // active for that window even when Insert folds the rest of Anomaly.
+    return !g_menus_collapsed.load() ||
+        g_host_independent_window_capture.load(std::memory_order_acquire);
 }
 
 void SetHostUiInputCapturePolicy(const PlatformInputCapturePolicy policy) noexcept {
@@ -1223,6 +1240,9 @@ void SetHostUiCurrentWindowLocked(const bool locked) noexcept {
 void PrepareHostUiFrame() noexcept {
     g_apply_menu_state.Set(g_menu_state_pending.exchange(false));
     g_frame_menus_collapsed.Set(g_menus_collapsed.load());
+    // Rebuilt by windows actually drawn this frame; hidden/closed windows don't
+    // leave the cursor captured indefinitely.
+    g_host_independent_window_capture.store(false, std::memory_order_release);
 }
 
 bool UpdateHostUiWindowState() noexcept {
