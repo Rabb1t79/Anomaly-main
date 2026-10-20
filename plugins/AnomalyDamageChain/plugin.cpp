@@ -162,6 +162,9 @@ void ArmChain() {
     ++g_hits;
 }
 
+// Gate callback referenced by the generated gate stub before its implementation below.
+extern "C" void OnGateResult();
+
 // 生成两条 stub：入口转发、重放调用。
 bool BuildStubs() {
     constexpr std::size_t kSlot = 512;
