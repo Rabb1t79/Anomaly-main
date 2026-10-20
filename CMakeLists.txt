@@ -1488,6 +1488,12 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/TimeAccel/manifest.json
         PACKAGE_NAME TimeAccel
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/TimeAccel")
+    # AutoFish: imported upstream plugin, built and packaged with the Runtime.
+    anomaly_add_plugin(anomaly_builtin_auto_fish
+        SOURCES plugins/AutoFish/plugin.cpp
+        MANIFEST plugins/AutoFish/manifest.json
+        PACKAGE_NAME AutoFish
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AutoFish")
     # 插件源码把中文直接写在字符串字面量里（非 locale），MSVC 需按 UTF-8 读源码并编码窄字符串。
     target_compile_options(anomaly_builtin_time_accel PRIVATE /utf-8)
     target_link_libraries(anomaly_builtin_fake_uid PRIVATE nlohmann_json::nlohmann_json)
@@ -1525,7 +1531,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         anomaly_builtin_clone_enter anomaly_builtin_nte_quick_ultimate
         anomaly_builtin_nte_free_fly anomaly_builtin_skin_changer anomaly_builtin_ui_buttons
         anomaly_builtin_dll_loader anomaly_builtin_hifi_vehicle_music
-        anomaly_builtin_model_scale)
+        anomaly_builtin_model_scale anomaly_builtin_auto_fish)
     if(ANOMALY_BUILD_TEST_PLUGINS)
         list(APPEND ANOMALY_BUILTIN_PLUGIN_TARGETS
             anomaly_builtin_nte_movement_hold
@@ -1546,6 +1552,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_builtin_nte_free_fly PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_skin_changer PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_auto_fish PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_hifi_vehicle_music PRIVATE /utf-8)
     endif()
     add_dependencies(anomaly_test_host ${ANOMALY_BUILTIN_PLUGIN_TARGETS})

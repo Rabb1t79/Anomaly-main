@@ -30,12 +30,14 @@
 #include "anomaly/sdk/services/nte.h"
 #include "anomaly/sdk/services/ui.h"
 #include "anomaly/sdk/services/interop.h"
+#include "anomaly/sdk/services/core.h"
 
 #include <Windows.h>
 #include <algorithm>
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <new>
@@ -53,18 +55,25 @@ struct NormalAttackBinding { uintptr_t world{}; uintptr_t controller{}; uintptr_
 struct Context final {
     // Draw belongs to Render while Update belongs to Game; serialize their shared state.
     std::mutex state_mutex;
+    const AnomalyCoreServiceV1* core{};
+    std::wstring replay_log_path;
+    bool replay_log_ready{};
+    std::string replay_log_error;
     const AnomalyNteCombatServiceV1* combat{};
+    const AnomalyNteDamageReplayServiceV1* damage_replay{};
     const AnomalyNteSkillsServiceV1* skills{};
     const AnomalyNteSkillInvocationServiceV1* invocation{};
     const AnomalyUiServiceV1* ui{};
     const AnomalySignatureServiceV1* signature{};
     const AnomalyUe5NamesServiceV1* names{};
     const AnomalyUe5FrameworkServiceV1* framework{};
-    const AnomalyNteAttackInputServiceV1* attack_input{};
 
     // The plugin is always armed: this cursor is advanced from the last observed
     // combat event, so only a damage event that occurs after startup can be captured.
     uint64_t combat_cursor{};
+    // Game-thread snapshot shown in the UI to distinguish "no Core events" from
+    // events received by Core but filtered as non-player/non-target damage.
+    uint64_t latest_damage_sequence_snapshot{};
 
     AnomalyGenerationHandleV1 world{};
     AnomalyGenerationHandleV1 character{};
@@ -75,6 +84,7 @@ struct Context final {
     AnomalyGenerationHandleV1 captured_target{};
     int32_t captured_input_id{-1};
     uint64_t captured_damage_sequence{};
+    uint64_t captured_damage_source_id{};
     int32_t captured_input_param{};
     AnomalyNteAttackInputRequestV1 captured_input_request{};
     bool captured_input_valid{};
@@ -100,11 +110,10 @@ struct Context final {
     // and executed by Update() in the Game callback domain required by the ABI.
     std::atomic_bool replay_requested{false};
     std::atomic_bool stop_requested{false};
-    // Target total damage hits, counting the original captured hit as one.
-    uint32_t replay_count{10};
+    // 连锁没有固定命中次数上限；该值仅控制两次 GameplayEffect 重放之间的 Game 帧间隔。
+    uint32_t replay_interval_frames{1};
     uint32_t replay_done{};
     uint64_t replay_last_tick{};
-    uint64_t replay_target_count{};
     std::string status{"自动等待玩家下一次攻击"};
 
     uint64_t last_skill_generation{};
@@ -118,20 +127,205 @@ struct Context final {
     NormalAttackBinding normal_attack{};
 };
 
+// Resolve the package folder via Anomaly's Core service. The DLL can be staged in
+// a shadow/cache folder, so its module path is not the user's actual plugin directory.
+void ReportReplayLogError(Context& context, std::string_view message) noexcept {
+    const auto* core = context.core;
+    constexpr std::size_t log_field_end =
+        offsetof(AnomalyCoreServiceV1, log) + sizeof(AnomalyCoreServiceV1::log);
+    if (core == nullptr || core->struct_size < log_field_end || core->log == nullptr) return;
+    try {
+        core->log(core->user, ANOMALY_CORE_LOG_LEVEL_V1_ERROR,
+            anomaly::sdk::StringView(message));
+    } catch (...) {
+    }
+}
+
+bool WriteReplayLogBytes(Context& context, std::string_view line) noexcept {
+    if (context.replay_log_path.empty()) {
+        ReportReplayLogError(context, context.replay_log_error.empty()
+            ? "NTE Attack Replay: plugin log path is not initialized"
+            : context.replay_log_error);
+        return false;
+    }
+    HANDLE file = CreateFileW(
+        context.replay_log_path.c_str(), FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        context.replay_log_ready = false;
+        context.replay_log_error = "NTE Attack Replay: cannot open attack-replay.log; Win32 error=" +
+            std::to_string(error);
+        ReportReplayLogError(context, context.replay_log_error);
+        return false;
+    }
+
+    DWORD written{};
+    const auto bytes_to_write = static_cast<DWORD>(
+        (std::min)(line.size(), static_cast<std::size_t>(0xFFFFFFFFU)));
+    const BOOL okay = bytes_to_write == 0 ||
+        (WriteFile(file, line.data(), bytes_to_write, &written, nullptr) != 0 &&
+            written == bytes_to_write);
+    const DWORD error = okay ? ERROR_SUCCESS : GetLastError();
+    if (okay) {
+        FlushFileBuffers(file);
+    }
+    CloseHandle(file);
+    if (!okay) {
+        context.replay_log_ready = false;
+        context.replay_log_error = "NTE Attack Replay: cannot write attack-replay.log; Win32 error=" +
+            std::to_string(error);
+        ReportReplayLogError(context, context.replay_log_error);
+        return false;
+    }
+    context.replay_log_ready = true;
+    return true;
+}
+
+std::string ReplayLogTimestampUtc() {
+    SYSTEMTIME now{};
+    GetSystemTime(&now);
+    char timestamp[40]{};
+    std::snprintf(
+        timestamp, sizeof(timestamp),
+        "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+        static_cast<unsigned>(now.wYear), static_cast<unsigned>(now.wMonth),
+        static_cast<unsigned>(now.wDay), static_cast<unsigned>(now.wHour),
+        static_cast<unsigned>(now.wMinute), static_cast<unsigned>(now.wSecond),
+        static_cast<unsigned>(now.wMilliseconds));
+    return timestamp;
+}
+
+// Create the log during plugin load, so the file exists even before the first error.
+// The directory comes from the Core API and refers to the real plugin package folder.
+bool InitializeReplayDiagnosticLog(Context& context) noexcept {
+    try {
+        constexpr std::size_t directory_field_end =
+            offsetof(AnomalyCoreServiceV1, plugin_directory) +
+            sizeof(AnomalyCoreServiceV1::plugin_directory);
+        if (context.core == nullptr ||
+            context.core->struct_size < directory_field_end ||
+            context.core->plugin_directory == nullptr) {
+            context.replay_log_error =
+                "NTE Attack Replay: Core plugin_directory API is unavailable";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+
+        std::size_t required{};
+        const auto size_status = context.core->plugin_directory(
+            context.core->user, nullptr, &required);
+        if (size_status.code != ANOMALY_STATUS_V1_OK || required < 2 || required > 32768) {
+            context.replay_log_error =
+                "NTE Attack Replay: cannot query package directory; Core status=" +
+                std::to_string(size_status.code);
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+        std::vector<char> utf8_path(required, '\0');
+        std::size_t capacity = utf8_path.size();
+        const auto path_status = context.core->plugin_directory(
+            context.core->user, utf8_path.data(), &capacity);
+        if (path_status.code != ANOMALY_STATUS_V1_OK || capacity < 2 ||
+            capacity > utf8_path.size() || utf8_path[capacity - 1] != '\0') {
+            context.replay_log_error =
+                "NTE Attack Replay: Core package directory read failed; status=" +
+                std::to_string(path_status.code);
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+
+        const int wide_required = MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(), -1, nullptr, 0);
+        if (wide_required < 2 || wide_required > 32768) {
+            context.replay_log_error =
+                "NTE Attack Replay: Core package directory is not valid UTF-8";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+        std::wstring directory(static_cast<std::size_t>(wide_required), L'\0');
+        if (MultiByteToWideChar(
+                CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(), -1,
+                directory.data(), wide_required) != wide_required) {
+            context.replay_log_error =
+                "NTE Attack Replay: failed to convert Core package directory to UTF-16";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+        directory.resize(static_cast<std::size_t>(wide_required - 1));
+        while (!directory.empty() &&
+            (directory.back() == L'\\' || directory.back() == L'/')) {
+            directory.pop_back();
+        }
+        if (directory.empty()) {
+            context.replay_log_error = "NTE Attack Replay: Core returned an empty package directory";
+            ReportReplayLogError(context, context.replay_log_error);
+            return false;
+        }
+
+        context.replay_log_path = directory + L"\\attack-replay.log";
+        const std::string startup_line =
+            "[" + ReplayLogTimestampUtc() + "] plugin=anomaly.builtin.nte-attack-replay "
+            "version=1.9.4 log=initialized\r\n";
+        if (!WriteReplayLogBytes(context, startup_line)) return false;
+        return true;
+    } catch (...) {
+        context.replay_log_error =
+            "NTE Attack Replay: unexpected failure while initializing attack-replay.log";
+        ReportReplayLogError(context, context.replay_log_error);
+        return false;
+    }
+}
+
+// Append every failed request's complete Core reason in the actual package folder;
+// the in-game UI only displays a short status.
+void AppendReplayDiagnosticLog(
+    Context& context, const uint32_t status_code,
+    const std::string_view detail) noexcept {
+    try {
+        std::string line;
+        line.reserve(detail.size() + context.captured_target_path.size() +
+            context.captured_damage_source_name.size() + 256U);
+        line += "[";
+        line += ReplayLogTimestampUtc();
+        line += "] replay=failed status_code=";
+        line += std::to_string(status_code);
+        line += " damage_sequence=";
+        line += std::to_string(context.captured_damage_sequence);
+        line += " interval_frames=";
+        line += std::to_string(context.replay_interval_frames);
+        line += " target=";
+        line += context.captured_target_path.empty()
+            ? "(unknown)" : context.captured_target_path;
+        line += " damage_source=";
+        line += context.captured_damage_source_name.empty()
+            ? "(unknown)" : context.captured_damage_source_name;
+        line += "\r\nreason=";
+        line.append(detail.data(), detail.size());
+        line += "\r\n\r\n";
+        WriteReplayLogBytes(context, line);
+    } catch (...) {
+        ReportReplayLogError(context,
+            "NTE Attack Replay: exception while writing replay failure diagnostic");
+    }
+}
+
 template <typename Struct, typename Field>
 // HasField 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
 bool HasField(const Struct* value, std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-// 检查战斗服务结构长度以及 latest_event_sequence、next_event、current_combatant 等回调是否存在；只有事件序列、事件读取和当前战斗角色查询同时可用时，攻击捕获逻辑才继续运行。
+// 只消费 Host 捕获的实际 CharacterOnDamaged 伤害流，不用合并后的 Unified CombatEvent 序列代替伤害序列。
 bool CombatReady(const AnomalyNteCombatServiceV1* service) noexcept {
     return HasField<AnomalyNteCombatServiceV1,
-                    decltype(AnomalyNteCombatServiceV1::next_event)>(
-               service, offsetof(AnomalyNteCombatServiceV1, next_event)) &&
-           service->latest_event_sequence != nullptr &&
-           service->next_event != nullptr &&
-           service->current_combatant != nullptr;
+                    decltype(AnomalyNteCombatServiceV1::next_damage_event)>(
+               service, offsetof(AnomalyNteCombatServiceV1, next_damage_event)) &&
+           service->latest_damage_sequence != nullptr &&
+           service->next_damage_event != nullptr &&
+           service->current_combatant != nullptr &&
+           service->source_name_utf8 != nullptr;
 }
 
 // SkillsReady 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -499,29 +693,24 @@ std::string ReadAbilityPath(
 }
 
 std::string ReadDamageSourceName(
-    const AnomalyNteCombatServiceV1* combat,
-    const AnomalyNteCombatEventV1& event) {
-    // The unified combat stream exposes the event's DamageSource name through
-    // event_name_utf8(event). name_id is not the source_id accepted by
-    // source_name_utf8, so passing name_id to source_name_utf8 can silently
-    // lose the skill correlation and incorrectly fall back to normal input.
-    if (combat == nullptr || combat->event_name_utf8 == nullptr || event.name_id == 0) {
+    const AnomalyNteCombatServiceV1* combat, const uint64_t source_id) {
+    if (combat == nullptr || combat->source_name_utf8 == nullptr || source_id == 0) {
         return {};
     }
     size_t size = 0;
-    const auto sizing = combat->event_name_utf8(
-        combat->user, &event, nullptr, &size);
+    const auto sizing = combat->source_name_utf8(
+        combat->user, source_id, nullptr, &size);
     if (sizing.code != ANOMALY_STATUS_V1_OK &&
         sizing.code != ANOMALY_STATUS_V1_BUFFER_TOO_SMALL) {
         return {};
     }
     if (size == 0) return {};
-    std::string result(size, '\0');
-    if (combat->event_name_utf8(
-            combat->user, &event, result.data(), &size).code != ANOMALY_STATUS_V1_OK) {
+    std::string result(size, '\\0');
+    if (combat->source_name_utf8(
+            combat->user, source_id, result.data(), &size).code != ANOMALY_STATUS_V1_OK) {
         return {};
     }
-    if (!result.empty() && result.back() == '\0') result.pop_back();
+    if (!result.empty() && result.back() == '\\0') result.pop_back();
     return result;
 }
 
@@ -673,6 +862,7 @@ void ArmForNextAttack(Context& context) {
     context.captured_target = {};
     context.captured_input_id = -1;
     context.captured_damage_sequence = 0;
+    context.captured_damage_source_id = 0;
     context.captured_input_param = 0;
     context.captured_input_request = {};
     context.captured_input_valid = false;
@@ -692,15 +882,17 @@ void ArmForNextAttack(Context& context) {
     context.replay_damage_cursor = 0;
     context.replay_damage_deadline = {};
     context.replay_last_tick = 0;
-    context.replay_target_count = 0;
     context.waiting_for_damage = false;
-    context.status = context.enabled ? "自动等待玩家下一次攻击" : "自动记录中：重放功能未启用";
+    context.status = context.enabled
+        ? "自动等待玩家下一次攻击"
+        : "已停用：勾选启用后自动连锁";
 
     // Starting at the current tail prevents an old combat event from being mistaken
     // for the next attack after a world change or plugin restart.
     if (context.combat != nullptr) {
-        context.combat_cursor = context.combat->latest_event_sequence(
+        context.combat_cursor = context.combat->latest_damage_sequence(
             context.combat->user);
+        context.latest_damage_sequence_snapshot = context.combat_cursor;
     }
 }
 
@@ -723,14 +915,14 @@ bool CaptureNextAttack(Context& context) {
     UpdateSkillCandidate(context);
 
     for (uint32_t i = 0; i < 16; ++i) {
-        AnomalyNteCombatEventV1 event{};
+        AnomalyNteDamageEventV1 event{};
         event.struct_size = sizeof(event);
-        const auto status = context.combat->next_event(
+        const auto status = context.combat->next_damage_event(
             context.combat->user, context.combat_cursor, &event);
         if (status.code == ANOMALY_STATUS_V1_NOT_FOUND) {
             // A stale cursor can happen when the Host replaces the combat ring or world.
             // Rebase to the current tail; old events must never be replayed as a new attack.
-            context.combat_cursor = context.combat->latest_event_sequence(
+            context.combat_cursor = context.combat->latest_damage_sequence(
                 context.combat->user);
             return false;
         }
@@ -739,28 +931,29 @@ bool CaptureNextAttack(Context& context) {
         }
         context.combat_cursor = event.sequence;
 
-        if (event.kind != ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE ||
+        if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) == 0 ||
             !SameHandle(event.world, combatant.world) ||
-            !SameHandle(event.source, combatant.character) ||
-            event.target.id == 0 || SameHandle(event.target, combatant.character)) {
+            !SameHandle(event.attacker, combatant.character) ||
+            event.victim.id == 0 || SameHandle(event.victim, combatant.character)) {
             continue;
         }
 
         context.captured = true;
         context.captured_damage_sequence = event.sequence;
         context.captured_tick_sequence = event.tick_sequence;
-        context.captured_damage_value = event.value;
-        context.captured_basic_value = event.basic_value;
-        context.captured_final_value = event.final_value;
+        context.captured_damage_value = event.display_damage;
+        context.captured_basic_value = event.basic_damage;
+        context.captured_final_value = event.final_damage;
+        context.captured_damage_source_id = event.source_id;
         context.captured_damage_type = event.damage_type;
         context.captured_reaction_type = event.reaction_type;
-        context.captured_target = event.target;
+        context.captured_target = event.victim;
 
         // Cross-check the real DamageEvent source against the skill catalog.
         // Prefer an exact reflected ability display-name match over the skill that
         // merely happened to be active immediately before the hit.
         context.captured_damage_source_name =
-            ReadDamageSourceName(context.combat, event);
+            ReadDamageSourceName(context.combat, event.source_id);
         // A generic active-skill candidate is not proof that it caused this hit.
         // When the real DamageSource is available, keep only an exact name match.
         if (!context.captured_damage_source_name.empty()) {
@@ -806,15 +999,16 @@ bool CaptureNextAttack(Context& context) {
         context.captured_has_skill = context.captured_skill.id != 0;
         context.captured_ability_path =
             ReadAbilityPath(context.skills, context.captured_ability);
-        const bool input_ready = PrepareCapturedInput(context);
+        // 仅读取既有数据行做只读交叉参考；重放路径不会再次按键或激活技能。
+        static_cast<void>(PrepareCapturedInput(context));
         if (context.combat->participant_path_utf8 != nullptr) {
             size_t size = 0;
             const auto sizing = context.combat->participant_path_utf8(
-                context.combat->user, event.target, nullptr, &size);
+                context.combat->user, event.victim, nullptr, &size);
             if (sizing.code == ANOMALY_STATUS_V1_BUFFER_TOO_SMALL && size != 0) {
                 context.captured_target_path.resize(size);
                 if (context.combat->participant_path_utf8(
-                        context.combat->user, event.target,
+                        context.combat->user, event.victim,
                         context.captured_target_path.data(), &size).code == ANOMALY_STATUS_V1_OK) {
                     if (!context.captured_target_path.empty() &&
                         context.captured_target_path.back() == '\0') {
@@ -825,13 +1019,9 @@ bool CaptureNextAttack(Context& context) {
                 }
             }
         }
-        context.status = !input_ready
-            ? "已记录真实伤害，但 DT_AbilityInput 无唯一有效的 InputID/Param；拒绝猜测并禁用重放"
-            : (context.captured_has_skill
-                ? (context.captured_damage_source_name.empty()
-                    ? "已自动捕获攻击；输入参数已从 DT_AbilityInput 解析"
-                    : "已自动捕获：已用真实 DamageSource 交叉匹配技能")
-                : "已自动捕获普通攻击链的第一次伤害，输入参数来自 MeleeAtack 数据行");
+        context.status = context.captured_damage_source_name.empty()
+            ? "已自动捕获实际玩家伤害事件；重放将使用 Host 捕获的原始 GameplayEffect 调用"
+            : "已自动捕获实际玩家伤害事件；DamageSource 已记录，等待重放";
         return true;
     }
     return false;
@@ -846,27 +1036,30 @@ enum class ReplayCallResult : uint32_t {
 };
 
 // 重放通过 Host 暴露的原生攻击输入服务执行；每次按下后必须观察到新的玩家->目标 DamageEvent 才能计数。
-ReplayCallResult ReplayOnce(Context& context, uint32_t* status_code, uint32_t* accepted) {
-    if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_OK;
-    if (accepted != nullptr) *accepted = 0;
-    if (!context.captured || !context.captured_input_valid ||
-        context.attack_input == nullptr || context.attack_input->press == nullptr ||
-        context.attack_input->release == nullptr) {
-        if (status_code != nullptr) *status_code = ANOMALY_STATUS_V1_UNAVAILABLE;
+ReplayCallResult ReplayOnce(Context& context, AnomalyStatusV1* replay_status) {
+    if (replay_status != nullptr) {
+        *replay_status = Status(ANOMALY_STATUS_V1_OK);
+    }
+    if (!context.captured || context.captured_damage_sequence == 0 ||
+        context.damage_replay == nullptr ||
+        context.damage_replay->replay_damage == nullptr) {
+        if (replay_status != nullptr) {
+            *replay_status = Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "captured damage/replay service is unavailable");
+        }
         return ReplayCallResult::InvalidState;
     }
 
-    // Send one real gameplay input. Release is performed in the next Game tick;
-    // an accepted call is not counted until Update observes a new matching DamageEvent.
-    const auto status = context.attack_input->press(
-        context.attack_input->user, &context.captured_input_request);
-    if (status_code != nullptr) *status_code = status.code;
-    if (status.code != ANOMALY_STATUS_V1_OK) return ReplayCallResult::ServiceError;
-
-    context.active_input_request = context.captured_input_request;
-    context.release_input_pending = true;
-    if (accepted != nullptr) *accepted = 1;
-    return ReplayCallResult::Success;
+    // Reapply only the exact GameplayEffect context associated with the recorded DamageEvent.
+    // No player input, attack animation, or skill activation request is issued here.
+    AnomalyNteDamageReplayRequestV1 request{};
+    request.struct_size = sizeof(request);
+    request.damage_sequence = context.captured_damage_sequence;
+    const auto status = context.damage_replay->replay_damage(
+        context.damage_replay->user, &request);
+    if (replay_status != nullptr) *replay_status = status;
+    return status.code == ANOMALY_STATUS_V1_OK
+        ? ReplayCallResult::Success : ReplayCallResult::ServiceError;
 }
 
 AnomalyStatusV1 ANOMALY_CALL Load(
@@ -878,9 +1071,15 @@ AnomalyStatusV1 ANOMALY_CALL Load(
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_FAILED);
 
     const anomaly::sdk::Host sdk_host(host);
+    context->core = sdk_host.Query<AnomalyCoreServiceV1>(
+        ANOMALY_CORE_SERVICE_V1_ID, ANOMALY_CORE_SERVICE_V1_VERSION).get();
+    InitializeReplayDiagnosticLog(*context);
     context->combat = sdk_host.Query<AnomalyNteCombatServiceV1>(
         ANOMALY_NTE_COMBAT_SERVICE_V1_ID,
         ANOMALY_NTE_COMBAT_SERVICE_V1_VERSION).get();
+    context->damage_replay = sdk_host.Query<AnomalyNteDamageReplayServiceV1>(
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION).get();
     context->skills = sdk_host.Query<AnomalyNteSkillsServiceV1>(
         ANOMALY_NTE_SKILLS_SERVICE_V1_ID,
         ANOMALY_NTE_SKILLS_SERVICE_V1_VERSION).get();
@@ -893,23 +1092,19 @@ AnomalyStatusV1 ANOMALY_CALL Load(
         ANOMALY_UE5_NAMES_SERVICE_V1_ID, ANOMALY_UE5_NAMES_SERVICE_V1_VERSION).get();
     context->framework = sdk_host.Query<AnomalyUe5FrameworkServiceV1>(
         ANOMALY_UE5_FRAMEWORK_SERVICE_V1_ID, ANOMALY_UE5_FRAMEWORK_SERVICE_V1_VERSION).get();
-    context->attack_input = sdk_host.Query<AnomalyNteAttackInputServiceV1>(
-        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
-        ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION).get();
     context->ui = sdk_host.Query<AnomalyUiServiceV1>(
         ANOMALY_UI_SERVICE_V1_ID, ANOMALY_UI_SERVICE_V1_VERSION).get();
 
-    if (!CombatReady(context->combat) || !SkillsReady(context->skills) ||
-        !InvocationReady(context->invocation) || !UiReady(context->ui) ||
-        context->signature == nullptr || context->names == nullptr || context->framework == nullptr || context->attack_input == nullptr ||
-        context->signature->resolve == nullptr || context->names->resolve_utf8 == nullptr ||
-        context->framework->tick_sequence == nullptr ||
-        context->attack_input->press == nullptr ||
-        context->attack_input->release == nullptr) {
+    // Damage replay uses the Host's validated captured GameplayEffect call. Skill,
+    // invocation, names and signature services are optional enrichers; requiring them
+    // prevented replay from loading when those unrelated services were unavailable.
+    if (!CombatReady(context->combat) || context->damage_replay == nullptr ||
+        context->damage_replay->replay_damage == nullptr || !UiReady(context->ui) ||
+        context->framework == nullptr || context->framework->tick_sequence == nullptr) {
         delete context;
         return Status(
             ANOMALY_STATUS_V1_UNAVAILABLE,
-            "attack replay requires NTE combat, skills, skill-invocation and UI services");
+            "Attack Replay requires raw NTE damage events, the GameplayEffect replay service, framework ticks, and UI");
     }
 
     *plugin_context = context;
@@ -922,9 +1117,8 @@ AnomalyStatusV1 ANOMALY_CALL Start(void* plugin_context) {
     if (context == nullptr) return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT);
     std::scoped_lock state_lock(context->state_mutex);
     context->enabled = false;
-    context->replay_count = 10;
+    context->replay_interval_frames = 1;
     context->replay_done = 0;
-    context->replay_target_count = 0;
     context->replay_last_tick = 0;
     context->replaying = false;
     context->replay_requested.store(false, std::memory_order_release);
@@ -954,49 +1148,47 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     auto* context = static_cast<Context*>(plugin_context);
     if (context == nullptr) return;
     std::scoped_lock state_lock(context->state_mutex);
-
-    // Recording is always active. The enable switch only gates replay actions.
-    if (!context->captured && !context->replaying) {
-        CaptureNextAttack(*context);
+    // Sample the host sequence on the Game callback, never from Draw's Render domain.
+    if (context->combat != nullptr && context->combat->latest_damage_sequence != nullptr) {
+        context->latest_damage_sequence_snapshot =
+            context->combat->latest_damage_sequence(context->combat->user);
     }
 
+    // 启用复选框是唯一的开关。停用时清除旧捕获，重新启用只处理之后的新攻击。
     if (context->stop_requested.exchange(false, std::memory_order_acq_rel)) {
+        // Disable stops the chain but intentionally preserves the current capture.
+        // The recorder remains armed at all times, even while replay is disabled.
         context->replaying = false;
-        context->status = "已停止重放，继续自动记录";
+        context->waiting_for_damage = false;
+        context->replay_requested.store(false, std::memory_order_release);
+        context->status = context->enabled
+            ? "已启用：自动等待下一次攻击"
+            : (context->captured
+                ? "自动记录中：重放未启用（已保留当前捕获）"
+                : "自动记录中：重放功能未启用");
     }
+    // Recording is always on. While disabled, a captured event is kept ready but never
+    // replayed until the checkbox is enabled; only newly captured events auto-start.
+    if (!context->captured && !context->replaying && CaptureNextAttack(*context)) {
+        if (context->enabled) {
+            context->replay_requested.store(true, std::memory_order_release);
+        }
+    }
+    if (!context->enabled) return;
     if (context->replay_requested.exchange(false, std::memory_order_acq_rel)) {
         if (context->enabled && context->captured && !context->replaying) {
             context->replay_done = 0;
             context->replaying = true;
             context->waiting_for_damage = false;
-            // The user-set chain rate X requests X+1 additional legal hits after
-            // the captured original event. Only one input is sent per Game tick.
-            context->replay_target_count = context->replay_count + 1U;
             context->replay_last_tick = context->captured_tick_sequence;
-            context->status = "已提交重放，等待原始伤害后的下一游戏帧";
+            context->status = "已自动启动连锁重放，等待原始伤害后的下一游戏帧";
         } else {
-            context->status = context->captured
-                ? "无法开始重放：请先启用重放功能"
-                : "无法开始重放：当前没有已捕获攻击";
+            context->status = "自动重放未启动：功能已停用或尚无有效攻击";
         }
     }
 
     const uint64_t current_tick = context->framework->tick_sequence(
         context->framework->user);
-    if (context->release_input_pending && current_tick != 0 &&
-        current_tick != context->input_press_tick) {
-        const auto release_status = context->attack_input->release(
-            context->attack_input->user, &context->active_input_request);
-        context->release_input_pending = false;
-        context->input_press_tick = current_tick;
-        if (release_status.code != ANOMALY_STATUS_V1_OK) {
-            context->replaying = false;
-            context->waiting_for_damage = false;
-            context->status = "原生攻击输入 Release 失败；重放已停止";
-            ArmForNextAttack(*context);
-            return;
-        }
-    }
     if (!context->replaying) return;
 
     const auto now = std::chrono::steady_clock::now();
@@ -1004,84 +1196,79 @@ void ANOMALY_CALL Update(void* plugin_context, double) {
     // accepted=1 only means the call reached the game. A replay is counted
     // only after a fresh player->target DamageEvent is observed.
     if (context->waiting_for_damage) {
-        AnomalyNteCombatEventV1 event{};
+        AnomalyNteDamageEventV1 event{};
         event.struct_size = sizeof(event);
-        const auto damage_status = context->combat->next_event(
+        const auto damage_status = context->combat->next_damage_event(
             context->combat->user, context->replay_damage_cursor, &event);
         if (damage_status.code == ANOMALY_STATUS_V1_OK) {
             context->replay_damage_cursor = event.sequence;
-            if (event.kind == ANOMALY_NTE_COMBAT_EVENT_V1_DAMAGE &&
-                SameHandle(event.source, context->character) &&
-                SameHandle(event.target, context->captured_target)) {
+            if ((event.flags & ANOMALY_NTE_DAMAGE_V1_CHARACTER_EVENT) != 0 &&
+                SameHandle(event.world, context->world) &&
+                SameHandle(event.attacker, context->character) &&
+                SameHandle(event.victim, context->captured_target) &&
+                event.sequence > context->captured_damage_sequence &&
+                (event.source_id == context->captured_damage_source_id ||
+                 (!context->captured_damage_source_name.empty() &&
+                  !ReadDamageSourceName(context->combat, event.source_id).empty() &&
+                  ReadDamageSourceName(context->combat, event.source_id) ==
+                    context->captured_damage_source_name))) {
                 context->waiting_for_damage = false;
                 ++context->replay_done;
-                context->replay_last_tick = event.tick_sequence;
-                context->status = "已确认新的 DamageEvent，进入下一游戏帧";
+                // Rate limiting is based on the actual Game tick observed here,
+                // not the event's potentially earlier capture tick.
+                context->replay_last_tick = current_tick;
+                context->status = "已确认新的 DamageEvent，下一游戏帧继续";
             }
         } else if (damage_status.code != ANOMALY_STATUS_V1_NOT_FOUND) {
             context->replaying = false;
             context->waiting_for_damage = false;
-            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误";
             ArmForNextAttack(*context);
+            context->status = "重放验证失败：读取新的 DamageEvent 时发生错误；已恢复自动捕获，等待下一次攻击";
             return;
         }
 
-        if (context->replaying && context->replay_done >= context->replay_target_count) {
-            context->replaying = false;
-            context->status = "重放完成，继续自动等待下一次攻击";
-            ArmForNextAttack(*context);
-            return;
-        }
         if (context->waiting_for_damage && now >= context->replay_damage_deadline) {
             context->replaying = false;
             context->waiting_for_damage = false;
-            context->status = "重放失败：真实攻击输入已发送，但未观察到新的 DamageEvent";
             ArmForNextAttack(*context);
+            context->status = "连锁停止：2 秒内未确认同一目标的新伤害（目标可能已死亡或该击未生效）；自动等待下一次攻击";
             return;
         }
         if (context->waiting_for_damage) return;
     }
 
-    if (context->replay_done >= context->replay_target_count) {
-        context->replaying = false;
-        context->status = "重放完成，继续自动等待下一次攻击";
-        ArmForNextAttack(*context);
-        return;
-    }
-
-    // on_update() runs once per Game tick. Do not issue a second replay invocation
-    // inside the same tick; one accepted attack is allowed to mature into one damage
-    // event before the next frame is permitted to submit another attack.
-    if (current_tick == 0 || current_tick == context->replay_last_tick) return;
-    context->input_press_tick = current_tick;
-
-    // Snapshot the event tail immediately before invoking the replay.
-    context->replay_damage_cursor = context->combat->latest_event_sequence(
+    // 连锁没有固定次数上限；速率只影响两次原生 GameplayEffect 调用之间的 Game 帧间隔。
+    const uint64_t interval = static_cast<uint64_t>(
+        std::clamp(context->replay_interval_frames, 1u, 10u));
+    if (current_tick == 0 || current_tick <= context->replay_last_tick ||
+        current_tick - context->replay_last_tick < interval) return;
+    // Snapshot the raw DamageEvent tail immediately before invoking the replay.
+    context->replay_damage_cursor = context->combat->latest_damage_sequence(
         context->combat->user);
     context->replay_damage_deadline = now + std::chrono::milliseconds(2000);
 
-    uint32_t replay_status = ANOMALY_STATUS_V1_OK;
-    uint32_t accepted = 0;
-    const ReplayCallResult replay_result =
-        ReplayOnce(*context, &replay_status, &accepted);
+    AnomalyStatusV1 replay_status{};
+    const ReplayCallResult replay_result = ReplayOnce(*context, &replay_status);
     if (replay_result != ReplayCallResult::Success) {
-        context->replaying = false;
-        if (replay_result == ReplayCallResult::NoSkill) {
-            context->status = context->captured_has_skill
-                ? "重放失败：当前捕获技能句柄已失效或无法重新解析"
-                : "已记录攻击，但 DT_AbilityInput 未能解析出有效的 InputID/Param";
-        } else if (replay_result == ReplayCallResult::Rejected) {
-            context->status = "游戏未接受攻击输入请求";
+        std::string failure;
+        if (replay_status.message.data != nullptr && replay_status.message.size != 0) {
+            failure = "重放请求被 Core 拒绝：" +
+                std::string(replay_status.message.data, replay_status.message.size);
         } else {
-            context->status = "重放调用失败：ABI status=" + std::to_string(replay_status);
+            failure = "GameplayEffect 重放调用失败：ABI status=" +
+                std::to_string(replay_status.code);
         }
+        // The UI remains short; the complete Core message and call context go to
+        // attack-replay.log in this plugin's own directory.
+        AppendReplayDiagnosticLog(*context, replay_status.code, failure);
+        context->replaying = false;
+        context->waiting_for_damage = false;
         ArmForNextAttack(*context);
+        context->status = "重放失败；已恢复捕获。详见 attack-replay.log";
         return;
     }
     context->waiting_for_damage = true;
-    context->status = accepted != 0
-        ? "已发送真实攻击输入，等待新的 DamageEvent"
-        : "攻击输入已提交，等待新的 DamageEvent";
+    context->status = "已复用原始 GameplayEffect 调用，等待真实新伤害事件";
 }
 
 // Draw 根据函数体中的具体对象、服务和状态字段执行当前插件流程；返回值/状态字段用于把实际执行结果交给调用方。
@@ -1097,7 +1284,7 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
     // begin_window/end_window are always paired. The host UI follows ImGui's
     // Begin/End rule: End is required even when Begin returns false.
     const int window_visible = ui->begin_window(
-        ui->user, anomaly::sdk::StringView("自动攻击录制/重放"), &open, 0);
+        ui->user, anomaly::sdk::StringView("自动伤害录制/重放"), &open, 0);
     if (window_visible != 0) {
         int enabled = context->enabled ? 1 : 0;
         if (ui->checkbox(ui->user, anomaly::sdk::StringView("[启用]"), &enabled) != 0) {
@@ -1107,15 +1294,16 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
                 if (context->enabled) {
                     // Enabling replay must not reset or interrupt the always-on recorder.
                     context->status = context->captured
-                        ? "已启用重放：已保留当前自动捕获"
-                        : "已启用重放：自动等待下一次攻击";
+                        ? "已启用：自动开始连锁"
+                        : "已启用：自动等待下一次攻击";
+                    if (context->captured) {
+                        context->replay_requested.store(true, std::memory_order_release);
+                    }
                 } else {
                     // Disabling replay must not stop recording or discard a captured attack.
                     // Draw is Render-domain code; disable replay through the Game-domain request.
                     context->stop_requested.store(true, std::memory_order_release);
-                    context->status = context->captured
-                        ? "自动记录中：重放功能未启用（已保留当前捕获）"
-                        : "自动记录中：重放功能未启用";
+                    context->status = "已停用：停止连锁，重新启用后等待下一次攻击";
                 }
             }
         }
@@ -1127,9 +1315,9 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
 
     if (ui->input_uint32 != nullptr) {
         ui->input_uint32(
-            ui->user, anomaly::sdk::StringView("连锁速率（追加重击参数）"),
-            &context->replay_count, 1, 10);
-        context->replay_count = std::clamp(context->replay_count, 0u, 9999u);
+            ui->user, anomaly::sdk::StringView("重放间隔（Game 帧；1=每帧一次）"),
+            &context->replay_interval_frames, 1, 10);
+        context->replay_interval_frames = std::clamp(context->replay_interval_frames, 1u, 10u);
     }
 
     if (context->captured) {
@@ -1145,32 +1333,20 @@ void ANOMALY_CALL Draw(void* plugin_context, const AnomalyUiServiceV1* ui) {
             ui->text(ui->user, anomaly::sdk::StringView(
                 "目标：" + context->captured_target_path));
         }
-        const uint32_t desired_rehits = context->replay_count + 1U;
         const std::string progress =
-            "已确认的额外伤害事件：" + std::to_string(context->replay_done) + "/" +
-            std::to_string(context->replay_target_count != 0
-                ? context->replay_target_count : desired_rehits);
+            "已确认的追加伤害事件：" + std::to_string(context->replay_done) +
+            "（目标持续受击时继续）";
         ui->text(ui->user, anomaly::sdk::StringView(progress));
-        ui->text(ui->user, anomaly::sdk::StringView("每个游戏帧最多提交一次真实攻击输入；只有出现新的玩家→同一目标 DamageEvent 才计数。速率 X 对当前命中追加 X+1 次重击。"));
+        ui->text(ui->user, anomaly::sdk::StringView("启用后自动持续重放原始 GameplayEffect，不重放按键、动画或技能激活；间隔设为 1 即每个 Game 帧最多一次，直到目标不再产生新伤害或关闭本功能。"));
     } else {
-        ui->text(ui->user, anomaly::sdk::StringView(
-            "无需手动录制：插件自动等待下一次玩家攻击"));
+        const std::string capture_monitor =
+            "Core 伤害事件序列：" +
+            std::to_string(context->latest_damage_sequence_snapshot) +
+            "；插件已扫描至：" + std::to_string(context->combat_cursor);
+        ui->text(ui->user, anomaly::sdk::StringView(capture_monitor));
     }
 
-    if (context->enabled && !context->replaying && context->captured) {
-        if (ui->button(
-                ui->user, anomaly::sdk::StringView("开始重放"), 0.0F, 0.0F) != 0) {
-            // Draw only posts the request; Update() sends the real input from the Game domain.
-            context->replay_requested.store(true, std::memory_order_release);
-            context->status = "已提交重放请求";
-        }
-    } else if (context->replaying) {
-        if (ui->button(
-                ui->user, anomaly::sdk::StringView("停止重放"), 0.0F, 0.0F) != 0) {
-            // Draw only posts the stop request; Update() applies it in Game domain.
-            context->stop_requested.store(true, std::memory_order_release);
-        }
-    }
+    // 没有手动开始/停止按钮；上方启用复选框是唯一的链式重放开关。
 
         ui->end_window(ui->user);
     } else {
@@ -1193,7 +1369,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         anomaly::sdk::StringView("anomaly.builtin.nte-attack-replay"),
         anomaly::sdk::StringView("NTE Attack Replay"),
         anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("1.5.0"),
+        anomaly::sdk::StringView("1.9.5"),
         Load,
         Start,
         Stop,

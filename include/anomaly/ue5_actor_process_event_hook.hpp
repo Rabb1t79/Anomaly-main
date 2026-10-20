@@ -10,19 +10,25 @@
 
 namespace anomaly {
 
-// AHUD-only ingress. It is kept separate from the shared UObject ProcessEvent
-// detour because NTE dispatches AHUD frames through AActor::ProcessEvent; the
-// generic UObject detour remains the single SDK fan-out point.
+// AActor::ProcessEvent ingress, separate from the shared UObject detour.
+// The pre-callback observes live parameter memory before native code can mutate it;
+// the post-callback preserves the existing AHUD dispatch behavior.
 class Ue5ActorProcessEventHook final {
 public:
     using Callback = std::function<void(
         std::uintptr_t object,
         std::uintptr_t function,
         void* parameters)>;
+    using PreCallback = std::function<void(
+        std::uintptr_t object,
+        std::uintptr_t function,
+        void* parameters)>;
 
-    explicit Ue5ActorProcessEventHook(Callback callback);
+    explicit Ue5ActorProcessEventHook(
+        Callback callback, PreCallback pre_callback = {});
     Ue5ActorProcessEventHook(
-        std::unique_ptr<HookBackend> backend, Callback callback);
+        std::unique_ptr<HookBackend> backend, Callback callback,
+        PreCallback pre_callback = {});
     ~Ue5ActorProcessEventHook();
 
     Ue5ActorProcessEventHook(const Ue5ActorProcessEventHook&) = delete;

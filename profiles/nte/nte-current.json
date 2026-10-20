@@ -911,6 +911,15 @@
     "htuiRadioBox.radioBox": 4960,
     "htuiRadioBox.radioText": 4968,
     "htuiRadioBox.blockButton": 4976,
-    "htuiListItem.clickButton": 1616
+    "htuiListItem.clickButton": 1616,
+    "vehicle.maxEngineRPM": 2620,
+    "vehicle.maxLinearVelocity": 4580,
+    "vehicle.topSpeedInKmH": 4588,
+    "vehicle.reverseTopSpeedInKmH": 4596,
+    "vehicle.enableTopSpeedLimit": 4600,
+    "vehicle.topSpeedRatio": 4640,
+    "vehicle.comfortMaxEngineTorque": 5728,
+    "vehicle.comfortMaxEngineRPM": 5732,
+    "vehicle.comfortTopSpeedInKmH": 5936
   }
 }

@@ -23,6 +23,12 @@ std::string PackageSignature(const std::filesystem::path& package) {
         const auto status = iterator->symlink_status(error);
         if (error) break;
         const std::filesystem::path relative = iterator->path().lexically_relative(package);
+        // Attack Replay writes its own append-only diagnostic log at the package root.
+        // Log writes must not alter the package signature and trigger a hot reload,
+        // which would reset plugin-owned UI state such as the replay-enabled checkbox.
+        if (relative == std::filesystem::path(L"attack-replay.log")) {
+            continue;
+        }
         if (std::filesystem::is_symlink(status)) {
             records.push_back(Utf8(relative) + ":reparse");
         } else if (std::filesystem::is_regular_file(status)) {
