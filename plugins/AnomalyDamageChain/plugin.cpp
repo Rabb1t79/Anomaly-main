@@ -64,7 +64,7 @@ constexpr std::uintptr_t kProcessEventVtableIndex = 76;   // 0x4C
 constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 
 // ---- 配置 ----
-constexpr int kConfVersion = 2;  // v2: 候选只保留 GE 入口，GE 名过滤默认关闭
+constexpr int kConfVersion = 3;  // v3: 目标改为技能激活 RPC
 constexpr const char* kConfFile = "damage-chain.conf";
 constexpr const char* kLogFile = "damage-chain-capture.txt";
 constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByActor";
@@ -72,8 +72,14 @@ constexpr std::uint32_t kMaxRepeat = 512;
 constexpr std::size_t kMaxParams = 1024;
 constexpr std::size_t kMaxDisplayRows = 12;
 
+// 重放目标：攻击技能激活 RPC。
+// 依据：怪物 HP 由服务端计算并复制（OnRep_HPCurrent 为 RepNotify，且游戏连着远程
+// 服务器 43.144.211.30:30031 / 113.250.24.242:10012），客户端没有任何 UFunction
+// 会施加怪物伤害；唯一能让服务端重新执行一次伤害判定的客户端动作，是重新激活攻击技能。
+// 实测 ServerActivateGameEffectsWithClassByActor 只承载 Buff_*（玩家增益），不是伤害链路。
 constexpr const char* kDefaultDamageNames[] = {
-    kGeFunctionName,  // 唯一目标：真正施加 GameplayEffect 的 Server RPC
+    "HTServerTryActivateAbilityWithData",  // 游戏自定义的技能激活 RPC
+    "ServerTryActivateAbility",            // GAS 标准激活 RPC
 };
 constexpr std::size_t kDefaultDamageNameCount =
     sizeof(kDefaultDamageNames) / sizeof(kDefaultDamageNames[0]);
@@ -850,11 +856,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.2.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.3.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.2.0, candidates=%d hook=%d np=%d gf=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.3.0, candidates=%d hook=%d np=%d gf=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
