@@ -86,8 +86,6 @@ struct Context {
     float other_speed_floor_ratio{0.6024F};
     float other_torque_ratio{1.0F};
     bool friction_enabled{true};
-    bool debug_unlocked{};
-    bool fine_speed_tuning_enabled{};
 } g_context;
 
 template <typename Struct, typename Field>
@@ -557,11 +555,7 @@ void Update() {
         const auto status = g_context.vehicle->reset(g_context.vehicle->user);
         {
             std::scoped_lock lock(g_context.mutex);
-                    g_context.speed_ratio = kLockedSpeedRatio;
-        }
-        if (g_context.vehicle->set_fine_speed_tuning_enabled) {
-            static_cast<void>(g_context.vehicle->set_fine_speed_tuning_enabled(
-                g_context.vehicle->user, 0U));
+            g_context.speed_ratio = kLockedSpeedRatio;
         }
         g_context.apply_speed.store(true, std::memory_order_release);
         SetStatus(status.code == ANOMALY_STATUS_V1_OK
@@ -574,7 +568,6 @@ void Update() {
         {
             std::scoped_lock lock(g_context.mutex);
             g_context.speed_ratio = ratio;
-            g_context.fine_speed_tuning_enabled = false;
         }
         const auto status = g_context.vehicle->set_top_speed_ratio(
             g_context.vehicle->user, ratio);
@@ -1271,7 +1264,6 @@ void DrawCustomizationTab(
 
 void DrawPerformanceTab(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
-    float ratio, bool debug_unlocked, bool fine_speed_tuning_enabled,
     float torque_ratio, float other_speed_ratio, float other_speed_floor_ratio, float other_torque_ratio) {
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
         DrawText(ui, "当前驾驶载具：未识别");
@@ -1282,43 +1274,14 @@ void DrawPerformanceTab(
                 ? "#" + std::to_string(snap.vehicle_entity_id) : std::string("#编号未知")) + ")");
         const double display_speed = std::isfinite(snap.speed_kmh)
             ? std::floor(std::fabs(snap.speed_kmh)) : 0.0;
-        DrawText(ui, "当前速度  /  " + std::to_string(static_cast<std::uint64_t>(display_speed)) + " km/h");
-        DrawText(ui, "当前最高速倍率 / " +
-        std::to_string(snap.top_speed_ratio) + "x");
+        DrawText(ui, "当前速度 / " +
+            std::to_string(static_cast<std::uint64_t>(display_speed)) + " km/h");
+        DrawText(ui, "当前最高速倍率 / " + std::to_string(snap.top_speed_ratio) + "x");
     }
 
     DrawDivider(ui);
-    const bool fine_tuning_active = debug_unlocked && fine_speed_tuning_enabled;
-    float slider_ratio = fine_tuning_active
-        ? std::clamp(ratio, kFineSpeedRatioMin, kFineSpeedRatioMax)
-        : kLockedSpeedRatio;
-    bool slider_changed = false;
-    const bool has_disabled_slider =
-        UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, slider_float_enabled),
-            sizeof(decltype(AnomalyUiServiceV1::slider_float_enabled))) &&
-        ui->slider_float_enabled != nullptr;
-    if (has_disabled_slider) {
-        slider_changed = ui->slider_float_enabled(ui->user,
-            anomaly::sdk::StringView("速度倍率"), &slider_ratio,
-            kFineSpeedRatioMin, kFineSpeedRatioMax,
-            fine_tuning_active ? 1 : 0) != 0;
-    } else {
-        // Older hosts lack a disabled-slider primitive; use a temporary value and never persist edits while locked.
-        slider_changed = ui->slider_float(ui->user,
-            anomaly::sdk::StringView("速度倍率"), &slider_ratio,
-            kFineSpeedRatioMin, kFineSpeedRatioMax) != 0;
-    }
-    if (fine_tuning_active && slider_changed) {
-        slider_ratio = std::clamp(slider_ratio, kFineSpeedRatioMin, kFineSpeedRatioMax);
-        std::scoped_lock lock(g_context.mutex);
-        if (g_context.debug_unlocked && g_context.fine_speed_tuning_enabled)
-            g_context.speed_ratio = slider_ratio;
-    } else if (!fine_tuning_active) {
-        std::scoped_lock lock(g_context.mutex);
-        g_context.speed_ratio = kLockedSpeedRatio;
-    }
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率"), 0.0F, 0.0F)) {
-        // Actual application path independently enforces the same policy in Update().
+    DrawText(ui, "本插件车速倍率固定为 10.0x。");
+    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率 10.0x"), 0.0F, 0.0F)) {
         g_context.apply_speed.store(true, std::memory_order_release);
     }
 
@@ -1332,7 +1295,7 @@ void DrawPerformanceTab(
     if (ui->button(ui->user, anomaly::sdk::StringView("应用扭矩倍率"), 0.0F, 0.0F)) {
         g_context.apply_torque.store(true, std::memory_order_release);
     }
-    DrawDivider(ui);
+
     DrawDivider(ui);
     DrawText(ui, "其他载具实例");
     DrawText(ui, "目标最高速 = 70 km/h × 速度因子");
@@ -1362,7 +1325,8 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
-    if (ui->button(ui->user, anomaly::sdk::StringView("恢复默认设置  /  固定车速倍率 10.0x"), 0.0F, 0.0F)) {
+    if (ui->button(ui->user,
+            anomaly::sdk::StringView("恢复默认设置 / 固定车速倍率 10.0x"), 0.0F, 0.0F)) {
         g_context.reset.store(true, std::memory_order_release);
     }
 }
@@ -1383,10 +1347,10 @@ void DrawDebugPanel(
     DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v7");
     DrawText(ui, "Plugin ID：anomaly.local." + std::string("nte-vehicle"));
     DrawText(ui, "Manifest：schemaVersion=2 / entry=plugin.dll / loadPhase=game-ready / games=nte / builds=nte-*");
-    DrawText(ui, "Required services：anomaly.ui v1 / anomaly.nte.vehicle v7 / anomaly.nte.player v1");
+    DrawText(ui, "Required services：anomaly.ui v1 / anomaly.input v1 / anomaly.window v1 / anomaly.nte.vehicle v7 / anomaly.nte.player v1");
     DrawText(ui, "Capabilities：ui / input / nte-vehicle / nte-player-snapshot / per-vehicle-customization-catalog / selected-modification-summon");
     DrawText(ui, "创建日期：2026-10-14");
-    DrawText(ui, "修改状态：已包含车型实时改装目录、模块/涂装选择与自定义召唤链路；游戏内结果待实测");
+    DrawText(ui, "修改状态：独立 K 菜单、分类改装选项与自定义召唤链路；游戏内结果待实测");
     DrawText(ui, "Host 状态：" + (status.empty() ? std::string("暂无状态消息") : status));
     // An empty diagnostic string means the Host snapshot callback returned OK.
     // Do not label this success path as "Host 未提供快照状态"; use the validity flag
@@ -1489,8 +1453,8 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
             DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
         }
     } else if (active_tab == 1) {
-        DrawPerformanceTab(ui, snap, ratio, false, false,
-            torque_ratio, other_speed_ratio, other_speed_floor_ratio, other_torque_ratio);
+        DrawPerformanceTab(ui, snap, torque_ratio, other_speed_ratio,
+            other_speed_floor_ratio, other_torque_ratio);
     } else if (active_tab == 2) {
         DrawChassisTab(ui, friction);
     } else if (active_tab == 3) {
@@ -1549,18 +1513,6 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
             decltype(AnomalyNteVehicleServiceV1::catalog_label_at)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, catalog_label_at)) ||
         !vehicle->catalog_label_at ||
-        !HasField<AnomalyNteVehicleServiceV1,
-            decltype(AnomalyNteVehicleServiceV1::authorize_fine_speed_tuning)>(
-                vehicle, offsetof(AnomalyNteVehicleServiceV1, authorize_fine_speed_tuning)) ||
-        !vehicle->authorize_fine_speed_tuning ||
-        !HasField<AnomalyNteVehicleServiceV1,
-            decltype(AnomalyNteVehicleServiceV1::set_fine_speed_tuning_enabled)>(
-                vehicle, offsetof(AnomalyNteVehicleServiceV1, set_fine_speed_tuning_enabled)) ||
-        !vehicle->set_fine_speed_tuning_enabled ||
-        !HasField<AnomalyNteVehicleServiceV1,
-            decltype(AnomalyNteVehicleServiceV1::revoke_fine_speed_authorization)>(
-                vehicle, offsetof(AnomalyNteVehicleServiceV1, revoke_fine_speed_authorization)) ||
-        !vehicle->revoke_fine_speed_authorization ||
         !HasField<AnomalyNteVehicleServiceV1,
             decltype(AnomalyNteVehicleServiceV1::set_other_vehicles_top_speed_ratio)>(
                 vehicle, offsetof(AnomalyNteVehicleServiceV1, set_other_vehicles_top_speed_ratio)) ||
@@ -1625,7 +1577,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.other_speed_floor_ratio = 0.6024F;
     g_context.other_torque_ratio = 1.0F;
     g_context.friction_enabled = true;
-    g_context.fine_speed_tuning_enabled = false;
+
     g_context.snapshot = {};
     g_context.selected_vehicle_id = "Vehicle007";
     g_context.pending_vehicle_id.clear();
@@ -1691,18 +1643,8 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
         static_cast<void>(g_context.window_service->set_open(
             g_context.window_service->user, g_context.menu_window_handle, 0));
     }
-    if (g_context.vehicle) {
-        if (g_context.vehicle->set_fine_speed_tuning_enabled)
-            static_cast<void>(g_context.vehicle->set_fine_speed_tuning_enabled(
-                g_context.vehicle->user, 0U));
-        if (g_context.vehicle->revoke_fine_speed_authorization)
-            static_cast<void>(g_context.vehicle->revoke_fine_speed_authorization(
-                g_context.vehicle->user));
-    }
     {
         std::scoped_lock lock(g_context.mutex);
-        g_context.debug_unlocked = false;
-        g_context.fine_speed_tuning_enabled = false;
         g_context.speed_ratio = kLockedSpeedRatio;
     }
     return anomaly::sdk::Ok();
@@ -1713,14 +1655,6 @@ void ANOMALY_CALL Unload(void* plugin_context) {
     g_context.started.store(false, std::memory_order_release);
     g_context.toggle_menu_requested.store(false, std::memory_order_release);
     ReleaseMenuHotkey(g_context);
-    if (g_context.vehicle) {
-        if (g_context.vehicle->set_fine_speed_tuning_enabled)
-            static_cast<void>(g_context.vehicle->set_fine_speed_tuning_enabled(
-                g_context.vehicle->user, 0U));
-        if (g_context.vehicle->revoke_fine_speed_authorization)
-            static_cast<void>(g_context.vehicle->revoke_fine_speed_authorization(
-                g_context.vehicle->user));
-    }
     if (g_context.window_service && g_context.menu_window_handle.id != 0) {
         static_cast<void>(g_context.window_service->release_window(
             g_context.window_service->user, g_context.menu_window_handle));
