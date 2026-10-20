@@ -64,7 +64,7 @@ constexpr std::uintptr_t kProcessEventVtableIndex = 76;   // 0x4C
 constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 
 // ---- 配置 ----
-constexpr int kConfVersion = 5;  // v3: 目标改为技能激活 RPC
+constexpr int kConfVersion = 6;  // v3: 目标改为技能激活 RPC
 constexpr const char* kConfFile = "damage-chain.conf";
 constexpr const char* kLogFile = "damage-chain-capture.txt";
 constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByActor";
@@ -163,6 +163,7 @@ struct State {
     int ge_filter{0};
     int log_matches{1};      // 命中时向 Core 写一条诊断（函数名 + GE 类名）
     int zero_prediction{1};  // 重放 GE 时清零 PredictionKey（+0x6C 起 0x10 字节）
+    int apply_on_instigator{1};  // 1=在施害者(玩家,客户端拥有)上调用GE施加，SourceObj=怪物
     int interval_ms{100};    // 每次重放的间隔（毫秒），形成可见的连续伤害
     double replay_accum{0.0};
 
@@ -441,7 +442,13 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     ++g_state.matched;
     g_state.pending = PendingReplay{};
     g_state.pending.mode = 1;
-    g_state.pending.object = victim;          // 施加到受害者身上
+    // A 模式：在施害者（玩家，客户端拥有）上调用，Server RPC 不会被所有权检查丢弃；
+    //          SourceObj 传受害者，由该函数把 GE 施加到目标。
+    // B 模式：直接在受害者（怪物，服务端拥有）上调用 —— 会被引擎静默丢弃，仅保留作对照。
+    const bool on_instigator = g_state.apply_on_instigator != 0 && instigator >= 0x10000;
+    const std::uintptr_t call_object = on_instigator ? instigator : victim;
+    const std::uintptr_t source_object = on_instigator ? victim : instigator;
+    g_state.pending.object = call_object;
     g_state.pending.function = g_apply_ufunc; // ServerActivateGameEffectsWithClassByActor
     g_state.pending.params_size = kApplyParamsSize;
     g_state.pending.remaining = g_state.repeat_count;
@@ -452,7 +459,7 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     // BuffEventType=0、PredictionKey 全零（不携带客户端预测）。
     auto* out = g_state.pending.params.data();
     std::memset(out, 0, kApplyParamsSize);
-    std::memcpy(out + kApplySourceOffset, &instigator, sizeof(instigator));
+    std::memcpy(out + kApplySourceOffset, &source_object, sizeof(source_object));
     std::memcpy(out + kApplyGeOffset, &ge, sizeof(ge));
     const std::int32_t level = 1;
     const std::int32_t stacks = 1;
@@ -725,9 +732,10 @@ void ServiceExport() {
 std::size_t FormatConfig(char* text, std::size_t capacity) {
     const int n = std::snprintf(
         text, capacity,
-        "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\nlog=%d\nzero_pred=%d\n",
+        "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\nlog=%d\nzero_pred=%d\non_instigator=%d\n",
         kConfVersion, g_state.enabled, g_state.repeat_count, g_state.capture_enabled,
-        g_state.ge_filter, g_state.log_matches, g_state.zero_prediction);
+        g_state.ge_filter, g_state.log_matches, g_state.zero_prediction,
+        g_state.apply_on_instigator);
     if (n <= 0) return 0;
     const std::size_t size = static_cast<std::size_t>(n);
     return size < capacity ? size : capacity - 1;
@@ -780,6 +788,8 @@ void LoadConfig() {
                 g_state.log_matches = std::atoi(value) != 0;
             } else if (std::strcmp(key, "zero_pred") == 0) {
                 g_state.zero_prediction = std::atoi(value) != 0;
+            } else if (std::strcmp(key, "on_instigator") == 0) {
+                g_state.apply_on_instigator = std::atoi(value) != 0;
             }
         }
         line = (next != nullptr) ? next + 1 : nullptr;
@@ -881,6 +891,8 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
         ui->checkbox(ui->user, StringView("清零 PredictionKey"), &g_state.zero_prediction);
     if (HAS(ui, checkbox))
         ui->checkbox(ui->user, StringView("命中写日志"), &g_state.log_matches);
+    if (HAS(ui, checkbox))
+        ui->checkbox(ui->user, StringView("在玩家(施害者)上施加"), &g_state.apply_on_instigator);
 
     if (snapshot.status[0] != '\0') Text(ui, snapshot.status);
 
@@ -973,13 +985,14 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.5.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.6.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.5.0, candidates=%d hook=%d np=%d gf=%d gobj=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.6.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
-                      g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0);
+                      g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
+                      g_state.apply_on_instigator);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     return anomaly::sdk::Ok();
