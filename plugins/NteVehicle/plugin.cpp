@@ -1082,12 +1082,6 @@ void DrawCustomizationTab(
         return found == module_overrides.end()
             ? std::string_view{} : std::string_view(found->second);
     };
-    const auto override_for_type = [&](std::uint32_t module_type) -> std::string_view {
-        const auto found = std::ranges::find_if(module_overrides,
-            [module_type](const auto& entry) { return entry.first == module_type; });
-        return found == module_overrides.end()
-            ? std::string_view{} : std::string_view(found->second);
-    };
     const bool child_api_available =
         UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_child),
             sizeof(decltype(AnomalyUiServiceV1::end_child))) &&
