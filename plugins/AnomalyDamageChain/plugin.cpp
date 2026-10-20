@@ -67,24 +67,41 @@ constexpr const char* kLogFile = "damage-chain-capture.txt";
 constexpr std::uint32_t kMaxRepeat = 512;
 constexpr std::size_t kMaxParams = 1024;
 
-// 默认候选伤害函数名（命中任意一个即触发）。
-// 说明：不同角色/怪物可能是蓝图子类，伤害入口可能是蓝图事件名（如 BPOnTakeDamage）。
+// 伤害候选函数名（来自实战 ProcessEvent 捕获 damage-chain-capture.txt，非猜测）。
+//
+// 捕获结论（203 个函数名里与伤害相关的全部条目）：
+//   ServerActivateGameEffectsWithClassByActor   4  ← 真正施加 GameplayEffect 的入口（Server RPC）
+//   OnCharacterAttackedCallBack                 3  ← 等待受击异步任务的回调（通知）
+//   OnOwningCharacterAttacked                   3  ← Boss 逻辑监听（通知）
+//   OnCharacterAttacked_<hash>                  3  ← 蓝图委托签名
+//   HandleOnHpAttributeChange2                  7  ← HP 属性变化通知（通知）
+//   OnRep_HPCurrent / HandlePlayerCharacterHPChanged   ≈ 复制/语音通知（通知）
+//
+// 关键：捕获里**根本没有** OnDamaged / ReceiveDamage / TakeDamage / BPOnTakeDamage，
+// 这就是早期候选表永不命中的原因。能"再判定一次"的只有 GE 施加入口。
+//
+// dump 证据（5.6.1-new/CppSDK/SDK/HTGame_parameters.hpp:2485）：
+//   void AHTAbilityCharacter::ServerActivateGameEffectsWithClassByActor(
+//       const AActor* SourceObj,            // +0x00
+//       const UGameplayEffect* GameplayEffect, // +0x08
+//       const FBufferData& ModifyData,      // +0x10 (0x58)
+//       EBuffEventType BuffEventType,       // +0x68
+//       const FPredictionKey& PredictionKey);// +0x6C (0x10)   ParmsSize=0x80
 constexpr const char* kDefaultDamageNames[] = {
+    "ServerActivateGameEffectsWithClassByActor",  // 主目标：GE 施加（伤害/增益共用，需按 GE 类名过滤）
+    "OnCharacterAttackedCallBack",                // 兜底
+    "OnOwningCharacterAttacked",                  // 兜底
+    "OnCharacterAttacked",                        // 兜底（蓝图委托基名）
+    // 旧候选保留（若某些角色/怪物走另一条路径仍可命中）
     "OnDamaged",
     "ReceiveDamage",
     "TakeDamage",
-    "ApplyDamage",
     "BPOnTakeDamage",
     "ReceiveOnTakeDamage",
-    "OnCharacterAttacked",
-    "OnCharacterAttackedCallBack",
-    "OnHandleDamageInfo",
-    "NetMulticast_OnHandleDamageInfo",
-    "ClientOnSendHandleDamageInfoToDamaged",
-    "CharacterOnDamaged",
-    "K2_ApplyDamage",
-    "ApplyDamageToTarget",
 };
+
+// ServerActivateGameEffectsWithClassByActor 的 GameplayEffect 指针在参数区 +0x08。
+constexpr std::size_t kGeParamOffset = 0x08;
 
 struct CaptureEntry {
     std::uint32_t name_id{};
@@ -105,6 +122,7 @@ struct State {
     int enabled{1};
     std::uint32_t repeat_count{8};
     int capture_enabled{1};
+    int ge_filter{1};  // 仅重放"伤害类" GameplayEffect（按 GE 类名含 damage/dmg/hurt 判断）
 
     // 统计
     std::uint64_t events{};
@@ -112,6 +130,7 @@ struct State {
     std::uint64_t replayed{};
     std::uint64_t failed{};
     std::uint64_t params_rejected{};
+    std::uint64_t ge_skipped{};   // GE 过滤跳过的次数（非伤害类）
 
     // 战斗流（anomaly.nte.combat，可选；主菜单时可能未就绪，进世界后可用）
     int combat_available{};
@@ -227,6 +246,46 @@ bool IsDamageName(std::uint32_t name_id) {
     return false;
 }
 
+// ServerActivateGameEffectsWithClassByActor 的 name_id（用于只对它应用 GE 类名过滤）。
+std::uint32_t g_server_ge_name_id{};
+
+bool ContainsIgnoreCase(const char* text, const char* needle) {
+    if (text == nullptr || needle == nullptr || *needle == '\0') return false;
+    const std::size_t n = std::strlen(needle);
+    for (const char* p = text; *p != '\0'; ++p) {
+        std::size_t i = 0;
+        while (i < n && p[i] != '\0') {
+            char a = p[i];
+            char b = needle[i];
+            if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z') b = static_cast<char>(b - 'A' + 'a');
+            if (a != b) break;
+            ++i;
+        }
+        if (i == n) return true;
+    }
+    return false;
+}
+
+// 判断参数区 +0x08 处的 GameplayEffect 是否"伤害类"。
+// UObject 布局：Class @ +0x10，NamePrivate(FName index) @ +0x18（dump 核实）。
+bool IsDamageGameplayEffect(const void* parameters) {
+    if (parameters == nullptr) return false;
+    std::uintptr_t ge = 0;
+    if (!SafeReadPtr(reinterpret_cast<std::uintptr_t>(parameters) + kGeParamOffset, &ge) ||
+        ge < 0x10000) {
+        return false;
+    }
+    std::uintptr_t cls = 0;
+    if (!SafeReadPtr(ge + 0x10, &cls) || cls < 0x10000) return false;
+    std::uint32_t name_id = 0;
+    if (!SafeReadU32(cls + 0x18, &name_id) || name_id == 0) return false;
+    const char* name = NameOf(name_id);
+    if (name == nullptr || name[0] == '\0') return false;
+    return ContainsIgnoreCase(name, "damage") || ContainsIgnoreCase(name, "dmg") ||
+           ContainsIgnoreCase(name, "hurt");
+}
+
 // 通过 UObject vtable 槽位调用 ProcessEvent（x64: rcx=this, rdx=Function, r8=Parms）。
 bool InvokeProcessEvent(std::uintptr_t object, std::uintptr_t function, void* parameters) {
     if (object < 0x10000 || function < 0x10000) return false;
@@ -270,6 +329,14 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     if (!IsDamageName(name_id)) return;
     if (g_state.replaying) return;
     if (g_state.pending.valid) return;  // 已有一条链在跑
+
+    // GE 施加入口同时承载伤害与增益/治疗等，只对"伤害类" GE 重放，避免把 buff 也乘 N 倍。
+    if (g_state.ge_filter && g_server_ge_name_id != 0 && name_id == g_server_ge_name_id &&
+        !IsDamageGameplayEffect(parameters)) {
+        std::scoped_lock lock(g_mutex);
+        ++g_state.ge_skipped;
+        return;
+    }
 
     std::uint16_t parms_size = 0;
     if (parameters == nullptr || !SafeReadU16(function + kFunctionParmsSizeOffset, &parms_size) ||
@@ -358,9 +425,9 @@ void PollCombat() {
 // --------------------------- 配置 ------------------------------------------
 std::size_t FormatConfig(char* text, std::size_t capacity) {
     const int n = std::snprintf(text, capacity,
-                                "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\n",
+                                "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\n",
                                 kConfVersion, g_state.enabled, g_state.repeat_count,
-                                g_state.capture_enabled);
+                                g_state.capture_enabled, g_state.ge_filter);
     if (n <= 0) return 0;
     const std::size_t size = static_cast<std::size_t>(n);
     return size < capacity ? size : capacity - 1;
@@ -404,6 +471,8 @@ void LoadConfig() {
                 g_state.repeat_count = static_cast<std::uint32_t>(std::strtoul(value, nullptr, 10));
             else if (std::strcmp(key, "capture") == 0)
                 g_state.capture_enabled = std::atoi(value) != 0;
+            else if (std::strcmp(key, "ge_filter") == 0)
+                g_state.ge_filter = std::atoi(value) != 0;
         }
         line = (next != nullptr) ? next + 1 : nullptr;
     }
@@ -549,6 +618,14 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
                   static_cast<unsigned long long>(g_state.combat_events));
     Text(ui, line);
 
+    if (HAS(ui, checkbox))
+        ui->checkbox(ui->user, StringView("仅重放伤害类 GE"), &g_state.ge_filter);
+    if (g_state.ge_skipped != 0) {
+        std::snprintf(line, sizeof(line), "GE 过滤跳过=%llu",
+                      static_cast<unsigned long long>(g_state.ge_skipped));
+        Text(ui, line);
+    }
+
     if (g_state.status[0] != '\0') Text(ui, g_state.status);
 
     if (HAS(ui, separator)) ui->separator(ui->user);
@@ -638,6 +715,9 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                     ANOMALY_STATUS_V1_OK && id != 0) {
                 g_state.damage_name_ids.push_back(id);
                 ++g_state.resolved_names;
+                if (std::strcmp(name, "ServerActivateGameEffectsWithClassByActor") == 0) {
+                    g_server_ge_name_id = id;
+                }
             }
         }
     }
