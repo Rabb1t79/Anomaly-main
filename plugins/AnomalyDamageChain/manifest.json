@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "id": "anomaly.local.damage-chain",
+  "name": "Damage Chain Reaction",
+  "description": "伤害链式反应：玩家命中怪物后，对同一次伤害连续重复判定，形成连锁伤害。基于 ue5.process-event 捕获伤害 UFunction 并重放，附带函数名捕获诊断。",
+  "author": "Anomaly",
+  "license": "AGPL-3.0-only",
+  "audience": "developer",
+  "version": "1.0.0",
+  "entry": "plugin.dll",
+  "api": { "major": 1, "minMinor": 0, "maxMinor": 0 },
+  "games": ["nte"],
+  "builds": ["nte-*"],
+  "loadPhase": "game-ready",
+  "services": [
+    { "id": "anomaly.ui", "minVersion": 1 },
+    { "id": "anomaly.core", "minVersion": 1, "optional": true },
+    { "id": "anomaly.input", "minVersion": 1, "optional": true },
+    { "id": "anomaly.storage", "minVersion": 1, "optional": true },
+    { "id": "anomaly.scheduler", "minVersion": 1, "optional": true },
+    { "id": "anomaly.ue5.process-event", "minVersion": 1, "optional": true },
+    { "id": "anomaly.ue5.names", "minVersion": 1, "optional": true },
+    { "id": "anomaly.ue5.objects", "minVersion": 1, "optional": true },
+    { "id": "anomaly.ue5.world", "minVersion": 1, "optional": true },
+    { "id": "anomaly.interop.signature", "minVersion": 1, "optional": true },
+    { "id": "anomaly.interop.hook", "minVersion": 1, "optional": true },
+    { "id": "anomaly.interop.patch", "minVersion": 1, "optional": true }
+  ],
+  "capabilities": [
+    "ui",
+    "memory-read",
+    "input",
+    "storage",
+    "scheduler",
+    "game-events",
+    "ue5-names",
+    "ue5-objects",
+    "ue5-world",
+    "interop-signature",
+    "interop-hook",
+    "interop-patch"
+  ]
+}
