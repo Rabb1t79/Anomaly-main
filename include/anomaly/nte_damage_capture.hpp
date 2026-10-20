@@ -71,6 +71,7 @@ struct NteCharacterDamageCapture {
     std::int32_t active_spec_handle{};
     NteDamageCriticalState critical;
     NteDamageTags tags;
+    std::uint64_t damage_chain_id{};
 };
 static_assert(std::is_trivially_copyable_v<NteCharacterDamageCapture>);
 
