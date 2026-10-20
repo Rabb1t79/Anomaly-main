@@ -190,6 +190,8 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_PATCH_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_UI_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_UI_SERVICE_V1_VERSION);
+    output.append(",\n    \"ANOMALY_UI_WINDOW_V1_PINNED\": ");
+    AppendUnsigned(output, ANOMALY_UI_WINDOW_V1_PINNED);
     output.append(",\n    \"ANOMALY_WINDOW_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_WINDOW_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_FONT_SERVICE_V1_VERSION\": ");
