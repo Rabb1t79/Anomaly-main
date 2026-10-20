@@ -1186,16 +1186,19 @@ void DrawCustomizationTab(
                         std::string(kModuleTypeNames[type]) + " 的选择；召唤时将提交给游戏原生改装组件";
                 }
             }
-            if (has_default && !selected_option_id.empty()) {
-                const std::string reset_label =
-                    "恢复默认##custom-reset-module-" + std::to_string(type);
+            if (!selected_option_id.empty()) {
+                const std::string reset_label = has_default
+                    ? "恢复默认##custom-reset-module-" + std::to_string(type)
+                    : "清除手动选择##custom-reset-module-" + std::to_string(type);
                 if (DrawButtonEnabled(ui, reset_label, true)) {
                     std::scoped_lock lock(g_context.mutex);
                     std::erase_if(g_context.selected_module_overrides, [type](const auto& entry) {
                         return entry.first == type;
                     });
-                    g_context.customization_status = "已恢复 " +
-                        std::string(kModuleTypeNames[type]) + " 的游戏默认模块";
+                    g_context.customization_status = has_default
+                        ? "已恢复 " + std::string(kModuleTypeNames[type]) + " 的游戏默认模块"
+                        : "已清除 " + std::string(kModuleTypeNames[type]) +
+                          " 的手动覆盖；该槽位交由游戏原生默认规则处理";
                 }
             }
         }
@@ -1250,7 +1253,7 @@ void DrawCustomizationTab(
     }
 
     DrawDivider(ui);
-    DrawText(ui, "仅手动选择的模块槽位会覆盖默认值；其他槽位使用游戏数据表的默认模块。");
+    DrawText(ui, "仅手动选择的槽位会覆盖游戏目录配置；未选择的槽位按车型默认数据与游戏原生默认规则处理。");
     const bool can_summon_customized = player_position_valid && has_selected &&
         customization_vehicle_id == selected && !skin_id.empty();
     if (DrawButtonEnabled(ui, "召唤改装车辆", can_summon_customized)) {
