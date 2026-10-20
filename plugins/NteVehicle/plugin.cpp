@@ -1536,7 +1536,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
 
     AnomalyWindowSpecV1 window_spec{};
     window_spec.struct_size = sizeof(window_spec);
-    window_spec.flags = ANOMALY_WINDOW_V1_NO_COLLAPSE;
+    window_spec.flags = ANOMALY_WINDOW_V1_NO_COLLAPSE | ANOMALY_WINDOW_V1_KEEP_VISIBLE_WHEN_MENUS_COLLAPSED;
     window_spec.id = anomaly::sdk::StringView("nte-vehicle-independent-menu");
     window_spec.title = anomaly::sdk::StringView("载具控制");
     window_spec.initial_width = 720.0F;
