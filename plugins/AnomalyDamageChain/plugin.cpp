@@ -64,7 +64,7 @@ constexpr std::uintptr_t kProcessEventVtableIndex = 76;   // 0x4C
 constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 
 // ---- 配置 ----
-constexpr int kConfVersion = 1;
+constexpr int kConfVersion = 2;  // v2: 候选只保留 GE 入口，GE 名过滤默认关闭
 constexpr const char* kConfFile = "damage-chain.conf";
 constexpr const char* kLogFile = "damage-chain-capture.txt";
 constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByActor";
@@ -73,15 +73,7 @@ constexpr std::size_t kMaxParams = 1024;
 constexpr std::size_t kMaxDisplayRows = 12;
 
 constexpr const char* kDefaultDamageNames[] = {
-    kGeFunctionName,  // 主目标：真正施加 GameplayEffect 的 Server RPC
-    "OnCharacterAttackedCallBack",
-    "OnOwningCharacterAttacked",
-    "OnCharacterAttacked",
-    "OnDamaged",
-    "ReceiveDamage",
-    "TakeDamage",
-    "BPOnTakeDamage",
-    "ReceiveOnTakeDamage",
+    kGeFunctionName,  // 唯一目标：真正施加 GameplayEffect 的 Server RPC
 };
 constexpr std::size_t kDefaultDamageNameCount =
     sizeof(kDefaultDamageNames) / sizeof(kDefaultDamageNames[0]);
@@ -135,9 +127,9 @@ struct DisplaySnapshot {
 struct State {
     // 配置
     int enabled{1};
-    std::uint32_t repeat_count{8};
+    std::uint32_t repeat_count{15};
     int capture_enabled{1};
-    int ge_filter{1};
+    int ge_filter{0};
     int log_matches{1};      // 命中时向 Core 写一条诊断（函数名 + GE 类名）
     int zero_prediction{1};  // 重放 GE 时清零 PredictionKey（+0x6C 起 0x10 字节）
     int interval_ms{100};    // 每次重放的间隔（毫秒），形成可见的连续伤害
@@ -432,6 +424,18 @@ void PumpReplay() {
         local = g_state.pending;
         is_first = (g_state.pending.remaining == g_state.repeat_count);
     }
+    // 先写诊断（即使随后被过滤，也要看到函数名与 GE 类名）。
+    if (is_first && g_state.log_matches && g_core != nullptr && g_core->log != nullptr) {
+        const char* fn = ResolveName(FunctionNameId(local.function));
+        const char* ge = local.ge_class_name_id ? ResolveName(local.ge_class_name_id) : "";
+        const char* obj = local.object_class_name_id ? ResolveName(local.object_class_name_id) : "";
+        char msg[320]{};
+        std::snprintf(msg, sizeof(msg), "damage-chain: match fn=%s ge=%s obj=%s n=%u ps=%zu",
+                      (fn != nullptr && fn[0]) ? fn : "?", (ge != nullptr && ge[0]) ? ge : "?",
+                      (obj != nullptr && obj[0]) ? obj : "?", g_state.repeat_count,
+                      local.params_size);
+        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(msg));
+    }
     // 宿主调用（ResolveName）必须在锁外，避免持锁等待宿主。
     if (local.ge_class_name_id != 0 && g_state.ge_filter && !PendingGeIsDamage()) {
         std::scoped_lock lock(g_state_mutex);
@@ -443,17 +447,6 @@ void PumpReplay() {
     // 可选：清零 PredictionKey（Server RPC 复用同一 key 时服务端可能去重）。
     if (g_state.zero_prediction && local.ge_class_name_id != 0 && local.params_size >= 0x7Cu) {
         std::memset(local.params.data() + 0x6C, 0, 0x10);
-    }
-    if (is_first && g_state.log_matches && g_core != nullptr && g_core->log != nullptr) {
-        const char* fn = ResolveName(FunctionNameId(local.function));
-        const char* ge = local.ge_class_name_id ? ResolveName(local.ge_class_name_id) : "";
-        const char* obj = local.object_class_name_id ? ResolveName(local.object_class_name_id) : "";
-        char text[320]{};
-        std::snprintf(text, sizeof(text), "damage-chain: match fn=%s ge=%s obj=%s n=%u ps=%zu",
-                      (fn != nullptr && fn[0]) ? fn : "?", (ge != nullptr && ge[0]) ? ge : "?",
-                      (obj != nullptr && obj[0]) ? obj : "?", g_state.repeat_count,
-                      local.params_size);
-        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     {
         std::scoped_lock lock(g_state_mutex);
@@ -689,9 +682,11 @@ void LoadConfig() {
     }
     if (version != kConfVersion) {
         g_state.enabled = 1;
-        g_state.repeat_count = 8;
+        g_state.repeat_count = 15;
         g_state.capture_enabled = 1;
-        g_state.ge_filter = 1;
+        g_state.ge_filter = 0;
+        g_state.log_matches = 1;
+        g_state.zero_prediction = 1;
     }
     if (g_state.repeat_count > kMaxRepeat) g_state.repeat_count = kMaxRepeat;
 }
@@ -855,13 +850,13 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.1.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.2.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.1.0, candidates=%d hook=%d np=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.2.0, candidates=%d hook=%d np=%d gf=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
-                      g_state.zero_prediction);
+                      g_state.zero_prediction, g_state.ge_filter);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     return anomaly::sdk::Ok();
