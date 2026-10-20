@@ -95,8 +95,9 @@ bool HasField(const Struct* value, std::size_t offset) noexcept {
     return value != nullptr && value->struct_size >= offset + sizeof(Field);
 }
 
-constexpr AnomalyStatusV1 Status(std::uint32_t code) noexcept {
-    return {code, 0, {}};
+constexpr AnomalyStatusV1 Status(
+    std::uint32_t code, std::string_view message = {}) noexcept {
+    return {code, 0, {message.data(), message.size()}};
 }
 
 template <typename Service>
