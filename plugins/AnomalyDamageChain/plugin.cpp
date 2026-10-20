@@ -60,6 +60,8 @@ constexpr const char* kGatePattern =
 using GateFn = int (*)(void*, void*, void*, void*);
 void* g_gate_original{};
 AnomalyGenerationHandleV1 g_gate_hook{};
+void* g_gate_stub{};
+std::uintptr_t g_gate_result{};
 
 double g_period_ms{1000.0 / 15.0};
 double g_next_due{};
@@ -149,10 +151,8 @@ extern "C" void OnBurstHit() {
         return;
     }
 
+    // 只统计：是否真正施加伤害由判定函数（gate）的返回值决定。
     ++g_call_valid;
-    g_armed = true;
-    g_next_due = g_now_ms + g_period_ms;
-    ++g_hits;
 }
 
 // 由判定函数确认"已施加伤害"后调用。
@@ -164,12 +164,13 @@ void ArmChain() {
 
 // 生成两条 stub：入口转发、重放调用。
 bool BuildStubs() {
-    constexpr std::size_t kSize = 512;
+    constexpr std::size_t kSlot = 512;
     auto* mem = static_cast<std::uint8_t*>(
-        VirtualAlloc(nullptr, kSize * 2, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        VirtualAlloc(nullptr, kSlot * 3, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     if (mem == nullptr) return false;
     std::uint8_t* p = mem;
-    std::uint8_t* q = mem + kSize;
+    std::uint8_t* q = mem + kSlot;
+    std::uint8_t* g = mem + kSlot * 2;
 
     auto put64 = [](std::uint8_t* d, std::uint64_t v, std::size_t& i) {
         std::memcpy(d + i, &v, sizeof(v));
@@ -184,59 +185,114 @@ bool BuildStubs() {
         d[i++] = rex; d[i++] = 0x8B; d[i++] = modrm; d[i++] = disp;
     };
     auto rep_movsq = [&](std::uint8_t* d, std::size_t& i) {
-        d[i++] = 0xB9;
-        d[i++] = static_cast<std::uint8_t>(kStackArgCount);
-        d[i++] = 0; d[i++] = 0; d[i++] = 0;   // mov ecx, N
+        d[i++] = 0xB9; d[i++] = static_cast<std::uint8_t>(kStackArgCount);
+        d[i++] = 0; d[i++] = 0; d[i++] = 0;
         d[i++] = 0xF3; d[i++] = 0x48; d[i++] = 0xA5;
     };
+    // 保存四个寄存器参数与栈参数到 g_capture
+    auto capture_all = [&](std::uint8_t* d, std::size_t& i) {
+        mov_rax_imm(d, i, &g_capture);
+        d[i++] = 0x48; d[i++] = 0x89; d[i++] = 0x20;                 // [rax]=rsp
+        d[i++] = 0x4C; d[i++] = 0x8B; d[i++] = 0x14; d[i++] = 0x24;  // r10=[rsp]
+        d[i++] = 0x4C; d[i++] = 0x89; d[i++] = 0x50; d[i++] = 0x08;
+        d[i++] = 0x48; d[i++] = 0x89; d[i++] = 0x48; d[i++] = 0x10;
+        d[i++] = 0x48; d[i++] = 0x89; d[i++] = 0x50; d[i++] = 0x18;
+        d[i++] = 0x4C; d[i++] = 0x89; d[i++] = 0x40; d[i++] = 0x20;
+        d[i++] = 0x4C; d[i++] = 0x89; d[i++] = 0x48; d[i++] = 0x28;
+        d[i++] = 0x48; d[i++] = 0x8D; d[i++] = 0x74; d[i++] = 0x24; d[i++] = 0x28;
+        d[i++] = 0x48; d[i++] = 0x8D; d[i++] = 0x78; d[i++] = 0x30;
+        rep_movsq(d, i);
+    };
+    // 用 g_capture 构造合法调用帧并装载参数
+    auto build_frame = [&](std::uint8_t* d, std::size_t& i) {
+        mov_rax_imm(d, i, &g_capture);
+        d[i++] = 0x48; d[i++] = 0x81; d[i++] = 0xEC;
+        d[i++] = 0xA8; d[i++] = 0x00; d[i++] = 0x00; d[i++] = 0x00;
+        d[i++] = 0x48; d[i++] = 0x8D; d[i++] = 0x70; d[i++] = 0x30;
+        d[i++] = 0x48; d[i++] = 0x8D; d[i++] = 0x7C; d[i++] = 0x24; d[i++] = 0x20;
+        rep_movsq(d, i);
+        mov_rax_imm(d, i, &g_capture);
+        load_from_rax(d, i, 0x48, 0x48, 0x10);
+        load_from_rax(d, i, 0x48, 0x50, 0x18);
+        load_from_rax(d, i, 0x4C, 0x40, 0x20);
+        load_from_rax(d, i, 0x4C, 0x48, 0x28);
+    };
 
-    // Win64 入口布局：[rsp]=返回地址，[rsp+8..0x28)=寄存器参数影子空间，
-    // 真正的栈参数从 [rsp+0x28) 起。之前按 [rsp+8] 抓取，抓到的是影子空间。
+    // ---- stub1：入口转发（尾跳，空指针保护）----
     std::size_t i = 0;
-    mov_rax_imm(p, i, &g_capture);
-    p[i++] = 0x48; p[i++] = 0x89; p[i++] = 0x20;                 // mov [rax],rsp
-    p[i++] = 0x4C; p[i++] = 0x8B; p[i++] = 0x14; p[i++] = 0x24;  // mov r10,[rsp]
-    p[i++] = 0x4C; p[i++] = 0x89; p[i++] = 0x50; p[i++] = 0x08;  // mov [rax+8],r10
-    p[i++] = 0x48; p[i++] = 0x89; p[i++] = 0x48; p[i++] = 0x10;  // [rax+0x10]=rcx
-    p[i++] = 0x48; p[i++] = 0x89; p[i++] = 0x50; p[i++] = 0x18;  // [rax+0x18]=rdx
-    p[i++] = 0x4C; p[i++] = 0x89; p[i++] = 0x40; p[i++] = 0x20;  // [rax+0x20]=r8
-    p[i++] = 0x4C; p[i++] = 0x89; p[i++] = 0x48; p[i++] = 0x28;  // [rax+0x28]=r9
-    p[i++] = 0x48; p[i++] = 0x8D; p[i++] = 0x74; p[i++] = 0x24; p[i++] = 0x28;  // lea rsi,[rsp+0x28]
-    p[i++] = 0x48; p[i++] = 0x8D; p[i++] = 0x78; p[i++] = 0x30;  // lea rdi,[rax+0x30]
-    rep_movsq(p, i);
+    capture_all(p, i);
     mov_rax_imm(p, i, &OnBurstHit);
-    p[i++] = 0x48; p[i++] = 0x83; p[i++] = 0xEC; p[i++] = 0x28;  // sub rsp,0x28
-    p[i++] = 0xFF; p[i++] = 0xD0;                                // call rax
-    p[i++] = 0x48; p[i++] = 0x83; p[i++] = 0xC4; p[i++] = 0x28;  // add rsp,0x28
+    p[i++] = 0x48; p[i++] = 0x83; p[i++] = 0xEC; p[i++] = 0x28;
+    p[i++] = 0xFF; p[i++] = 0xD0;
+    p[i++] = 0x48; p[i++] = 0x83; p[i++] = 0xC4; p[i++] = 0x28;
     mov_rax_imm(p, i, &g_capture);
-    load_from_rax(p, i, 0x48, 0x48, 0x10);  // rcx
-    load_from_rax(p, i, 0x48, 0x50, 0x18);  // rdx
-    load_from_rax(p, i, 0x4C, 0x40, 0x20);  // r8
-    load_from_rax(p, i, 0x4C, 0x48, 0x28);  // r9
+    load_from_rax(p, i, 0x48, 0x48, 0x10);
+    load_from_rax(p, i, 0x48, 0x50, 0x18);
+    load_from_rax(p, i, 0x4C, 0x40, 0x20);
+    load_from_rax(p, i, 0x4C, 0x48, 0x28);
     mov_rax_imm(p, i, &g_original);
-    p[i++] = 0xFF; p[i++] = 0x20;                                // jmp [rax]
+    p[i++] = 0x48; p[i++] = 0x8B; p[i++] = 0x00;   // rax=[g_original]
+    p[i++] = 0x48; p[i++] = 0x85; p[i++] = 0xC0;   // test
+    p[i++] = 0x74; const std::size_t pjz = i; p[i++] = 0x00;  // jz（回填）
+    p[i++] = 0xFF; p[i++] = 0xE0;                  // jmp rax
+    const std::size_t pfg = i;
+    p[i++] = 0x31; p[i++] = 0xC0;                  // xor eax,eax
+    p[i++] = 0xC3;                                 // ret
+    p[pjz] = static_cast<std::uint8_t>(pfg - (pjz + 1));
 
+    // ---- stub2：重放 ----
     std::size_t j = 0;
-    mov_rax_imm(q, j, &g_capture);
-    q[j++] = 0x48; q[j++] = 0x81; q[j++] = 0xEC;
-    q[j++] = 0xA8; q[j++] = 0x00; q[j++] = 0x00; q[j++] = 0x00;  // sub rsp,0xA8
-    q[j++] = 0x48; q[j++] = 0x8D; q[j++] = 0x70; q[j++] = 0x30;  // lea rsi,[rax+0x30]
-    q[j++] = 0x48; q[j++] = 0x8D; q[j++] = 0x7C; q[j++] = 0x24; q[j++] = 0x20;
-    rep_movsq(q, j);
-    mov_rax_imm(q, j, &g_capture);
-    load_from_rax(q, j, 0x48, 0x48, 0x10);  // rcx
-    load_from_rax(q, j, 0x48, 0x50, 0x18);  // rdx
-    load_from_rax(q, j, 0x4C, 0x40, 0x20);  // r8
-    load_from_rax(q, j, 0x4C, 0x48, 0x28);  // r9
+    build_frame(q, j);
     mov_rax_imm(q, j, &g_original);
-    q[j++] = 0xFF; q[j++] = 0x10;                                // call [rax]
+    q[j++] = 0x48; q[j++] = 0x8B; q[j++] = 0x00;
+    q[j++] = 0x48; q[j++] = 0x85; q[j++] = 0xC0;
+    q[j++] = 0x74; const std::size_t qjz = j; q[j++] = 0x00;  // jz（回填）
+    q[j++] = 0xFF; q[j++] = 0xD0;                  // call rax
     q[j++] = 0x48; q[j++] = 0x81; q[j++] = 0xC4;
-    q[j++] = 0xA8; q[j++] = 0x00; q[j++] = 0x00; q[j++] = 0x00;  // add rsp,0xA8
-    q[j++] = 0xC3;                                               // ret
+    q[j++] = 0xA8; q[j++] = 0x00; q[j++] = 0x00; q[j++] = 0x00;
+    q[j++] = 0xC3;                                 // ret
+    const std::size_t qfg = j;
+    q[qjz] = static_cast<std::uint8_t>(qfg - (qjz + 1));
+    q[j++] = 0x48; q[j++] = 0x81; q[j++] = 0xC4;   // fail:
+    q[j++] = 0xA8; q[j++] = 0x00; q[j++] = 0x00; q[j++] = 0x00;
+    q[j++] = 0x31; q[j++] = 0xC0;
+    q[j++] = 0xC3;
 
-    FlushInstructionCache(GetCurrentProcess(), mem, kSize * 2);
+    // ---- stub3：判定函数（带返回值）----
+    std::size_t k = 0;
+    capture_all(g, k);
+    build_frame(g, k);
+    mov_rax_imm(g, k, &g_gate_original);
+    g[k++] = 0x48; g[k++] = 0x8B; g[k++] = 0x00;   // rax=[g_gate_original]
+    g[k++] = 0x48; g[k++] = 0x85; g[k++] = 0xC0;   // test
+    g[k++] = 0x74; g[k++] = 0x00;                  // jz fail（偏移稍后回填）
+    const std::size_t jz_at = k - 1;
+    g[k++] = 0xFF; g[k++] = 0xD0;                  // call rax
+    g[k++] = 0x49; g[k++] = 0x89; g[k++] = 0xC2;   // mov r10,rax
+    g[k++] = 0xEB; g[k++] = 0x00;                  // jmp store（偏移稍后回填）
+    const std::size_t jmp_at = k - 1;
+    const std::size_t fail_label = k;
+    g[k++] = 0x45; g[k++] = 0x31; g[k++] = 0xD2;   // xor r10d,r10d
+    const std::size_t store_label = k;
+    mov_rax_imm(g, k, &g_gate_result);
+    g[k++] = 0x4C; g[k++] = 0x89; g[k++] = 0x10;   // mov [rax],r10
+    mov_rax_imm(g, k, &OnGateResult);
+    g[k++] = 0x48; g[k++] = 0x83; g[k++] = 0xEC; g[k++] = 0x28;
+    g[k++] = 0xFF; g[k++] = 0xD0;
+    g[k++] = 0x48; g[k++] = 0x83; g[k++] = 0xC4; g[k++] = 0x28;
+    mov_rax_imm(g, k, &g_gate_result);
+    g[k++] = 0x48; g[k++] = 0x8B; g[k++] = 0x00;   // mov rax,[rax]
+    g[k++] = 0x48; g[k++] = 0x81; g[k++] = 0xC4;
+    g[k++] = 0xA8; g[k++] = 0x00; g[k++] = 0x00; g[k++] = 0x00;
+    g[k++] = 0xC3;
+
+    g[jz_at] = static_cast<std::uint8_t>(fail_label - (jz_at + 1));
+    g[jmp_at] = static_cast<std::uint8_t>(store_label - (jmp_at + 1));
+
+    FlushInstructionCache(GetCurrentProcess(), mem, kSlot * 3);
     g_stub = p;
     g_replay = q;
+    g_gate_stub = g;
     return true;
 }
 
@@ -292,13 +348,9 @@ void ProbeProcessEvent() {
 }
 
 // 判定函数 detour：只有它返回真，才说明这次攻击真的施加了伤害。
-int ANOMALY_CALL GateDetour(void* a, void* b, void* c, void* d) {
-    const int applied =
-        reinterpret_cast<GateFn>(g_gate_original)(a, b, c, d);
-    if (applied != 0 && g_capture.entry_rsp != 0) {
-        ArmChain();
-    }
-    return applied;
+// gate stub 调用完原函数后回调这里（无参数，结果在 g_gate_result）。
+extern "C" void OnGateResult() {
+    if (g_gate_result != 0) ArmChain();
 }
 
 void EnsureGateHook() {
@@ -317,7 +369,8 @@ void EnsureGateHook() {
     request.struct_size = sizeof(request);
     request.kind = ANOMALY_HOOK_V1_FUNCTION;
     request.target = target;
-    request.detour = reinterpret_cast<void*>(&GateDetour);
+    if (g_gate_stub == nullptr) return;
+    request.detour = g_gate_stub;
     request.label = StringView("damage-chain.gate");
 
     std::uintptr_t original = 0;
@@ -534,6 +587,7 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
     }
     if (g_stub == nullptr) BuildStubs();
     EnsureHook();
+    if (g_gate_hook.id == 0) EnsureGateHook();
     if (g_conf.enabled != 0) {
         Pump();
     } else if (g_armed) {
@@ -602,7 +656,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.5.0"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.6.0"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
