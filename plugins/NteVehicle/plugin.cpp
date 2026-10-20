@@ -1422,6 +1422,8 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
 
     static int active_tab = 0;
 
+    DrawText(ui, "K：打开/关闭载具菜单；按住 Alt 呼出游戏原生光标。");
+
     const auto nav_button = [&](std::string_view label, int tab) {
         const std::string shown = active_tab == tab
             ? "[" + std::string(label) + "]" : std::string(label);
