@@ -637,6 +637,27 @@ void ResolvePendingDamage() {
         return;
     }
     const std::uintptr_t fn = FindFunctionInClass(cls, kOnDamagedName);
+    if (fn >= 0x10000 && g_state.log_matches && g_core != nullptr && g_core->log != nullptr) {
+        // 探测：UFunction 上是否存有指向 HTGame.exe 代码段的原生函数指针。
+        const HMODULE mod = GetModuleHandleA("HTGame.exe");
+        const std::uintptr_t mb = reinterpret_cast<std::uintptr_t>(mod);
+        char text[512]{};
+        int n = std::snprintf(text, sizeof(text),
+                              "damage-chain: OnDamaged ufunc=0x%llX mod=0x%llX",
+                              static_cast<unsigned long long>(fn),
+                              static_cast<unsigned long long>(mb));
+        for (std::uintptr_t off = 0xC0; off <= 0xF8 && n > 0 &&
+                                       static_cast<std::size_t>(n) + 32 < sizeof(text);
+             off += 8) {
+            std::uintptr_t v = 0;
+            SafeReadPtr(fn + off, &v);
+            const bool in_mod = mb != 0 && v >= mb && v < mb + 0x11000000ULL;
+            n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
+                               " +%llX=0x%llX%s", static_cast<unsigned long long>(off),
+                               static_cast<unsigned long long>(v), in_mod ? "*" : "");
+        }
+        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+    }
     if (fn < 0x10000) {
         char children[320]{};
         LogClassChildren(cls, children, sizeof(children));
@@ -703,10 +724,10 @@ void PumpReplay() {
         const char* ge = local.ge_class_name_id ? ResolveName(local.ge_class_name_id) : "";
         const char* obj = local.object_class_name_id ? ResolveName(local.object_class_name_id) : "";
         char msg[320]{};
-        std::snprintf(msg, sizeof(msg), "damage-chain: match fn=%s ge=%s obj=%s n=%u ps=%zu",
+        std::snprintf(msg, sizeof(msg), "damage-chain: match fn=%s ge=%s obj=%s n=%u ps=%zu dmg=%.1f",
                       (fn != nullptr && fn[0]) ? fn : "?", (ge != nullptr && ge[0]) ? ge : "?",
                       (obj != nullptr && obj[0]) ? obj : "?", g_state.repeat_count,
-                      local.params_size);
+                      local.params_size, local.raw_damage);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(msg));
     }
     // 宿主调用（ResolveName）必须在锁外，避免持锁等待宿主。
@@ -1166,11 +1187,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.7.4：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.7.5：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.4, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.5, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
