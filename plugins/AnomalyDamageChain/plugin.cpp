@@ -263,6 +263,7 @@ int g_scan_target_count{};
 int g_scan_target_hits[8]{};
 std::uintptr_t g_scan_target_first[8][3]{};
 AnomalyGenerationHandleV1 g_scan_task{};
+bool g_dump_done{};
 bool g_scan_logged{};
 const AnomalySignatureServiceV1* g_signature{};
 std::uintptr_t g_objects_accessor{};  // ue5.GObjects 访问器地址
@@ -555,6 +556,53 @@ int ScanDirectCallers(std::uintptr_t target, std::uintptr_t* out, int capacity,
     return found;
 }
 
+// 把模块的可执行段整段写到磁盘，供离线反汇编分析。
+void DumpExecSections() {
+    const HMODULE mod = GetModuleHandleA("HTGame.exe");
+    if (mod == nullptr) return;
+    const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mod);
+    std::uintptr_t starts[32]{};
+    std::uintptr_t ends[32]{};
+    const int ranges = CollectExecRanges(base, starts, ends, 32);
+    if (ranges <= 0) return;
+    char temp[MAX_PATH]{};
+    if (GetTempPathA(MAX_PATH, temp) == 0) return;
+    constexpr std::size_t kChunk = 1U << 20;
+    std::vector<std::uint8_t> buffer(kChunk);
+    for (int r = 0; r < ranges; ++r) {
+        if (ends[r] <= starts[r]) continue;
+        char path[MAX_PATH]{};
+        std::snprintf(path, sizeof(path), "%sanomaly_htgame_%d.bin", temp, r);
+        HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) continue;
+        const std::uintptr_t size = ends[r] - starts[r];
+        std::uintptr_t written_total = 0;
+        for (std::uintptr_t off = 0; off < size; off += kChunk) {
+            const std::size_t n = (size - off) < kChunk
+                                      ? static_cast<std::size_t>(size - off)
+                                      : kChunk;
+            if (!SafeCopyBlock(starts[r] + off, buffer.data(), n)) break;
+            DWORD written = 0;
+            if (!WriteFile(file, buffer.data(), static_cast<DWORD>(n), &written, nullptr) ||
+                written != n) {
+                break;
+            }
+            written_total += n;
+        }
+        CloseHandle(file);
+        if (g_core != nullptr && g_core->log != nullptr) {
+            char text[320]{};
+            std::snprintf(text, sizeof(text),
+                          "damage-chain: dump %s rva=0x%llX size=0x%llX written=0x%llX",
+                          path, static_cast<unsigned long long>(starts[r] - base),
+                          static_cast<unsigned long long>(size),
+                          static_cast<unsigned long long>(written_total));
+            g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+        }
+    }
+}
+
 // worker 线程执行扫描（不冻结游戏）。
 void ANOMALY_CALL ScanTaskRun(void*, AnomalyGenerationHandleV1) {
     std::uintptr_t target = 0;
@@ -628,6 +676,11 @@ void ANOMALY_CALL ScanTaskRun(void*, AnomalyGenerationHandleV1) {
         for (int k = 0; k < 3; ++k) g_scan_target_first[t][k] = target_first[t][k];
     }
     g_scan_done = true;
+
+    if (!g_dump_done) {
+        g_dump_done = true;
+        DumpExecSections();
+    }
 }
 
 // TWeakObjectPtr<T> = { int32 ObjectIndex; int32 ObjectSerialNumber }（8 字节，不是指针）。
@@ -1399,11 +1452,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.8.2：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.9.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.8.2, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.9.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
