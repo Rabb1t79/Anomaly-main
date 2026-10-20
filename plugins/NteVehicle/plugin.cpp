@@ -1052,6 +1052,7 @@ void DrawCustomizationTab(
     const std::string& customization_vehicle_id,
     const std::string& skin_id,
     const std::string& customization_status,
+    const std::string& last_summon,
     bool player_position_valid) {
     const auto selected_index = std::ranges::find(ids, selected);
     const bool has_selected = selected_index != ids.end();
@@ -1257,6 +1258,7 @@ void DrawCustomizationTab(
     } else if (skin_id.empty()) {
         DrawText(ui, "该车型尚无有效涂装选择；请在「涂装」类别中选择一项。");
     }
+    if (!last_summon.empty()) DrawText(ui, "最近召唤状态：" + last_summon);
 }
 
 
@@ -1446,7 +1448,7 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
         if (customization_page) {
             DrawCustomizationTab(ui, selected, ids, labels, customization_options,
                 module_overrides, customization_vehicle_id, customization_skin_id,
-                customization_status, player_position_valid);
+                customization_status, last_summon, player_position_valid);
         } else {
             DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
         }
