@@ -871,6 +871,8 @@ void ANOMALY_CALL Unload(void*) {
 }
 
 void ANOMALY_CALL Update(void*, double) {
+    // Do not poll combat services or touch replay state until the user arms the feature.
+    if (!g_runtime_enabled.load(std::memory_order_relaxed)) return;
     PollCombat();
     PumpReplay();
 }
