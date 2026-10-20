@@ -55,9 +55,9 @@ jobs:
           set_target_properties(anomaly_damage_chain PROPERTIES
             OUTPUT_NAME "plugin"
             PREFIX ""
-            RUNTIME_OUTPUT_DIRECTORY "\${CMAKE_BINARY_DIR}/out/AnomalyDamageChain/$<CONFIG>"
-            LIBRARY_OUTPUT_DIRECTORY "\${CMAKE_BINARY_DIR}/out/AnomalyDamageChain/$<CONFIG>"
-            ARCHIVE_OUTPUT_DIRECTORY "\${CMAKE_BINARY_DIR}/lib/AnomalyDamageChain/$<CONFIG>"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/out/AnomalyDamageChain/$<CONFIG>"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/out/AnomalyDamageChain/$<CONFIG>"
+            ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib/AnomalyDamageChain/$<CONFIG>"
           )
           '@
           $cmakeLists = $cmakeLists.Replace('__ANOMALY_SOURCE_ROOT__', $root)
