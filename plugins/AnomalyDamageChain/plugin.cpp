@@ -262,6 +262,7 @@ int g_exec_count{};
 struct StackCandidate {
     std::uintptr_t return_va{};
     std::uintptr_t call_target{};
+    bool is_process_event_call{};  // 前 6 字节是 FF 90 60 02 00 00（call [rax+0x260]）
 };
 
 std::unordered_map<std::uint32_t, std::uintptr_t> g_caller_rva;
@@ -537,12 +538,34 @@ int CollectStackCandidates(StackCandidate* out, int capacity) {
             if (value >= g_exec_starts[r] && value < g_exec_ends[r]) { in_exec = true; break; }
         }
         if (!in_exec) continue;
-        std::uint32_t opcode = 0;
-        if (!SafeReadU32(value - 5, &opcode) || (opcode & 0xFFu) != 0xE8u) continue;
-        std::int32_t rel = 0;
-        if (!SafeReadU32(value - 4, reinterpret_cast<std::uint32_t*>(&rel))) continue;
+        // 判据 A：直接调用 E8 rel32
+        std::uint32_t word = 0;
+        bool accepted = false;
+        std::uintptr_t target = 0;
+        if (SafeReadU32(value - 5, &word) && (word & 0xFFu) == 0xE8u) {
+            std::int32_t rel = 0;
+            if (SafeReadU32(value - 4, reinterpret_cast<std::uint32_t*>(&rel))) {
+                target = value + static_cast<std::intptr_t>(rel);
+                accepted = true;
+            }
+        }
+        // 判据 B：虚表间接调用 FF 90 60 02 00 00 = call qword [rax+0x260]
+        // 这正是 ProcessEvent 在 UObject 虚表中的槽位。
+        bool is_pe_call = false;
+        if (!accepted) {
+            std::uint32_t lo = 0;
+            std::uint16_t hi = 0;
+            if (SafeReadU32(value - 6, &lo) && SafeReadU16(value - 2, &hi)) {
+                if ((lo & 0xFFFFu) == 0x90FFu && ((lo >> 16) & 0xFFFFu) == 0x0260u && hi == 0x0000u) {
+                    accepted = true;
+                    is_pe_call = true;
+                }
+            }
+        }
+        if (!accepted) continue;
         out[count].return_va = value;
-        out[count].call_target = value + static_cast<std::intptr_t>(rel);
+        out[count].call_target = target;
+        out[count].is_process_event_call = is_pe_call;
         ++count;
     }
     return count;
@@ -1619,11 +1642,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v2.1.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v2.1.1：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v2.1.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v2.1.1, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
@@ -1721,9 +1744,10 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
         for (const auto& c : g_caller_candidates) {
             if (n <= 0 || static_cast<std::size_t>(n) + 64 >= sizeof(text)) break;
             n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
-                               " [0x%llX<-0x%llX]",
+                               " [0x%llX<-0x%llX%s]",
                                static_cast<unsigned long long>(c.return_va - mb),
-                               static_cast<unsigned long long>(c.call_target - mb));
+                               static_cast<unsigned long long>(c.call_target - mb),
+                               c.is_process_event_call ? "*PE" : "");
         }
         if (g_core != nullptr && g_core->log != nullptr) {
             g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
@@ -1816,6 +1840,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    StringView("anomaly.local.damage-chain"),
                    StringView("Damage Chain Reaction"), StringView("Anomaly"),
-                   StringView("2.1.0"), Load, Start, Stop, Unload, Update, Draw};
+                   StringView("2.1.1"), Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
