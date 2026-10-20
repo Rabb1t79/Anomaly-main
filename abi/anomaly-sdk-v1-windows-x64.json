@@ -62,6 +62,14 @@
     "ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID": 1,
     "ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION": 1,
     "ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER": 2,
+    "ANOMALY_NTE_VEHICLE_SUMMON_V1_RESERVED_OWNED_MODIFICATIONS": 4,
+    "ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION": 8,
+    "ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES": 128,
+    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_VALID": 1,
+    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_DEFAULT": 2,
+    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE": 1,
+    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN": 2,
+    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES": 256,
     "ANOMALY_NTE_NAVIGATION_SERVICE_V1_VERSION": 1,
     "ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION": 1,
     "ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION": 1,
@@ -131,15 +139,7 @@
     "ANOMALY_NTE_UI_BUTTON_OUTCOME_V1_FORCED": 1,
     "ANOMALY_NTE_UI_BUTTON_OUTCOME_V1_PRESS_ARMED": 2,
     "ANOMALY_NTE_UI_BUTTON_OUTCOME_V1_CLICK_ACCEPTED": 4,
-    "ANOMALY_NTE_UI_BUTTON_OUTCOME_V1_TRUNCATED": 8,
-    "ANOMALY_NTE_VEHICLE_SUMMON_V1_RESERVED_OWNED_MODIFICATIONS": 4,
-    "ANOMALY_NTE_VEHICLE_SUMMON_V1_APPLY_CUSTOM_CONFIGURATION": 8,
-    "ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES": 128,
-    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_VALID": 1,
-    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_OPTION_V1_DEFAULT": 2,
-    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_MODULE": 1,
-    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_KIND_V1_SKIN": 2,
-    "ANOMALY_NTE_VEHICLE_CUSTOMIZATION_LABEL_MAX_UTF8_BYTES": 256
+    "ANOMALY_NTE_UI_BUTTON_OUTCOME_V1_TRUNCATED": 8
   },
   "enums": {
     "AnomalyStatusCodeV1": {
@@ -1514,6 +1514,38 @@
         "reserved": 20
       }
     },
+    "AnomalyNteVehicleCustomizationCatalogSnapshotV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "sequence": 8,
+        "entry_count": 16,
+        "reserved": 20
+      }
+    },
+    "AnomalyNteVehicleCustomizationOptionV1": {
+      "size": 404,
+      "alignment": 4,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "kind": 8,
+        "module_type": 12,
+        "option_id": 16,
+        "label": 145
+      }
+    },
+    "AnomalyNteVehicleModuleSelectionV1": {
+      "size": 24,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "module_type": 4,
+        "module_id": 8
+      }
+    },
     "AnomalyNteVehicleSummonRequestV1": {
       "size": 64,
       "alignment": 8,
@@ -2127,38 +2159,6 @@
         "user": 8,
         "register_button": 16,
         "unregister_button": 24
-      }
-    },
-    "AnomalyNteVehicleCustomizationCatalogSnapshotV1": {
-      "size": 24,
-      "alignment": 8,
-      "offsets": {
-        "struct_size": 0,
-        "flags": 4,
-        "sequence": 8,
-        "entry_count": 16,
-        "reserved": 20
-      }
-    },
-    "AnomalyNteVehicleCustomizationOptionV1": {
-      "size": 404,
-      "alignment": 4,
-      "offsets": {
-        "struct_size": 0,
-        "flags": 4,
-        "kind": 8,
-        "module_type": 12,
-        "option_id": 16,
-        "label": 145
-      }
-    },
-    "AnomalyNteVehicleModuleSelectionV1": {
-      "size": 24,
-      "alignment": 8,
-      "offsets": {
-        "struct_size": 0,
-        "module_type": 4,
-        "module_id": 8
       }
     }
   },
