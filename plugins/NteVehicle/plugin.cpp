@@ -980,45 +980,28 @@ void DrawSummonTab(
     } else if (filtered.empty()) {
         DrawText(ui, "没有匹配项。");
     } else {
-        const bool can_table =
-            UiFieldAvailable(ui, offsetof(AnomalyUiServiceV1, end_table),
-                sizeof(decltype(AnomalyUiServiceV1::end_table))) &&
-            ui->begin_table && ui->table_next_row && ui->table_next_column && ui->end_table;
-        const bool table_open = can_table && ui->begin_table(ui->user,
-            anomaly::sdk::StringView("##vehicle-catalog-table"), 2,
-            ANOMALY_UI_TABLE_V1_SIZING_STRETCH_PROP, 0.0F, 0.0F) != 0;
-        if (table_open) {
-            ui->table_next_row(ui->user);
-            ui->table_next_column(ui->user);
-            DrawText(ui, "载具");
-            ui->table_next_column(ui->user);
-            DrawText(ui, "选择");
-            for (const std::size_t index : visible_indices) {
-                const std::string& id = ids[index];
-                const bool current = id == selected;
-                ui->table_next_row(ui->user);
-                ui->table_next_column(ui->user);
-                DrawText(ui, label_at(index));
-                ui->table_next_column(ui->user);
-                const std::string button_label =
-                    std::string(current ? "当前##" : "选择##") + id;
-                if (ui->button(ui->user, anomaly::sdk::StringView(button_label), 0.0F, 0.0F)) {
-                    std::scoped_lock lock(g_context.mutex);
-                    g_context.pending_vehicle_id = id;
+        // 每辆载具本身就是可点击的按钮，不再单独渲染“选择”列。
+        for (const std::size_t index : visible_indices) {
+            const std::string& id = ids[index];
+            const bool current = id == selected;
+            std::string display_label(label_at(index));
+
+            // Host label format may append " (VehicleID)" after the user-facing
+            // VehicleData.Name text. Keep the game display name as the visible label.
+            if (!display_label.empty() && display_label.back() == ')') {
+                const std::size_t suffix = display_label.rfind(" (");
+                if (suffix != std::string::npos && suffix > 0U) {
+                    display_label.resize(suffix);
                 }
             }
-            ui->end_table(ui->user);
-        } else {
-            for (const std::size_t index : visible_indices) {
-                const std::string& id = ids[index];
-                const bool current = id == selected;
-                const std::string button_label =
-                    std::string(current ? "当前  " : "选择  ") +
-                    std::string(label_at(index)) + "##" + id;
-                if (ui->button(ui->user, anomaly::sdk::StringView(button_label), 0.0F, 0.0F)) {
-                    std::scoped_lock lock(g_context.mutex);
-                    g_context.pending_vehicle_id = id;
-                }
+            if (display_label.empty()) display_label = id;
+
+            const std::string button_label =
+                "[" + std::string(current ? "✓ " : "") + display_label +
+                "]##vehicle-select-" + id;
+            if (ui->button(ui->user, anomaly::sdk::StringView(button_label), 0.0F, 0.0F)) {
+                std::scoped_lock lock(g_context.mutex);
+                g_context.pending_vehicle_id = id;
             }
         }
     }
@@ -1390,7 +1373,7 @@ void DrawDebugPanel(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
     const std::string& status, const std::string& selected,
     std::size_t catalog_size, bool player_position_valid) {
-    DrawText(ui, "构建标记：NTE Vehicle 0.10.3 / 2026-10-20-durability-guard");
+    DrawText(ui, "构建标记：NTE Vehicle 0.10.5 / 2026-10-21-clickable-display-names");
     DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v8");
     DrawText(ui, "Plugin ID：anomaly.local." + std::string("nte-vehicle"));
     DrawText(ui, "Manifest：schemaVersion=2 / entry=plugin.dll / loadPhase=game-ready / games=nte / builds=nte-*");
