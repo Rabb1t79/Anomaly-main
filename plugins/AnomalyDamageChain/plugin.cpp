@@ -105,6 +105,7 @@ struct PendingReplay {
     std::size_t params_size{};
     std::uint32_t remaining{};
     std::uint32_t ge_class_name_id{};
+    std::uint32_t object_class_name_id{};
     bool valid{};
 };
 
@@ -127,6 +128,8 @@ struct DisplaySnapshot {
     int combat_available{};
     int hook_ready{};
     int candidate_count{};
+    char last_match[72]{};
+    char last_ge[72]{};
 };
 
 struct State {
@@ -135,6 +138,14 @@ struct State {
     std::uint32_t repeat_count{8};
     int capture_enabled{1};
     int ge_filter{1};
+    int log_matches{1};      // 命中时向 Core 写一条诊断（函数名 + GE 类名）
+    int zero_prediction{1};  // 重放 GE 时清零 PredictionKey（+0x6C 起 0x10 字节）
+    int interval_ms{100};    // 每次重放的间隔（毫秒），形成可见的连续伤害
+    double replay_accum{0.0};
+
+    // 最近一次命中的函数/GE 类名 id（供界面显示）
+    std::uint32_t last_match_name_id{};
+    std::uint32_t last_ge_name_id{};
 
     // 统计
     std::uint64_t events{};
@@ -333,6 +344,7 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     }
     if (cached->second != kNameMatch && cached->second != kNameMatchGe) return;
     if (g_state.replaying || g_state.pending.valid) return;
+    if (g_state.repeat_count == 0) return;  // 0 次时不要留下永久 pending
 
     std::uint16_t parms_size = 0;
     if (parameters == nullptr || !SafeReadU16(function + kFunctionParmsSizeOffset, &parms_size) ||
@@ -348,16 +360,25 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     std::memcpy(g_state.pending.params.data(), parameters, parms_size);
     g_state.pending.remaining = g_state.repeat_count;
     g_state.pending.ge_class_name_id = 0;
+    g_state.pending.object_class_name_id = 0;
     g_state.pending.valid = true;
+    g_state.last_match_name_id = name_id;
 
-    // 记录 GE 类名 id（只读内存）；类名过滤推迟到 PumpReplay（Game 线程）。
-    if (cached->second == kNameMatchGe && g_state.ge_filter) {
+    // 记录类名 id（只读内存）；真正的名字解析与过滤推迟到 Update。
+    {
+        std::uintptr_t cls = 0;
+        if (SafeReadPtr(object + kClassPrivateOffset, &cls) && cls >= 0x10000) {
+            g_state.pending.object_class_name_id = ObjectNameId(cls);
+        }
+    }
+    if (cached->second == kNameMatchGe) {
         std::uintptr_t ge = 0;
         if (SafeReadPtr(reinterpret_cast<std::uintptr_t>(parameters) + kGeParamOffset, &ge) &&
             ge >= 0x10000) {
             std::uintptr_t cls = 0;
             if (SafeReadPtr(ge + kClassPrivateOffset, &cls) && cls >= 0x10000) {
                 g_state.pending.ge_class_name_id = ObjectNameId(cls);
+                g_state.last_ge_name_id = g_state.pending.ge_class_name_id;
             }
         }
     }
@@ -404,10 +425,12 @@ bool PendingGeIsDamage() {
 
 void PumpReplay() {
     PendingReplay local;
+    bool is_first = false;
     {
         std::scoped_lock lock(g_state_mutex);
         if (!g_state.pending.valid || g_state.pending.remaining == 0) return;
         local = g_state.pending;
+        is_first = (g_state.pending.remaining == g_state.repeat_count);
     }
     // 宿主调用（ResolveName）必须在锁外，避免持锁等待宿主。
     if (local.ge_class_name_id != 0 && g_state.ge_filter && !PendingGeIsDamage()) {
@@ -416,6 +439,21 @@ void PumpReplay() {
         g_state.pending.valid = false;
         g_state.pending.remaining = 0;
         return;
+    }
+    // 可选：清零 PredictionKey（Server RPC 复用同一 key 时服务端可能去重）。
+    if (g_state.zero_prediction && local.ge_class_name_id != 0 && local.params_size >= 0x7Cu) {
+        std::memset(local.params.data() + 0x6C, 0, 0x10);
+    }
+    if (is_first && g_state.log_matches && g_core != nullptr && g_core->log != nullptr) {
+        const char* fn = ResolveName(FunctionNameId(local.function));
+        const char* ge = local.ge_class_name_id ? ResolveName(local.ge_class_name_id) : "";
+        const char* obj = local.object_class_name_id ? ResolveName(local.object_class_name_id) : "";
+        char text[320]{};
+        std::snprintf(text, sizeof(text), "damage-chain: match fn=%s ge=%s obj=%s n=%u ps=%zu",
+                      (fn != nullptr && fn[0]) ? fn : "?", (ge != nullptr && ge[0]) ? ge : "?",
+                      (obj != nullptr && obj[0]) ? obj : "?", g_state.repeat_count,
+                      local.params_size);
+        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     {
         std::scoped_lock lock(g_state_mutex);
@@ -475,6 +513,8 @@ void PollCombat() {
 void BuildDisplay() {
     DisplaySnapshot snapshot;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> rows;
+    std::uint32_t last_match_id = 0;
+    std::uint32_t last_ge_id = 0;
     {
         std::scoped_lock lock(g_state_mutex);
         snapshot.events = g_state.events;
@@ -487,6 +527,8 @@ void BuildDisplay() {
         snapshot.combat_available = g_state.combat_available;
         snapshot.candidate_count = g_state.candidate_count;
         std::memcpy(snapshot.status, g_state.status, sizeof(snapshot.status));
+        last_match_id = g_state.last_match_name_id;
+        last_ge_id = g_state.last_ge_name_id;
         rows.reserve(g_state.capture_counts.size());
         for (const auto& kv : g_state.capture_counts) rows.emplace_back(kv.first, kv.second);
     }
@@ -500,6 +542,14 @@ void BuildDisplay() {
         DisplayRow& out = snapshot.rows[snapshot.row_count++];
         std::snprintf(out.name, sizeof(out.name), "%s", name);
         out.count = row.second;
+    }
+    if (last_match_id != 0) {
+        const char* name = ResolveName(last_match_id);
+        if (name != nullptr) std::snprintf(snapshot.last_match, sizeof(snapshot.last_match), "%s", name);
+    }
+    if (last_ge_id != 0) {
+        const char* name = ResolveName(last_ge_id);
+        if (name != nullptr) std::snprintf(snapshot.last_ge, sizeof(snapshot.last_ge), "%s", name);
     }
     std::scoped_lock lock(g_display_mutex);
     g_display = snapshot;
@@ -578,8 +628,9 @@ void ServiceExport() {
 std::size_t FormatConfig(char* text, std::size_t capacity) {
     const int n = std::snprintf(
         text, capacity,
-        "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\n", kConfVersion,
-        g_state.enabled, g_state.repeat_count, g_state.capture_enabled, g_state.ge_filter);
+        "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\nlog=%d\nzero_pred=%d\n",
+        kConfVersion, g_state.enabled, g_state.repeat_count, g_state.capture_enabled,
+        g_state.ge_filter, g_state.log_matches, g_state.zero_prediction);
     if (n <= 0) return 0;
     const std::size_t size = static_cast<std::size_t>(n);
     return size < capacity ? size : capacity - 1;
@@ -628,6 +679,10 @@ void LoadConfig() {
                 g_state.capture_enabled = std::atoi(value) != 0;
             } else if (std::strcmp(key, "ge_filter") == 0) {
                 g_state.ge_filter = std::atoi(value) != 0;
+            } else if (std::strcmp(key, "log") == 0) {
+                g_state.log_matches = std::atoi(value) != 0;
+            } else if (std::strcmp(key, "zero_pred") == 0) {
+                g_state.zero_prediction = std::atoi(value) != 0;
             }
         }
         line = (next != nullptr) ? next + 1 : nullptr;
@@ -712,8 +767,21 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
                   static_cast<unsigned long long>(snapshot.combat_events));
     Text(ui, line);
 
+    if (snapshot.last_match[0] != '\0') {
+        std::snprintf(line, sizeof(line), "上次命中：%s", snapshot.last_match);
+        Text(ui, line);
+    }
+    if (snapshot.last_ge[0] != '\0') {
+        std::snprintf(line, sizeof(line), "GE 类名：%s", snapshot.last_ge);
+        Text(ui, line);
+    }
+
     if (HAS(ui, checkbox))
         ui->checkbox(ui->user, StringView("仅重放伤害类 GE"), &g_state.ge_filter);
+    if (HAS(ui, checkbox))
+        ui->checkbox(ui->user, StringView("清零 PredictionKey"), &g_state.zero_prediction);
+    if (HAS(ui, checkbox))
+        ui->checkbox(ui->user, StringView("命中写日志"), &g_state.log_matches);
 
     if (snapshot.status[0] != '\0') Text(ui, snapshot.status);
 
@@ -787,12 +855,13 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.1.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start, candidates=%d hook=%d",
-                      g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0);
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.1.0, candidates=%d hook=%d np=%d",
+                      g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
+                      g_state.zero_prediction);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     return anomaly::sdk::Ok();
@@ -847,16 +916,37 @@ void ANOMALY_CALL Unload(void*) {
     g_state = State{};
 }
 
-void ANOMALY_CALL Update(void*, double) {
+void ANOMALY_CALL Update(void*, double delta_seconds) {
     ResolvePendingNames();
     ServiceExport();
-    PumpReplay();
+
+    // 按 interval_ms 间隔重放，形成「连续多次」而不是同帧爆发。
+    g_state.replay_accum += (delta_seconds > 0.0 ? delta_seconds : 0.0) * 1000.0;
+    const double interval = static_cast<double>(g_state.interval_ms > 0 ? g_state.interval_ms : 0);
+    if (g_state.replay_accum >= interval) {
+        g_state.replay_accum = 0.0;
+        PumpReplay();
+    }
     PollCombat();
 
     // 每 ~30 tick 刷新一次显示快照，控制排序/解析开销；首帧也构建一次。
     static std::uint32_t tick = 0;
     ++tick;
     if (tick == 1u || (tick % 30u) == 0u) BuildDisplay();
+    if ((tick % 600u) == 0u && g_state.log_matches && g_core != nullptr &&
+        g_core->log != nullptr) {
+        char text[320]{};
+        std::snprintf(text, sizeof(text),
+                      "damage-chain: events=%llu matched=%llu replayed=%llu failed=%llu "
+                      "ge_skip=%llu params_rej=%llu",
+                      static_cast<unsigned long long>(g_state.events),
+                      static_cast<unsigned long long>(g_state.matched),
+                      static_cast<unsigned long long>(g_state.replayed),
+                      static_cast<unsigned long long>(g_state.failed),
+                      static_cast<unsigned long long>(g_state.ge_skipped),
+                      static_cast<unsigned long long>(g_state.params_rejected));
+        g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+    }
 }
 
 }  // namespace
