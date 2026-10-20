@@ -30,7 +30,9 @@ jobs:
         env:
           # Fixtures, diagnostic probes and test plugin packages are opt-in; a normal run
           # builds Runtime, Tools, SDK, and the two supported NTE plugin packages.
-          ANOMALY_BUILD_OPTIONAL: ${{ inputs.fixtures == true && 'ON' || 'OFF' }}
+          # This one-off repair build intentionally includes the optional test plugins,
+          # so their packages are rebuilt with the current SDK exception bridge.
+          ANOMALY_BUILD_OPTIONAL: ON
         run: |
           $arguments = @(
             '--preset', 'windows-vs2022',
@@ -124,7 +126,7 @@ jobs:
             }
           }
       - name: Stage CI test plugins
-        if: github.ref_type != 'tag' && inputs.fixtures == true
+        if: github.ref_type != 'tag'
         shell: pwsh
         run: |
           cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component TestPlugins
