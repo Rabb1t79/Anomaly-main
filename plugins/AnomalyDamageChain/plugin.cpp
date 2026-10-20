@@ -64,10 +64,28 @@ constexpr std::uintptr_t kProcessEventVtableIndex = 76;   // 0x4C
 constexpr std::uintptr_t kFunctionParmsSizeOffset = 182;  // 0xB6
 
 // ---- 配置 ----
-constexpr int kConfVersion = 6;  // v3: 目标改为技能激活 RPC
+constexpr int kConfVersion = 8;  // v3: 目标改为技能激活 RPC
 constexpr const char* kConfFile = "damage-chain.conf";
 constexpr const char* kLogFile = "damage-chain-capture.txt";
 constexpr const char* kGeFunctionName = "ServerActivateGameEffectsWithClassByActor";
+
+// 反射遍历：用怪物对象的 Class 找 OnDamaged 这个 UFunction（不依赖 RVA/特征码）。
+// Profile layout 证据：object.class=0x10、object.nameOffset=0x18、ufield.next=0x28、
+// ufunction.execFunction=0xD8。UStruct::Children 取 UE5 标准 0x38。
+constexpr std::uintptr_t kUStructChildrenOffset = 0x38;
+constexpr std::uintptr_t kUFieldNextOffset = 0x28;
+constexpr std::uintptr_t kUFunctionExecOffset = 216;
+constexpr const char* kOnDamagedName = "OnDamaged";
+
+// AHTAbilityCharacter::OnDamaged 参数区（dump: ParmsSize 0x148）
+// (float DamageAmount, FHitResult&, FGameplayTagContainer&, UHTGamePlayEffect*, AHTAbilityCharacter*, AActor*)
+constexpr std::size_t kOnDamagedParamsSize = 0x148;
+constexpr std::size_t kOnDamagedAmountOffset = 0x00;
+constexpr std::size_t kOnDamagedGeOffset = 0x130;
+constexpr std::size_t kOnDamagedInstigatorOffset = 0x138;
+constexpr std::size_t kOnDamagedCauserOffset = 0x140;
+// FHTDamageEvent 里 FPointDamageEvent::Damage 位于 +0x08
+constexpr std::size_t kDamageEventAmountOffset = 0x08;
 constexpr std::uint32_t kMaxRepeat = 512;
 constexpr std::size_t kMaxParams = 1024;
 constexpr std::size_t kMaxDisplayRows = 12;
@@ -128,7 +146,12 @@ struct PendingReplay {
     std::uint32_t ge_class_name_id{};
     std::uint32_t object_class_name_id{};
     std::uint32_t victim_class_name_id{};
-    int mode{};                       // 0=原样重放调用 1=把伤害 GE 施加到目标
+    int mode{};                       // 0=原样重放 1=GE 施加 2=待解析 OnDamaged
+    // mode 2 暂存，等 Update 里解析出 OnDamaged 后再组装 params
+    std::uintptr_t raw_victim{};
+    std::uintptr_t raw_instigator{};
+    std::uintptr_t raw_ge{};
+    float raw_damage{};
     bool valid{};
 };
 
@@ -164,7 +187,7 @@ struct State {
     int log_matches{1};      // 命中时向 Core 写一条诊断（函数名 + GE 类名）
     int zero_prediction{1};  // 重放 GE 时清零 PredictionKey（+0x6C 起 0x10 字节）
     int apply_on_instigator{1};  // 1=在施害者(玩家,客户端拥有)上调用GE施加，SourceObj=怪物
-    int interval_ms{100};    // 每次重放的间隔（毫秒），形成可见的连续伤害
+    int interval_ms{120};    // 每次重放的间隔（毫秒），形成可见的连续伤害
     double replay_accum{0.0};
 
     // 最近一次命中的函数/GE 类名 id（供界面显示）
@@ -311,6 +334,45 @@ const char* ResolveName(std::uint32_t name_id) {
     return inserted.first->second.c_str();
 }
 
+// 在给定 UClass 的 Children 链里按名字找 UFunction。
+std::uintptr_t FindFunctionInClass(std::uintptr_t cls, const char* wanted) {
+    if (cls < 0x10000 || wanted == nullptr) return 0;
+    std::uintptr_t field = 0;
+    if (!SafeReadPtr(cls + kUStructChildrenOffset, &field)) return 0;
+    for (int guard = 0; guard < 8192 && field >= 0x10000; ++guard) {
+        const std::uint32_t name_id = ObjectNameId(field);
+        if (name_id != 0) {
+            const char* name = ResolveName(name_id);
+            if (name != nullptr && name[0] != '\0' && std::strcmp(name, wanted) == 0) return field;
+        }
+        std::uintptr_t next = 0;
+        if (!SafeReadPtr(field + kUFieldNextOffset, &next)) break;
+        field = next;
+    }
+    return 0;
+}
+
+// 日志用：列出某个类的前几个子函数名，确认遍历是否正确。
+void LogClassChildren(std::uintptr_t cls, char* out, std::size_t cap) {
+    out[0] = '\0';
+    if (cls < 0x10000) return;
+    std::uintptr_t field = 0;
+    if (!SafeReadPtr(cls + kUStructChildrenOffset, &field)) return;
+    std::size_t used = 0;
+    for (int i = 0; i < 8 && field >= 0x10000; ++i) {
+        const std::uint32_t id = ObjectNameId(field);
+        const char* n = id ? ResolveName(id) : "";
+        if (n != nullptr && n[0] != '\0') {
+            const int w = std::snprintf(out + used, cap - used, "%s%s", used ? "," : "", n);
+            if (w > 0) used += static_cast<std::size_t>(w);
+            if (used + 2 >= cap) break;
+        }
+        std::uintptr_t next = 0;
+        if (!SafeReadPtr(field + kUFieldNextOffset, &next)) break;
+        field = next;
+    }
+}
+
 bool ContainsIgnoreCase(const char* text, const char* needle) {
     if (text == nullptr || needle == nullptr || *needle == '\0') return false;
     const std::size_t n = std::strlen(needle);
@@ -441,34 +503,19 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
 
     ++g_state.matched;
     g_state.pending = PendingReplay{};
-    g_state.pending.mode = 1;
-    // A 模式：在施害者（玩家，客户端拥有）上调用，Server RPC 不会被所有权检查丢弃；
-    //          SourceObj 传受害者，由该函数把 GE 施加到目标。
-    // B 模式：直接在受害者（怪物，服务端拥有）上调用 —— 会被引擎静默丢弃，仅保留作对照。
-    const bool on_instigator = g_state.apply_on_instigator != 0 && instigator >= 0x10000;
-    const std::uintptr_t call_object = on_instigator ? instigator : victim;
-    const std::uintptr_t source_object = on_instigator ? victim : instigator;
-    g_state.pending.object = call_object;
-    g_state.pending.function = g_apply_ufunc; // ServerActivateGameEffectsWithClassByActor
-    g_state.pending.params_size = kApplyParamsSize;
+    g_state.pending.mode = 2;  // 待 Update 里解析 OnDamaged 再组装 params
+    g_state.pending.raw_victim = victim;
+    g_state.pending.raw_instigator = instigator;
+    g_state.pending.raw_ge = ge;
     g_state.pending.remaining = g_state.repeat_count;
     g_state.pending.valid = true;
     g_state.last_match_name_id = name_id;
 
-    // 组装施加参数：SourceObj、GameplayEffect、FBufferData(nLevel=1,nStacks=1,fDuration=0)、
-    // BuffEventType=0、PredictionKey 全零（不携带客户端预测）。
-    auto* out = g_state.pending.params.data();
-    std::memset(out, 0, kApplyParamsSize);
-    std::memcpy(out + kApplySourceOffset, &source_object, sizeof(source_object));
-    std::memcpy(out + kApplyGeOffset, &ge, sizeof(ge));
-    const std::int32_t level = 1;
-    const std::int32_t stacks = 1;
-    const float duration = 0.0F;
-    std::memcpy(out + kApplyBufferLevelOffset, &level, sizeof(level));
-    std::memcpy(out + kApplyBufferStacksOffset, &stacks, sizeof(stacks));
-    std::memcpy(out + kApplyBufferDurationOffset, &duration, sizeof(duration));
-    const std::uint8_t buff_event_type = 0;
-    std::memcpy(out + kApplyEventTypeOffset, &buff_event_type, sizeof(buff_event_type));
+    float amount = 0.0F;
+    if (SafeReadU32(base + kDamageEventAmountOffset,
+                    reinterpret_cast<std::uint32_t*>(&amount))) {
+        g_state.pending.raw_damage = amount;
+    }
 
     // 记录受害者/GE 类名（只读内存），用于诊断显示。
     {
@@ -514,6 +561,63 @@ void ResolvePendingNames() {
             g_state.name_match[name_id] = result;
         }
     }
+}
+
+// mode 2 -> 用反射把 OnDamaged 找出来，组装它的参数区，转入正式重放。
+void ResolvePendingDamage() {
+    PendingReplay local;
+    {
+        std::scoped_lock lock(g_state_mutex);
+        if (!g_state.pending.valid || g_state.pending.mode != 2) return;
+        local = g_state.pending;
+    }
+    std::uintptr_t cls = 0;
+    if (!SafeReadPtr(local.raw_victim + kClassPrivateOffset, &cls) || cls < 0x10000) {
+        std::scoped_lock lock(g_state_mutex);
+        g_state.pending.valid = false;
+        ++g_state.params_rejected;
+        return;
+    }
+    const std::uintptr_t fn = FindFunctionInClass(cls, kOnDamagedName);
+    if (fn < 0x10000) {
+        char children[320]{};
+        LogClassChildren(cls, children, sizeof(children));
+        SetStatus("未找到 OnDamaged；类子项=%s", children);
+        if (g_core != nullptr && g_core->log != nullptr && g_state.log_matches) {
+            char text[384]{};
+            std::snprintf(text, sizeof(text), "damage-chain: OnDamaged miss, children=%s", children);
+            g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_WARNING, StringView(text));
+        }
+        std::scoped_lock lock(g_state_mutex);
+        g_state.pending.valid = false;
+        ++g_state.failed;
+        return;
+    }
+    // 组装 AHTAbilityCharacter::OnDamaged 的参数区。
+    PendingReplay rebuilt = local;
+    rebuilt.mode = 1;
+    rebuilt.object = local.raw_victim;
+    rebuilt.function = fn;
+    rebuilt.params_size = kOnDamagedParamsSize;
+    rebuilt.ge_class_name_id = local.ge_class_name_id;
+    auto* out = rebuilt.params.data();
+    std::memset(out, 0, kOnDamagedParamsSize);
+    std::memcpy(out + kOnDamagedAmountOffset, &local.raw_damage, sizeof(local.raw_damage));
+    std::memcpy(out + kOnDamagedGeOffset, &local.raw_ge, sizeof(local.raw_ge));
+    std::memcpy(out + kOnDamagedInstigatorOffset, &local.raw_instigator,
+                sizeof(local.raw_instigator));
+    const std::uintptr_t causer = 0;
+    std::memcpy(out + kOnDamagedCauserOffset, &causer, sizeof(causer));
+
+    const std::uint32_t fn_id = ObjectNameId(fn);
+    {
+        std::scoped_lock lock(g_state_mutex);
+        rebuilt.remaining = g_state.repeat_count;
+        g_state.pending = rebuilt;
+        g_state.last_match_name_id = fn_id;
+    }
+    SetStatus("已定位 OnDamaged（rva 待定），伤害=%.1f 开始重放 %u 次",
+              local.raw_damage, g_state.repeat_count);
 }
 
 // 判断 pending 里的 GE 是否伤害类（Game 线程调用）。
@@ -732,10 +836,10 @@ void ServiceExport() {
 std::size_t FormatConfig(char* text, std::size_t capacity) {
     const int n = std::snprintf(
         text, capacity,
-        "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\nlog=%d\nzero_pred=%d\non_instigator=%d\n",
+        "conf_version=%d\nenabled=%d\nrepeat_count=%u\ncapture=%d\nge_filter=%d\nlog=%d\nzero_pred=%d\non_instigator=%d\ninterval=%d\n",
         kConfVersion, g_state.enabled, g_state.repeat_count, g_state.capture_enabled,
         g_state.ge_filter, g_state.log_matches, g_state.zero_prediction,
-        g_state.apply_on_instigator);
+        g_state.apply_on_instigator, g_state.interval_ms);
     if (n <= 0) return 0;
     const std::size_t size = static_cast<std::size_t>(n);
     return size < capacity ? size : capacity - 1;
@@ -790,6 +894,8 @@ void LoadConfig() {
                 g_state.zero_prediction = std::atoi(value) != 0;
             } else if (std::strcmp(key, "on_instigator") == 0) {
                 g_state.apply_on_instigator = std::atoi(value) != 0;
+            } else if (std::strcmp(key, "interval") == 0) {
+                g_state.interval_ms = std::atoi(value);
             }
         }
         line = (next != nullptr) ? next + 1 : nullptr;
@@ -803,6 +909,8 @@ void LoadConfig() {
         g_state.zero_prediction = 1;
     }
     if (g_state.repeat_count > kMaxRepeat) g_state.repeat_count = kMaxRepeat;
+    if (g_state.interval_ms < 16) g_state.interval_ms = 16;
+    if (g_state.interval_ms > 5000) g_state.interval_ms = 5000;
 }
 
 // --------------------------- 热键 -------------------------------------------
@@ -855,6 +963,21 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
     if (HAS(ui, same_line)) ui->same_line(ui->user, 0.0F, 6.0F);
     if (HAS(ui, button) && ui->button(ui->user, StringView("+##dc-up"), 24.0F, 0.0F)) {
         if (g_state.repeat_count < kMaxRepeat) ++g_state.repeat_count;
+    }
+
+    if (HAS(ui, text)) {
+        std::snprintf(line, sizeof(line), "间隔：%d ms", g_state.interval_ms);
+        Text(ui, line);
+    }
+    if (HAS(ui, same_line)) ui->same_line(ui->user, 0.0F, 6.0F);
+    if (HAS(ui, button) && ui->button(ui->user, StringView("-##iv-dn"), 24.0F, 0.0F)) {
+        g_state.interval_ms -= 20;
+        if (g_state.interval_ms < 16) g_state.interval_ms = 16;
+    }
+    if (HAS(ui, same_line)) ui->same_line(ui->user, 0.0F, 6.0F);
+    if (HAS(ui, button) && ui->button(ui->user, StringView("+##iv-up"), 24.0F, 0.0F)) {
+        g_state.interval_ms += 20;
+        if (g_state.interval_ms > 5000) g_state.interval_ms = 5000;
     }
 
     std::snprintf(line, sizeof(line), "Hook=%s 事件=%llu 命中=%llu 重放=%llu 失败=%llu",
@@ -985,14 +1108,14 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.6.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.7.1：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.6.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.1, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
-                      g_state.apply_on_instigator);
+                      g_state.apply_on_instigator, g_state.interval_ms);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
     }
     return anomaly::sdk::Ok();
@@ -1053,6 +1176,7 @@ void ANOMALY_CALL Unload(void*) {
 
 void ANOMALY_CALL Update(void*, double delta_seconds) {
     ResolvePendingNames();
+    ResolvePendingDamage();
     ServiceExport();
 
     // 按 interval_ms 间隔重放，形成「连续多次」而不是同帧爆发。
