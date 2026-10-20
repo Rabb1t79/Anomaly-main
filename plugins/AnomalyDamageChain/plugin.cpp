@@ -247,6 +247,18 @@ const AnomalyNteCombatServiceV1* g_combat{};
 
 std::uintptr_t g_apply_ufunc{};  // ServerActivateGameEffectsWithClassByActor 的 UFunction
 std::unordered_map<std::uintptr_t, std::uintptr_t> g_class_fn_cache;
+
+// 原生代码扫描（B 方案）：找 HTGame.exe 里 call 到 OnDamaged 原生入口的位置。
+std::mutex g_scan_mutex;
+bool g_scan_requested{};
+bool g_scan_done{};
+std::uintptr_t g_scan_target{};
+std::uintptr_t g_scan_hits[16]{};
+int g_scan_hit_count{};
+int g_scan_scanned_ranges{};
+std::uint64_t g_scan_bytes{};
+AnomalyGenerationHandleV1 g_scan_task{};
+bool g_scan_logged{};
 const AnomalySignatureServiceV1* g_signature{};
 std::uintptr_t g_objects_accessor{};  // ue5.GObjects 访问器地址
 std::uintptr_t g_objects_global{};    // 其中 mov rax,[rip+x] 指向的全局变量地址
@@ -457,6 +469,107 @@ bool ContainsIgnoreCase(const char* text, const char* needle) {
     return false;
 }
 
+// 解析模块的可执行段范围（读内存里的 PE 头，不走磁盘）。
+int CollectExecRanges(std::uintptr_t base, std::uintptr_t* starts, std::uintptr_t* ends,
+                      int capacity) {
+    if (base < 0x10000 || capacity <= 0) return 0;
+    std::uint32_t lfanew = 0;
+    if (!SafeReadU32(base + 0x3C, &lfanew) || lfanew == 0) return 0;
+    const std::uintptr_t nt = base + lfanew;
+    std::uint16_t num_sections = 0;
+    std::uint16_t opt_size = 0;
+    if (!SafeReadU16(nt + 0x06, &num_sections) || !SafeReadU16(nt + 0x14, &opt_size)) return 0;
+    int count = 0;
+    const std::uintptr_t sect = nt + 0x18 + opt_size;
+    for (int i = 0; i < num_sections && count < capacity; ++i) {
+        const std::uintptr_t hdr = sect + static_cast<std::uintptr_t>(i) * 40;
+        std::uint32_t vsize = 0;
+        std::uint32_t va = 0;
+        std::uint32_t chars = 0;
+        if (!SafeReadU32(hdr + 8, &vsize) || !SafeReadU32(hdr + 12, &va) ||
+            !SafeReadU32(hdr + 36, &chars)) {
+            continue;
+        }
+        if ((chars & 0x20000000u) == 0 || vsize == 0) continue;  // IMAGE_SCN_MEM_EXECUTE
+        starts[count] = base + va;
+        ends[count] = base + va + vsize;
+        ++count;
+    }
+    return count;
+}
+
+// 块级安全拷贝：一次 SEH 保护拷整块，之后在本地缓冲里紧凑扫描。
+bool SafeCopyBlock(std::uintptr_t src, void* dst, std::size_t size) {
+    if (dst == nullptr || size == 0) return false;
+    __try {
+        std::memcpy(dst, reinterpret_cast<const void*>(src), size);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// 在可执行段里找 call rel32 指向 target 的位置（E8 rel32）。
+int ScanDirectCallers(std::uintptr_t target, std::uintptr_t* out, int capacity,
+                      std::uintptr_t* ranges_scanned, std::uint64_t* bytes_scanned) {
+    const HMODULE mod = GetModuleHandleA("HTGame.exe");
+    if (mod == nullptr || target < 0x10000) return 0;
+    const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mod);
+    std::uintptr_t starts[32]{};
+    std::uintptr_t ends[32]{};
+    const int ranges = CollectExecRanges(base, starts, ends, 32);
+    if (ranges_scanned != nullptr) *ranges_scanned = static_cast<std::uintptr_t>(ranges);
+
+    constexpr std::size_t kChunk = 1U << 20;
+    std::vector<std::uint8_t> buffer(kChunk + 8);
+    int found = 0;
+    std::uint64_t total = 0;
+    for (int r = 0; r < ranges; ++r) {
+        const std::uintptr_t begin = starts[r];
+        const std::uintptr_t end = ends[r];
+        if (end <= begin) continue;
+        total += static_cast<std::uint64_t>(end - begin);
+        for (std::uintptr_t off = 0; off < end - begin; off += kChunk) {
+            const std::size_t n = static_cast<std::size_t>(
+                (end - begin - off) < kChunk ? (end - begin - off) : kChunk);
+            if (n < 5) break;
+            if (!SafeCopyBlock(begin + off, buffer.data(), n)) continue;
+            const std::uint8_t* data = buffer.data();
+            for (std::size_t i = 0; i + 5 <= n; ++i) {
+                if (data[i] != 0xE8) continue;
+                std::int32_t rel = 0;
+                std::memcpy(&rel, data + i + 1, sizeof(rel));
+                const std::uintptr_t site = begin + off + i;
+                if (site + 5 + static_cast<std::intptr_t>(rel) != target) continue;
+                if (found < capacity) out[found] = site;
+                ++found;
+            }
+        }
+    }
+    if (bytes_scanned != nullptr) *bytes_scanned = total;
+    return found;
+}
+
+// worker 线程执行扫描（不冻结游戏）。
+void ANOMALY_CALL ScanTaskRun(void*, AnomalyGenerationHandleV1) {
+    std::uintptr_t target = 0;
+    {
+        std::scoped_lock lock(g_scan_mutex);
+        target = g_scan_target;
+    }
+    if (target == 0) return;
+    std::uintptr_t hits[16]{};
+    std::uintptr_t ranges = 0;
+    std::uint64_t bytes = 0;
+    const int count = ScanDirectCallers(target, hits, 16, &ranges, &bytes);
+    std::scoped_lock lock(g_scan_mutex);
+    g_scan_hit_count = count;
+    g_scan_scanned_ranges = static_cast<int>(ranges);
+    g_scan_bytes = bytes;
+    for (int i = 0; i < 16; ++i) g_scan_hits[i] = hits[i];
+    g_scan_done = true;
+}
+
 // TWeakObjectPtr<T> = { int32 ObjectIndex; int32 ObjectSerialNumber }（8 字节，不是指针）。
 // 通过 GUObjectArray 的 chunked 数组解析成真实对象指针；序列号不匹配或读取失败返回 0。
 std::uintptr_t ResolveWeakObject(std::int32_t index, std::int32_t serial) {
@@ -661,6 +774,30 @@ void ResolvePendingDamage() {
         return;
     }
     const std::uintptr_t fn = FindFunctionInClass(cls, kOnDamagedName);
+    if (fn >= 0x10000) {
+        std::uintptr_t exec = 0;
+        if (SafeReadPtr(fn + kUFunctionExecOffset, &exec) && exec >= 0x10000) {
+            bool need = false;
+            {
+                std::scoped_lock lock(g_scan_mutex);
+                if (!g_scan_requested && !g_scan_done) {
+                    g_scan_target = exec;
+                    g_scan_requested = true;
+                    need = true;
+                }
+            }
+            if (need && g_scheduler != nullptr && g_scheduler->schedule != nullptr) {
+                AnomalyGenerationHandleV1 task{};
+                if (g_scheduler->schedule(g_scheduler->user, 0, &ScanTaskRun, nullptr, &task).code ==
+                    ANOMALY_STATUS_V1_OK) {
+                    g_scan_task = task;
+                } else {
+                    std::scoped_lock lock(g_scan_mutex);
+                    g_scan_requested = false;
+                }
+            }
+        }
+    }
     if (fn >= 0x10000 && g_state.log_matches && g_core != nullptr && g_core->log != nullptr) {
         // 探测：UFunction 上是否存有指向 HTGame.exe 代码段的原生函数指针。
         const HMODULE mod = GetModuleHandleA("HTGame.exe");
@@ -1202,11 +1339,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v1.7.6：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v1.8.0：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v1.7.6, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v1.8.0, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
@@ -1281,6 +1418,43 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
         PumpReplay();
     }
     PollCombat();
+
+    // 扫描完成后把结果写进日志（只写一次）。
+    if (!g_scan_logged) {
+        std::uintptr_t hits[16]{};
+        int count = 0;
+        int ranges = 0;
+        std::uint64_t bytes = 0;
+        std::uintptr_t target = 0;
+        {
+            std::scoped_lock lock(g_scan_mutex);
+            if (g_scan_done) {
+                count = g_scan_hit_count;
+                ranges = g_scan_scanned_ranges;
+                bytes = g_scan_bytes;
+                target = g_scan_target;
+                for (int i = 0; i < 16; ++i) hits[i] = g_scan_hits[i];
+                g_scan_logged = true;
+            }
+        }
+        if (g_scan_logged && g_core != nullptr && g_core->log != nullptr) {
+            const HMODULE mod = GetModuleHandleA("HTGame.exe");
+            const std::uintptr_t mb = reinterpret_cast<std::uintptr_t>(mod);
+            char text[512]{};
+            int n = std::snprintf(text, sizeof(text),
+                                  "damage-chain: scan target=0x%llX ranges=%d bytes=%llu hits=%d",
+                                  static_cast<unsigned long long>(target), ranges,
+                                  static_cast<unsigned long long>(bytes), count);
+            for (int i = 0; i < count && i < 8 && n > 0 &&
+                            static_cast<std::size_t>(n) + 24 < sizeof(text);
+                 ++i) {
+                n += std::snprintf(text + n, sizeof(text) - static_cast<std::size_t>(n),
+                                   " [rva=0x%llX]",
+                                   static_cast<unsigned long long>(hits[i] - mb));
+            }
+            g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(text));
+        }
+    }
 
     // 每 ~30 tick 刷新一次显示快照，控制排序/解析开销；首帧也构建一次。
     static std::uint32_t tick = 0;
