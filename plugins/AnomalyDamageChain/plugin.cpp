@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -119,9 +120,9 @@ struct PendingReplay {
 
 struct State {
     // 配置
-    int enabled{1};
+    int enabled{0};
     std::uint32_t repeat_count{8};
-    int capture_enabled{1};
+    int capture_enabled{0};
     int ge_filter{1};  // 仅重放"伤害类" GameplayEffect（按 GE 类名含 damage/dmg/hurt 判断）
 
     // 统计
@@ -155,6 +156,12 @@ struct State {
 
 State g_state;
 std::mutex g_mutex;
+std::mutex g_fn_name_mutex;
+std::mutex g_name_match_mutex;
+std::atomic_bool g_runtime_enabled{false};
+std::atomic_bool g_capture_enabled{false};
+std::atomic_bool g_replaying_fast{false};
+std::atomic<std::uint64_t> g_event_count{0};
 
 const AnomalyUiServiceV1* g_ui{};
 const AnomalyCoreServiceV1* g_core{};
@@ -213,11 +220,20 @@ bool SafeReadPtr(std::uintptr_t address, std::uintptr_t* out) {
 // 解析 UFunction 的 FName index（带缓存）。
 std::uint32_t FunctionNameId(std::uintptr_t function) {
     if (function < 0x10000) return 0;
-    auto it = g_fn_name_cache.find(function);
-    if (it != g_fn_name_cache.end()) return it->second;
+    {
+        std::scoped_lock lock(g_fn_name_mutex);
+        const auto it = g_fn_name_cache.find(function);
+        if (it != g_fn_name_cache.end()) return it->second;
+    }
     std::uint32_t id = 0;
     if (!SafeReadU32(function + kNamePrivateOffset, &id)) id = 0;
-    if (g_fn_name_cache.size() < 65536) g_fn_name_cache.emplace(function, id);
+    {
+        std::scoped_lock lock(g_fn_name_mutex);
+        if (g_fn_name_cache.size() < 65536) {
+            const auto inserted = g_fn_name_cache.emplace(function, id);
+            if (!inserted.second) return inserted.first->second;
+        }
+    }
     return id;
 }
 
@@ -248,8 +264,11 @@ bool NameEquals(std::uint32_t name_id, const char* wanted) {
 
 bool IsDamageName(std::uint32_t name_id) {
     if (name_id == 0) return false;
-    auto it = g_state.name_match.find(name_id);
-    if (it != g_state.name_match.end()) return it->second == 1;
+    {
+        std::scoped_lock lock(g_name_match_mutex);
+        const auto it = g_state.name_match.find(name_id);
+        if (it != g_state.name_match.end()) return it->second == 1;
+    }
     bool match = false;
     for (const char* wanted : kDefaultDamageNames) {
         if (NameEquals(name_id, wanted)) {
@@ -257,8 +276,12 @@ bool IsDamageName(std::uint32_t name_id) {
             break;
         }
     }
-    if (g_state.name_match.size() < 65536) {
-        g_state.name_match.emplace(name_id, match ? 1 : 2);
+    {
+        std::scoped_lock lock(g_name_match_mutex);
+        if (g_state.name_match.size() < 65536) {
+            const auto inserted = g_state.name_match.emplace(name_id, match ? 1 : 2);
+            if (!inserted.second) return inserted.first->second == 1;
+        }
     }
     return match;
 }
@@ -320,7 +343,7 @@ bool InvokeProcessEvent(std::uintptr_t object, std::uintptr_t function, void* pa
 }
 
 void CaptureName(std::uint32_t name_id) {
-    if (!g_state.capture_enabled || name_id == 0) return;
+    if (!g_capture_enabled.load(std::memory_order_relaxed) || name_id == 0) return;
     auto it = g_state.capture_counts.find(name_id);
     if (it == g_state.capture_counts.end()) {
         if (g_state.capture_counts.size() < 4096) g_state.capture_counts.emplace(name_id, 1);
@@ -331,21 +354,34 @@ void CaptureName(std::uint32_t name_id) {
 
 void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t function,
                                  void* parameters) {
-    if (!g_state.enabled) return;
-    const std::uint32_t name_id = FunctionNameId(function);
+    // This hook sees the game's entire ProcessEvent stream. Keep the disabled path
+    // allocation-free, lock-free, and very short.
+    if (!g_runtime_enabled.load(std::memory_order_relaxed) ||
+        g_replaying_fast.load(std::memory_order_relaxed)) {
+        return;
+    }
 
-    {
+    const std::uint32_t name_id = FunctionNameId(function);
+    g_event_count.fetch_add(1, std::memory_order_relaxed);
+
+    // Full function capture is opt-in; never build a hash table on every event by default.
+    if (g_capture_enabled.load(std::memory_order_relaxed)) {
         std::scoped_lock lock(g_mutex);
-        ++g_state.events;
         CaptureName(name_id);
     }
 
     if (!IsDamageName(name_id)) return;
-    if (g_state.replaying) return;
-    if (g_state.pending.valid) return;  // 已有一条链在跑
 
-    // GE 施加入口同时承载伤害与增益/治疗等，只对"伤害类" GE 重放，避免把 buff 也乘 N 倍。
-    if (g_state.ge_filter &&
+    bool ge_filter = false;
+    {
+        std::scoped_lock lock(g_mutex);
+        if (g_state.replaying || g_state.pending.valid) return;
+        ge_filter = g_state.ge_filter != 0;
+    }
+
+    // The GE-apply entry is shared by damage, buffs, and heals. Filter it before
+    // creating a pending replay.
+    if (ge_filter &&
         NameEquals(name_id, "ServerActivateGameEffectsWithClassByActor") &&
         !IsDamageGameplayEffect(parameters)) {
         std::scoped_lock lock(g_mutex);
@@ -354,17 +390,22 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
     }
 
     std::uint16_t parms_size = 0;
-    if (parameters == nullptr || !SafeReadU16(function + kFunctionParmsSizeOffset, &parms_size) ||
+    if (parameters == nullptr ||
+        !SafeReadU16(function + kFunctionParmsSizeOffset, &parms_size) ||
         parms_size == 0 || parms_size > kMaxParams) {
         std::scoped_lock lock(g_mutex);
         ++g_state.params_rejected;
-        SetStatus("命中 %s，但参数区不可用（ParmsSize=%u）", NameOf(name_id),
+        SetStatus("命中伤害候选函数，但参数区不可用（ParmsSize=%u）",
                   static_cast<unsigned>(parms_size));
         return;
     }
 
+    std::uint32_t repeat_count = 0;
     {
         std::scoped_lock lock(g_mutex);
+        // Re-check under the same lock that protects the pending record: concurrent
+        // ProcessEvent calls must not replace one another's chain.
+        if (g_state.replaying || g_state.pending.valid) return;
         ++g_state.matched;
         g_state.pending.object = object;
         g_state.pending.function = function;
@@ -372,14 +413,14 @@ void ANOMALY_CALL OnProcessEvent(void*, std::uintptr_t object, std::uintptr_t fu
         std::memcpy(g_state.pending.params.data(), parameters, parms_size);
         g_state.pending.remaining = g_state.repeat_count;
         g_state.pending.valid = true;
-        SetStatus("命中 %s：开始重放 %u 次", NameOf(name_id), g_state.repeat_count);
+        repeat_count = g_state.repeat_count;
+        SetStatus("命中 %s：开始重放 %u 次", NameOf(name_id), repeat_count);
     }
 
-    // 向 Core 写入一条可相互印证的事件
     if (g_core != nullptr && g_core->log != nullptr) {
         char line[192]{};
         std::snprintf(line, sizeof(line), "damage-chain: hit %s, replay %u",
-                      NameOf(name_id), g_state.repeat_count);
+                      NameOf(name_id), repeat_count);
         g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO, StringView(line));
     }
 }
@@ -394,7 +435,9 @@ void PumpReplay() {
         --g_state.pending.remaining;
         g_state.replaying = 1;
     }
+    g_replaying_fast.store(true, std::memory_order_release);
     const bool ok = InvokeProcessEvent(local.object, local.function, local.params.data());
+    g_replaying_fast.store(false, std::memory_order_release);
     {
         std::scoped_lock lock(g_mutex);
         g_state.replaying = 0;
@@ -492,9 +535,9 @@ void LoadConfig() {
         line = (next != nullptr) ? next + 1 : nullptr;
     }
     if (version != kConfVersion) {
-        g_state.enabled = 1;
+        g_state.enabled = 0;
         g_state.repeat_count = 8;
-        g_state.capture_enabled = 1;
+        g_state.capture_enabled = 0;
     }
     if (g_state.repeat_count > kMaxRepeat) g_state.repeat_count = kMaxRepeat;
 }
@@ -569,8 +612,10 @@ void ExportCapture() {
 
 // --------------------------- 热键 -------------------------------------------
 void ANOMALY_CALL OnHotkey(void*, AnomalyGenerationHandleV1, const AnomalyInputSnapshotV1*) {
-    g_state.enabled = g_state.enabled ? 0 : 1;
-    SetStatus(g_state.enabled ? "已启用" : "已关闭");
+    const bool enabled = !g_runtime_enabled.load(std::memory_order_relaxed);
+    g_runtime_enabled.store(enabled, std::memory_order_relaxed);
+    g_state.enabled = enabled ? 1 : 0;
+    SetStatus(enabled ? "已启用" : "已关闭");
 }
 
 void RegisterHotkey() {
@@ -599,7 +644,10 @@ void Text(const AnomalyUiServiceV1* ui, const char* s) {
 void DrawMain(const AnomalyUiServiceV1* ui) {
     char line[320]{};
 
-    if (HAS(ui, checkbox)) ui->checkbox(ui->user, StringView("启用"), &g_state.enabled);
+    int enabled = g_runtime_enabled.load(std::memory_order_relaxed) ? 1 : 0;
+    if (HAS(ui, checkbox)) ui->checkbox(ui->user, StringView("启用"), &enabled);
+    g_runtime_enabled.store(enabled != 0, std::memory_order_relaxed);
+    g_state.enabled = enabled != 0 ? 1 : 0;
 
     if (HAS(ui, text)) {
         std::snprintf(line, sizeof(line), "重复次数：%u", g_state.repeat_count);
@@ -616,7 +664,7 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
 
     std::snprintf(line, sizeof(line), "Hook=%s 事件=%llu 命中=%llu 重放=%llu 失败=%llu",
                   g_events_handle.id != 0 ? "就绪" : "未就绪",
-                  static_cast<unsigned long long>(g_state.events),
+                  static_cast<unsigned long long>(g_event_count.load(std::memory_order_relaxed)),
                   static_cast<unsigned long long>(g_state.matched),
                   static_cast<unsigned long long>(g_state.replayed),
                   static_cast<unsigned long long>(g_state.failed));
@@ -644,8 +692,11 @@ void DrawMain(const AnomalyUiServiceV1* ui) {
 
     if (HAS(ui, separator)) ui->separator(ui->user);
 
+    int capture = g_capture_enabled.load(std::memory_order_relaxed) ? 1 : 0;
     if (HAS(ui, checkbox))
-        ui->checkbox(ui->user, StringView("捕获诊断（列出实战函数名）"), &g_state.capture_enabled);
+        ui->checkbox(ui->user, StringView("捕获诊断（列出实战函数名）"), &capture);
+    g_capture_enabled.store(capture != 0, std::memory_order_relaxed);
+    g_state.capture_enabled = capture != 0 ? 1 : 0;
     if (HAS(ui, button) && ui->button(ui->user, StringView("导出捕获日志##dc-exp"), 150.0F, 0.0F)) {
         ExportCapture();
     }
@@ -714,6 +765,16 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
 
 AnomalyStatusV1 ANOMALY_CALL Start(void*) {
     LoadConfig();
+
+    // A plugin-manager enable must not immediately process the global game event stream.
+    // The user explicitly arms the feature from its UI after the game is responsive.
+    g_state.enabled = 0;
+    g_state.capture_enabled = 0;
+    g_runtime_enabled.store(false, std::memory_order_release);
+    g_capture_enabled.store(false, std::memory_order_release);
+    g_replaying_fast.store(false, std::memory_order_release);
+    g_event_count.store(0, std::memory_order_relaxed);
+
     RegisterHotkey();
 
     // 候选名不预解析：本机宿主 names 只有 v1（无 find_utf8），反查恒失败。
@@ -790,8 +851,22 @@ void ANOMALY_CALL Unload(void*) {
     g_process_event = nullptr;
     g_names = nullptr;
     g_combat = nullptr;
-    g_fn_name_cache.clear();
-    g_name_cache.clear();
+    {
+        std::scoped_lock lock(g_fn_name_mutex);
+        g_fn_name_cache.clear();
+    }
+    {
+        std::scoped_lock lock(g_name_mutex);
+        g_name_cache.clear();
+    }
+    {
+        std::scoped_lock lock(g_name_match_mutex);
+        g_state.name_match.clear();
+    }
+    g_runtime_enabled.store(false, std::memory_order_release);
+    g_capture_enabled.store(false, std::memory_order_release);
+    g_replaying_fast.store(false, std::memory_order_release);
+    g_event_count.store(0, std::memory_order_relaxed);
     g_state = State{};
 }
 
