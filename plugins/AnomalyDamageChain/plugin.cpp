@@ -50,6 +50,16 @@ void* g_stub{};
 void* g_replay{};
 AnomalyGenerationHandleV1 g_hook_handle{};
 
+// 内层判定函数（gate）：返回 bool，决定本次攻击是否真正施加伤害。
+// 它只带 4 个寄存器参数、无栈参数，因此可以用普通 C detour 安全挂钩。
+// 签名取自游戏代码 0x767F0D0 前 32 字节，已在该版本验证唯一命中。
+constexpr const char* kGatePattern =
+    "48 8B C4 48 89 58 08 48 89 70 18 48 89 78 20 55 41 54 41 55 41 56 41 57 48 8D 68 A9 "
+    "48 81 EC D0";
+using GateFn = int (*)(void*, void*, void*, void*);
+void* g_gate_original{};
+AnomalyGenerationHandleV1 g_gate_hook{};
+
 double g_period_ms{1000.0 / 15.0};
 double g_next_due{};
 bool g_armed{};
@@ -138,8 +148,12 @@ extern "C" void OnBurstHit() {
         return;
     }
 
+    // 这里只统计，不再入队：是否真正施加伤害由内层判定函数（gate）决定。
     ++g_call_valid;
-    HoldArgs();
+}
+
+// 由判定函数确认"已施加伤害"后调用。
+void ArmChain() {
     g_armed = true;
     g_next_due = g_now_ms + g_period_ms;
     ++g_hits;
@@ -312,6 +326,51 @@ void ProbeProcessEvent() {
     LogInfo(buf);
 }
 
+// 判定函数 detour：只有它返回真，才说明这次攻击真的施加了伤害。
+int ANOMALY_CALL GateDetour(void* a, void* b, void* c, void* d) {
+    const int applied =
+        reinterpret_cast<GateFn>(g_gate_original)(a, b, c, d);
+    if (applied != 0 && g_capture.entry_rsp != 0) {
+        ArmChain();
+    }
+    return applied;
+}
+
+void EnsureGateHook() {
+    if (g_gate_hook.id != 0) return;
+    if (g_hook == nullptr || g_signature == nullptr) return;
+
+    std::uintptr_t target = 0;
+    if (g_signature
+            ->resolve(g_signature->user, StringView("HTGame.exe"), StringView(".text"),
+                      StringView(kGatePattern), &target)
+            .code != ANOMALY_STATUS_V1_OK ||
+        target < 0x10000) {
+        return;
+    }
+    AnomalyHookRequestV1 request{};
+    request.struct_size = sizeof(request);
+    request.kind = ANOMALY_HOOK_V1_FUNCTION;
+    request.target = target;
+    request.detour = reinterpret_cast<void*>(&GateDetour);
+    request.label = StringView("damage-chain.gate");
+
+    std::uintptr_t original = 0;
+    AnomalyGenerationHandleV1 handle{};
+    if (g_hook->create(g_hook->user, &request, &original, &handle).code !=
+        ANOMALY_STATUS_V1_OK) {
+        return;
+    }
+    g_gate_original = reinterpret_cast<void*>(original);
+    g_gate_hook = handle;
+    const HMODULE mod = GetModuleHandleA("HTGame.exe");
+    const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(mod);
+    char buf[200]{};
+    std::snprintf(buf, sizeof(buf), "damage-chain: gate hook rva=0x%llX",
+                  static_cast<unsigned long long>(base != 0 ? target - base : target));
+    LogInfo(buf);
+}
+
 void EnsureHook() {
     if (g_hook_handle.id != 0) return;
     if (g_stub == nullptr || g_hook == nullptr || g_signature == nullptr) return;
@@ -408,18 +467,15 @@ void Pump() {
     if (!LooksLikeLiveObject(reinterpret_cast<const void*>(g_capture.reg[1])) ||
         !LooksLikeLiveObject(reinterpret_cast<const void*>(g_capture.reg[2]))) {
         g_armed = false;  // 目标已不存在，停止循环
-        ClearRoots();
         return;
     }
     if (ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8) == 0) {
         g_armed = false;  // 命中目标已被清空（目标死亡/离开），停止循环
-        ClearRoots();
         return;
     }
     if (CallReplayGuarded() == 0) {
         // 目标状态已失效：停止循环，避免反复触发同一处失效访问。
         g_armed = false;
-        ClearRoots();
         ++g_faults;
         LogInfo("damage-chain: replay hit invalid state, chain stopped");
         return;
@@ -460,13 +516,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
 
 AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
     g_armed = false;
-    ClearRoots();
     return anomaly::sdk::Ok();
 }
 
 void ANOMALY_CALL Unload(void*) {
     g_armed = false;
-    ClearRoots();
     if (g_hook_handle.id != 0 && g_hook != nullptr && g_hook->release != nullptr) {
         g_hook->release(g_hook->user, g_hook_handle);
     }
@@ -515,12 +569,11 @@ void ANOMALY_CALL Update(void*, double delta_seconds) {
     }
     if (g_stub == nullptr) BuildStubs();
     EnsureHook();
+    if (g_gate_original == nullptr || g_gate_hook.id == 0) EnsureGateHook();
     if (g_conf.enabled != 0) {
         Pump();
     } else if (g_armed) {
-        // 用户关闭时立刻停止并释放持有的引用。
         g_armed = false;
-        ClearRoots();
     }
 }
 
@@ -585,7 +638,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.3.0"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.4.0"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
