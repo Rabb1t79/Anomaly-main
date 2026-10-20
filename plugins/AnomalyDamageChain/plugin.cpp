@@ -45,7 +45,8 @@ struct Capture {
     std::uintptr_t reg[4];                 // 0x10
     std::uintptr_t stack[kStackArgCount];  // 0x30，从第 5 个参数开始
 };
-Capture g_capture{};
+Capture g_capture{};      // 外层施加函数的参数（补发用）
+Capture g_gate_capture{}; // 判定函数的参数（不能与外层共用，否则互相覆盖）
 void* g_original{};
 void* g_stub{};
 void* g_replay{};
@@ -190,8 +191,8 @@ bool BuildStubs() {
         d[i++] = 0xF3; d[i++] = 0x48; d[i++] = 0xA5;
     };
     // 保存四个寄存器参数与栈参数到 g_capture
-    auto capture_all = [&](std::uint8_t* d, std::size_t& i) {
-        mov_rax_imm(d, i, &g_capture);
+    auto capture_all = [&](std::uint8_t* d, std::size_t& i, Capture* dst) {
+        mov_rax_imm(d, i, dst);
         d[i++] = 0x48; d[i++] = 0x89; d[i++] = 0x20;                 // [rax]=rsp
         d[i++] = 0x4C; d[i++] = 0x8B; d[i++] = 0x14; d[i++] = 0x24;  // r10=[rsp]
         d[i++] = 0x4C; d[i++] = 0x89; d[i++] = 0x50; d[i++] = 0x08;
@@ -204,14 +205,14 @@ bool BuildStubs() {
         rep_movsq(d, i);
     };
     // 用 g_capture 构造合法调用帧并装载参数
-    auto build_frame = [&](std::uint8_t* d, std::size_t& i) {
-        mov_rax_imm(d, i, &g_capture);
+    auto build_frame = [&](std::uint8_t* d, std::size_t& i, Capture* src) {
+        mov_rax_imm(d, i, src);
         d[i++] = 0x48; d[i++] = 0x81; d[i++] = 0xEC;
         d[i++] = 0xA8; d[i++] = 0x00; d[i++] = 0x00; d[i++] = 0x00;
         d[i++] = 0x48; d[i++] = 0x8D; d[i++] = 0x70; d[i++] = 0x30;
         d[i++] = 0x48; d[i++] = 0x8D; d[i++] = 0x7C; d[i++] = 0x24; d[i++] = 0x20;
         rep_movsq(d, i);
-        mov_rax_imm(d, i, &g_capture);
+        mov_rax_imm(d, i, src);
         load_from_rax(d, i, 0x48, 0x48, 0x10);
         load_from_rax(d, i, 0x48, 0x50, 0x18);
         load_from_rax(d, i, 0x4C, 0x40, 0x20);
@@ -220,7 +221,7 @@ bool BuildStubs() {
 
     // ---- stub1：入口转发（尾跳，空指针保护）----
     std::size_t i = 0;
-    capture_all(p, i);
+    capture_all(p, i, &g_capture);
     mov_rax_imm(p, i, &OnBurstHit);
     p[i++] = 0x48; p[i++] = 0x83; p[i++] = 0xEC; p[i++] = 0x28;
     p[i++] = 0xFF; p[i++] = 0xD0;
@@ -242,7 +243,7 @@ bool BuildStubs() {
 
     // ---- stub2：重放 ----
     std::size_t j = 0;
-    build_frame(q, j);
+    build_frame(q, j, &g_capture);
     mov_rax_imm(q, j, &g_original);
     q[j++] = 0x48; q[j++] = 0x8B; q[j++] = 0x00;
     q[j++] = 0x48; q[j++] = 0x85; q[j++] = 0xC0;
@@ -260,8 +261,8 @@ bool BuildStubs() {
 
     // ---- stub3：判定函数（带返回值）----
     std::size_t k = 0;
-    capture_all(g, k);
-    build_frame(g, k);
+    capture_all(g, k, &g_gate_capture);
+    build_frame(g, k, &g_gate_capture);
     mov_rax_imm(g, k, &g_gate_original);
     g[k++] = 0x48; g[k++] = 0x8B; g[k++] = 0x00;   // rax=[g_gate_original]
     g[k++] = 0x48; g[k++] = 0x85; g[k++] = 0xC0;   // test
@@ -277,9 +278,9 @@ bool BuildStubs() {
     mov_rax_imm(g, k, &g_gate_result);
     g[k++] = 0x4C; g[k++] = 0x89; g[k++] = 0x10;   // mov [rax],r10
     mov_rax_imm(g, k, &OnGateResult);
-    g[k++] = 0x48; g[k++] = 0x83; g[k++] = 0xEC; g[k++] = 0x28;
+    g[k++] = 0x48; g[k++] = 0x83; g[k++] = 0xEC; g[k++] = 0x20;
     g[k++] = 0xFF; g[k++] = 0xD0;
-    g[k++] = 0x48; g[k++] = 0x83; g[k++] = 0xC4; g[k++] = 0x28;
+    g[k++] = 0x48; g[k++] = 0x83; g[k++] = 0xC4; g[k++] = 0x20;
     mov_rax_imm(g, k, &g_gate_result);
     g[k++] = 0x48; g[k++] = 0x8B; g[k++] = 0x00;   // mov rax,[rax]
     g[k++] = 0x48; g[k++] = 0x81; g[k++] = 0xC4;
@@ -656,7 +657,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.6.0"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.6.1"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
