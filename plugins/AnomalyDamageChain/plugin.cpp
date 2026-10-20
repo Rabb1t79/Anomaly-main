@@ -237,6 +237,7 @@ std::mutex g_state_mutex;    // 保护 g_state（钩子与 Update/Draw 共享的
 std::mutex g_display_mutex;  // 保护 g_display
 DisplaySnapshot g_display;
 
+const AnomalyHostApiV1* g_host{};
 const AnomalyUiServiceV1* g_ui{};
 const AnomalyCoreServiceV1* g_core{};
 const AnomalyInputServiceV1* g_input{};
@@ -1445,6 +1446,7 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui_v1) {
 AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) {
     if (context == nullptr) return {ANOMALY_STATUS_V1_INVALID_ARGUMENT, 0, {}};
     *context = nullptr;
+    g_host = host;
     const Host view(host);
 
     const auto ui = view.Query<AnomalyUiServiceV1>(ANOMALY_UI_SERVICE_V1_ID,
@@ -1472,6 +1474,35 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** context) 
     g_state = State{};
     *context = &g_state;
     return anomaly::sdk::Ok();
+}
+
+// 服务在 Load 时可能还没注册（游戏刚启动）。这里在每帧补查一次，
+// 拿到 ue5.process-event 后立即订阅。
+void EnsureServices() {
+    if (g_events_handle.id != 0) return;
+    if (g_host == nullptr) return;
+    // 每 ~1 秒重试一次，避免每帧都问宿主。
+    static int throttle = 0;
+    if ((throttle++ % 60) != 0) return;
+    const Host view(g_host);
+    if (g_process_event == nullptr) {
+        g_process_event =
+            view.Query<AnomalyUe5ProcessEventServiceV1>(ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_ID,
+                                                        ANOMALY_UE5_PROCESS_EVENT_SERVICE_V1_VERSION)
+                .get();
+    }
+    if (g_names == nullptr) {
+        g_names = view.Query<AnomalyUe5NamesServiceV1>(ANOMALY_UE5_NAMES_SERVICE_V1_ID, 1u).get();
+    }
+    if (g_process_event == nullptr || g_process_event->subscribe == nullptr) return;
+    g_process_event->subscribe(g_process_event->user, &OnProcessEvent, nullptr, &g_events_handle);
+    if (g_events_handle.id != 0) {
+        SetStatus("Hook 已就绪（延迟订阅成功）");
+        if (g_core != nullptr && g_core->log != nullptr) {
+            g_core->log(g_core->user, ANOMALY_CORE_LOG_LEVEL_V1_INFO,
+                        StringView("damage-chain: standby hook ready (late subscribe)"));
+        }
+    }
 }
 
 AnomalyStatusV1 ANOMALY_CALL Start(void*) {
@@ -1517,11 +1548,11 @@ AnomalyStatusV1 ANOMALY_CALL Start(void*) {
                                    &g_events_handle);
     }
 
-    SetStatus("已加载 v2.0.2：候选名 %d 个，Hook=%s", g_state.candidate_count,
+    SetStatus("已加载 v2.0.3：候选名 %d 个，Hook=%s", g_state.candidate_count,
               g_events_handle.id != 0 ? "就绪" : "未就绪");
     if (g_core != nullptr && g_core->log != nullptr) {
         char text[192]{};
-        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.2, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
+        std::snprintf(text, sizeof(text), "damage-chain: start v2.0.3, candidates=%d hook=%d np=%d gf=%d gobj=%d oi=%d iv=%d",
                       g_state.candidate_count, g_events_handle.id != 0 ? 1 : 0,
                       g_state.zero_prediction, g_state.ge_filter, g_objects_global != 0 ? 1 : 0,
                       g_state.apply_on_instigator, g_state.interval_ms);
@@ -1584,6 +1615,7 @@ void ANOMALY_CALL Unload(void*) {
 }
 
 void ANOMALY_CALL Update(void*, double delta_seconds) {
+    EnsureServices();
     ResolvePendingNames();
     ResolvePendingDamage();
     ServiceExport();
@@ -1710,6 +1742,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    StringView("anomaly.local.damage-chain"),
                    StringView("Damage Chain Reaction"), StringView("Anomaly"),
-                   StringView("2.0.2"), Load, Start, Stop, Unload, Update, Draw};
+                   StringView("2.0.3"), Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
