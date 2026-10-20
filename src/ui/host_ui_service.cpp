@@ -24,6 +24,7 @@ namespace {
 
 std::atomic_bool g_menus_collapsed{};
 std::atomic_bool g_host_independent_window_capture{};
+std::atomic_bool g_host_independent_window_seen_this_frame{};
 std::atomic_bool g_menu_state_pending{true};
 std::atomic_bool g_management_expansion_requested{};
 std::atomic_bool g_developer_mode{};
@@ -116,6 +117,7 @@ bool SynchronizePluginWindowHostCollapse(
     if (requested_host_independent) {
         state.host_independent = true;
         state.pinned = true;
+        g_host_independent_window_seen_this_frame.store(true, std::memory_order_release);
         g_host_independent_window_capture.store(true, std::memory_order_release);
     } else if (state.host_independent) {
         state.host_independent = false;
@@ -1240,9 +1242,12 @@ void SetHostUiCurrentWindowLocked(const bool locked) noexcept {
 void PrepareHostUiFrame() noexcept {
     g_apply_menu_state.Set(g_menu_state_pending.exchange(false));
     g_frame_menus_collapsed.Set(g_menus_collapsed.load());
-    // Rebuilt by windows actually drawn this frame; hidden/closed windows don't
-    // leave the cursor captured indefinitely.
-    g_host_independent_window_capture.store(false, std::memory_order_release);
+    // Retain the previous frame's capture until the current draw callbacks rebuild
+    // this-frame visibility. This keeps WndProc input routed to the overlay before
+    // the next Present/render callback runs.
+    const bool independent_window_seen =
+        g_host_independent_window_seen_this_frame.exchange(false, std::memory_order_acq_rel);
+    g_host_independent_window_capture.store(independent_window_seen, std::memory_order_release);
 }
 
 bool UpdateHostUiWindowState() noexcept {
