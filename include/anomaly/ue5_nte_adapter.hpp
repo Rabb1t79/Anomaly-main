@@ -141,6 +141,15 @@ public:
     void OnProcessEventPre(
         std::uintptr_t object, std::uintptr_t function,
         void* parameters) noexcept;
+    // AActor::ProcessEvent has a separate native ingress. Capture validated
+    // GameplayEffect calls in its pre-callback and suppress the same call at
+    // UObject::ProcessEvent to prevent duplicate replay records.
+    void OnActorProcessEventPre(
+        std::uintptr_t object, std::uintptr_t function,
+        void* parameters) noexcept;
+    void OnActorProcessEventPost(
+        std::uintptr_t object, std::uintptr_t function, void* parameters,
+        const ProcessEventInvoker& process_event) noexcept;
 
     [[nodiscard]] bool Started() const noexcept;
     [[nodiscard]] DWORD GameThreadId() const noexcept;

@@ -29,8 +29,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.FNamePool": {
@@ -60,8 +59,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.FTextData.GetDisplayString": {
@@ -137,8 +135,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.StaticFindObject": {
@@ -189,8 +186,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "ue5.ProcessEvent": {
@@ -214,8 +210,7 @@
         "anomaly.nte.combat",
         "anomaly.nte.skills",
         "anomaly.nte.skill-invocation",
-        "anomaly.nte.vehicle",
-        "anomaly.nte.attack-input"
+        "anomaly.nte.vehicle"
       ]
     },
     "nte.ClientIgnoreGameAndUiInput": {
@@ -393,13 +388,6 @@
       "ue5.GObjects",
       "ue5.ProcessEvent"
     ],
-    "nte.attack-input": [
-      "ue5.GWorld",
-      "ue5.GameTick",
-      "ue5.FNamePool",
-      "ue5.GObjects",
-      "ue5.ProcessEvent"
-    ],
     "nte.player-esp": [
       "ue5.GWorld",
       "ue5.GameTick"
@@ -484,8 +472,7 @@
     "nte.skills",
     "nte.skill-invocation",
     "ue5.streaming-source",
-    "nte.vehicle",
-    "nte.attack-input"
+    "nte.vehicle"
   ],
   "featureLayoutValidators": {
     "ue5.ftext": [
@@ -551,9 +538,6 @@
     ],
     "nte.vehicle": [
       "nte-vehicle-layout-v1"
-    ],
-    "nte.attack-input": [
-      "nte-attack-input-layout-v1"
     ]
   },
   "featureDependencies": {
@@ -645,12 +629,6 @@
       "ue5.names",
       "ue5.objects",
       "ue5.process-event"
-    ],
-    "nte.attack-input": [
-      "nte.player",
-      "ue5.names",
-      "ue5.objects",
-      "ue5.process-event"
     ]
   },
   "layout": {
@@ -691,7 +669,7 @@
     "ustruct.children": 72,
     "ufield.next": 40,
     "ufunction.execFunction": 216,
-    "fstack.locals": 32,
+    "fstack.locals": 24,
     "escMenu.buttonClickedVtableOffset": 1392,
     "ffield.class": 8,
     "ffield.name": 32,
@@ -718,9 +696,9 @@
     "damageEvent.damage": 16,
     "damageEvent.damageGEDef": 312,
     "damageEvent.damageTags": 328,
-    "abilitySpawnActor.triggerAbilityHandle": 1152,
-    "abilitySpawnActor.savedTriggerSkillCDO": 1160,
-    "abilitySystem.tryActivateAbilityStack": 8280,
+    "abilitySpawnActor.triggerAbilityHandle": 1160,
+    "abilitySpawnActor.savedTriggerSkillCDO": 1168,
+    "abilitySystem.tryActivateAbilityStack": 8320,
     "gameplayEffectSpec.size": 664,
     "gameplayEffectSpec.def": 0,
     "gameplayEffectSpec.duration": 80,
@@ -745,7 +723,7 @@
     "damageTextInfo.reactionDisplayType": 69,
     "gameplayEffect.uiData": 768,
     "gameplayEffectUIData.description": 40,
-    "abilityCharacter.abilitySystemComponent": 2208,
+    "abilityCharacter.abilitySystemComponent": 2368,
     "abilityCharacter.characterConfigId": 7544,
     "playerCharacter.defaultCharacterId": 10040,
     "playerCharacter.currentDisplayCharacterId": 10084,
@@ -753,8 +731,8 @@
     "activeGameplayEffects.size": 768,
     "activeGameplayEffects.arrayReplicationKey": 84,
     "activeGameplayEffects.items": 304,
-    "abilitySystem.currentDamageCauserOrInstigator": 9064,
-    "abilitySystem.currentDamageGameplayEffect": 9072,
+    "abilitySystem.currentDamageCauserOrInstigator": 9104,
+    "abilitySystem.currentDamageGameplayEffect": 9112,
     "gameData.abilityDataAsset": 952,
     "abilityData.skillDamageDataTable": 1112,
     "skillDamage.gaName": 24,
@@ -911,6 +889,15 @@
     "htuiRadioBox.radioBox": 4960,
     "htuiRadioBox.radioText": 4968,
     "htuiRadioBox.blockButton": 4976,
-    "htuiListItem.clickButton": 1616
+    "htuiListItem.clickButton": 1616,
+    "vehicle.maxEngineRPM": 2620,
+    "vehicle.maxLinearVelocity": 4580,
+    "vehicle.topSpeedInKmH": 4588,
+    "vehicle.reverseTopSpeedInKmH": 4596,
+    "vehicle.enableTopSpeedLimit": 4600,
+    "vehicle.topSpeedRatio": 4640,
+    "vehicle.comfortMaxEngineTorque": 5728,
+    "vehicle.comfortMaxEngineRPM": 5732,
+    "vehicle.comfortTopSpeedInKmH": 5936
   }
 }

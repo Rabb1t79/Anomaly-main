@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 2u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 5u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -293,10 +293,9 @@ typedef struct AnomalyNteNavigationServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *stop_movement)(void* user);
 } AnomalyNteNavigationServiceV1;
 
-// Host-owned UE5 vehicle bridge. Version 2 adds a catalog read directly from
-// HTVehicleDataAsset.DT_VehicleData, selection by a validated table ID, and a
-// position/owner-aware summon request. No UE object pointer crosses the plugin ABI.
-// All reflective reads and mutations are bounded, Game-thread operations.
+// Host 管理的 UE5 载具桥接接口：V2 增加实时目录和位置/归属召唤，V3 增加目录刷新和显示标签，
+// V4 增加对非玩家载具实例的批量速率与扭矩控制。插件 ABI 不暴露 UE 对象指针；反射读取与修改
+// 均受边界约束，并且只允许在 Game 线程执行。
 typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_V1_HAS_SPEED (1u << 1u)
@@ -306,6 +305,7 @@ typedef uint32_t AnomalyNteVehicleFlagsV1;
 #define ANOMALY_NTE_VEHICLE_V1_HAS_ENGINE_TORQUE_RATIO (1u << 5u)
 #define ANOMALY_NTE_VEHICLE_CATALOG_V1_VALID (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES 128u
+#define ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES 128u
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_HAS_POSITION (1u << 0u)
 #define ANOMALY_NTE_VEHICLE_SUMMON_V1_SET_OWNER_TO_PLAYER (1u << 1u)
 typedef struct AnomalyNteVehicleSnapshotV1 {
@@ -317,6 +317,9 @@ typedef struct AnomalyNteVehicleSnapshotV1 {
     uint32_t wheel_friction_enabled;
     // Optional V2 tail field. Guard reads by snapshot.struct_size.
     float engine_torque_ratio;
+    // Optional append-only identity tail; entity ID is Host internal object index + 1.
+    uint64_t vehicle_entity_id;
+    char vehicle_class_name[ANOMALY_NTE_VEHICLE_CLASS_NAME_MAX_UTF8_BYTES + 1u];
 } AnomalyNteVehicleSnapshotV1;
 
 typedef struct AnomalyNteVehicleCatalogSnapshotV1 {
@@ -353,26 +356,26 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // Optional V2 tail field: sets the game-declared external torque ratio on
     // HTVehicleMovementComponent. Check struct_size before calling this pointer.
     AnomalyStatusV1 (ANOMALY_CALL *set_engine_torque_ratio)(void* user, float ratio);
+    // V3: explicitly invalidates/rebuilds DT_VehicleData on user request. Game-thread operation.
+    AnomalyStatusV1 (ANOMALY_CALL *refresh_catalog)(void* user);
+    // V3: display label corresponding to vehicle_id_at(index). Labels use FVehicleData.Name (FText)
+    // followed by VehicleID, while RowName remains the canonical internal selection key.
+    AnomalyStatusV1 (ANOMALY_CALL *catalog_label_at)(
+        void* user, uint32_t index, char* destination, size_t* inout_size);
+    // V4：批量控制已加载关卡中的 HTWheeledVehicleBase 实例，排除本地玩家当前驾驶的载具。
+    // 两个回调只能在 Game 线程运行，且会在修改前校验实时 Actor 与运动组件实例。
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_top_speed_ratio)(void* user, float ratio);
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_engine_torque_ratio)(void* user, float ratio);
+    // V4 tail extension: configure the minimum user-facing speed factor for non-player instances only.
+    // Kept after the original V4 fields so existing service-table offsets remain stable.
+    AnomalyStatusV1 (ANOMALY_CALL *set_other_vehicles_min_speed_ratio)(void* user, float ratio);
+    // V5: Core-validated fixed-key authorization and independent enforcement for fine current-vehicle speed tuning.
+    AnomalyStatusV1 (ANOMALY_CALL *authorize_fine_speed_tuning)(
+        void* user, AnomalyStringViewV1 key);
+    AnomalyStatusV1 (ANOMALY_CALL *set_fine_speed_tuning_enabled)(
+        void* user, uint32_t enabled);
+    AnomalyStatusV1 (ANOMALY_CALL *revoke_fine_speed_authorization)(void* user);
 } AnomalyNteVehicleServiceV1;
-
-// Uses the game's own HTPlayerController input-to-ability bridge. It is kept
-// separate from skill-class activation because accepting a class activation did
-// not guarantee the actual attack action or a resulting damage event.
-#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID "anomaly.nte.attack-input"
-#define ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION 1u
-typedef struct AnomalyNteAttackInputRequestV1 {
-    uint32_t struct_size;
-    uint32_t flags;
-    uint32_t input_id;
-    int32_t param;
-} AnomalyNteAttackInputRequestV1;
-typedef struct AnomalyNteAttackInputServiceV1 {
-    uint32_t struct_size; uint32_t service_version; void* user;
-    AnomalyStatusV1 (ANOMALY_CALL *press)(
-        void* user, const AnomalyNteAttackInputRequestV1* request);
-    AnomalyStatusV1 (ANOMALY_CALL *release)(
-        void* user, const AnomalyNteAttackInputRequestV1* request);
-} AnomalyNteAttackInputServiceV1;
 
 // Nearby pickup is a Host-owned interaction bridge. The request is accepted only from the
 // active Game callback domain; it never exposes UE object pointers, reflected functions, or
@@ -848,6 +851,23 @@ typedef struct AnomalyNteCombatServiceV1 {
         void* user, AnomalyGenerationHandleV1 participant,
         char* destination, size_t* inout_size);
 } AnomalyNteCombatServiceV1;
+
+// Replays the exact HTAbilitySystemComponent GameplayEffect application captured with
+// a real CharacterOnDamaged event. This is a native GameplayEffect application API, not
+// simulated input or skill activation. OK means the original call was dispatched; plugins
+// must still observe a newer damage event before reporting a successful extra hit.
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_ID "anomaly.nte.damage-replay"
+#define ANOMALY_NTE_DAMAGE_REPLAY_SERVICE_V1_VERSION 1u
+typedef struct AnomalyNteDamageReplayRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    uint64_t damage_sequence;
+} AnomalyNteDamageReplayRequestV1;
+typedef struct AnomalyNteDamageReplayServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *replay_damage)(
+        void* user, const AnomalyNteDamageReplayRequestV1* request);
+} AnomalyNteDamageReplayServiceV1;
 
 typedef struct AnomalyNteSkillFrameV1 {
     uint32_t struct_size; uint32_t flags;

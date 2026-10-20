@@ -20,6 +20,7 @@ on:
 
 jobs:
   build:
+    timeout-minutes: 45
     permissions:
       contents: read
     runs-on: windows-2022
@@ -43,67 +44,106 @@ jobs:
           }
           cmake @arguments
       - name: Build
-        run: cmake --build --preset windows-relwithdebinfo --parallel
-      - name: Build NTE Vehicle and Attack Replay plugins
+        run: cmake --build --preset windows-relwithdebinfo --parallel 4
+      - name: Capture generated ABI snapshot for diagnostics
+        if: always()
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $root = $env:GITHUB_WORKSPACE -replace '\\', '/'
-          $sourceDir = Join-Path $env:GITHUB_WORKSPACE '.build/nte-runtime-plugins-src'
-          $buildDir = Join-Path $env:GITHUB_WORKSPACE '.build/nte-runtime-plugins'
-          New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
-          $cmakeLists = @'
-          cmake_minimum_required(VERSION 3.22)
-          project(AnomalyNteRuntimePlugins LANGUAGES CXX)
-          set(CMAKE_CXX_STANDARD 20)
-          set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          set(CMAKE_CXX_EXTENSIONS OFF)
-          set(ANOMALY_SOURCE_ROOT "@ROOT@")
-          add_library(nte_vehicle SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteVehicle/plugin.cpp")
-          add_library(nte_attack_replay SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteAttackReplay/plugin.cpp")
-          foreach(target IN ITEMS nte_vehicle nte_attack_replay)
-            target_include_directories(${target} PRIVATE "${ANOMALY_SOURCE_ROOT}/include")
-            target_compile_definitions(${target} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-            set_target_properties(${target} PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
-          endforeach()
-          set_target_properties(nte_vehicle PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle"
-            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle")
-          set_target_properties(nte_attack_replay PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay"
-            LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay")
-          '@
-          $cmakeLists = $cmakeLists.Replace('@ROOT@', $root)
-          Set-Content -LiteralPath (Join-Path $sourceDir 'CMakeLists.txt') -Value $cmakeLists -Encoding UTF8
-          cmake -S $sourceDir -B $buildDir -G "Visual Studio 17 2022" -A x64
-          cmake --build $buildDir --config Release --parallel
-          $vehicleDll = Join-Path $buildDir 'out/NteVehicle/plugin.dll'
-          $attackDll = Join-Path $buildDir 'out/NteAttackReplay/plugin.dll'
-          if (!(Test-Path $vehicleDll)) { throw "NteVehicle plugin.dll was not produced: $vehicleDll" }
-          if (!(Test-Path $attackDll)) { throw "NteAttackReplay plugin.dll was not produced: $attackDll" }
+          $snapshot = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe'
+          if (!(Test-Path $snapshot)) { throw "ABI snapshot tool was not built: $snapshot" }
+          $capture = Join-Path $env:GITHUB_WORKSPACE '.build/abi-snapshot-capture'
+          New-Item -ItemType Directory -Path $capture -Force | Out-Null
+          $generated = Join-Path $capture 'generated-abi.json'
+          & $snapshot --write $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Could not capture generated ABI snapshot' }
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'abi/anomaly-sdk-v1-windows-x64.json') (Join-Path $capture 'checked-in-root-abi.json')
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi/anomaly-sdk-v1-windows-x64.json') (Join-Path $capture 'checked-in-sdk-abi.json')
+          $expected = [IO.File]::ReadAllText((Join-Path $capture 'checked-in-root-abi.json'))
+          $actual = [IO.File]::ReadAllText($generated)
+          $offset = 0
+          $limit = [Math]::Min($expected.Length, $actual.Length)
+          while ($offset -lt $limit -and $expected[$offset] -eq $actual[$offset]) { $offset++ }
+          $start = [Math]::Max(0, $offset - 160)
+          $expectedEnd = [Math]::Min($expected.Length, $offset + 320)
+          $actualEnd = [Math]::Min($actual.Length, $offset + 320)
+          @(
+            "Expected length: $($expected.Length)"
+            "Generated length: $($actual.Length)"
+            "First differing character: $offset"
+            '--- checked-in ABI context ---'
+            $expected.Substring($start, $expectedEnd - $start)
+            '--- generated ABI context ---'
+            $actual.Substring($start, $actualEnd - $start)
+          ) | Set-Content -LiteralPath (Join-Path $capture 'diagnostic.txt') -Encoding utf8
+      - name: Upload generated ABI snapshot diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-snapshot-diagnostic
+          path: .build/abi-snapshot-capture/
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Validate ABI snapshot and packaged SDK interfaces
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $snapshotTool = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe'
+          if (!(Test-Path $snapshotTool)) { throw "ABI snapshot tool was not built: $snapshotTool" }
+          $generated = Join-Path $env:RUNNER_TEMP 'anomaly-sdk-v1-windows-x64.generated.json'
+          & $snapshotTool --write $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to generate ABI snapshot from the built SDK headers.' }
+          # Validate the generated ABI document and installed SDK headers from this exact build.
+          & $snapshotTool --check $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
+          foreach ($relative in @('services/nte.h', 'services/ui.h')) {
+            $source = Join-Path $env:GITHUB_WORKSPACE ('include/anomaly/sdk/' + $relative)
+            $packaged = Join-Path $env:GITHUB_WORKSPACE ('Anomaly-2.0.0-sdk/include/anomaly/sdk/' + $relative)
+            $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+            $packagedHash = (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash
+            if ($sourceHash -ne $packagedHash) { throw "SDK header drift: $relative" }
+          }
+          $abiDir = Join-Path $env:GITHUB_WORKSPACE 'Anomaly-2.0.0-sdk/share/anomaly/abi'
+          New-Item -ItemType Directory -Path $abiDir -Force | Out-Null
+          Copy-Item -LiteralPath $generated -Destination (Join-Path $abiDir 'anomaly-sdk-v1-windows-x64.json') -Force
+          Copy-Item -LiteralPath $generated -Destination (Join-Path $env:GITHUB_WORKSPACE 'abi/anomaly-sdk-v1-windows-x64.json') -Force
       - name: Stage CI runtime and tools
         if: github.ref_type != 'tag'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/runtime --component GameRuntime
-          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix .build/ci-artifacts/tools --component Tools
-          $pluginsRoot = Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly/plugins'
-          if (!(Test-Path (Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly'))) {
-            throw 'Runtime staging root did not contain the expected Anomaly directory.'
+          $runtimePrefix = '.build/ci-artifacts/runtime'
+          $toolsPrefix = '.build/ci-artifacts/tools'
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $runtimePrefix --component GameRuntime
+          cmake --install .build/windows-vs2022 --config RelWithDebInfo --prefix $toolsPrefix --component Tools
+          # The 5.6.1/CppSDK dump is external validation evidence, never a Runtime/Tools payload.
+          foreach ($prefix in @($runtimePrefix, $toolsPrefix)) {
+            $stageRoot = Join-Path $env:GITHUB_WORKSPACE $prefix
+            $dumpPayload = @(Get-ChildItem -LiteralPath $stageRoot -Force -Recurse | Where-Object {
+              $relative = [IO.Path]::GetRelativePath($stageRoot, $_.FullName)
+              $relative -match '(?i)(5\.6\.1|CppSDK|dump)'
+            })
+            if ($dumpPayload.Count -gt 0) {
+              $paths = $dumpPayload | ForEach-Object { [IO.Path]::GetRelativePath($stageRoot, $_.FullName) }
+              throw 'Game dump content is forbidden in CI package: ' + ($paths -join ', ')
+            }
           }
-          $buildRoot = Join-Path $env:GITHUB_WORKSPACE '.build/nte-runtime-plugins/out'
-          $packages = @(
-            @{ Name = 'NteVehicle'; Source = (Join-Path $buildRoot 'NteVehicle/plugin.dll'); Manifest = (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/manifest.json') },
-            @{ Name = 'NteAttackReplay'; Source = (Join-Path $buildRoot 'NteAttackReplay/plugin.dll'); Manifest = (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteAttackReplay/manifest.json') }
+          $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE '.build/ci-artifacts/runtime/Anomaly'
+          if (!(Test-Path $runtimeRoot)) { throw 'Runtime staging root did not contain the expected Anomaly directory.' }
+          if (!(Test-Path (Join-Path $runtimeRoot 'Anomaly.Core.dll'))) { throw 'Runtime staging is missing the Core built from this commit.' }
+          $expectedPlugins = @(
+            @{ Name = 'AutoFish'; Id = 'b1ank.autofish'; Version = '0.1.15' },
+            @{ Name = 'NteVehicle'; Id = 'anomaly.local.nte-vehicle'; Version = '0.9.9' },
+            @{ Name = 'NteAttackReplay'; Id = 'anomaly.builtin.nte-attack-replay'; Version = '1.9.7' }
           )
-          foreach ($package in $packages) {
-            $destination = Join-Path $pluginsRoot $package.Name
-            New-Item -ItemType Directory -Path $destination -Force | Out-Null
-            Copy-Item -LiteralPath $package.Source -Destination (Join-Path $destination 'plugin.dll') -Force
-            Copy-Item -LiteralPath $package.Manifest -Destination (Join-Path $destination 'manifest.json') -Force
-            if (!(Test-Path (Join-Path $destination 'plugin.dll')) -or !(Test-Path (Join-Path $destination 'manifest.json'))) {
-              throw "Incomplete staged plugin package: $($package.Name)"
+          foreach ($plugin in $expectedPlugins) {
+            $pluginRoot = Join-Path $runtimeRoot ("plugins/" + $plugin.Name)
+            $dll = Join-Path $pluginRoot 'plugin.dll'
+            $manifestPath = Join-Path $pluginRoot 'manifest.json'
+            if (!(Test-Path $dll) -or !(Test-Path $manifestPath)) { throw "Incomplete current-build plugin package: $($plugin.Name)" }
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            if ($manifest.id -ne $plugin.Id -or $manifest.version -ne $plugin.Version -or $manifest.entry -ne 'plugin.dll') {
+              throw "Manifest mismatch in current-build plugin package: $($plugin.Name)"
             }
           }
       - name: Stage CI test plugins

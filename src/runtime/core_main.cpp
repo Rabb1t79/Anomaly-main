@@ -1039,13 +1039,20 @@ DWORD ConfirmRuntimeHealth(
 
     anomaly::RuntimeRecoveryStore recovery(context->runtime_root);
     const auto recovery_state = recovery.Load();
-    if (recovery_state.Ok()) {
+    if (recovery_state.Ok() ||
+        recovery_state.error == anomaly::RuntimeRecoveryError::StateInvalid) {
         const auto healthy = recovery.MarkHealthy();
         if (!healthy.Ok()) {
             RuntimeLog(
                 context, anomaly::LogLevel::Warning,
                 "runtime.recovery_health_rejected",
                 "runtime_recovery_health=rejected reason=" + healthy.message,
+                anomaly::LogThreadDomain::Worker);
+        } else if (recovery_state.error == anomaly::RuntimeRecoveryError::StateInvalid) {
+            RuntimeLog(
+                context, anomaly::LogLevel::Warning,
+                "runtime.recovery_state_reinitialized",
+                "runtime_recovery_state=reinitialized after healthy runtime window",
                 anomaly::LogThreadDomain::Worker);
         }
     }

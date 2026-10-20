@@ -1,0 +1,60 @@
+name: NTE damage-chain Core validation
+
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'cmake/**'
+      - 'include/anomaly/**'
+      - 'src/game/**'
+      - 'src/runtime/**'
+      - 'src/plugin/**'
+      - 'profiles/nte/**'
+      - 'abi/**'
+      - 'Anomaly-2.0.0-sdk/**'
+      - '.github/workflows/nte-damage-chain-core.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-validation:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout PR head (not synthetic merge tree)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Configure Core and ABI validation
+        shell: pwsh
+        run: |
+          cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF
+
+      - name: Build Core and ABI snapshot tool
+        run: cmake --build --preset windows-relwithdebinfo --target anomaly_core anomaly_abi_snapshot --parallel 4
+
+      - name: Generate and validate ABI snapshot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $snapshot = Join-Path $env:GITHUB_WORKSPACE '.build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe'
+          if (!(Test-Path $snapshot)) { throw "ABI snapshot tool was not built: $snapshot" }
+          $generated = Join-Path $env:RUNNER_TEMP 'nte-damage-chain-generated-abi.json'
+          & $snapshot --write $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Could not generate ABI snapshot from the built SDK.' }
+          & $snapshot --check $generated
+          if ($LASTEXITCODE -ne 0) { throw 'Generated ABI snapshot did not validate.' }
+
+      - name: Upload Core and ABI snapshot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nte-damage-chain-core-validation
+          path: |
+            .build/windows-vs2022/bin/RelWithDebInfo/Anomaly.Core.dll
+            .build/windows-vs2022/bin/RelWithDebInfo/anomaly-abi-snapshot.exe
+          if-no-files-found: error
+          retention-days: 7
