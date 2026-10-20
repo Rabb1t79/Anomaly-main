@@ -390,8 +390,11 @@ void ANOMALY_CALL Draw(void*, const AnomalyUiServiceV1* ui) noexcept {
                               sizeof(ui->end_window)) {
         return;
     }
-    if (ui->begin_window(ui->user, anomaly::sdk::StringView("Damage Chain Reaction"),
-                         nullptr, 0u) == 0) {
+    const auto window_visible = ui->begin_window(
+        ui->user, anomaly::sdk::StringView("Damage Chain Reaction"), nullptr, 0u);
+    if (window_visible == 0) {
+        // begin_window pairs with end_window even when the window is collapsed or not visible.
+        ui->end_window(ui->user);
         return;
     }
 
@@ -434,7 +437,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.1.0"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.1.1"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
