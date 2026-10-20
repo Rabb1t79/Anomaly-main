@@ -18,8 +18,10 @@
 
 namespace {
 
-// 车速倍率固定为 10x；无密码输入与解锁步骤。
-constexpr float kLockedSpeedRatio = 10.0F;
+// 车速倍率直接调节，无需额外启用/关闭；范围 0x–10x。
+constexpr float kDefaultSpeedRatio = 1.0F;
+constexpr float kMinimumSpeedRatio = 0.0F;
+constexpr float kMaximumSpeedRatio = 10.0F;
 
 struct Snapshot {
     std::uint32_t flags{};
@@ -552,24 +554,26 @@ void Update() {
         const auto status = g_context.vehicle->reset(g_context.vehicle->user);
         {
             std::scoped_lock lock(g_context.mutex);
-            g_context.speed_ratio = kLockedSpeedRatio;
+            g_context.speed_ratio = kDefaultSpeedRatio;
         }
         g_context.apply_speed.store(true, std::memory_order_release);
         SetStatus(status.code == ANOMALY_STATUS_V1_OK
-            ? "已恢复默认载具设置；车速倍率策略恢复为固定 10.0x"
-            : "恢复失败；仍将重新应用固定车速倍率");
+            ? "已恢复默认载具设置；车速倍率已恢复为 1.0x"
+            : "恢复失败；仍将重新应用默认车速倍率 1.0x");
     }
 
     if (g_context.apply_speed.exchange(false, std::memory_order_acq_rel)) {
-        constexpr float ratio = kLockedSpeedRatio;
+        float ratio{};
         {
             std::scoped_lock lock(g_context.mutex);
+            ratio = std::clamp(g_context.speed_ratio,
+                kMinimumSpeedRatio, kMaximumSpeedRatio);
             g_context.speed_ratio = ratio;
         }
         const auto status = g_context.vehicle->set_top_speed_ratio(
             g_context.vehicle->user, ratio);
         if (status.code == ANOMALY_STATUS_V1_OK) {
-            SetStatus("当前车速与最高车速上限均已应用：10.0x");
+            SetStatus("当前车速与最高车速上限均已应用：" + std::to_string(ratio) + "x");
         } else if (status.message.data != nullptr && status.message.size != 0) {
             SetStatus("车速倍率应用失败：" + std::string(status.message.data, status.message.size));
         } else {
@@ -1264,7 +1268,8 @@ void DrawCustomizationTab(
 
 void DrawPerformanceTab(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
-    float torque_ratio, float other_speed_ratio, float other_speed_floor_ratio, float other_torque_ratio) {
+    float speed_ratio, float torque_ratio, float other_speed_ratio,
+    float other_speed_floor_ratio, float other_torque_ratio) {
     if ((snap.flags & ANOMALY_NTE_VEHICLE_V1_VALID) == 0) {
         DrawText(ui, "当前驾驶载具：未识别");
     } else {
@@ -1280,8 +1285,14 @@ void DrawPerformanceTab(
     }
 
     DrawDivider(ui);
-    DrawText(ui, "本插件车速倍率固定为 10.0x。");
-    if (ui->button(ui->user, anomaly::sdk::StringView("应用车速倍率 10.0x"), 0.0F, 0.0F)) {
+    DrawText(ui, "当前载具车速倍率（拖动后立即应用，范围 0.0x–10.0x）");
+    if (ui->slider_float(ui->user, anomaly::sdk::StringView("车速倍率"),
+                         &speed_ratio, kMinimumSpeedRatio, kMaximumSpeedRatio)) {
+        {
+            std::scoped_lock lock(g_context.mutex);
+            g_context.speed_ratio = std::clamp(
+                speed_ratio, kMinimumSpeedRatio, kMaximumSpeedRatio);
+        }
         g_context.apply_speed.store(true, std::memory_order_release);
     }
 
@@ -1326,7 +1337,7 @@ void DrawPerformanceTab(
 
     DrawDivider(ui);
     if (ui->button(ui->user,
-            anomaly::sdk::StringView("恢复默认设置 / 固定车速倍率 10.0x"), 0.0F, 0.0F)) {
+            anomaly::sdk::StringView("恢复默认设置 / 车速倍率 1.0x"), 0.0F, 0.0F)) {
         g_context.reset.store(true, std::memory_order_release);
     }
 }
@@ -1376,7 +1387,7 @@ void DrawDebugPanel(
         (selected.empty() ? std::string("无") : selected));
 
     DrawDivider(ui);
-    DrawText(ui, "车速倍率固定为 10.0x");
+    DrawText(ui, "车速倍率：0.0x–10.0x；拖动滑块后自动应用");
 }
 
 void DrawContents(const AnomalyUiServiceV1* ui) {
@@ -1394,6 +1405,7 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
     std::string customization_skin_id;
     std::string customization_status;
     bool customization_page{};
+    float speed_ratio;
     float torque_ratio;
     float other_speed_ratio;
     float other_speed_floor_ratio;
@@ -1414,6 +1426,7 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
         customization_skin_id = g_context.customization_skin_id;
         customization_status = g_context.customization_status;
         customization_page = g_context.customization_page;
+        speed_ratio = g_context.speed_ratio;
         torque_ratio = g_context.engine_torque_ratio;
         other_speed_ratio = g_context.other_speed_ratio;
         other_speed_floor_ratio = g_context.other_speed_floor_ratio;
@@ -1453,7 +1466,7 @@ void DrawContents(const AnomalyUiServiceV1* ui) {
             DrawSummonTab(ui, selected, ids, labels, last_summon, player_position_valid);
         }
     } else if (active_tab == 1) {
-        DrawPerformanceTab(ui, snap, torque_ratio, other_speed_ratio,
+        DrawPerformanceTab(ui, snap, speed_ratio, torque_ratio, other_speed_ratio,
             other_speed_floor_ratio, other_torque_ratio);
     } else if (active_tab == 2) {
         DrawChassisTab(ui, friction);
@@ -1571,7 +1584,7 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
     g_context.friction_toggle.store(false, std::memory_order_release);
     g_context.refresh_catalog_requested.store(false, std::memory_order_release);
     g_context.refresh_customization_requested.store(false, std::memory_order_release);
-    g_context.speed_ratio = kLockedSpeedRatio;
+    g_context.speed_ratio = kDefaultSpeedRatio;
     g_context.engine_torque_ratio = 1.0F;
     g_context.other_speed_ratio = 1.0F;
     g_context.other_speed_floor_ratio = 0.6024F;
@@ -1645,7 +1658,7 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void* plugin_context, std::uint32_t) {
     }
     {
         std::scoped_lock lock(g_context.mutex);
-        g_context.speed_ratio = kLockedSpeedRatio;
+        g_context.speed_ratio = kDefaultSpeedRatio;
     }
     return anomaly::sdk::Ok();
 }
