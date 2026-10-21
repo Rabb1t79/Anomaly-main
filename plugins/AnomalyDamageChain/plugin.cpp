@@ -551,6 +551,16 @@ AnomalyStatusV1 ANOMALY_CALL Stop(void*, std::uint32_t) {
 
 void ANOMALY_CALL Unload(void*) {
     g_armed = false;
+    // 先把原函数指针清空：即便有并发调用，stub 也会因空指针直接返回，
+    // 不会再去写即将随 DLL 卸载而消失的全局缓冲区。
+    g_original = nullptr;
+    g_gate_original = nullptr;
+    // 两个钩子都必须卸载。只卸外层、把判定函数的钩子留在内存里，
+    // 会导致 DLL 卸载后游戏仍跳进残留 stub，写已释放的内存，造成堆损坏。
+    if (g_gate_hook.id != 0 && g_hook != nullptr && g_hook->release != nullptr) {
+        g_hook->release(g_hook->user, g_gate_hook);
+    }
+    g_gate_hook = AnomalyGenerationHandleV1{};
     if (g_hook_handle.id != 0 && g_hook != nullptr && g_hook->release != nullptr) {
         g_hook->release(g_hook->user, g_hook_handle);
     }
@@ -682,7 +692,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.7.0"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.7.1"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
