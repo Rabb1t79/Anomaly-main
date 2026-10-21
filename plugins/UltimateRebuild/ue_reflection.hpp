@@ -1,4 +1,4 @@
-// UE 反射遍历（偏移全部来自 5.6.1 CppSDK dump，逐项核对）
+﻿// UE 反射遍历（偏移全部来自 5.6.1 CppSDK dump，逐项核对）
 //   UObject::Class 0x10 / Name 0x18 / Outer 0x20
 //   UStruct::Children 0x48
 //   UFunction::FunctionFlags 0xB0

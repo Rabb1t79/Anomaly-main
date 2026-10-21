@@ -1,4 +1,4 @@
-#include <windows.h>
+﻿#include <windows.h>
 #include "anomaly/sdk/services/ui.h"
 #include "anomaly/sdk/services/interop.h"
 #include "anomaly/sdk/services/ue5.h"
