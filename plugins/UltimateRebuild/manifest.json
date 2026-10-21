@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 2,
+  "id": "anomaly.local.ultimate",
+  "name": "AnomalyUltimate",
+  "description": "Rebuilt from reverse-engineering evidence: Chronos / Damage Replay / Volleyball Win / Developer GM.",
+  "author": "Anomaly",
+  "license": "AGPL-3.0-only",
+  "audience": "developer",
+  "version": "1.0.0",
+  "entry": "plugin.dll",
+  "api": {
+    "major": 1,
+    "minMinor": 0,
+    "maxMinor": 0
+  },
+  "games": [
+    "nte"
+  ],
+  "builds": [
+    "nte-*"
+  ],
+  "loadPhase": "game-ready",
+  "services": [
+    {
+      "id": "anomaly.config",
+      "minVersion": 1
+    },
+    {
+      "id": "anomaly.core",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.interop.signature",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.ue5.framework",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.ue5.names",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.ue5.objects",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.ui",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.nte.combat",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.interop.patch",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.ue5.process-event",
+      "minVersion": 1,
+      "optional": true
+    },
+    {
+      "id": "anomaly.interop.hook",
+      "minVersion": 1,
+      "optional": true
+    }
+  ],
+  "capabilities": [
+    "configuration",
+    "game-events",
+    "interop-hook",
+    "interop-patch",
+    "interop-signature",
+    "memory-read",
+    "nte-combat-read",
+    "ue5-names",
+    "ue5-objects",
+    "ui"
+  ]
+}
