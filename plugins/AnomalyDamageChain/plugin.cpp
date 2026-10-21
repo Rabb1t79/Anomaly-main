@@ -63,6 +63,7 @@ void* g_gate_original{};
 AnomalyGenerationHandleV1 g_gate_hook{};
 void* g_gate_stub{};
 std::uintptr_t g_gate_result{};
+extern "C" void OnGateResult();
 
 // 实时监视：记录最近一次命中/补发的关键数据，由 Update 定期写日志。
 std::uintptr_t g_last_rdx{};
