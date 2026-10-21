@@ -64,6 +64,13 @@ AnomalyGenerationHandleV1 g_gate_hook{};
 void* g_gate_stub{};
 std::uintptr_t g_gate_result{};
 
+// 实时监视：记录最近一次命中/补发的关键数据，由 Update 定期写日志。
+std::uintptr_t g_last_rdx{};
+std::uintptr_t g_last_r8{};
+std::uintptr_t g_last_target{};
+int g_last_gate{-1};
+double g_last_log_ms{-1e9};
+
 double g_period_ms{1000.0 / 15.0};
 double g_next_due{};
 bool g_armed{};
@@ -154,6 +161,9 @@ extern "C" void OnBurstHit() {
 
     // 只统计：是否真正施加伤害由判定函数（gate）的返回值决定。
     ++g_call_valid;
+    g_last_rdx = g_capture.reg[1];
+    g_last_r8 = g_capture.reg[2];
+    g_last_target = ReadField(reinterpret_cast<const void*>(g_capture.reg[1]), 0xa8);
 }
 
 // 由判定函数确认"已施加伤害"后调用。
@@ -351,6 +361,7 @@ void ProbeProcessEvent() {
 // 判定函数 detour：只有它返回真，才说明这次攻击真的施加了伤害。
 // gate stub 调用完原函数后回调这里（无参数，结果在 g_gate_result）。
 extern "C" void OnGateResult() {
+    g_last_gate = static_cast<int>(g_gate_result & 0xFF);
     if (g_gate_result != 0) ArmChain();
 }
 
@@ -559,6 +570,20 @@ void ANOMALY_CALL Unload(void*) {
 void ANOMALY_CALL Update(void*, double delta_seconds) {
     g_now_ms += (delta_seconds > 0.0 ? delta_seconds : 0.0) * 1000.0;
 
+    // 实时监视：链式判定激活期间每 250ms 输出一行，便于还原崩溃前的现场。
+    if (g_armed && (g_now_ms - g_last_log_ms) >= 250.0) {
+        g_last_log_ms = g_now_ms;
+        char mon[360]{};
+        std::snprintf(mon, sizeof(mon),
+                      "damage-chain: live hits=%llu pulses=%llu faults=%llu total=%llu "
+                      "valid=%llu rdx=0x%llX r8=0x%llX tgt=0x%llX gate=%d",
+                      g_hits, g_pulses, g_faults, g_call_total, g_call_valid,
+                      static_cast<unsigned long long>(g_last_rdx),
+                      static_cast<unsigned long long>(g_last_r8),
+                      static_cast<unsigned long long>(g_last_target), g_last_gate);
+        LogInfo(mon);
+    }
+
     {
         static int tick = 0;
         if ((tick++ % 300) == 0 && g_call_total != 0) {
@@ -657,7 +682,7 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
     *descriptor = {sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
                    anomaly::sdk::StringView("anomaly.local.damage-chain"),
                    anomaly::sdk::StringView("Damage Chain Reaction"),
-                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.6.1"),
+                   anomaly::sdk::StringView("Anomaly"), anomaly::sdk::StringView("3.7.0"),
                    Load, Start, Stop, Unload, Update, Draw};
     return anomaly::sdk::Ok();
 }
