@@ -1,0 +1,60 @@
+name: build-anomaly-ultimate-repair
+
+on:
+  push:
+    branches:
+      - feat/ultimate-rebuild
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/sdk/AnomalyPlugin.cmake'
+      - 'plugins/AnomalyUltimate/**'
+      - '.github/workflows/build-anomaly-ultimate-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ultimate:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SDK-compliant repair build
+        shell: pwsh
+        run: |
+          cmake --preset windows-vs2022 -DANOMALY_BUILD_TEST_FIXTURES=OFF -DANOMALY_BUILD_DIAGNOSTIC_PROBES=OFF -DANOMALY_BUILD_TEST_PLUGINS=OFF -DANOMALY_BUILD_ULTIMATE_REPAIR_PLUGIN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build AnomalyUltimate
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-relwithdebinfo --target anomaly_ultimate_repair --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate and package
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:GITHUB_WORKSPACE '.build\windows-vs2022\bin\RelWithDebInfo\repair-plugins\AnomalyUltimate-v1.2'
+          $dll = Join-Path $package 'plugin.dll'
+          $manifest = Join-Path $package 'manifest.json'
+          if (!(Test-Path -LiteralPath $dll)) { throw "Missing repaired plugin: $dll" }
+          if (!(Test-Path -LiteralPath $manifest)) { throw "Missing package manifest: $manifest" }
+
+          $m = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+          if ($m.id -ne 'anomaly.local.ultimate') { throw "Unexpected manifest id: $($m.id)" }
+          if ($m.version -ne '1.2.0') { throw "Unexpected manifest version: $($m.version)" }
+
+          $out = Join-Path $env:GITHUB_WORKSPACE 'artifact'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $zip = Join-Path $out 'AnomalyUltimate-v1.2-sdk-rebuilt.zip'
+          Compress-Archive -Path (Join-Path $package '*') -DestinationPath $zip -Force
+          Get-Item -LiteralPath $dll | Select-Object FullName, Length
+          Get-Item -LiteralPath $zip | Select-Object FullName, Length
+
+      - name: Upload repaired package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnomalyUltimate-v1.2-sdk-rebuilt
+          path: artifact/AnomalyUltimate-v1.2-sdk-rebuilt.zip
+          if-no-files-found: error
