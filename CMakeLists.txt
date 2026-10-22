@@ -1184,6 +1184,10 @@ option(ANOMALY_BUILD_BUILTIN_PLUGINS "Build Anomaly bundled plugins" ON)
 # would cost time on every default build. `build.cmd testplugins` turns both on.
 option(ANOMALY_BUILD_TEST_PLUGINS
     "Build and install the developer test plugin packages" OFF)
+# Build the local AnomalyUltimate package with the same SDK safeguards as Runtime plugins.
+# It is an opt-in repair target so it does not silently replace a user's installed custom plugin.
+option(ANOMALY_BUILD_ULTIMATE_REPAIR_PLUGIN
+    "Build an SDK-compliant AnomalyUltimate repair package" OFF)
 set(ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly"
@@ -1549,6 +1553,23 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     add_dependencies(anomaly_test_host ${ANOMALY_BUILTIN_PLUGIN_TARGETS})
     if(TARGET anomaly-platform-preview)
         add_dependencies(anomaly-platform-preview ${ANOMALY_BUILTIN_PLUGIN_TARGETS})
+    endif()
+endif()
+
+# A separately downloadable package for repairing older locally-installed builds of
+# AnomalyUltimate. NO_RELEASE keeps this custom plugin out of the default Runtime installer,
+# while anomaly_add_plugin still applies SDK compiler flags and the C++ exception bridge.
+if(ANOMALY_BUILD_ULTIMATE_REPAIR_PLUGIN)
+    anomaly_add_plugin(anomaly_ultimate_repair NO_RELEASE
+        SOURCES plugins/AnomalyUltimate/plugin.cpp
+        MANIFEST plugins/AnomalyUltimate/manifest.json
+        PACKAGE_NAME AnomalyUltimate
+        OUTPUT_DIRECTORY
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/repair-plugins/AnomalyUltimate-v1.2")
+    target_compile_definitions(anomaly_ultimate_repair PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(MSVC)
+        target_compile_options(anomaly_ultimate_repair PRIVATE /utf-8)
     endif()
 endif()
 
