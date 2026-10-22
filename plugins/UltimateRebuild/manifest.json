@@ -83,6 +83,7 @@
     "interop-patch",
     "interop-signature",
     "memory-read",
+    "memory-write",
     "nte-combat-read",
     "ue5-names",
     "ue5-objects",

@@ -1,5 +1,6 @@
 ﻿#include <windows.h>
 #include "anomaly/sdk/services/ui.h"
+#include "anomaly/sdk/services/core.h"
 #include "anomaly/sdk/services/interop.h"
 #include "anomaly/sdk/services/ue5.h"
 #include "ue_reflection.hpp"
@@ -86,6 +87,8 @@ struct Ctx {
     const void* nte_combat;
     const void* patch;
     const void* process_event;
+    const void* hook;
+    const void* damage_chain;
 };
 
 Ctx* g_ctx = nullptr;
@@ -95,6 +98,8 @@ void ANOMALY_CALL OnProcessEvent(void*, uintptr_t, uintptr_t, void*);
 static int g_pe_subscribed = 0;
 static int g_patch_rc = -1;
 static int g_hook_ok = 0;
+static int g_dmg_chain_ok = 0;
+static int g_hook2_ok = 0;
 int GmToggleOn();
 static int g_sig_ok = 0;
 static int g_load_count = 0;
@@ -371,8 +376,10 @@ void ProbeHook() {
     static int done = 0;
     if (done || !g_ctx) return;
     done = 1;
-    const void* hook = LazyService(&g_ctx->patch, "anomaly.interop.hook", 1);
+    const void* hook = LazyService(&g_ctx->hook, "anomaly.interop.hook", 1);
     g_hook_ok = hook ? 1 : 0;
+    const void* dmg = LazyService(&g_ctx->damage_chain, "anomaly.nte.damage-chain", 1);
+    g_dmg_chain_ok = dmg ? 1 : 0;
 }
 
 void EnsureSubscription() {
@@ -420,22 +427,73 @@ const void* LazyService(const void** slot, const char* id, uint32_t min_version)
     return *slot;
 }
 
+
+// GM 命令清单：patch 成功后，从 HTCheatManager 类的 Children 链枚举 UFunction 名
+static char g_gm_cmd_names[32][64];
+static int  g_gm_cmd_count = 0;
+
+void BuildGmCommandList() {
+    static int built = 0;
+    if (built || !g_gm_patched) return;
+    built = 1;
+    unsigned int cls_id = FindNameIdByPath("/Script/HTGame.HTCheatManager");
+    if (cls_id == 0) return;
+    void* cls = g_ue.FindClassById(cls_id);
+    if (cls == nullptr) return;
+    std::uintptr_t child = 0;
+    if (!ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(cls) + 0x48, &child)) return;
+    char name[64];
+    for (int guard = 0; guard < 4096 && child != 0 && g_gm_cmd_count < 32; ++guard) {
+        unsigned int id = 0;
+        if (ue::Reader::SafeU32(child + 0x18, &id)) {
+            DecodeName(id, name, sizeof(name));
+            if (name[0] != 0) {
+                std::snprintf(g_gm_cmd_names[g_gm_cmd_count], sizeof(g_gm_cmd_names[0]), "%s", name);
+                ++g_gm_cmd_count;
+            }
+        }
+        std::uintptr_t next = 0;
+        if (!ue::Reader::SafePtr(child + 0x28, &next)) break;
+        child = next;
+    }
+}
+
 void ApplyGmPatch() {
-    if (g_gm_patched || !g_ctx) return;
+    if (g_gm_patched) return;
+    if (!g_ctx) { g_patch_rc = -201; return; }
+
+    const void* core_service = LazyService(&g_ctx->core, "anomaly.core", 1);
+    if (!core_service) { g_patch_rc = -202; return; }
+    const auto* core = static_cast<const AnomalyCoreServiceV1*>(core_service);
+    if (!core->read_memory) { g_patch_rc = -203; return; }
+
     const void* patch_service = LazyService(&g_ctx->patch, "anomaly.interop.patch", 1);
-    if (!patch_service) return;
-    if (!g_isgm_fn && g_cls_pc) g_isgm_fn = FindFuncByName(reinterpret_cast<void*>(g_cls_pc), "IsGM");
-    if (!g_isgm_fn) return;
-    const auto* ps = static_cast<const AnomalyPatchServiceV1*>(patch_service);
-    if (!ps->apply) return;
+    if (!patch_service) { g_patch_rc = -204; return; }
+    const auto* patcher = static_cast<const AnomalyPatchServiceV1*>(patch_service);
+    if (!patcher->apply) { g_patch_rc = -205; return; }
+
+    if (!g_isgm_fn && g_cls_pc)
+        g_isgm_fn = FindFuncByName(reinterpret_cast<void*>(g_cls_pc), "IsGM");
+    if (!g_isgm_fn) { g_patch_rc = -206; return; }
+
+    unsigned char pointer_bytes[8] = {0};
+    AnomalyMutableByteSpanV1 read_span{pointer_bytes, 8};
+    if (core->read_memory(core->user,
+                          reinterpret_cast<std::uintptr_t>(g_isgm_fn) + 0xD8,
+                          read_span).code != ANOMALY_STATUS_V1_OK) {
+        g_patch_rc = -207;
+        return;
+    }
     std::uintptr_t exec = 0;
-    if (!ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(g_isgm_fn) + 0xD8, &exec) || exec == 0) return;
-    unsigned char bytes[3] = {0xB0, 0x01, 0xC3};   // mov al,1 ; ret
-    AnomalyByteSpanV1 span{bytes, 3};
+    std::memcpy(&exec, pointer_bytes, 8);
+    if (exec == 0) { g_patch_rc = -208; return; }
+
+    unsigned char body[3] = {0xB0, 0x01, 0xC3};   // mov al,1 ; ret
+    AnomalyByteSpanV1 body_span{body, 3};
     AnomalyStringViewV1 label{"ultimate.gm.isgm", 16};
     AnomalyGenerationHandleV1 handle{};
-    g_patch_rc = (int)ps->apply(ps->user, exec, span, label, &handle).code;
-    if (g_patch_rc == ANOMALY_STATUS_V1_OK) g_gm_patched = 1;
+    g_patch_rc = static_cast<int>(patcher->apply(patcher->user, exec, body_span, label, &handle).code);
+    if (g_patch_rc == 0) g_gm_patched = 1;
 }
 
 // Damage：在 process-event 回调（游戏线程）里重放同一调用
@@ -514,6 +572,8 @@ void TickFeatures() {
 void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     if (ctx == nullptr || ui == nullptr || ui->begin_window == nullptr) return;
     ++g_draw_count;
+    if (GmToggleOn()) ApplyGmPatch();
+    BuildGmCommandList();
     static int open = 1;
     AnomalyStringViewV1 title{kWindowTitle, std::strlen(kWindowTitle)};
     if (ui->begin_window(ui->user, title, &open, 0) != 0) {
@@ -560,10 +620,15 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
                 char wn[48] = {0}, nn[48] = {0};
                 DecodeName(g_want_id, wn, sizeof(wn));
                 DecodeName(g_probe_nid, nn, sizeof(nn));
-                int en = snprintf(dec, sizeof(dec), "cls: pc=%llX inst=%llX gm=%d/%d sub=%d hook=%d", g_cls_pc, (unsigned long long)g_pc_inst, g_gm_patched, g_patch_rc, g_pe_subscribed, g_hook_ok);
+                int en = snprintf(dec, sizeof(dec), "cls: pc=%llX inst=%llX gm=%d/%d sub=%d hook=%d dmg=%d", g_cls_pc, (unsigned long long)g_pc_inst, g_gm_patched, g_patch_rc, g_pe_subscribed, g_hook_ok, g_dmg_chain_ok);
                 if (en > 0) {
                     AnomalyStringViewV1 ev{dec, static_cast<std::size_t>(en)};
                     ui->text(ui->user, ev);
+                }
+                if (g_gm_cmd_count > 0 && ui->separator) ui->separator(ui->user);
+                for (int i = 0; i < g_gm_cmd_count; ++i) {
+                    AnomalyStringViewV1 cmd{g_gm_cmd_names[i], std::strlen(g_gm_cmd_names[i])};
+                    ui->text(ui->user, cmd);
                 }
             }
         }
