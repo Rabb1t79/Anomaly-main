@@ -24,7 +24,7 @@
 
 namespace {
 
-constexpr const char* kId = "anomaly.local.ultimate";
+constexpr const char* kId = "anomaly.local.KX";
 constexpr const char* kName = "AnomalyUltimate";
 constexpr const char* kAuthor = "Anomaly";
 constexpr const char* kVersion = "1.0.0";
@@ -101,6 +101,7 @@ static int g_pe_subscribed = 0;
 static int g_patch_rc = -1;
 static int g_hook_ok = 0;
 static int g_dmg_chain_ok = 0;
+static int g_query_rc = -1;
 static int g_hook2_ok = 0;
 int GmToggleOn();
 static int g_sig_ok = 0;
@@ -416,6 +417,7 @@ void TickChronos() {
 
 // GM：把 IsGM 的原生 ExecFunction（UFunction::ExecFunction 0xD8）改成 "mov al,1; ret"
 int g_gm_patched = 0;
+AnomalyGenerationHandleV1 g_gm_handle{};
 
 // on_load 阶段服务可能尚未注册，这里按帧惰性补查
 const void* LazyService(const void** slot, const char* id, uint32_t min_version) {
@@ -423,10 +425,9 @@ const void* LazyService(const void** slot, const char* id, uint32_t min_version)
     if (!g_ctx || !g_ctx->host || !g_ctx->host->query_service) return nullptr;
     const void* service = nullptr;
     AnomalyStringViewV1 view{id, std::strlen(id)};
-    if (g_ctx->host->query_service(g_ctx->host->host_context, view, min_version, &service).code ==
-        ANOMALY_STATUS_V1_OK) {
-        *slot = service;
-    }
+    g_query_rc = static_cast<int>(
+        g_ctx->host->query_service(g_ctx->host->host_context, view, min_version, &service).code);
+    if (g_query_rc == 0) *slot = service;
     return *slot;
 }
 
@@ -598,6 +599,19 @@ void BuildGmCommandList() {
     if (g_scan_cursor >= limit) g_scan_done = 1;
 }
 
+
+// 取消勾选时撤销补丁，IsGM 恢复原实现
+void RemoveGmPatch() {
+    if (!g_gm_patched) return;
+    const void* patch_service = LazyService(&g_ctx->patch, "anomaly.interop.patch", 1);
+    if (patch_service) {
+        const auto* patcher = static_cast<const AnomalyPatchServiceV1*>(patch_service);
+        if (patcher->release) patcher->release(patcher->user, g_gm_handle);
+    }
+    g_gm_patched = 0;
+    g_patch_rc = 0;
+}
+
 void ApplyGmPatch() {
     if (g_gm_patched) return;
     if (!g_ctx) { g_patch_rc = -201; return; }
@@ -633,7 +647,7 @@ void ApplyGmPatch() {
     AnomalyStringViewV1 label{"ultimate.gm.isgm", 16};
     AnomalyGenerationHandleV1 handle{};
     g_patch_rc = static_cast<int>(patcher->apply(patcher->user, exec, body_span, label, &handle).code);
-    if (g_patch_rc == 0) g_gm_patched = 1;
+    if (g_patch_rc == 0) { g_gm_patched = 1; g_gm_handle = handle; }
 }
 
 // Damage：在 process-event 回调（游戏线程）里重放同一调用
@@ -663,7 +677,19 @@ void TickFeatures() {
         __try {
             const int disp = *reinterpret_cast<const int*>((std::uintptr_t)g_gworld_instr + 3);
             const std::uintptr_t target = (std::uintptr_t)g_gworld_instr + 7 + (std::intptr_t)disp;
-            g_gworld_ptr = (unsigned long long)*reinterpret_cast<void* const*>(target);
+            std::uintptr_t candidate = 0;
+            __try { candidate = *reinterpret_cast<std::uintptr_t*>(target); } __except (EXCEPTION_EXECUTE_HANDLER) { candidate = 0; }
+            if (candidate != 0) {
+                unsigned int nid = 0;
+                char nm[32] = {0};
+                if (ue::Reader::SafeU32(candidate + 0x18, &nid)) DecodeName(nid, nm, sizeof(nm));
+                if (nm[0] == 0) {
+                    std::uintptr_t alt = 0;
+                    __try { alt = *reinterpret_cast<std::uintptr_t*>((std::uintptr_t)g_gworld_instr); } __except (EXCEPTION_EXECUTE_HANDLER) { alt = 0; }
+                    if (alt != 0) candidate = alt;
+                }
+            }
+            g_gworld_ptr = (unsigned long long)candidate;
         } __except (EXCEPTION_EXECUTE_HANDLER) { g_gworld_ptr = 0; }
     }
     if (!g_pc_inst) g_pc_inst = PlayerControllerFromWorld();
@@ -846,7 +872,7 @@ void DrawTabs(const AnomalyUiServiceV1* ui) {
                 if (ui->separator) ui->separator(ui->user);
                 if (ui->text) {
                     char l1[96];
-                    int n1 = snprintf(l1, sizeof(l1), "sub=%d dmg=%d", g_pe_subscribed, g_dmg_chain_ok);
+                    int n1 = snprintf(l1, sizeof(l1), "sub=%d dmg=%d qrc=%d", g_pe_subscribed, g_dmg_chain_ok, g_query_rc);
                     if (n1 > 0) { AnomalyStringViewV1 v{l1, static_cast<std::size_t>(n1)}; ui->text(ui->user, v); }
                     char l2[96];
                     int n2 = snprintf(l2, sizeof(l2), "replay=%u chain=%d", g_replay_count, g_ui_state.chain);
@@ -888,8 +914,10 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     if (ctx == nullptr || ui == nullptr || ui->begin_window == nullptr) return;
     ++g_draw_count;
     if (GmToggleOn()) ApplyGmPatch();
+    else RemoveGmPatch();
     BuildGmCommandList();
     EnsureHotkeys();
+    ProbeHook();
     TickChronosDump();
     TickFeatures();
 
@@ -909,7 +937,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
 
 const AnomalyPluginDescriptorV1 kDescriptor = {
     sizeof(AnomalyPluginDescriptorV1), 1, 0,
-    {kId, 22}, {kName, 15}, {kAuthor, 7}, {kVersion, 5},
+    {kId, 16}, {kName, 15}, {kAuthor, 7}, {kVersion, 5},
     on_load, on_start, on_stop, on_unload, on_update, on_draw,
 };
 

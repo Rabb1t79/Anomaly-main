@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "id": "anomaly.local.ultimate",
+  "id": "anomaly.local.KX",
   "name": "AnomalyUltimate",
   "description": "Rebuilt from reverse-engineering evidence: Chronos / Damage Replay / Volleyball Win / Developer GM.",
   "author": "Anomaly",
@@ -79,6 +79,11 @@
       "id": "anomaly.input",
       "minVersion": 1,
       "optional": true
+    },
+    {
+      "id": "anomaly.nte.damage-chain",
+      "minVersion": 1,
+      "optional": true
     }
   ],
   "capabilities": [
@@ -91,6 +96,7 @@
     "memory-read",
     "memory-write",
     "nte-combat-read",
+    "nte-damage-chain",
     "ue5-names",
     "ue5-objects",
     "ui"
