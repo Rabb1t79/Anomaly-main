@@ -1,17 +1,8 @@
 name: Build NteAttackReplay MSVC
 
+# Kept as an explicit opt-in legacy plugin build; normal CI builds Core only.
 on:
-  push:
-    branches:
-      - '**'
-    paths:
-      - 'plugins/NteAttackReplay/**'
-      - 'include/anomaly/sdk/services/nte.h'
-      - '.github/workflows/build-nte-attack-replay-llvm.yml'
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
 
 jobs:
   build:
