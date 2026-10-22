@@ -41,7 +41,8 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $arguments += "-DANOMALY_RELEASE_VERSION=$env:GITHUB_REF_NAME"
           }
-          cmake @arguments
+          cmake @arguments 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build
         shell: pwsh
         run: |
@@ -51,12 +52,22 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          if (Test-Path build.log) {
-            Get-Content build.log -Tail 200 |
-              Where-Object { $_ -match 'error|Error|FAILED|fatal' } |
-              Select-Object -First 25 |
-              ForEach-Object { Write-Host "::error::$_" }
+          $emitted = 0
+          foreach ($file in @('build.log', 'configure.log')) {
+            if (-not (Test-Path $file)) { continue }
+            $lines = Get-Content $file -Tail 80
+            foreach ($line in $lines) {
+              if ($emitted -ge 30) { break }
+              if ([string]::IsNullOrWhiteSpace($line)) { continue }
+              Write-Host "::error::$line"
+              $emitted++
+            }
           }
+          if ($emitted -eq 0) {
+            Write-Host "::error::no build.log captured; listing .build"
+            if (Test-Path .build) { Get-ChildItem .build -Depth 1 | Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName } }
+          }
+
       - name: Build NTE Vehicle and Attack Replay plugins
         shell: pwsh
         run: |
