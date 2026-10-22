@@ -1842,6 +1842,17 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteDamageChainServiceV1",
+        sizeof(AnomalyNteDamageChainServiceV1),
+        alignof(AnomalyNteDamageChainServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageChainServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageChainServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageChainServiceV1, user)},
+         {"apply_address", offsetof(AnomalyNteDamageChainServiceV1, apply_address)},
+         {"gate_address", offsetof(AnomalyNteDamageChainServiceV1, gate_address)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNtePickupRequestV1",
         sizeof(AnomalyNtePickupRequestV1),
         alignof(AnomalyNtePickupRequestV1),
