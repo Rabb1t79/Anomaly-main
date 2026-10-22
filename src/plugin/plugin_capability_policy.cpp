@@ -86,6 +86,7 @@ constexpr std::array<ServiceCapabilityMapping, 47> kServiceCapabilities{{
     {"anomaly.ue5.ahud", "ue5-ahud"},
     {"anomaly.ue5.framework", "game-events"},
     {"anomaly.ue5.process-event", "game-events"},
+    {"anomaly.ue5.functions", "ue5-functions"},
     {"anomaly.ue5.names", "ue5-names"},
     {"anomaly.ue5.objects", "ue5-objects"},
     {"anomaly.ue5.world", "ue5-world"},

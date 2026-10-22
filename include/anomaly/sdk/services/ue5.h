@@ -83,6 +83,16 @@ typedef struct AnomalyUe5ProcessEventServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *unsubscribe)(
         void* user, AnomalyGenerationHandleV1 handle);
 } AnomalyUe5ProcessEventServiceV1;
+// Invokes a reflected UFunction through the host's own ProcessEvent ingress.
+// Only valid from the Game callback domain; the host validates and guards the call.
+#define ANOMALY_UE5_FUNCTIONS_SERVICE_V1_ID "anomaly.ue5.functions"
+#define ANOMALY_UE5_FUNCTIONS_SERVICE_V1_VERSION 1u
+typedef struct AnomalyUe5FunctionsServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *invoke)(
+        void* user, uintptr_t object, uintptr_t function,
+        void* parameters, size_t parameters_size);
+} AnomalyUe5FunctionsServiceV1;
 typedef struct AnomalyUe5NamesServiceV1 {
     uint32_t struct_size; uint32_t service_version; void* user;
     AnomalyStatusV1 (ANOMALY_CALL *resolve_utf8)(void* user, uint32_t name_id, char* destination, size_t* inout_size);
