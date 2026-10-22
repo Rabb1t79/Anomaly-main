@@ -2154,6 +2154,7 @@ struct Ue5NteAdapter::State {
         if (feature == "nte.navigation") return NteNavigationAvailable();
         if (feature == "nte.vehicle") return NteVehicleProfileAvailable();
         if (feature == "nte.attack-input") return NteAttackInputProfileAvailable();
+        if (feature == "nte.damage-chain") return resolution.FeatureAvailable("nte.damage-chain");
         if (feature == "nte.pickup") return NtePickupAvailable();
         if (feature == "nte.ui-buttons") return NteUiButtonsAvailable();
         if (feature == "nte.entities") {
