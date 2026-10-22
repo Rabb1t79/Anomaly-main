@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "anomaly.local.KX",
-  "name": "AnomalyUltimate",
+  "name": "AnomalyKX",
   "description": "Rebuilt from reverse-engineering evidence: Chronos / Damage Replay / Volleyball Win / Developer GM.",
   "author": "Anomaly",
   "license": "AGPL-3.0-only",

@@ -25,7 +25,7 @@
 namespace {
 
 constexpr const char* kId = "anomaly.local.KX";
-constexpr const char* kName = "AnomalyUltimate";
+constexpr const char* kName = "AnomalyKX";
 constexpr const char* kAuthor = "Anomaly";
 constexpr const char* kVersion = "1.0.0";
 
@@ -937,7 +937,7 @@ void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
 
 const AnomalyPluginDescriptorV1 kDescriptor = {
     sizeof(AnomalyPluginDescriptorV1), 1, 0,
-    {kId, 16}, {kName, 15}, {kAuthor, 7}, {kVersion, 5},
+    {kId, 16}, {kName, 9}, {kAuthor, 7}, {kVersion, 5},
     on_load, on_start, on_stop, on_unload, on_update, on_draw,
 };
 
