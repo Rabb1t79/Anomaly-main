@@ -52,7 +52,7 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          $pattern = 'error|错误|FAILED|fatal|C[0-9]{4}|LNK[0-9]{4}'
+          $pattern = '(^|[^a-z])error[ :]|错误 C|fatal error|LNK[0-9]{4}'
           $emitted = 0
           foreach ($file in @('build.log', 'configure.log')) {
             if (-not (Test-Path $file)) { continue }
