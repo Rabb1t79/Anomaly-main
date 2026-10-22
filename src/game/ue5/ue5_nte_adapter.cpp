@@ -15115,7 +15115,7 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             &endpoint->vehicle_service, {}, semantic_lifetime)) {
         return false;
     }
-    if (framework_hook_ready && NteDamageChainProfileAvailable() &&
+    if (framework_hook_ready && SemanticFeatureAvailable("nte.damage-chain") &&
         !PublishIfMissing(
             ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
             ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
