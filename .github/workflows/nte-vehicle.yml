@@ -1,17 +1,8 @@
 name: nte-vehicle
 
+# This legacy plugin build is intentionally opt-in. The current branch build
+# validates and publishes Core only; it must not block Core CI on absent plugin sources.
 on:
-  push:
-    branches:
-      - '**'
-    paths:
-      - 'plugins/NteVehicle/**'
-      - 'include/anomaly/sdk/services/nte.h'
-      - '.github/workflows/nte-vehicle.yml'
-      - fix/nte-runtime-abi-20261010
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
