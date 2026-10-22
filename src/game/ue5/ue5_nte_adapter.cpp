@@ -1676,6 +1676,19 @@ struct Ue5NteAdapter::State {
             FeatureDeclaresLayoutValidator(profile, kNteAttackInputFeature, kNteAttackInputLayoutValidator);
     }
 
+    AnomalyStatusV1 DamageChainAddress(const bool gate, std::uintptr_t* address) noexcept {
+        if (address == nullptr) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "address is required");
+        }
+        const char* const id = gate ? "nte.DamageChain.Gate" : "nte.DamageChain.Apply";
+        const auto* const symbol = resolution.FindSymbol(id);
+        if (symbol == nullptr || !symbol->Available()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "damage-chain symbol is unavailable");
+        }
+        *address = symbol->address;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     [[nodiscard]] bool NteCombatProfileAvailable() const noexcept {
         return static_cast<bool>(process_event_invoker) && framework_hook_ready &&
             resolution.FeatureAvailable("nte.combat") &&
@@ -2291,7 +2304,7 @@ struct Ue5NteAdapter::State {
             return framework_hook_ready && NteAttackInputProfileAvailable();
         }
         if (id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
-            return framework_hook_ready && NteDamageChainProfileAvailable();
+            return framework_hook_ready && SemanticFeatureAvailable("nte.damage-chain");
         }
         if (id == ANOMALY_NTE_PICKUP_SERVICE_V1_ID) {
             return framework_hook_ready && SemanticFeatureAvailable("nte.pickup");
@@ -13868,22 +13881,7 @@ private:
         return lease ? static_cast<State*>(lease.User())->AttackInput(request, false) : StoppedStatus();
     }
 
-    bool NteDamageChainProfileAvailable() const noexcept {
-        return framework_hook_ready && resolution.FeatureAvailable("nte.damage-chain");
-    }
 
-    AnomalyStatusV1 DamageChainAddress(const bool gate, std::uintptr_t* address) noexcept {
-        if (address == nullptr) {
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "address is required");
-        }
-        const char* const id = gate ? "nte.DamageChain.Gate" : "nte.DamageChain.Apply";
-        const auto* const symbol = resolution.FindSymbol(id);
-        if (symbol == nullptr || !symbol->Available()) {
-            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "damage-chain symbol is unavailable");
-        }
-        *address = symbol->address;
-        return Status(ANOMALY_STATUS_V1_OK);
-    }
 
     static AnomalyStatusV1 ANOMALY_CALL DamageChainApplyAddressThunk(
         void* user, std::uintptr_t* address) noexcept {
