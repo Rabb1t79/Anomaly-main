@@ -83,27 +83,45 @@ jobs:
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_CXX_EXTENSIONS OFF)
           set(ANOMALY_SOURCE_ROOT "@ROOT@")
-          add_library(nte_vehicle SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteVehicle/plugin.cpp")
-          add_library(nte_attack_replay SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteAttackReplay/plugin.cpp")
-          add_library(anomaly_ultimate SHARED "${ANOMALY_SOURCE_ROOT}/plugins/AnomalyUltimate/plugin.cpp")
-          add_library(anomaly_damage_chain SHARED "${ANOMALY_SOURCE_ROOT}/plugins/AnomalyDamageChain/plugin.cpp")
+          if(EXISTS "${ANOMALY_SOURCE_ROOT}/plugins/NteVehicle/plugin.cpp")
+  add_library(nte_vehicle SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteVehicle/plugin.cpp")
+endif()
+          if(EXISTS "${ANOMALY_SOURCE_ROOT}/plugins/NteAttackReplay/plugin.cpp")
+  add_library(nte_attack_replay SHARED "${ANOMALY_SOURCE_ROOT}/plugins/NteAttackReplay/plugin.cpp")
+endif()
+          if(EXISTS "${ANOMALY_SOURCE_ROOT}/plugins/AnomalyUltimate/plugin.cpp")
+  add_library(anomaly_ultimate SHARED "${ANOMALY_SOURCE_ROOT}/plugins/AnomalyUltimate/plugin.cpp")
+endif()
+          if(EXISTS "${ANOMALY_SOURCE_ROOT}/plugins/AnomalyDamageChain/plugin.cpp")
+  add_library(anomaly_damage_chain SHARED "${ANOMALY_SOURCE_ROOT}/plugins/AnomalyDamageChain/plugin.cpp")
+endif()
           foreach(target IN ITEMS nte_vehicle nte_attack_replay anomaly_ultimate anomaly_damage_chain)
+            if(TARGET ${target})
             target_include_directories(${target} PRIVATE "${ANOMALY_SOURCE_ROOT}/include")
             target_compile_definitions(${target} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
             set_target_properties(${target} PROPERTIES OUTPUT_NAME "plugin" PREFIX "")
+            endif()
           endforeach()
+          if(TARGET nte_vehicle)
           set_target_properties(nte_vehicle PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle"
             LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteVehicle")
+          endif()
+          if(TARGET nte_attack_replay)
           set_target_properties(nte_attack_replay PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay"
             LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/NteAttackReplay")
+          endif()
+          if(TARGET anomaly_ultimate)
           set_target_properties(anomaly_ultimate PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/AnomalyUltimate"
             LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/AnomalyUltimate")
+          endif()
+          if(TARGET anomaly_damage_chain)
           set_target_properties(anomaly_damage_chain PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/AnomalyDamageChain"
             LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/out/AnomalyDamageChain")
+          endif()
           '@
           $cmakeLists = $cmakeLists.Replace('@ROOT@', $root)
           Set-Content -LiteralPath (Join-Path $sourceDir 'CMakeLists.txt') -Value $cmakeLists -Encoding UTF8
