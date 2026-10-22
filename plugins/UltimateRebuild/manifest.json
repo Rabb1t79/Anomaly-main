@@ -74,11 +74,17 @@
       "id": "anomaly.interop.hook",
       "minVersion": 1,
       "optional": true
+    },
+    {
+      "id": "anomaly.input",
+      "minVersion": 1,
+      "optional": true
     }
   ],
   "capabilities": [
     "configuration",
     "game-events",
+    "input",
     "interop-hook",
     "interop-patch",
     "interop-signature",

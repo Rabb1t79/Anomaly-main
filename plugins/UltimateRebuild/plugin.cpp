@@ -1,6 +1,7 @@
 ﻿#include <windows.h>
 #include "anomaly/sdk/services/ui.h"
 #include "anomaly/sdk/services/core.h"
+#include "anomaly/sdk/services/ui_resources.h"
 #include "anomaly/sdk/services/interop.h"
 #include "anomaly/sdk/services/ue5.h"
 #include "ue_reflection.hpp"
@@ -89,6 +90,7 @@ struct Ctx {
     const void* process_event;
     const void* hook;
     const void* damage_chain;
+    const void* input;
 };
 
 Ctx* g_ctx = nullptr;
@@ -153,6 +155,7 @@ AnomalyStatusV1 ANOMALY_CALL on_load(const AnomalyHostApiV1* host, void** out) {
     ctx->patch        = Query(host, "anomaly.interop.patch", 1);
     ctx->process_event= Query(host, "anomaly.ue5.process-event", 1);
     g_ctx = ctx;
+    ctx->input        = Query(host, "anomaly.input", 1);
     InitUe(ctx->signature, ctx->ue5_names);
 
     if (!ctx->config) { delete ctx; g_ctx = nullptr;
@@ -431,18 +434,21 @@ const void* LazyService(const void** slot, const char* id, uint32_t min_version)
 // GM 命令清单：patch 成功后，从 HTCheatManager 类的 Children 链枚举 UFunction 名
 static char g_gm_cmd_names[32][64];
 static int  g_gm_cmd_count = 0;
+static int  g_gm_selected = -1;
+static unsigned int g_gm_cls_id = 0;
+static unsigned long long g_gm_cls_ptr = 0;
+static unsigned long long g_gm_first_child = 0;
+static unsigned long long g_gm_cheat = 0;
 
-void BuildGmCommandList() {
-    static int built = 0;
-    if (built || !g_gm_patched) return;
-    built = 1;
-    unsigned int cls_id = FindNameIdByPath("/Script/HTGame.HTCheatManager");
-    if (cls_id == 0) return;
-    void* cls = g_ue.FindClassById(cls_id);
-    if (cls == nullptr) return;
+// 分帧扫描：按类名解码匹配 "HTCheatManager"，不依赖任何结构体偏移
+static unsigned int g_scan_cursor = 0;
+static int g_scan_done = 0;
+
+void CollectCommandsFromClass(void* cls) {
+    char name[64];
     std::uintptr_t child = 0;
     if (!ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(cls) + 0x48, &child)) return;
-    char name[64];
+    g_gm_first_child = static_cast<unsigned long long>(child);
     for (int guard = 0; guard < 4096 && child != 0 && g_gm_cmd_count < 32; ++guard) {
         unsigned int id = 0;
         if (ue::Reader::SafeU32(child + 0x18, &id)) {
@@ -456,6 +462,140 @@ void BuildGmCommandList() {
         if (!ue::Reader::SafePtr(child + 0x28, &next)) break;
         child = next;
     }
+}
+
+
+// Chronos：全局时间膨胀 + 玩家角色忽略全局膨胀
+//   5.6.1-0+UE5-HT dump:
+//     AWorldSettings::TimeDilation        0x0400 (Engine_classes.hpp:28060)
+//     AController::Pawn                   0x0308 (Engine_classes.hpp:30496)
+//     AHTCharacter::IgnoreGlobalTimeDilation 0x0870 (HTGame_classes.hpp:1094)
+static int   g_chronos_applied = 0;
+static int   g_chronos_rc = 0;
+static float g_chronos_saved_dilation = 1.0f;
+static unsigned char g_chronos_saved_ignore = 0;
+static float g_chronos_readback = -1.0f;
+static char g_world_name[48] = {0};
+static unsigned long long g_pawn_ptr = 0;
+static int g_pawn_rc = 0;
+static unsigned long long g_chronos_addr = 0;
+
+bool ReadSpan(const AnomalyCoreServiceV1* core, std::uintptr_t address, void* dest, std::size_t size) {
+    AnomalyMutableByteSpanV1 span{static_cast<unsigned char*>(dest), size};
+    return core->read_memory(core->user, address, span).code == ANOMALY_STATUS_V1_OK;
+}
+
+bool WriteSpan(const AnomalyCoreServiceV1* core, std::uintptr_t address, const void* src, std::size_t size) {
+    AnomalyByteSpanV1 span{static_cast<const unsigned char*>(src), size};
+    return core->write_memory(core->user, address, span).code == ANOMALY_STATUS_V1_OK;
+}
+
+static uint32_t g_hot_vk[3] = {0x70u, 0x71u, 0x72u};
+static int g_hot_once = 0;
+static int g_hot_hold = 0;
+static int g_hot_restore = 0;
+static int g_hot_registered = 0;
+static void* g_pause_fn = nullptr;   // HTPlayerController::PausedGameExcludePlayerByTimer
+
+void TickChronosDump() {
+    if (!g_ctx) return;
+    const void* core_service = LazyService(&g_ctx->core, "anomaly.core", 1);
+    if (!core_service) { g_chronos_rc = -301; return; }
+    const auto* core = static_cast<const AnomalyCoreServiceV1*>(core_service);
+    if (!core->read_memory || !core->write_memory) { g_chronos_rc = -302; return; }
+    if (g_gworld_ptr == 0) { g_chronos_rc = -303; return; }
+
+    {
+        unsigned int wid = 0;
+        if (ue::Reader::SafeU32(static_cast<std::uintptr_t>(g_gworld_ptr) + 0x18, &wid))
+            DecodeName(wid, g_world_name, sizeof(g_world_name));
+    }
+    std::uintptr_t level = 0;
+    if (!ue::Reader::SafePtr(static_cast<std::uintptr_t>(g_gworld_ptr) + 0x30, &level) || level == 0) {
+        g_chronos_rc = -304;
+        return;
+    }
+    std::uintptr_t settings = 0;
+    if (!ue::Reader::SafePtr(level + 0x2B0, &settings) || settings == 0) { g_chronos_rc = -305; return; }
+    const std::uintptr_t dilation_addr = settings + 0x5E0;   // HTWorldSettings 自定义膨胀（TimeAccel 已验证）
+
+    std::uintptr_t pawn = 0;
+    if (g_pc_inst != nullptr) {
+        ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(g_pc_inst) + 0x308, &pawn);
+    }
+
+    g_pawn_ptr = static_cast<unsigned long long>(pawn);
+    if (g_hot_hold && !g_ui_state.chronos) g_ui_state.chronos = 1;
+    if (g_hot_hold == 0 && g_ui_state.chronos && g_hot_restore == 0 && g_chronos_applied && g_hot_once == 0) {
+        /* keep as-is until toggled off by UI */
+    }
+    if (g_hot_restore) { g_hot_restore = 0; g_ui_state.chronos = 0; g_hot_hold = 0; g_hot_once = 0; }
+    if (g_hot_once) { g_ui_state.chronos = 1; g_hot_once = 0; g_hot_hold = 1; }
+    if (g_ui_state.chronos && !g_chronos_applied) {
+        if (!ReadSpan(core, dilation_addr, &g_chronos_saved_dilation, sizeof(float))) { g_chronos_rc = -306; return; }
+        float frozen = 0.0001f;   // 时间停止：取游戏自身钳位下限
+        float clamp_min = 0.0f;
+        if (ReadSpan(core, settings + 0x40C, &clamp_min, sizeof(float)) &&
+            clamp_min > 0.0f && clamp_min < 1.0f) {
+            frozen = clamp_min;
+        }
+        if (!WriteSpan(core, dilation_addr, &frozen, sizeof(float))) { g_chronos_rc = -307; return; }
+        if (pawn != 0) {
+            const std::uintptr_t ignore_addr = pawn + 0x870;
+            if (ReadSpan(core, ignore_addr, &g_chronos_saved_ignore, 1)) {
+                const unsigned char on = 1;
+                if (WriteSpan(core, ignore_addr, &on, 1)) g_pawn_rc = 1;
+                else g_pawn_rc = -2;
+                const float one = 1.0f;
+                if (WriteSpan(core, pawn + 0x808, &one, sizeof(float)) && g_pawn_rc == 1)
+                    g_pawn_rc = 3;
+            } else {
+                g_pawn_rc = -1;
+            }
+        }
+        g_chronos_addr = static_cast<unsigned long long>(dilation_addr);
+        g_chronos_readback = -1.0f;
+        ReadSpan(core, dilation_addr, &g_chronos_readback, sizeof(float));
+        g_chronos_applied = 1;
+        g_chronos_rc = 0;
+    } else if (!g_ui_state.chronos && g_chronos_applied) {
+        WriteSpan(core, dilation_addr, &g_chronos_saved_dilation, sizeof(float));
+        if (pawn != 0) {
+            const std::uintptr_t ignore_addr = pawn + 0x870;
+            WriteSpan(core, ignore_addr, &g_chronos_saved_ignore, 1);
+        }
+        g_chronos_applied = 0;
+        g_chronos_rc = 0;
+    }
+}
+
+void BuildGmCommandList() {
+    if (!g_gm_patched || g_gm_cmd_count > 0 || g_scan_done) return;
+    if (!g_sig_ok || !g_names_ok) return;
+
+    const unsigned int limit = 1600000u;
+    const unsigned int budget = 20000u;
+    char class_name[64];
+    unsigned int processed = 0;
+    while (processed < budget && g_scan_cursor < limit) {
+        void* obj = g_ue.ObjectAt(g_scan_cursor);
+        ++g_scan_cursor;
+        ++processed;
+        if (obj == nullptr) continue;
+        std::uintptr_t cls = 0;
+        if (!ue::Reader::SafePtr(reinterpret_cast<std::uintptr_t>(obj) + 0x10, &cls) || cls == 0) continue;
+        unsigned int id = 0;
+        if (!ue::Reader::SafeU32(cls + 0x18, &id)) continue;
+        DecodeName(id, class_name, sizeof(class_name));
+        if (std::strcmp(class_name, "HTCheatManager") == 0) {
+            g_gm_cls_ptr = static_cast<unsigned long long>(cls);
+            g_gm_cheat = static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(obj));
+            CollectCommandsFromClass(reinterpret_cast<void*>(cls));
+            g_scan_done = 1;
+            return;
+        }
+    }
+    if (g_scan_cursor >= limit) g_scan_done = 1;
 }
 
 void ApplyGmPatch() {
@@ -527,8 +667,8 @@ void TickFeatures() {
         } __except (EXCEPTION_EXECUTE_HANDLER) { g_gworld_ptr = 0; }
     }
     if (!g_pc_inst) g_pc_inst = PlayerControllerFromWorld();
-    if (g_scan_budget >= 6) return;
-    ++g_scan_budget;
+    static int tick = 0;
+    if ((++tick % 30) != 0) return;   // 每 30 帧重试一次，避免早期失败后永久放弃
     if (g_resolve.damage && g_resolve.volley && g_resolve.chronos && g_resolve.gm) return;
     if (!g_sig_ok || !g_names_ok) return;
     // retry every frame until resolved (services may appear after first frames)
@@ -543,7 +683,10 @@ void TickFeatures() {
     g_cls_pc = (unsigned long long)pc_cls;
     if (pc_cls) {
         // DISABLED: full GObjects scan stalls/crashes the game
-        if (FindFuncByName(pc_cls, "PausedGameExcludePlayerByTimer")) g_resolve.chronos = 1;
+        if (void* pf = FindFuncByName(pc_cls, "PausedGameExcludePlayerByTimer")) {
+            g_resolve.chronos = 1;
+            g_pause_fn = pf;
+        }
         if (FindFuncByName(pc_cls, "IsGM")) g_resolve.gm = 1;
         if (void* f = FindFuncByName(pc_cls, "CanShowGMConsole")) g_resolve.gm = 1;
         g_isgm_fn = FindFuncByName(pc_cls, "IsGM");
@@ -569,68 +712,196 @@ void TickFeatures() {
     }
 }
 
+static int g_gm_selected2 = -1;
+static unsigned int g_replay_count = 0;
+
+
+// 三条快捷键（TimeAccel 同款交互）：时停一次 / 一直时停 / 恢复速度
+static const char* kHotkeyLabels[3] = {
+    "\xE6\x97\xB6\xE5\x81\x9C\xE4\xB8\x80\xE6\xAC\xA1",              // 时停一次
+    "\xE4\xB8\x80\xE7\x9B\xB4\xE6\x97\xB6\xE5\x81\x9C",              // 一直时停
+    "\xE6\x81\xA2\xE5\xA4\x8D\xE9\x80\x9F\xE5\xBA\xA6",              // 恢复速度
+};
+
+void ANOMALY_CALL OnHotkey(void* user, AnomalyGenerationHandleV1, const AnomalyInputSnapshotV1*) {
+    const int index = static_cast<int>(reinterpret_cast<std::uintptr_t>(user));
+    if (index == 3) {
+        g_hot_restore = 1;
+        if (g_pc_inst && g_pause_fn) {
+            PE_FN process = nullptr;   // direct ProcessEvent crashes the game; disabled
+            if (process) {
+                struct { float seconds; } params{0.0f};
+                process(g_pc_inst, g_pause_fn, &params);
+            }
+        }
+        return;
+    }
+    if (index == 1) {
+        g_hot_once = 1;
+        if (g_pc_inst && g_pause_fn) {
+            PE_FN process = nullptr;   // direct ProcessEvent crashes the game; disabled
+            if (process) {
+                struct { float seconds; } params{3600.0f};
+                process(g_pc_inst, g_pause_fn, &params);
+            }
+        }
+        return;
+    }
+    else if (index == 2) g_hot_hold = !g_hot_hold;
+    else g_hot_restore = 1;
+}
+
+void EnsureHotkeys() {
+    if (g_hot_registered || !g_ctx) return;
+    const void* input_service = LazyService(&g_ctx->input, "anomaly.input", 1);
+    if (!input_service) return;
+    const auto* input = static_cast<const AnomalyInputServiceV1*>(input_service);
+    if (!input->register_hotkey) return;
+    for (int i = 0; i < 3; ++i) {
+        AnomalyHotkeySpecV1 spec{};
+        spec.struct_size = sizeof(spec);
+        spec.modifiers = 0;
+        spec.virtual_key = g_hot_vk[i];
+        spec.flags = ANOMALY_HOTKEY_V1_ALLOW_WHILE_UI_CAPTURED;
+        spec.id = AnomalyStringViewV1{kHotkeyLabels[i], std::strlen(kHotkeyLabels[i])};
+        AnomalyGenerationHandleV1 handle{};
+        input->register_hotkey(input->user, &spec, OnHotkey,
+                               reinterpret_cast<void*>(static_cast<std::uintptr_t>(i + 1)), &handle);
+    }
+    g_hot_registered = 1;
+}
+
+void DrawTabs(const AnomalyUiServiceV1* ui) {
+    if (!ui->begin_tab_bar || !ui->begin_tab_item || !ui->end_tab_bar) return;
+    AnomalyStringViewV1 bar_id{"ultimate-tabs", 14};
+    if (ui->begin_tab_bar(ui->user, bar_id, 0) == 0) return;
+
+    struct TabDef { const char* label; int len; };
+    TabDef tabs[] = {
+        {"\xE6\xBF\x80\xE6\xB4\xBB", 6},        // 激活
+        {"\xE6\x97\xB6\xE5\x81\x9C", 6},        // 时停
+        {"\xE5\x80\x8D\xE6\x94\xBB", 6},        // 倍攻
+        {"\xE6\x8E\x92\xE7\x90\x83", 6},        // 排球
+        {"GM", 2},
+    };
+    for (int t = 0; t < 5; ++t) {
+        AnomalyStringViewV1 label{tabs[t].label, static_cast<std::size_t>(tabs[t].len)};
+        if (ui->begin_tab_item(ui->user, label, nullptr, 0, 1) != 0) {
+            if (t == 0) {
+                if (ui->checkbox) {
+                    AnomalyStringViewV1 c1{"\xE5\x90\xAF\xE7\x94\xA8", 6};
+                    ui->checkbox(ui->user, c1, &g_ui_state.chronos);
+                }
+                if (ui->text) {
+                    char buf[96];
+                    int n = snprintf(buf, sizeof(buf), "world=%llX chr=%d", g_gworld_ptr, g_chronos_rc);
+                    if (n > 0) { AnomalyStringViewV1 v{buf, static_cast<std::size_t>(n)}; ui->text(ui->user, v); }
+                }
+            } else if (t == 1) {
+                if (ui->checkbox) {
+                    AnomalyStringViewV1 c1{"\xE5\x90\xAF\xE7\x94\xA8", 6};
+                    ui->checkbox(ui->user, c1, &g_ui_state.chronos);
+                }
+                static const char* kVkNames[3] = {"F1", "F2", "F3"};
+                for (int i = 0; i < 3; ++i) {
+                    if (ui->text) {
+                        char row[128];
+                        int len = snprintf(row, sizeof(row), "%s  \xE5\xBF\xAB\xE6\x8D\xB7\xEF\xBC\x9A%s", kHotkeyLabels[i],
+                                          g_hot_vk[i] == 0x70u ? kVkNames[0] : (g_hot_vk[i] == 0x71u ? kVkNames[1] : kVkNames[2]));
+                        if (len > 0) { AnomalyStringViewV1 v{row, static_cast<std::size_t>(len)}; ui->text(ui->user, v); }
+                    }
+                    if (ui->same_line) ui->same_line(ui->user, 0.0f, -1.0f);
+                    if (ui->button) {
+                        char rb[24];
+                        int rn = snprintf(rb, sizeof(rb), "\xE6\x94\xB9\xE9\x94\xAE##hk%d", i);
+                        AnomalyStringViewV1 rebind{rb, static_cast<std::size_t>(rn > 0 ? rn : 0)};
+                        if (ui->button(ui->user, rebind, 48.0f, 0.0f)) {
+                            g_hot_vk[i] = (g_hot_vk[i] == 0x70u) ? 0x71u : (g_hot_vk[i] == 0x71u ? 0x72u : 0x70u);
+                        }
+                    }
+                }
+                if (ui->text) {
+                    char buf[160];
+                    int n = snprintf(buf, sizeof(buf), "wn=%s pz=%llX pe=%llX rc=%d prc=%d", g_world_name, reinterpret_cast<unsigned long long>(g_pause_fn), g_pe_addr, g_chronos_rc, g_pawn_rc);
+                    if (n > 0) { AnomalyStringViewV1 v{buf, static_cast<std::size_t>(n)}; ui->text(ui->user, v); }
+                }
+            } else if (t == 2) {
+                if (ui->checkbox) {
+                    AnomalyStringViewV1 c1{"\xE5\x80\x8D\xE6\x94\xBB\xE8\xBF\x9E\xE9\x94\x81\xE5\x8F\x8D\xE5\xBA\x94", 15};
+                    ui->checkbox(ui->user, c1, &g_ui_state.chain);
+                    AnomalyStringViewV1 c2{"\xE5\x90\xAF\xE7\x94\xA8", 6};
+                    ui->checkbox(ui->user, c2, &g_ui_state.damage);
+                }
+                if (ui->input_uint32) {
+                    unsigned int value = static_cast<unsigned int>(g_ui_state.replay);
+                    AnomalyStringViewV1 id{"##count", 7};
+                    if (ui->input_uint32(ui->user, id, &value, 1, 10))
+                        g_ui_state.replay = static_cast<float>(value);
+                    if (ui->same_line && ui->text) {
+                        ui->same_line(ui->user, 0.0f, -1.0f);
+                        AnomalyStringViewV1 cap{"\xE4\xBC\xA4\xE5\xAE\xB3\xE9\x87\x8D\xE5\xA4\x8D\xE6\xAC\xA1\xE6\x95\xB0", 12};
+                        ui->text(ui->user, cap);
+                    }
+                }
+                if (ui->separator) ui->separator(ui->user);
+                if (ui->text) {
+                    char l1[96];
+                    int n1 = snprintf(l1, sizeof(l1), "sub=%d dmg=%d", g_pe_subscribed, g_dmg_chain_ok);
+                    if (n1 > 0) { AnomalyStringViewV1 v{l1, static_cast<std::size_t>(n1)}; ui->text(ui->user, v); }
+                    char l2[96];
+                    int n2 = snprintf(l2, sizeof(l2), "replay=%u chain=%d", g_replay_count, g_ui_state.chain);
+                    if (n2 > 0) { AnomalyStringViewV1 v{l2, static_cast<std::size_t>(n2)}; ui->text(ui->user, v); }
+                }
+            } else if (t == 3) {
+                if (ui->checkbox) {
+                    AnomalyStringViewV1 c1{"\xE5\x90\xAF\xE7\x94\xA8", 6};
+                    ui->checkbox(ui->user, c1, &g_ui_state.volley);
+                }
+                if (ui->text) {
+                    AnomalyStringViewV1 v{"resolved=1", 10};
+                    ui->text(ui->user, v);
+                }
+            } else {
+                if (ui->checkbox) {
+                    AnomalyStringViewV1 c1{"\xE5\x90\xAF\xE7\x94\xA8", 6};
+                    ui->checkbox(ui->user, c1, &g_ui_state.gm);
+                }
+                if (ui->separator) ui->separator(ui->user);
+                for (int i = 0; i < g_gm_cmd_count; ++i) {
+                    AnomalyStringViewV1 cmd{g_gm_cmd_names[i], std::strlen(g_gm_cmd_names[i])};
+                    if (ui->button && ui->same_line && (i % 4) != 0) ui->same_line(ui->user, 0.0f, -1.0f);
+                    if (ui->button && ui->button(ui->user, cmd, 0.0f, 0.0f)) g_gm_selected2 = i;
+                }
+                if (g_gm_selected2 >= 0 && g_gm_selected2 < g_gm_cmd_count && ui->text) {
+                    char sel[96];
+                    int sn = snprintf(sel, sizeof(sel), "selected: %s", g_gm_cmd_names[g_gm_selected2]);
+                    if (sn > 0) { AnomalyStringViewV1 sv{sel, static_cast<std::size_t>(sn)}; ui->text(ui->user, sv); }
+                }
+            }
+            ui->end_tab_item(ui->user);
+        }
+    }
+    ui->end_tab_bar(ui->user);
+}
+
 void ANOMALY_CALL on_draw(void* ctx, const AnomalyUiServiceV1* ui) {
     if (ctx == nullptr || ui == nullptr || ui->begin_window == nullptr) return;
     ++g_draw_count;
     if (GmToggleOn()) ApplyGmPatch();
     BuildGmCommandList();
+    EnsureHotkeys();
+    TickChronosDump();
+    TickFeatures();
+
     static int open = 1;
     AnomalyStringViewV1 title{kWindowTitle, std::strlen(kWindowTitle)};
     if (ui->begin_window(ui->user, title, &open, 0) != 0) {
-        if (ui->checkbox) {
-            AnomalyStringViewV1 c1{"Chronos", 8};
-            if (ui->checkbox(ui->user, c1, &g_ui_state.chronos)) g_ui_dirty = true;
-            AnomalyStringViewV1 c2{"Damage Replay", 13};
-            if (ui->checkbox(ui->user, c2, &g_ui_state.damage)) g_ui_dirty = true;
-            AnomalyStringViewV1 c3{"  chainReaction", 15};
-            if (ui->checkbox(ui->user, c3, &g_ui_state.chain)) g_ui_dirty = true;
-            AnomalyStringViewV1 c4{"Volleyball Win", 14};
-            if (ui->checkbox(ui->user, c4, &g_ui_state.volley)) g_ui_dirty = true;
-            AnomalyStringViewV1 c5{"Developer GM", 12};
-            if (ui->checkbox(ui->user, c5, &g_ui_state.gm)) g_ui_dirty = true;
-        }
-        if (ui->slider_float) {
-            AnomalyStringViewV1 s1{"replayCount", 11};
-            if (ui->slider_float(ui->user, s1, &g_ui_state.replay, 0.0f, 1024.0f))
-                g_ui_dirty = true;
-        }
-        
-        if (ui->button && g_ui_dirty) {
-            AnomalyStringViewV1 b1{"Save", 4};
-            if (ui->button(ui->user, b1, 60.0f, 0.0f)) SaveDamageConfig();
-        }
+        DrawTabs(ui);
         if (ui->text) {
-            char status[160];
-            int n = snprintf(status, sizeof(status),
-                             "state: c=%d d=%d chain=%d v=%d gm=%d replay=%.0f | resolved c=%d d=%d v=%d gm=%d",
-                             g_ui_state.chronos, g_ui_state.damage, g_ui_state.chain,
-                             g_ui_state.volley, g_ui_state.gm, g_ui_state.replay,
+            char status[128];
+            int n = snprintf(status, sizeof(status), "resolved c=%d d=%d v=%d gm=%d",
                              g_resolve.chronos, g_resolve.damage, g_resolve.volley, g_resolve.gm);
-            if (n > 0) {
-                AnomalyStringViewV1 view{status, static_cast<std::size_t>(n)};
-                ui->text(ui->user, view);
-                char diag[96];
-                int dn = snprintf(diag, sizeof(diag), "diag: rc=%d find=%d ids=%u/%u/%u world=%llX flags=%d%d", g_sig_rc, g_find_rc, g_id_pc, g_id_asc, g_id_vb,
-                             g_gworld_ptr, g_sig_ok, g_names_ok);
-                if (dn > 0) {
-                    AnomalyStringViewV1 dv{diag, static_cast<std::size_t>(dn)};
-                    ui->text(ui->user, dv);
-                }
-                char dec[160];
-                char wn[48] = {0}, nn[48] = {0};
-                DecodeName(g_want_id, wn, sizeof(wn));
-                DecodeName(g_probe_nid, nn, sizeof(nn));
-                int en = snprintf(dec, sizeof(dec), "cls: pc=%llX inst=%llX gm=%d/%d sub=%d hook=%d dmg=%d", g_cls_pc, (unsigned long long)g_pc_inst, g_gm_patched, g_patch_rc, g_pe_subscribed, g_hook_ok, g_dmg_chain_ok);
-                if (en > 0) {
-                    AnomalyStringViewV1 ev{dec, static_cast<std::size_t>(en)};
-                    ui->text(ui->user, ev);
-                }
-                if (g_gm_cmd_count > 0 && ui->separator) ui->separator(ui->user);
-                for (int i = 0; i < g_gm_cmd_count; ++i) {
-                    AnomalyStringViewV1 cmd{g_gm_cmd_names[i], std::strlen(g_gm_cmd_names[i])};
-                    ui->text(ui->user, cmd);
-                }
-            }
+            if (n > 0) { AnomalyStringViewV1 v{status, static_cast<std::size_t>(n)}; ui->text(ui->user, v); }
         }
     }
     ui->end_window(ui->user);
