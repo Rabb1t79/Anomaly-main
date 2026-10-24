@@ -55,6 +55,7 @@ struct PluginContext {
     const AnomalyUiServiceV1* ui{};
     const AnomalyNteCombatServiceV1* combat{};
     const AnomalyNteDamageEchoServiceV1* echo{};
+    const AnomalyUe5BuildServiceV1* build{};
     SharedState shared;
     double service_retry{};
     int window_open{1};
@@ -208,6 +209,10 @@ void RefreshServices(PluginContext& context) {
         context.echo = QueryService<AnomalyNteDamageEchoServiceV1>(
             context.host, ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID);
     }
+    if (context.build == nullptr) {
+        context.build = QueryService<AnomalyUe5BuildServiceV1>(
+            context.host, ANOMALY_UE5_BUILD_SERVICE_V1_ID);
+    }
 }
 
 void DrainEvents(PluginContext& context, const AnomalyNteCombatantSnapshotV1& player) {
@@ -335,6 +340,16 @@ void Draw(PluginContext& context, const AnomalyUiServiceV1* ui) {
             context.combat != nullptr ? "可用" : "不可用",
             context.echo != nullptr ? "可用" : "不可用");
         text(line);
+        if (context.build != nullptr) {
+            const auto combat_feature = context.build->feature_state(
+                context.build->user, View("nte.combat"));
+            const auto echo_feature = context.build->feature_state(
+                context.build->user, View("nte.damage-echo"));
+            std::snprintf(line, sizeof(line), "Feature：combat=%s / damage-echo=%s",
+                combat_feature == ANOMALY_FEATURE_V1_AVAILABLE ? "可用" : "不可用",
+                echo_feature == ANOMALY_FEATURE_V1_AVAILABLE ? "可用" : "不可用");
+            text(line);
+        }
         text(status.c_str());
         if (mode == 1) {
             text("B 模式的跳伤由游戏原生 DoT GE 决定，速率只控制维护/重挂频率。");

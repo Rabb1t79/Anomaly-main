@@ -1803,11 +1803,10 @@ struct Ue5NteAdapter::State {
     }
 
     [[nodiscard]] bool NteDamageEchoReflectionReady() const noexcept {
+        // A mode only needs HP read/write; damage text and B mode are optional
+        // per-call capabilities so one missing UI/GE binding cannot hide A.
         return NteDamageEchoProfileAvailable() && NteCombatReflectionReady() &&
-            NteFunctionReady(NteFunctionKind::SetHp) &&
-            NteFunctionReady(NteFunctionKind::ApplyGameplayEffect) &&
-            NteFunctionReady(NteFunctionKind::HaveGameplayEffectWithClass) &&
-            NteFunctionReady(NteFunctionKind::MulticastShowMonsterDamageInfo);
+            NteFunctionReady(NteFunctionKind::SetHp);
     }
 
     [[nodiscard]] bool NteSkillsProfileAvailable() const noexcept {
@@ -8076,13 +8075,18 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_NOT_FOUND, "stale damage-echo victim handle");
         }
         std::uintptr_t victim_class{};
+        const auto& character_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::GetHp)];
+        if (!character_binding ||
+            !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
+            !IsClassDerivedFromLocked(victim_class, character_binding->outer_class)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "damage-echo victim is not a character");
+        }
         const auto& monster_binding = combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::MulticastShowMonsterDamageInfo)];
-        if (!monster_binding ||
-            !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
-            !IsClassDerivedFromLocked(victim_class, monster_binding->outer_class)) {
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "damage-echo victim is not a monster");
-        }
+        const bool can_display =
+            monster_binding &&
+            IsClassDerivedFromLocked(victim_class, monster_binding->outer_class);
         float hp_before{};
         bool dead_before{};
         if (!InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_before) ||
@@ -8137,7 +8141,8 @@ struct Ue5NteAdapter::State {
         result->dead = (dead_after || hp_after <= 0.0F) ? 1U : 0U;
         if (result->dead != 0) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED;
         if (dead_after || hp_after <= 0.0F) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
-        if ((request->flags & ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE) != 0) {
+        if ((request->flags & ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE) != 0 &&
+            can_display) {
             std::array<std::uint8_t, 72> text{};
             FillDamageEchoTextLocked(*request, victim, text);
             std::array<std::uint8_t, 80> text_parameters{};
