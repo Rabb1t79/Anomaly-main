@@ -8150,9 +8150,14 @@ struct Ue5NteAdapter::State {
                 }
                 std::string name;
                 if (!ReadReflectedObjectNameLocked(candidate, name) ||
-                    name != "Buff_NormalFireDot_C") {
+                    !name.ends_with("_C") || name.size() <= 2U) {
                     continue;
                 }
+                const bool exact_dot = name == "Buff_NormalFireDot_C";
+                const bool generic_dot = !exact_dot &&
+                    name.find("Dot") != std::string::npos &&
+                    name.rfind("Buff_", 0) == 0;
+                if (!exact_dot && !generic_dot) continue;
                 std::uintptr_t meta_class{};
                 std::uintptr_t outer{};
                 std::string meta_name;
@@ -8162,7 +8167,7 @@ struct Ue5NteAdapter::State {
                     !ReadReflectedObjectNameLocked(meta_class, meta_name) ||
                     (meta_name != "Class" && meta_name != "BlueprintGeneratedClass") ||
                     !ReadReflectedObjectNameLocked(outer, outer_name) ||
-                    outer_name != "Buff_NormalFireDot" ||
+                    (!exact_dot && outer_name.rfind("Buff_", 0) != 0) ||
                     (meta_binding &&
                         !IsClassDerivedFromLocked(candidate, meta_binding->meta_class))) {
                     continue;
