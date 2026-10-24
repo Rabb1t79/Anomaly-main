@@ -8179,44 +8179,8 @@ struct Ue5NteAdapter::State {
             committed = true;
         }
         if (!committed) {
-            // Client-side characters are not authoritative, so the game's
-            // SetHP UFunction can complete without committing. The user
-            // explicitly authorized the Anomaly host's local memory fallback:
-            // write the replicated HPCurrent field and mirror the local death
-            // state so the hit remains observable and the next tick can stop.
-            std::uintptr_t ability_system{};
-            const auto hp_current_offset =
-                Layout(profile, "attributeComponent.hpCurrent", -1);
-            if (!ReadPointerAt(*memory, victim,
-                    Layout(profile, "abilityCharacter.htAbilitySystemComponent"),
-                    ability_system) ||
-                ability_system == 0 || hp_current_offset < 0 ||
-                !memory->Write(ability_system + static_cast<std::uintptr_t>(hp_current_offset),
-                    &next_hp, sizeof(next_hp))) {
-                return Status(ANOMALY_STATUS_V1_FAILED,
-                    "SetHP did not commit and HPCurrent fallback failed");
-            }
-            if (!InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_after) ||
-                !std::isfinite(hp_after) || hp_after >= hp_before - 0.001F) {
-                return Status(ANOMALY_STATUS_V1_FAILED,
-                    "SetHP did not commit and HPCurrent fallback was not observed");
-            }
-            if (next_hp <= 0.0F) {
-                const auto& dead_binding = combat_skill_discovery.functions[
-                    NteIndex(NteFunctionKind::SetIsDead)];
-                if (dead_binding) {
-                    std::array<std::uint8_t, 8> dead_parameters{};
-                    const auto& value = dead_binding->bool_parameters[0];
-                    if (value.byte_offset < dead_parameters.size()) {
-                        dead_parameters[value.byte_offset] = static_cast<std::uint8_t>(
-                            (dead_parameters[value.byte_offset] & ~value.field_mask) |
-                            value.byte_mask);
-                        static_cast<void>(InvokeNteFunctionLocked(
-                            NteFunctionKind::SetIsDead, victim, dead_parameters));
-                    }
-                }
-            }
-            committed = true;
+            return Status(ANOMALY_STATUS_V1_FAILED,
+                "SetHP did not commit; client is not authoritative");
         }
         static_cast<void>(InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead,
             victim, dead_after));
