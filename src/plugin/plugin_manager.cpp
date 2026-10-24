@@ -4335,7 +4335,9 @@ bool PluginManager::Activate(LoadedPlugin& plugin) {
         plugin.plugin_context = nullptr;
         plugin.waiting_for_service = true;
         plugin.started = false;
-        Log(ANOMALY_CORE_LOG_LEVEL_V1_INFO, "ABI v1 plugin waiting for service: " + plugin.view.id);
+        Log(ANOMALY_CORE_LOG_LEVEL_V1_INFO,
+            "ABI v1 plugin waiting for service: " + plugin.view.id + " (" +
+                StatusMessage("on_load", load_status) + ")");
         return true;
     }
     if (load_status.code != ANOMALY_STATUS_V1_OK) {
@@ -4372,7 +4374,8 @@ bool PluginManager::Activate(LoadedPlugin& plugin) {
                 plugin.waiting_for_service = true;
                 plugin.started = false;
                 Log(ANOMALY_CORE_LOG_LEVEL_V1_INFO,
-                    "ABI v1 plugin waiting for service: " + plugin.view.id);
+                    "ABI v1 plugin waiting for service: " + plugin.view.id + " (" +
+                        StatusMessage("on_start", start_status) + ")");
                 return true;
             }
             plugin.waiting_for_service = false;
