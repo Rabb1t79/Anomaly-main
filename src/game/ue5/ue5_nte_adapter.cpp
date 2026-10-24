@@ -8177,11 +8177,13 @@ struct Ue5NteAdapter::State {
         }
         const auto& apply_binding = combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::ApplyGameplayEffect)];
+        const auto& character_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::GetHp)];
         std::uintptr_t victim_class{};
-        if (!apply_binding ||
+        if (!apply_binding || !character_binding ||
             !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
-            !IsClassDerivedFromLocked(victim_class, apply_binding->outer_class)) {
-            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "native DoT victim is not an AI character");
+            !IsClassDerivedFromLocked(victim_class, character_binding->outer_class)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "native DoT victim is not a character");
         }
         std::uintptr_t gameplay_effect{};
         if (!FindNativeDotGameplayEffectLocked(gameplay_effect)) {
