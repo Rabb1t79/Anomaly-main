@@ -1528,9 +1528,21 @@ AnomalyStatusV1 ANOMALY_CALL Load(const AnomalyHostApiV1* host, void** plugin_co
         host, ANOMALY_INPUT_SERVICE_V1_ID, ANOMALY_INPUT_SERVICE_V1_VERSION);
     const auto* window_service = QueryService<AnomalyWindowServiceV1>(
         host, ANOMALY_WINDOW_SERVICE_V1_ID, ANOMALY_WINDOW_SERVICE_V1_VERSION);
-    if (!vehicle || !player || !InputReady(input) || !WindowReady(window_service)) {
+    if (!vehicle) {
         return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-            "载具菜单需要 anomaly.input 与 anomaly.window 服务");
+            "missing required service: anomaly.nte.vehicle@8");
+    }
+    if (!player) {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+            "missing required service: anomaly.nte.player@1");
+    }
+    if (!InputReady(input)) {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+            "service unavailable or ABI fields incomplete: anomaly.input@1");
+    }
+    if (!WindowReady(window_service)) {
+        return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+            "service unavailable or ABI fields incomplete: anomaly.window@1");
     }
 
     if (!vehicle->snapshot || !vehicle->set_top_speed_ratio ||
