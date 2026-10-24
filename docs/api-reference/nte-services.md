@@ -773,16 +773,19 @@ typedef struct AnomalyNteDamageEchoServiceV1 {
 HP 归零时调用 `SetIsDead(true)`；仍以重新读取的 HP 差值决定成功与否。该入口不会再次
 广播 `CharacterOnDamaged`。
 
-`apply_native_dot` 对已验证的 AI 目标调用 `HTAICharacter.ApplyGameplayEffect`，使用当前
-活动 Profile 验证通过的原生 DoT `Buff_NormalFireDot_C`，并通过
-`K2_HaveGameplayEffectWithClass` 避免同一目标重复挂载；已有该 GE 时返回
-`NATIVE_DOT_ACTIVE`，新挂载时返回 `NATIVE_DOT_APPLIED`。B 模式的跳伤数值与周期由游戏
-GE 公式决定，`request.damage` 只用于状态报告，不是 GE 的伤害量。
+`apply_native_dot` 优先从玩家 ASC 调用
+`UHTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass`，把验证过的 DoT
+`Buff_NormalFireDot_C` 施加到目标 ASC；`bUsePredictionKey` 置位，`FBufferData` 使用
+Dump 验证的 `BuffName/Duration/Period/Stack/Strength`，由游戏生成预测键并发送服务端
+RPC。只有该绑定不可用时才回退 `HTAICharacter.ApplyGameplayEffect`。应用前后通过
+`K2_HaveGameplayEffectWithClass` 查询；已有该 GE 时返回 `NATIVE_DOT_ACTIVE`，新挂载时
+返回 `NATIVE_DOT_APPLIED`。B 模式的跳伤数值与周期由游戏 GE 公式决定，
+`request.damage` 只用于状态报告，不是 GE 的伤害量。
 
 服务只在 `nte.damage-echo` Feature、`nte.combat` 依赖、`SetHP` /
-`ApplyGameplayEffect` / `K2_HaveGameplayEffectWithClass` /
+`ApplyGameplayEffectToTarget` / `K2_HaveGameplayEffectWithClass` /
 `MulticastShowMonsterDamageInfo` 反射绑定和 `nte-damage-echo-abi-v1` 布局校验全部通过后
-发布。任一绑定缺失时服务保持 `UNAVAILABLE`，调用方应按模式降级，而不是自行扫描偏移。
+发布；旧 `ApplyGameplayEffect` 只作为运行时回退，不作为发布前提。任一绑定缺失时服务保持 `UNAVAILABLE`，调用方应按模式降级，而不是自行扫描偏移。
 
 ---
 

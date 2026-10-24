@@ -703,6 +703,7 @@ struct Ue5NteAdapter::State {
         SetHp,
         SetIsDead,
         ApplyGameplayEffect,
+        ApplyGameplayEffectToTarget,
         HaveGameplayEffectWithClass,
         Count,
     };
@@ -1369,6 +1370,13 @@ struct Ue5NteAdapter::State {
             NteFunctionParameterSpec{"fRealDamage", "FloatProperty", 4, false}};
         static constexpr std::array set_is_dead{
             NteFunctionParameterSpec{"Value", "BoolProperty", 1, false}};
+        static constexpr std::array apply_gameplay_effect_to_target{
+            NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
+            NteFunctionParameterSpec{"TargetAbilityCmp", "ObjectProperty", 8, false},
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 0x58, false},
+            NteFunctionParameterSpec{"BuffEventType", "EnumProperty", 1, false},
+            NteFunctionParameterSpec{"bUsePredictionKey", "BoolProperty", 1, false},
+            NteFunctionParameterSpec{"ReturnValue", "StructProperty", 8, true}};
         static constexpr std::array apply_gameplay_effect{
             NteFunctionParameterSpec{"GETemplate", "ClassProperty", 8, false},
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
@@ -1486,6 +1494,9 @@ struct Ue5NteAdapter::State {
         case NteFunctionKind::ApplyGameplayEffect:
             return {kind, "ApplyGameplayEffect", "HTAICharacter", 16,
                 apply_gameplay_effect};
+        case NteFunctionKind::ApplyGameplayEffectToTarget:
+            return {kind, "K2_ApplyGameplayEffectToTargetWithClass",
+                "HTAbilitySystemComponent", 0x78, apply_gameplay_effect_to_target};
         case NteFunctionKind::HaveGameplayEffectWithClass:
             return {kind, "K2_HaveGameplayEffectWithClass", "HTAbilityCharacter", 16,
                 have_gameplay_effect};
@@ -8309,9 +8320,66 @@ struct Ue5NteAdapter::State {
             if (dead) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
             return Status(ANOMALY_STATUS_V1_OK, "native DoT is already active");
         }
-        std::array<std::uint8_t, 16> parameters{};
         bool applied = false;
-        if (apply_binding) {
+        const auto& target_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ApplyGameplayEffectToTarget)];
+        if (target_binding) {
+            std::uintptr_t player_ability_system{};
+            std::uintptr_t target_ability_system{};
+            if (CurrentAbilitySystemLocked(player_pawn, player_ability_system) &&
+                player_ability_system != 0 &&
+                ReadPointerAt(*memory, victim,
+                    Layout(profile, "abilityCharacter.htAbilitySystemComponent"),
+                    target_ability_system) &&
+                target_ability_system != 0 &&
+                target_binding->parms_size <= 0x80U) {
+                std::array<std::uint8_t, 0x80> parameters{};
+                std::memcpy(parameters.data() + target_binding->offsets[0],
+                    &gameplay_effect, sizeof(gameplay_effect));
+                std::memcpy(parameters.data() + target_binding->offsets[1],
+                    &target_ability_system, sizeof(target_ability_system));
+                struct BufferData {
+                    std::array<std::uint8_t, 8> buff_name{};
+                    std::array<std::uint8_t, 0x20> dynamic_tags{};
+                    std::int32_t level{1};
+                    float duration{600.0F};
+                    float modify_duration{};
+                    float period{0.25F};
+                    std::int32_t stack_count{1};
+                    float strength_multiplier{1.0F};
+                    float strength_add{};
+                    std::array<std::uint8_t, 4> pad{};
+                    std::int64_t start_time{};
+                    bool calc_offline_time{};
+                    std::array<std::uint8_t, 7> tail{};
+                } modify{};
+                static_assert(sizeof(BufferData) == 0x58);
+                const auto name_offset = Layout(profile, "object.nameOffset", -1);
+                if (name_offset < 0 ||
+                    !ReadValue(*memory,
+                        gameplay_effect + static_cast<std::uintptr_t>(name_offset),
+                        modify.buff_name)) {
+                    return Status(ANOMALY_STATUS_V1_FAILED,
+                        "native DoT GameplayEffect name is unreadable");
+                }
+                std::memcpy(parameters.data() + target_binding->offsets[2],
+                    &modify, sizeof(modify));
+                parameters[target_binding->offsets[3]] = 1U; // BUFF_EVENT_BEGIN
+                const auto& use_prediction = target_binding->bool_parameters[4];
+                if (use_prediction.byte_offset < parameters.size()) {
+                    parameters[use_prediction.byte_offset] =
+                        static_cast<std::uint8_t>(
+                            (parameters[use_prediction.byte_offset] &
+                                ~use_prediction.field_mask) |
+                            use_prediction.byte_mask);
+                }
+                applied = InvokeNteFunctionLocked(
+                    NteFunctionKind::ApplyGameplayEffectToTarget,
+                    player_ability_system, parameters);
+            }
+        }
+        if (!applied && apply_binding) {
+            std::array<std::uint8_t, 16> parameters{};
             std::memcpy(parameters.data() + apply_binding->offsets[0], &gameplay_effect,
                 sizeof(gameplay_effect));
             if (!InvokeNteFunctionLocked(
@@ -8322,7 +8390,8 @@ struct Ue5NteAdapter::State {
             const auto& reflected = apply_binding->bool_parameters[1];
             applied = reflected.byte_offset < parameters.size() &&
                 (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
-        } else {
+        } else if (!applied && raw_native_dot) {
+            std::array<std::uint8_t, 16> parameters{};
             std::memcpy(parameters.data(), &gameplay_effect, sizeof(gameplay_effect));
             if (!InvokeNativeProcessEventLocked(victim,
                     raw_native_dot_binding.function, parameters.data(), parameters.size())) {
@@ -9635,6 +9704,7 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::SetHp);
                     lookup_optional(NteFunctionKind::SetIsDead);
                     lookup_optional(NteFunctionKind::ApplyGameplayEffect);
+                    lookup_optional(NteFunctionKind::ApplyGameplayEffectToTarget);
                     lookup_optional(NteFunctionKind::HaveGameplayEffectWithClass);
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
