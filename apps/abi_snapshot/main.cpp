@@ -1847,7 +1847,8 @@ std::string BuildSnapshot() {
          {"slot_90", offsetof(AnomalyNteVehicleServiceV1, slot_90)},
          {"slot_98", offsetof(AnomalyNteVehicleServiceV1, slot_98)},
          {"slot_a0", offsetof(AnomalyNteVehicleServiceV1, slot_a0)},
-         {"slot_a8", offsetof(AnomalyNteVehicleServiceV1, slot_a8)}},
+         {"slot_a8", offsetof(AnomalyNteVehicleServiceV1, slot_a8)},
+         {"slot_b0", offsetof(AnomalyNteVehicleServiceV1, slot_b0)}},
         false);
     AppendStruct(
         output,

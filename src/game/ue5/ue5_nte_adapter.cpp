@@ -14107,7 +14107,8 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             VehicleExtensionUnavailable, VehicleExtensionUnavailable,
             VehicleExtensionUnavailable, VehicleExtensionUnavailable,
             VehicleExtensionUnavailable, VehicleExtensionUnavailable,
-            VehicleExtensionUnavailable, VehicleExtensionUnavailable};
+            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
+            VehicleExtensionUnavailable};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};

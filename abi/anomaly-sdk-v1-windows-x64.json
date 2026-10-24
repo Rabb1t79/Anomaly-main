@@ -1522,7 +1522,7 @@
       }
     },
     "AnomalyNteVehicleServiceV1": {
-      "size": 168,
+      "size": 176,
       "alignment": 8,
       "offsets": {
         "struct_size": 0,
@@ -1546,7 +1546,8 @@
         "slot_90": 136,
         "slot_98": 144,
         "slot_a0": 152,
-        "slot_a8": 160
+        "slot_a8": 160,
+        "slot_b0": 168
       }
     },
     "AnomalyNteAttackInputRequestV1": {

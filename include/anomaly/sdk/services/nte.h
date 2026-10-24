@@ -367,6 +367,7 @@ typedef struct AnomalyNteVehicleServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *slot_98)(void* user, ...);
     AnomalyStatusV1 (ANOMALY_CALL *slot_a0)(void* user, ...);
     AnomalyStatusV1 (ANOMALY_CALL *slot_a8)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_b0)(void* user, ...);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept
