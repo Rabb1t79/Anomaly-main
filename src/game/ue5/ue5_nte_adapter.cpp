@@ -704,6 +704,7 @@ struct Ue5NteAdapter::State {
         SetIsDead,
         ApplyGameplayEffect,
         ApplyGameplayEffectToTarget,
+        ServerActivateGameEffects,
         HaveGameplayEffectWithClass,
         Count,
     };
@@ -1378,6 +1379,12 @@ struct Ue5NteAdapter::State {
             NteFunctionParameterSpec{"BuffEventType", "EnumProperty", 1, false},
             NteFunctionParameterSpec{"bUsePredictionKey", "BoolProperty", 1, false},
             NteFunctionParameterSpec{"ReturnValue", "StructProperty", 8, true}};
+        static constexpr std::array server_activate_ge{
+            NteFunctionParameterSpec{"SourceObj", "ObjectProperty", 8, false},
+            NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
+            NteFunctionParameterSpec{"ModifyData", "StructProperty", 0x58, false},
+            NteFunctionParameterSpec{"BuffEventType", "EnumProperty", 1, false},
+            NteFunctionParameterSpec{"PredictionKey", "StructProperty", 0x10, false}};
         static constexpr std::array apply_gameplay_effect{
             NteFunctionParameterSpec{"GETemplate", "ClassProperty", 8, false},
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
@@ -1498,6 +1505,9 @@ struct Ue5NteAdapter::State {
         case NteFunctionKind::ApplyGameplayEffectToTarget:
             return {kind, "K2_ApplyGameplayEffectToTargetWithClass",
                 "HTAbilitySystemComponent", 0x78, apply_gameplay_effect_to_target};
+        case NteFunctionKind::ServerActivateGameEffects:
+            return {kind, "ServerActivateGameEffectsWithClassByActor",
+                "HTAbilityCharacter", 0x80, server_activate_ge};
         case NteFunctionKind::HaveGameplayEffectWithClass:
             return {kind, "K2_HaveGameplayEffectWithClass", "HTAbilityCharacter", 16,
                 have_gameplay_effect};
@@ -8435,6 +8445,67 @@ struct Ue5NteAdapter::State {
                 }
             }
         }
+        if (!applied) {
+            const auto& server_binding = combat_skill_discovery.functions[
+                NteIndex(NteFunctionKind::ServerActivateGameEffects)];
+            if (server_binding && server_binding->parms_size <= 0x80U &&
+                player_pawn != 0) {
+                struct ServerBufferData {
+                    std::array<std::uint8_t, 8> buff_name{};
+                    std::array<std::uint8_t, 0x20> dynamic_tags{};
+                    std::int32_t level{1};
+                    float duration{600.0F};
+                    float modify_duration{};
+                    float period{0.25F};
+                    std::int32_t stack_count{1};
+                    float strength_multiplier{1.0F};
+                    float strength_add{};
+                    std::array<std::uint8_t, 4> pad{};
+                    std::int64_t start_time{};
+                    bool calc_offline_time{};
+                    std::array<std::uint8_t, 7> tail{};
+                } modify{};
+                static_assert(sizeof(ServerBufferData) == 0x58);
+                const auto name_offset = Layout(profile, "object.nameOffset", -1);
+                const auto outer_offset = Layout(profile, "object.outer", -1);
+                std::uintptr_t name_owner = gameplay_effect;
+                if (outer_offset >= 0) {
+                    std::uintptr_t outer{};
+                    if (ReadPointerAt(*memory, gameplay_effect,
+                            static_cast<std::int64_t>(outer_offset), outer) &&
+                        outer != 0) {
+                        name_owner = outer;
+                    }
+                }
+                if (name_offset < 0 ||
+                    !ReadValue(*memory,
+                        name_owner + static_cast<std::uintptr_t>(name_offset),
+                        modify.buff_name)) {
+                    return Status(ANOMALY_STATUS_V1_FAILED,
+                        "native DoT server GE name is unreadable");
+                }
+                std::array<std::uint8_t, 0x80> parameters{};
+                std::memcpy(parameters.data() + server_binding->offsets[0],
+                    &victim, sizeof(victim));
+                std::memcpy(parameters.data() + server_binding->offsets[1],
+                    &gameplay_effect, sizeof(gameplay_effect));
+                std::memcpy(parameters.data() + server_binding->offsets[2],
+                    &modify, sizeof(modify));
+                parameters[server_binding->offsets[3]] = 1U; // BUFF_EVENT_BEGIN
+                struct PredictionKey {
+                    std::int16_t current{1};
+                    std::int16_t base{};
+                    bool server_initiated{};
+                    std::array<std::uint8_t, 11> pad{};
+                } prediction{};
+                static_assert(sizeof(PredictionKey) == 0x10);
+                std::memcpy(parameters.data() + server_binding->offsets[4],
+                    &prediction, sizeof(prediction));
+                applied = InvokeNteFunctionLocked(
+                    NteFunctionKind::ServerActivateGameEffects,
+                    player_pawn, parameters);
+            }
+        }
         if (!applied && apply_binding) {
             std::array<std::uint8_t, 16> parameters{};
             std::memcpy(parameters.data() + apply_binding->offsets[0], &gameplay_effect,
@@ -9762,6 +9833,7 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::SetIsDead);
                     lookup_optional(NteFunctionKind::ApplyGameplayEffect);
                     lookup_optional(NteFunctionKind::ApplyGameplayEffectToTarget);
+                    lookup_optional(NteFunctionKind::ServerActivateGameEffects);
                     lookup_optional(NteFunctionKind::HaveGameplayEffectWithClass);
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
