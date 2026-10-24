@@ -752,6 +752,15 @@ struct Ue5NteAdapter::State {
         bool attempted{};
     };
     NativeDotClassCache native_dot_class_cache;
+    struct DamageEchoSession {
+        std::array<std::uint8_t, 0x80> parameters{};
+        std::uint32_t parms_size{};
+        std::uintptr_t function{};
+        std::uintptr_t target{};
+        std::uint16_t replay_key{1};
+        bool valid{};
+        bool replaying{};
+    } damage_echo_session;
     struct RawNativeDotBinding {
         std::uintptr_t function{};
         bool attempted{};
@@ -8286,6 +8295,34 @@ struct Ue5NteAdapter::State {
         return Status(ANOMALY_STATUS_V1_OK);
     }
 
+    void CaptureDamageEchoSessionLocked(
+        const std::uintptr_t object, const std::uintptr_t function,
+        void* const parameters) noexcept {
+        if (!started.load(std::memory_order_acquire) ||
+            object != player_pawn || function == 0 || parameters == nullptr ||
+            damage_echo_session.replaying) {
+            return;
+        }
+        const auto& binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ServerActivateGameEffects)];
+        if (!binding || binding->function != function ||
+            binding->parms_size > damage_echo_session.parameters.size()) {
+            return;
+        }
+        std::memcpy(damage_echo_session.parameters.data(), parameters,
+            binding->parms_size);
+        damage_echo_session.parms_size = binding->parms_size;
+        damage_echo_session.function = function;
+        damage_echo_session.target = 0;
+        if (binding->offsets[0] < binding->parms_size &&
+            sizeof(std::uintptr_t) <= binding->parms_size - binding->offsets[0]) {
+            std::memcpy(&damage_echo_session.target,
+                damage_echo_session.parameters.data() + binding->offsets[0],
+                sizeof(damage_echo_session.target));
+        }
+        damage_echo_session.valid = true;
+    }
+
     AnomalyStatusV1 ApplyNativeDot(
         const AnomalyNteDamageEchoRequestV1* request,
         AnomalyNteDamageEchoResultV1* result) noexcept {
@@ -8359,6 +8396,40 @@ struct Ue5NteAdapter::State {
             return reflected.byte_offset < parameters.size() &&
                 (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
         };
+        if (damage_echo_session.valid &&
+            damage_echo_session.target == victim &&
+            damage_echo_session.function != 0 &&
+            damage_echo_session.parms_size >= 4U) {
+            const auto& server_binding = combat_skill_discovery.functions[
+                NteIndex(NteFunctionKind::ServerActivateGameEffects)];
+            if (server_binding &&
+                server_binding->function == damage_echo_session.function &&
+                server_binding->parms_size == damage_echo_session.parms_size &&
+                server_binding->offsets[4] + 0x10U <=
+                    damage_echo_session.parameters.size()) {
+                std::array<std::uint8_t, 0x80> parameters =
+                    damage_echo_session.parameters;
+                const auto key_offset = server_binding->offsets[4];
+                std::int16_t key = damage_echo_session.replay_key++;
+                if (damage_echo_session.replay_key == 0) {
+                    damage_echo_session.replay_key = 1;
+                }
+                std::memcpy(parameters.data() + key_offset, &key, sizeof(key));
+                std::int16_t base{};
+                std::memcpy(parameters.data() + key_offset + 2, &base, sizeof(base));
+                parameters[key_offset + 4] = 0;
+                damage_echo_session.replaying = true;
+                const bool invoked = InvokeNativeProcessEventLocked(
+                    player_pawn, damage_echo_session.function,
+                    parameters.data(), damage_echo_session.parms_size);
+                damage_echo_session.replaying = false;
+                if (invoked) {
+                    result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED;
+                    return Status(ANOMALY_STATUS_V1_OK,
+                        "replayed captured attack session");
+                }
+            }
+        }
         if (query_active()) {
             result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE;
             bool dead{};
@@ -16569,6 +16640,7 @@ void Ue5NteAdapter::OnProcessEventPre(
     if (GetCurrentThreadId() != state->game_thread_id.load(std::memory_order_acquire)) {
         return;
     }
+    state->CaptureDamageEchoSessionLocked(object, function, parameters);
     const auto* const combat_bindings =
         state->combat_capture_bindings.load(std::memory_order_acquire);
     if (combat_bindings != nullptr) {

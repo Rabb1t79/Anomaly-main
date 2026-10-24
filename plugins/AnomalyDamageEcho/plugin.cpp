@@ -164,10 +164,6 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
                applications < kMaxApplicationsPerUpdate) {
             target.accumulator -= interval;
             ++applications;
-            if (shared.mode == 1 && target.native_started) {
-                target.accumulator = 0.0;
-                break;
-            }
             AnomalyNteDamageEchoRequestV1 request{};
             FillRequest(target, request);
             AnomalyNteDamageEchoResultV1 result{};
@@ -177,7 +173,6 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
                 : context.echo->apply_native_dot(context.echo->user, &request, &result);
             if (status.code == ANOMALY_STATUS_V1_OK) {
                 target.failures = 0;
-                if (shared.mode == 1) target.native_started = true;
                 if ((result.flags & ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD) != 0 ||
                     result.dead != 0) {
                     remove.push_back(target.victim.id);
