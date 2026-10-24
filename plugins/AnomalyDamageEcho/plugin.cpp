@@ -35,6 +35,7 @@ struct EchoTarget {
     std::uint32_t flags{};
     double accumulator{};
     std::uint32_t failures{};
+    bool native_started{};
 };
 
 struct SharedState {
@@ -163,6 +164,10 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
                applications < kMaxApplicationsPerUpdate) {
             target.accumulator -= interval;
             ++applications;
+            if (shared.mode == 1 && target.native_started) {
+                target.accumulator = 0.0;
+                break;
+            }
             AnomalyNteDamageEchoRequestV1 request{};
             FillRequest(target, request);
             AnomalyNteDamageEchoResultV1 result{};
@@ -172,6 +177,7 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
                 : context.echo->apply_native_dot(context.echo->user, &request, &result);
             if (status.code == ANOMALY_STATUS_V1_OK) {
                 target.failures = 0;
+                if (shared.mode == 1) target.native_started = true;
                 if ((result.flags & ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD) != 0 ||
                     result.dead != 0) {
                     remove.push_back(target.victim.id);
@@ -186,7 +192,9 @@ void ApplyTargets(PluginContext& context, double delta_seconds) {
             }
             if (++target.failures >= 3) {
                 remove.push_back(target.victim.id);
-                if (shared.mode == 0 && status.code == ANOMALY_STATUS_V1_FAILED) {
+                if (status.message.size != 0 && status.message.data != nullptr) {
+                    shared.status.assign(status.message.data, status.message.size);
+                } else if (shared.mode == 0 && status.code == ANOMALY_STATUS_V1_FAILED) {
                     SetStatus(shared, "A 模式写入被游戏拒绝；可切换到 B 原生 DoT");
                 } else if (status.code == ANOMALY_STATUS_V1_PERMISSION_DENIED) {
                     SetStatus(shared, "宿主拒绝了伤害回响服务权限");
@@ -257,7 +265,11 @@ void Update(PluginContext& context, double delta_seconds) {
     std::scoped_lock lock(context.shared.mutex);
     if (!context.shared.enabled) return;
     if (context.shared.cursor == 0) {
-        context.shared.cursor = context.combat->latest_event_sequence(context.combat->user);
+        const auto latest = context.combat->latest_event_sequence(context.combat->user);
+        // Consume the most recent event on the first service-visible tick. The
+        // initial attack can otherwise arrive on the same tick this cursor was
+        // initialized and be skipped forever.
+        context.shared.cursor = latest > 0 ? latest - 1 : 0;
     }
     if (context.shared.last_player_id != player.character.id ||
         context.shared.last_player_generation != player.character.generation) {

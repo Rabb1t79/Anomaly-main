@@ -750,6 +750,11 @@ struct Ue5NteAdapter::State {
         bool attempted{};
     };
     NativeDotClassCache native_dot_class_cache;
+    struct RawNativeDotBinding {
+        std::uintptr_t function{};
+        bool attempted{};
+    };
+    RawNativeDotBinding raw_native_dot_binding;
 
     struct VehicleFunctionBinding {
         std::uintptr_t function{};
@@ -8012,6 +8017,28 @@ struct Ue5NteAdapter::State {
         static_cast<void>(victim);
     }
 
+    [[nodiscard]] bool ResolveRawNativeDotBindingLocked() noexcept {
+        if (raw_native_dot_binding.attempted) {
+            return raw_native_dot_binding.function != 0;
+        }
+        raw_native_dot_binding.attempted = true;
+        std::uintptr_t function{};
+        if (!FindExactObjectLocked(
+                L"/Script/HTGame.HTAICharacter.ApplyGameplayEffect", function) ||
+            function == 0) {
+            return false;
+        }
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{};
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            num_parms != 2 || parms_size != 16) {
+            return false;
+        }
+        raw_native_dot_binding.function = function;
+        return true;
+    }
+
     [[nodiscard]] bool FindNativeDotGameplayEffectLocked(std::uintptr_t& gameplay_effect) noexcept {
         gameplay_effect = 0;
         if (native_dot_class_cache.object_generation != object_generation) {
@@ -8227,10 +8254,16 @@ struct Ue5NteAdapter::State {
         const auto& character_binding = combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::GetHp)];
         std::uintptr_t victim_class{};
-        if (!apply_binding || !character_binding ||
+        if (!character_binding ||
             !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
             !IsClassDerivedFromLocked(victim_class, character_binding->outer_class)) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "native DoT victim is not a character");
+        }
+        const bool raw_native_dot =
+            !apply_binding && ResolveRawNativeDotBindingLocked();
+        if (!apply_binding && !raw_native_dot) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "HTAICharacter.ApplyGameplayEffect binding is unavailable");
         }
         std::uintptr_t gameplay_effect{};
         if (!FindNativeDotGameplayEffectLocked(gameplay_effect)) {
@@ -8277,15 +8310,28 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_OK, "native DoT is already active");
         }
         std::array<std::uint8_t, 16> parameters{};
-        std::memcpy(parameters.data() + apply_binding->offsets[0], &gameplay_effect,
-            sizeof(gameplay_effect));
-        if (!InvokeNteFunctionLocked(
-                NteFunctionKind::ApplyGameplayEffect, victim, parameters)) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "ApplyGameplayEffect ProcessEvent failed");
+        bool applied = false;
+        if (apply_binding) {
+            std::memcpy(parameters.data() + apply_binding->offsets[0], &gameplay_effect,
+                sizeof(gameplay_effect));
+            if (!InvokeNteFunctionLocked(
+                    NteFunctionKind::ApplyGameplayEffect, victim, parameters)) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "ApplyGameplayEffect ProcessEvent failed");
+            }
+            const auto& reflected = apply_binding->bool_parameters[1];
+            applied = reflected.byte_offset < parameters.size() &&
+                (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
+        } else {
+            std::memcpy(parameters.data(), &gameplay_effect, sizeof(gameplay_effect));
+            if (!InvokeNativeProcessEventLocked(victim,
+                    raw_native_dot_binding.function, parameters.data(), parameters.size())) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "raw ApplyGameplayEffect ProcessEvent failed");
+            }
+            applied = parameters[8] != 0;
         }
-        const auto& applied = apply_binding->bool_parameters[1];
-        if (applied.byte_offset >= parameters.size() ||
-            (parameters[applied.byte_offset] & applied.field_mask) == 0) {
+        if (!applied) {
             return Status(ANOMALY_STATUS_V1_FAILED, "native DoT was rejected by the game");
         }
         (void)query_active();
