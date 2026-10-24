@@ -33,7 +33,7 @@
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_ID "anomaly.nte.pickup"
 #define ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_VEHICLE_SERVICE_V1_ID "anomaly.nte.vehicle"
-#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 2u
+#define ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION 8u
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_ID "anomaly.nte.ui-buttons"
 #define ANOMALY_NTE_UI_BUTTONS_SERVICE_V1_VERSION 1u
 #define ANOMALY_NTE_UI_BUTTON_V1_NAME_MAX_BYTES 128u
@@ -353,6 +353,20 @@ typedef struct AnomalyNteVehicleServiceV1 {
     // Optional V2 tail field: sets the game-declared external torque ratio on
     // HTVehicleMovementComponent. Check struct_size before calling this pointer.
     AnomalyStatusV1 (ANOMALY_CALL *set_engine_torque_ratio)(void* user, float ratio);
+    // V3-V8 compatibility slots. Newer vehicle plugins query version 8 and
+    // require a 0xB0-byte table. The current host has no native implementation
+    // for these catalog/customization extensions, so they return UNAVAILABLE;
+    // callers must check the returned status and keep V1/V2 features usable.
+    AnomalyStatusV1 (ANOMALY_CALL *slot_60)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_68)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_70)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_78)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_80)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_88)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_90)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_98)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_a0)(void* user, ...);
+    AnomalyStatusV1 (ANOMALY_CALL *slot_a8)(void* user, ...);
 } AnomalyNteVehicleServiceV1;
 
 // Uses the game's own HTPlayerController input-to-ability bridge. It is kept

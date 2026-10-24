@@ -14102,7 +14102,12 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
             this, VehicleSnapshotThunk, VehicleSetTopSpeedRatioThunk,
             VehicleSetWheelFrictionThunk, VehicleResetThunk, VehicleCatalogSnapshotThunk,
             VehicleIdAtThunk, VehicleSetSummonVehicleIdThunk, VehicleSummonThunk,
-            VehicleSetEngineTorqueRatioThunk};
+            VehicleSetEngineTorqueRatioThunk,
+            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
+            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
+            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
+            VehicleExtensionUnavailable, VehicleExtensionUnavailable,
+            VehicleExtensionUnavailable, VehicleExtensionUnavailable};
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
@@ -14454,6 +14459,11 @@ private:
         void* user, float ratio) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->VehicleSetEngineTorqueRatio(ratio) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL VehicleExtensionUnavailable(
+        void*, ...) noexcept {
+        return {ANOMALY_STATUS_V1_UNAVAILABLE, 0, {}};
     }
 
     static AnomalyStatusV1 ANOMALY_CALL VehicleSetWheelFrictionThunk(

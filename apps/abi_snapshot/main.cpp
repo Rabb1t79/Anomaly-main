@@ -1837,7 +1837,17 @@ std::string BuildSnapshot() {
          {"vehicle_id_at", offsetof(AnomalyNteVehicleServiceV1, vehicle_id_at)},
          {"set_summon_vehicle_id", offsetof(AnomalyNteVehicleServiceV1, set_summon_vehicle_id)},
          {"summon_vehicle", offsetof(AnomalyNteVehicleServiceV1, summon_vehicle)},
-         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)}},
+         {"set_engine_torque_ratio", offsetof(AnomalyNteVehicleServiceV1, set_engine_torque_ratio)},
+         {"slot_60", offsetof(AnomalyNteVehicleServiceV1, slot_60)},
+         {"slot_68", offsetof(AnomalyNteVehicleServiceV1, slot_68)},
+         {"slot_70", offsetof(AnomalyNteVehicleServiceV1, slot_70)},
+         {"slot_78", offsetof(AnomalyNteVehicleServiceV1, slot_78)},
+         {"slot_80", offsetof(AnomalyNteVehicleServiceV1, slot_80)},
+         {"slot_88", offsetof(AnomalyNteVehicleServiceV1, slot_88)},
+         {"slot_90", offsetof(AnomalyNteVehicleServiceV1, slot_90)},
+         {"slot_98", offsetof(AnomalyNteVehicleServiceV1, slot_98)},
+         {"slot_a0", offsetof(AnomalyNteVehicleServiceV1, slot_a0)},
+         {"slot_a8", offsetof(AnomalyNteVehicleServiceV1, slot_a8)}},
         false);
     AppendStruct(
         output,
