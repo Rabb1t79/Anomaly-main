@@ -1504,7 +1504,7 @@ struct Ue5NteAdapter::State {
                 apply_gameplay_effect};
         case NteFunctionKind::ApplyGameplayEffectToTarget:
             return {kind, "K2_ApplyGameplayEffectToTargetWithClass",
-                "HTAbilitySystemComponent", 0x78, apply_gameplay_effect_to_target};
+                "HTAbilitySystemComponent", 0x74, apply_gameplay_effect_to_target};
         case NteFunctionKind::ServerActivateGameEffects:
             return {kind, "ServerActivateGameEffectsWithClassByActor",
                 "HTAbilityCharacter", 0x80, server_activate_ge};
@@ -8111,7 +8111,7 @@ struct Ue5NteAdapter::State {
         std::uint16_t parms_size{};
         if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
             !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
-            num_parms != 6 || parms_size != 0x78) {
+            num_parms != 6 || parms_size != 0x74) {
             return false;
         }
         raw_target_ge_binding.function = function;
@@ -8441,7 +8441,7 @@ struct Ue5NteAdapter::State {
                 } else {
                     applied = InvokeNativeProcessEventLocked(
                         player_ability_system, raw_target_ge_binding.function,
-                        parameters.data(), 0x78);
+                        parameters.data(), 0x74);
                 }
             }
         }
