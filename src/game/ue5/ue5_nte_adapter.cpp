@@ -756,6 +756,7 @@ struct Ue5NteAdapter::State {
         bool attempted{};
     };
     RawNativeDotBinding raw_native_dot_binding;
+    RawNativeDotBinding raw_target_ge_binding;
 
     struct VehicleFunctionBinding {
         std::uintptr_t function{};
@@ -8050,6 +8051,29 @@ struct Ue5NteAdapter::State {
         return true;
     }
 
+    [[nodiscard]] bool ResolveRawTargetGeBindingLocked() noexcept {
+        if (raw_target_ge_binding.attempted) {
+            return raw_target_ge_binding.function != 0;
+        }
+        raw_target_ge_binding.attempted = true;
+        std::uintptr_t function{};
+        if (!FindExactObjectLocked(
+                L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass",
+                function) ||
+            function == 0) {
+            return false;
+        }
+        std::uint8_t num_parms{};
+        std::uint16_t parms_size{};
+        if (!ReadValue(*memory, function + Layout(profile, "ufunction.numParms"), num_parms) ||
+            !ReadValue(*memory, function + Layout(profile, "ufunction.parmsSize"), parms_size) ||
+            num_parms != 6 || parms_size != 0x78) {
+            return false;
+        }
+        raw_target_ge_binding.function = function;
+        return true;
+    }
+
     [[nodiscard]] bool FindNativeDotGameplayEffectLocked(std::uintptr_t& gameplay_effect) noexcept {
         gameplay_effect = 0;
         if (native_dot_class_cache.object_generation != object_generation) {
@@ -8066,10 +8090,12 @@ struct Ue5NteAdapter::State {
         const auto& target_binding = combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::ApplyGameplayEffectToTarget)];
         const auto& meta_binding = target_binding ? target_binding : apply_binding;
-        if (!meta_binding || meta_binding->meta_class == 0 ||
-            object_registry.items == 0) {
+        const bool raw_target =
+            !meta_binding && ResolveRawTargetGeBindingLocked();
+        if ((!meta_binding || meta_binding->meta_class == 0) && !raw_target) {
             return false;
         }
+        if (object_registry.items == 0) return false;
         try {
             for (std::uint32_t index = 0; index < object_registry.count; ++index) {
                 std::uintptr_t candidate{};
@@ -8093,7 +8119,8 @@ struct Ue5NteAdapter::State {
                     (meta_name != "Class" && meta_name != "BlueprintGeneratedClass") ||
                     !ReadReflectedObjectNameLocked(outer, outer_name) ||
                     outer_name != "Buff_NormalFireDot" ||
-                    !IsClassDerivedFromLocked(candidate, meta_binding->meta_class)) {
+                    (meta_binding &&
+                        !IsClassDerivedFromLocked(candidate, meta_binding->meta_class))) {
                     continue;
                 }
                 native_dot_class_cache.gameplay_effect_class = candidate;
@@ -8239,9 +8266,12 @@ struct Ue5NteAdapter::State {
         }
         const auto& target_binding = combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::ApplyGameplayEffectToTarget)];
+        const bool raw_target_ge =
+            !target_binding && ResolveRawTargetGeBindingLocked();
         const bool raw_native_dot =
-            !apply_binding && !target_binding && ResolveRawNativeDotBindingLocked();
-        if (!apply_binding && !target_binding && !raw_native_dot) {
+            !apply_binding && !target_binding && !raw_target_ge &&
+            ResolveRawNativeDotBindingLocked();
+        if (!apply_binding && !target_binding && !raw_target_ge && !raw_native_dot) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
                 "native DoT target GE binding is unavailable");
         }
@@ -8290,7 +8320,7 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_OK, "native DoT is already active");
         }
         bool applied = false;
-        if (target_binding) {
+        if (target_binding || raw_target_ge) {
             std::uintptr_t player_ability_system{};
             std::uintptr_t target_ability_system{};
             if (CurrentAbilitySystemLocked(player_pawn, player_ability_system) &&
@@ -8299,11 +8329,23 @@ struct Ue5NteAdapter::State {
                     Layout(profile, "abilityCharacter.htAbilitySystemComponent"),
                     target_ability_system) &&
                 target_ability_system != 0 &&
-                target_binding->parms_size <= 0x80U) {
+                (!target_binding || target_binding->parms_size <= 0x80U)) {
+                const std::size_t class_offset = target_binding
+                    ? target_binding->offsets[0] : 0U;
+                const std::size_t target_offset = target_binding
+                    ? target_binding->offsets[1] : 8U;
+                const std::size_t modify_offset = target_binding
+                    ? target_binding->offsets[2] : 0x10U;
+                const std::size_t event_offset = target_binding
+                    ? target_binding->offsets[3] : 0x68U;
+                const std::size_t prediction_offset = target_binding
+                    ? target_binding->bool_parameters[4].byte_offset : 0x69U;
+                const std::uint8_t prediction_mask = target_binding
+                    ? target_binding->bool_parameters[4].field_mask : 1U;
                 std::array<std::uint8_t, 0x80> parameters{};
-                std::memcpy(parameters.data() + target_binding->offsets[0],
+                std::memcpy(parameters.data() + class_offset,
                     &gameplay_effect, sizeof(gameplay_effect));
-                std::memcpy(parameters.data() + target_binding->offsets[1],
+                std::memcpy(parameters.data() + target_offset,
                     &target_ability_system, sizeof(target_ability_system));
                 struct BufferData {
                     std::array<std::uint8_t, 8> buff_name{};
@@ -8339,20 +8381,24 @@ struct Ue5NteAdapter::State {
                     return Status(ANOMALY_STATUS_V1_FAILED,
                         "native DoT GameplayEffect name is unreadable");
                 }
-                std::memcpy(parameters.data() + target_binding->offsets[2],
+                std::memcpy(parameters.data() + modify_offset,
                     &modify, sizeof(modify));
-                parameters[target_binding->offsets[3]] = 1U; // BUFF_EVENT_BEGIN
-                const auto& use_prediction = target_binding->bool_parameters[4];
-                if (use_prediction.byte_offset < parameters.size()) {
-                    parameters[use_prediction.byte_offset] =
+                parameters[event_offset] = 1U; // BUFF_EVENT_BEGIN
+                if (prediction_offset < parameters.size()) {
+                    parameters[prediction_offset] =
                         static_cast<std::uint8_t>(
-                            (parameters[use_prediction.byte_offset] &
-                                ~use_prediction.field_mask) |
-                            use_prediction.byte_mask);
+                            (parameters[prediction_offset] & ~prediction_mask) |
+                            prediction_mask);
                 }
-                applied = InvokeNteFunctionLocked(
-                    NteFunctionKind::ApplyGameplayEffectToTarget,
-                    player_ability_system, parameters);
+                if (target_binding) {
+                    applied = InvokeNteFunctionLocked(
+                        NteFunctionKind::ApplyGameplayEffectToTarget,
+                        player_ability_system, parameters);
+                } else {
+                    applied = InvokeNativeProcessEventLocked(
+                        player_ability_system, raw_target_ge_binding.function,
+                        parameters.data(), 0x78);
+                }
             }
         }
         if (!applied && apply_binding) {
