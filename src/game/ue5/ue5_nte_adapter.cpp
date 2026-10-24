@@ -8237,11 +8237,13 @@ struct Ue5NteAdapter::State {
             !IsClassDerivedFromLocked(victim_class, character_binding->outer_class)) {
             return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "native DoT victim is not a character");
         }
+        const auto& target_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ApplyGameplayEffectToTarget)];
         const bool raw_native_dot =
-            !apply_binding && ResolveRawNativeDotBindingLocked();
-        if (!apply_binding && !raw_native_dot) {
+            !apply_binding && !target_binding && ResolveRawNativeDotBindingLocked();
+        if (!apply_binding && !target_binding && !raw_native_dot) {
             return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
-                "HTAICharacter.ApplyGameplayEffect binding is unavailable");
+                "native DoT target GE binding is unavailable");
         }
         std::uintptr_t gameplay_effect{};
         if (!FindNativeDotGameplayEffectLocked(gameplay_effect)) {
@@ -8288,8 +8290,6 @@ struct Ue5NteAdapter::State {
             return Status(ANOMALY_STATUS_V1_OK, "native DoT is already active");
         }
         bool applied = false;
-        const auto& target_binding = combat_skill_discovery.functions[
-            NteIndex(NteFunctionKind::ApplyGameplayEffectToTarget)];
         if (target_binding) {
             std::uintptr_t player_ability_system{};
             std::uintptr_t target_ability_system{};
