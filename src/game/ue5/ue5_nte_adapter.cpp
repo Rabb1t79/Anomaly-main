@@ -17894,18 +17894,6 @@ private:
         return lease ? State::StopMovement(lease.User()) : StoppedStatus();
     }
 
-    static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
-        void* user,
-        const double destination[3]) noexcept {
-        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::MoveToLocation(lease.User(), destination) : StoppedStatus();
-    }
-
-    static AnomalyStatusV1 ANOMALY_CALL StopMovementThunk(void* user) noexcept {
-        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
-        return lease ? State::StopMovement(lease.User()) : StoppedStatus();
-    }
-
     static AnomalyStatusV1 ANOMALY_CALL PickupRequestNearbyThunk(
         void* user, const AnomalyNtePickupRequestV1* request) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
