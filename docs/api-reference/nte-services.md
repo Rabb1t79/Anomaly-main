@@ -768,7 +768,10 @@ typedef struct AnomalyNteDamageEchoServiceV1 {
 `apply_manual` 用已验证的 `AHTAbilityCharacter.GetHP/SetHP` 扣减真实 HP，并在
 `SHOW_DAMAGE` 置位时用 `AHTMonsterCharacter.MulticastShowMonsterDamageInfo` 显示一次
 伤害数字。结果中的 `applied_damage` 是实际 HP 差值；HP 未变化时返回 `FAILED`，不会把
-“调用过 ProcessEvent”当成已造成伤害。该入口不会再次广播 `CharacterOnDamaged`。
+“调用过 ProcessEvent”当成已造成伤害。若 `SetHP` 因客户端非 Authority 完成但未提交，
+宿主在用户授权的本地内存范围内写入已验证的 `UHTAttributeComponent.HPCurrent`，并在
+HP 归零时调用 `SetIsDead(true)`；仍以重新读取的 HP 差值决定成功与否。该入口不会再次
+广播 `CharacterOnDamaged`。
 
 `apply_native_dot` 对已验证的 AI 目标调用 `HTAICharacter.ApplyGameplayEffect`，使用当前
 活动 Profile 验证通过的原生 DoT `Buff_NormalFireDot_C`，并通过

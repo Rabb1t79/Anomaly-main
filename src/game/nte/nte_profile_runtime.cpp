@@ -321,6 +321,7 @@ FeatureValidationResult ValidateDamageEchoLayout(
         "damageTextInfo.reactionType", "damageTextInfo.reactionDisplayType",
         "weakObject.index", "weakObject.serial",
         "abilityCharacter.abilitySystemComponent",
+        "abilityCharacter.htAbilitySystemComponent",
         "attributeComponent.hpCurrent"});
     if (!required.valid) return required;
     const auto value = [&profile](const std::string_view key) {

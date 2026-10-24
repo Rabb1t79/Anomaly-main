@@ -1799,6 +1799,7 @@ struct Ue5NteAdapter::State {
                 "damageTextInfo.victim", "damageTextInfo.reactionType",
                 "damageTextInfo.reactionDisplayType", "weakObject.index",
                 "weakObject.serial", "abilityCharacter.abilitySystemComponent",
+                "abilityCharacter.htAbilitySystemComponent",
                 "attributeComponent.hpCurrent"}) &&
             FeatureDeclaresDependency(profile, "nte.damage-echo", "nte.combat") &&
             FeatureDeclaresDependency(profile, "nte.damage-echo", "ue5.object-find") &&
@@ -8149,7 +8150,7 @@ struct Ue5NteAdapter::State {
             const auto hp_current_offset =
                 Layout(profile, "attributeComponent.hpCurrent", -1);
             if (!ReadPointerAt(*memory, victim,
-                    Layout(profile, "abilityCharacter.abilitySystemComponent"),
+                    Layout(profile, "abilityCharacter.htAbilitySystemComponent"),
                     ability_system) ||
                 ability_system == 0 || hp_current_offset < 0 ||
                 !memory->Write(ability_system + static_cast<std::uintptr_t>(hp_current_offset),
