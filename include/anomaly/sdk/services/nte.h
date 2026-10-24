@@ -1032,6 +1032,19 @@ typedef struct AnomalyNteMetricsServiceV1 {
     AnomalyStatusV1 (ANOMALY_CALL *snapshot)(void* user,
         AnomalyNteSnapshotMetricsV1* metrics);
 } AnomalyNteMetricsServiceV1;
+// Damage chain: hands out the two native addresses that the active Profile has
+// already resolved and validated. Plugins must not carry their own byte patterns
+// for these functions; a Profile that fails validation simply does not publish
+// this service.
+#define ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID "anomaly.nte.damage-chain"
+#define ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION 1u
+typedef struct AnomalyNteDamageChainServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    // Damage application entry: called once per applied hit.
+    AnomalyStatusV1 (ANOMALY_CALL *apply_address)(void* user, uintptr_t* address);
+    // Inner predicate: returns whether this call actually applies damage.
+    AnomalyStatusV1 (ANOMALY_CALL *gate_address)(void* user, uintptr_t* address);
+} AnomalyNteDamageChainServiceV1;
 #ifdef __cplusplus
 }
 #endif

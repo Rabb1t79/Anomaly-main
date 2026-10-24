@@ -1911,6 +1911,19 @@ struct Ue5NteAdapter::State {
             FeatureDeclaresLayoutValidator(profile, kNteAttackInputFeature, kNteAttackInputLayoutValidator);
     }
 
+    AnomalyStatusV1 DamageChainAddress(const bool gate, std::uintptr_t* address) noexcept {
+        if (address == nullptr) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "address is required");
+        }
+        const char* const id = gate ? "nte.DamageChain.Gate" : "nte.DamageChain.Apply";
+        const auto* const symbol = resolution.FindSymbol(id);
+        if (symbol == nullptr || !symbol->Available()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "damage-chain symbol is unavailable");
+        }
+        *address = symbol->address;
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     [[nodiscard]] bool NteCombatProfileAvailable() const noexcept {
         return static_cast<bool>(process_event_invoker) && framework_hook_ready &&
             resolution.FeatureAvailable("nte.combat") &&
@@ -2524,6 +2537,9 @@ struct Ue5NteAdapter::State {
         }
         if (id == ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID) {
             return framework_hook_ready && NteAttackInputProfileAvailable();
+        }
+        if (id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
+            return framework_hook_ready && SemanticFeatureAvailable("nte.damage-chain");
         }
         if (id == ANOMALY_NTE_PICKUP_SERVICE_V1_ID) {
             return framework_hook_ready && SemanticFeatureAvailable("nte.pickup");
@@ -17380,6 +17396,9 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
         attack_input_service = {
             sizeof(AnomalyNteAttackInputServiceV1), ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION,
             this, AttackInputPressThunk, AttackInputReleaseThunk};
+        damage_chain_service = {
+            sizeof(AnomalyNteDamageChainServiceV1), ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            this, DamageChainApplyAddressThunk, DamageChainGateAddressThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -17456,6 +17475,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteNavigationServiceV1 navigation_service{};
     AnomalyNteVehicleServiceV1 vehicle_service{};
     AnomalyNteAttackInputServiceV1 attack_input_service{};
+    AnomalyNteDamageChainServiceV1 damage_chain_service{};
     AnomalyNtePickupServiceV1 pickup_service{};
     AnomalyNteUiButtonsServiceV1 ui_buttons_service{};
     AnomalyNteEntitiesServiceV1 entities_service{};
@@ -17846,6 +17866,32 @@ private:
         void* user, const AnomalyNteAttackInputRequestV1* request) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->AttackInput(request, false) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainApplyAddressThunk(
+        void* user, std::uintptr_t* address) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->DamageChainAddress(false, address)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageChainGateAddressThunk(
+        void* user, std::uintptr_t* address) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->DamageChainAddress(true, address)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
+        void* user,
+        const double destination[3]) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? State::MoveToLocation(lease.User(), destination) : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL StopMovementThunk(void* user) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? State::StopMovement(lease.User()) : StoppedStatus();
     }
 
     static AnomalyStatusV1 ANOMALY_CALL MoveToLocationThunk(
@@ -19072,6 +19118,13 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_NTE_VEHICLE_SERVICE_V1_ID,
             ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION,
             &endpoint->vehicle_service, {}, semantic_lifetime)) {
+        return false;
+    }
+    if (framework_hook_ready && SemanticFeatureAvailable("nte.damage-chain") &&
+        !PublishIfMissing(
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
+            &endpoint->damage_chain_service, {}, semantic_lifetime)) {
         return false;
     }
     if (framework_hook_ready && NteAttackInputProfileAvailable() &&

@@ -60,6 +60,10 @@ inline constexpr std::string_view kNavigationLayoutValidator =
     "nte-navigation-layout-v1";
 inline constexpr std::string_view kNavigationInputAbiValidator =
     "nte-navigation-input-abi-v1";
+inline constexpr std::string_view kDamageChainFeature = "nte.damage-chain";
+inline constexpr std::string_view kDamageChainApplySymbol = "nte.DamageChain.Apply";
+inline constexpr std::string_view kDamageChainGateSymbol = "nte.DamageChain.Gate";
+inline constexpr std::string_view kDamageChainAbiValidator = "nte-damage-chain-abi-v1";
 inline constexpr std::string_view kPickupFeature = "nte.pickup";
 inline constexpr std::string_view kPickupLayoutValidator = "nte-pickup-layout-v1";
 inline constexpr std::string_view kCombatFeature = "nte.combat";
@@ -601,6 +605,43 @@ FeatureValidationResult ValidatePickupLayout(
     return {true, {}};
 }
 
+FeatureValidationResult ValidateDamageChainAbi(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot& snapshot,
+    const SymbolMemory& memory) {
+    if (feature != kDamageChainFeature ||
+        !FeatureRequires(profile, feature, kDamageChainApplySymbol) ||
+        !FeatureRequires(profile, feature, kDamageChainGateSymbol)) {
+        return {false, "profile does not declare both damage-chain targets"};
+    }
+    const auto* const apply_symbol = snapshot.FindSymbol(kDamageChainApplySymbol);
+    const auto* const gate_symbol = snapshot.FindSymbol(kDamageChainGateSymbol);
+    if (apply_symbol == nullptr || !apply_symbol->Available() || gate_symbol == nullptr ||
+        !gate_symbol->Available()) {
+        return {false, "damage-chain target is unavailable"};
+    }
+    const auto apply_module = memory.FindModule(apply_symbol->module);
+    const auto gate_module = memory.FindModule(gate_symbol->module);
+    if (!apply_module || !HasMatchingUnwindEntry(*apply_module, *apply_symbol) ||
+        !gate_module || !HasMatchingUnwindEntry(*gate_module, *gate_symbol)) {
+        return {false, "damage-chain target has no matching unwind entry"};
+    }
+
+    constexpr auto kApplyHead = std::to_array<std::uint8_t>({
+        0x48, 0x85, 0xD2, 0x0F, 0x84, 0x41, 0x01, 0x00,
+        0x00, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x8B});
+    constexpr auto kGateHead = std::to_array<std::uint8_t>({
+        0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48,
+        0x89, 0x70, 0x18, 0x48, 0x89, 0x78, 0x20, 0x55});
+    if (!MatchesBytes(memory, apply_symbol->address, kApplyHead)) {
+        return {false, "damage-chain apply instruction contract changed"};
+    }
+    if (!MatchesBytes(memory, gate_symbol->address, kGateHead)) {
+        return {false, "damage-chain gate instruction contract changed"};
+    }
+    return {true, {}};
+}
 FeatureValidationResult ValidateNavigationInputAbi(
     const BuildProfile& profile,
     const std::string_view feature,
@@ -872,6 +913,8 @@ FeatureLayoutValidatorRegistry NteFeatureLayoutValidators(
         std::string(kNavigationLayoutValidator), ValidateNavigationLayout);
     validators.Register(
         std::string(kNavigationInputAbiValidator), ValidateNavigationInputAbi);
+    validators.Register(
+        std::string(kDamageChainAbiValidator), ValidateDamageChainAbi);
     validators.Register(std::string(kPickupLayoutValidator), ValidatePickupLayout);
     validators.Register(
         std::string(kNteUiButtonsLayoutValidator), ValidateUiButtonsLayout);
