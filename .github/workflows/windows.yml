@@ -1,4 +1,4 @@
-name: windows-core
+name: windows-core-and-nte-profile
 
 on:
   push:
@@ -64,20 +64,47 @@ jobs:
             }
           }
 
-      - name: Prepare Core artifact
+      - name: Prepare Core and NTE vehicle profile patch
         shell: pwsh
         run: |
           $core = Join-Path $env:GITHUB_WORKSPACE '.build\windows-vs2022\bin\RelWithDebInfo\Anomaly\Anomaly.Core.dll'
+          $profile = Join-Path $env:GITHUB_WORKSPACE 'profiles\nte\nte-current.json'
           if (!(Test-Path -LiteralPath $core)) {
             throw "Core DLL was not produced: $core"
           }
-          $out = Join-Path $env:GITHUB_WORKSPACE '.build\core-artifact'
-          New-Item -ItemType Directory -Path $out -Force | Out-Null
-          Copy-Item -LiteralPath $core -Destination (Join-Path $out 'Anomaly.Core.dll') -Force
+          if (!(Test-Path -LiteralPath $profile)) {
+            throw "NTE Profile was not found: $profile"
+          }
+          $parsed = Get-Content -LiteralPath $profile -Raw | ConvertFrom-Json
+          if (-not $parsed.features.'nte.vehicle') {
+            throw "The NTE Profile does not declare nte.vehicle"
+          }
+          $out = Join-Path $env:GITHUB_WORKSPACE '.build\runtime-vehicle-service-patch'
+          $anomaly = Join-Path $out 'Anomaly'
+          $profileDir = Join-Path $anomaly 'profiles\nte'
+          New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+          Copy-Item -LiteralPath $core -Destination (Join-Path $anomaly 'Anomaly.Core.dll') -Force
+          Copy-Item -LiteralPath $profile -Destination (Join-Path $profileDir 'nte-current.json') -Force
+          @'
+          Anomaly vehicle-service compatibility patch
 
-      - name: Upload Core artifact
+          Contents:
+          - Anomaly/Anomaly.Core.dll
+          - Anomaly/profiles/nte/nte-current.json
+
+          Installation:
+          1. Exit the game and Anomaly Runtime completely.
+          2. Back up the existing Anomaly/Anomaly.Core.dll and Anomaly/profiles/nte/nte-current.json.
+          3. Copy the Anomaly folder from this package into the existing Runtime directory and overwrite those two files.
+          4. Start the game again and check whether the vehicle plugin still reports "waiting for service".
+
+          This is a two-file compatibility patch, not a full Runtime distribution.
+          '@ | Set-Content -LiteralPath (Join-Path $out 'INSTALL.txt') -Encoding utf8
+          Get-ChildItem -LiteralPath $out -Recurse -File | Select-Object FullName, Length
+
+      - name: Upload Core and NTE vehicle profile patch
         uses: actions/upload-artifact@v4
         with:
-          name: anomaly-core-windows-x64
-          path: .build/core-artifact/Anomaly.Core.dll
+          name: anomaly-vehicle-service-core-profile-patch
+          path: .build/runtime-vehicle-service-patch/*
           if-no-files-found: error
