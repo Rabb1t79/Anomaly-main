@@ -1373,7 +1373,7 @@ void DrawDebugPanel(
     const AnomalyUiServiceV1* ui, const Snapshot& snap,
     const std::string& status, const std::string& selected,
     std::size_t catalog_size, bool player_position_valid) {
-    DrawText(ui, "构建标记：NTE Vehicle 0.10.5 / 2026-10-21-clickable-display-names");
+    DrawText(ui, "构建标记：NTE Vehicle 0.10.6 / 2026-10-24-service-diagnostics");
     DrawText(ui, "构建标记：manifest schema v2 / Plugin API v1 / Vehicle service v8");
     DrawText(ui, "Plugin ID：anomaly.local." + std::string("nte-vehicle"));
     DrawText(ui, "Manifest：schemaVersion=2 / entry=plugin.dll / loadPhase=game-ready / games=nte / builds=nte-*");
@@ -1734,6 +1734,6 @@ ANOMALY_SDK_EXPORT AnomalyStatusV1 ANOMALY_CALL AnomalyPluginEntryV1(
         sizeof(*descriptor), ANOMALY_PLUGIN_API_V1_MAJOR, ANOMALY_PLUGIN_API_V1_MINOR,
         anomaly::sdk::StringView("anomaly.local.nte-vehicle"),
         anomaly::sdk::StringView("载具控制"), anomaly::sdk::StringView("Anomaly"),
-        anomaly::sdk::StringView("0.10.3"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
+        anomaly::sdk::StringView("0.10.6"), Load, Start, Stop, Unload, UpdateCallback, DrawCallback};
     return anomaly::sdk::Ok();
 }
