@@ -1000,14 +1000,15 @@ add_custom_command(TARGET anomaly_core POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_SOURCE_DIR}/assets/fonts"
             "$<TARGET_FILE_DIR:anomaly_core>/assets/fonts"
-    # Theme artwork and presets ship with the runtime too: the preview fixture
-    # deploys them and the injected host resolves the same entry points.
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "${CMAKE_SOURCE_DIR}/assets/images"
-            "$<TARGET_FILE_DIR:anomaly_core>/assets/images"
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "${CMAKE_SOURCE_DIR}/config/themes"
-            "$<TARGET_FILE_DIR:anomaly_core>/config/themes")
+    # The optional theme directory is staged below only when it exists.
+)
+if(EXISTS "${CMAKE_SOURCE_DIR}/config/themes")
+    add_custom_command(TARGET anomaly_core POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                "${CMAKE_SOURCE_DIR}/config/themes"
+                "$<TARGET_FILE_DIR:anomaly_core>/config/themes"
+        VERBATIM)
+endif()
 
 add_library(dwmapi SHARED
     src/bootstrap/dwmapi/proxy_main.cpp
@@ -1183,6 +1184,10 @@ option(ANOMALY_BUILD_BUILTIN_PLUGINS "Build Anomaly bundled plugins" ON)
 # would cost time on every default build. `build.cmd testplugins` turns both on.
 option(ANOMALY_BUILD_TEST_PLUGINS
     "Build and install the developer test plugin packages" OFF)
+# Build the local AnomalyUltimate package with the same SDK safeguards as Runtime plugins.
+# It is an opt-in repair target so it does not silently replace a user's installed custom plugin.
+option(ANOMALY_BUILD_ULTIMATE_REPAIR_PLUGIN
+    "Build an SDK-compliant AnomalyUltimate repair package" OFF)
 set(ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly"
@@ -1194,19 +1199,16 @@ set(ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
             "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/locales/host"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_SOURCE_DIR}/assets/fonts"
-            "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/assets/fonts"
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "${CMAKE_SOURCE_DIR}/assets/images"
-            "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/assets/images")
+            "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/assets/fonts")
 
-# Theme presets are shipped content, so the whole directory is deployed exactly
-# like locales and artwork. `layout.json` is deliberately absent from the source
-# directory: it is the shared document the running build creates the first time a
-# background is changed, and it lives in the deployed tree only.
-list(APPEND ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "${CMAKE_SOURCE_DIR}/config/themes"
-            "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/config/themes")
+# Theme presets are optional in source snapshots. Stage them only when present;
+# `layout.json` remains runtime-generated in the deployed tree.
+if(EXISTS "${CMAKE_SOURCE_DIR}/config/themes")
+    list(APPEND ANOMALY_PLATFORM_PREVIEW_STAGE_COMMANDS
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                "${CMAKE_SOURCE_DIR}/config/themes"
+                "$<TARGET_FILE_DIR:anomaly-platform-preview>/Anomaly/config/themes")
+endif()
 
 if(ANOMALY_BUILD_SDK_EXAMPLES)
     # The SDK examples ship as sources in the SDK component; only NteCombatDemo is also a
@@ -1554,6 +1556,23 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     endif()
 endif()
 
+# A separately downloadable package for repairing older locally-installed builds of
+# AnomalyUltimate. NO_RELEASE keeps this custom plugin out of the default Runtime installer,
+# while anomaly_add_plugin still applies SDK compiler flags and the C++ exception bridge.
+if(ANOMALY_BUILD_ULTIMATE_REPAIR_PLUGIN)
+    anomaly_add_plugin(anomaly_ultimate_repair NO_RELEASE
+        SOURCES plugins/AnomalyUltimate/plugin.cpp
+        MANIFEST plugins/AnomalyUltimate/manifest.json
+        PACKAGE_NAME AnomalyUltimate
+        OUTPUT_DIRECTORY
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/repair-plugins/AnomalyUltimate-v1.2")
+    target_compile_definitions(anomaly_ultimate_repair PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(MSVC)
+        target_compile_options(anomaly_ultimate_repair PRIVATE /utf-8)
+    endif()
+endif()
+
 function(anomaly_stage_platform_preview_plugin target package_name)
     if(NOT TARGET ${target} OR NOT TARGET anomaly-platform-preview)
         return()
@@ -1783,13 +1802,11 @@ install(DIRECTORY locales/host
     DESTINATION Anomaly/locales COMPONENT GameRuntime)
 install(FILES assets/fonts/NotoSansCJKsc-Regular.ttf
     DESTINATION Anomaly/assets/fonts COMPONENT GameRuntime)
-# Theme artwork and presets ship with the package: the game runtime and the
-# launcher both resolve `assets/images/...` and `config/themes/...` against the
-# same `Anomaly/` root. Users replace or extend these with their own files.
-install(DIRECTORY assets/images/
-    DESTINATION Anomaly/assets/images COMPONENT GameRuntime)
-install(DIRECTORY config/themes/
-    DESTINATION Anomaly/config/themes COMPONENT GameRuntime)
+# Theme presets are optional package content in this source snapshot.
+if(EXISTS "${CMAKE_SOURCE_DIR}/config/themes")
+    install(DIRECTORY config/themes/
+        DESTINATION Anomaly/config/themes COMPONENT GameRuntime)
+endif()
 install(CODE [[
     file(REMOVE_RECURSE
         "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/Anomaly/profiles/nte")

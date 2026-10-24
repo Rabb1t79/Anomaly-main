@@ -2,6 +2,36 @@
   "schemaVersion": 1,
   "game": "nte",
   "symbols": {
+    "nte.DamageChain.Apply": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 85 D2 0F 84 41 01 00 00 57 48 83 EC 60 48 8B F9 4D 85 C0 0F 84 2B 01 00 00 48 89 5C 24 70 48",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.nte.damage-chain"
+      ]
+    },
+    "nte.DamageChain.Gate": {
+      "module": "HTGame.exe",
+      "section": ".text",
+      "pattern": "48 8B C4 48 89 58 08 48 89 70 18 48 89 78 20 55 41 54 41 55 41 56 41 57 48 8D 68 A9 48 81 EC D0",
+      "resolve": {
+        "kind": "direct"
+      },
+      "validators": [
+        "address-in-module",
+        "executable"
+      ],
+      "requiredBy": [
+        "anomaly.nte.damage-chain"
+      ]
+    },
     "ue5.GWorld": {
       "module": "HTGame.exe",
       "section": ".text",
@@ -325,6 +355,10 @@
     }
   },
   "features": {
+    "nte.damage-chain": [
+      "nte.DamageChain.Apply",
+      "nte.DamageChain.Gate"
+    ],
     "ue5.ftext": [
       "ue5.FTextData.GetDisplayString",
       "ue5.FTextDataStringTableEntry.GetSharedDisplayString",
@@ -485,9 +519,13 @@
     "nte.skill-invocation",
     "ue5.streaming-source",
     "nte.vehicle",
-    "nte.attack-input"
+    "nte.attack-input",
+    "nte.damage-chain"
   ],
   "featureLayoutValidators": {
+    "nte.damage-chain": [
+      "nte-damage-chain-abi-v1"
+    ],
     "ue5.ftext": [
       "ue5-ftext-layout-v1"
     ],
