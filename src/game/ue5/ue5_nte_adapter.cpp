@@ -8063,7 +8063,10 @@ struct Ue5NteAdapter::State {
         native_dot_class_cache.attempted = true;
         const auto& apply_binding = combat_skill_discovery.functions[
             NteIndex(NteFunctionKind::ApplyGameplayEffect)];
-        if (!apply_binding || apply_binding->meta_class == 0 ||
+        const auto& target_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ApplyGameplayEffectToTarget)];
+        const auto& meta_binding = target_binding ? target_binding : apply_binding;
+        if (!meta_binding || meta_binding->meta_class == 0 ||
             object_registry.items == 0) {
             return false;
         }
@@ -8090,7 +8093,7 @@ struct Ue5NteAdapter::State {
                     (meta_name != "Class" && meta_name != "BlueprintGeneratedClass") ||
                     !ReadReflectedObjectNameLocked(outer, outer_name) ||
                     outer_name != "Buff_NormalFireDot" ||
-                    !IsClassDerivedFromLocked(candidate, apply_binding->meta_class)) {
+                    !IsClassDerivedFromLocked(candidate, meta_binding->meta_class)) {
                     continue;
                 }
                 native_dot_class_cache.gameplay_effect_class = candidate;
@@ -8319,9 +8322,19 @@ struct Ue5NteAdapter::State {
                 } modify{};
                 static_assert(sizeof(BufferData) == 0x58);
                 const auto name_offset = Layout(profile, "object.nameOffset", -1);
+                const auto outer_offset = Layout(profile, "object.outer", -1);
+                std::uintptr_t name_owner = gameplay_effect;
+                if (outer_offset >= 0) {
+                    std::uintptr_t outer{};
+                    if (ReadPointerAt(*memory, gameplay_effect,
+                            static_cast<std::int64_t>(outer_offset), outer) &&
+                        outer != 0) {
+                        name_owner = outer;
+                    }
+                }
                 if (name_offset < 0 ||
                     !ReadValue(*memory,
-                        gameplay_effect + static_cast<std::uintptr_t>(name_offset),
+                        name_owner + static_cast<std::uintptr_t>(name_offset),
                         modify.buff_name)) {
                     return Status(ANOMALY_STATUS_V1_FAILED,
                         "native DoT GameplayEffect name is unreadable");
