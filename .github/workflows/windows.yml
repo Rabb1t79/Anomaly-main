@@ -44,7 +44,7 @@ jobs:
           cmake @arguments
       - name: Build
         run: cmake --build --preset windows-relwithdebinfo --parallel
-      - name: Build NTE Vehicle and Attack Replay plugins
+      - name: Build NTE Vehicle plugin
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -103,7 +103,7 @@ jobs:
           }
           $buildRoot = Join-Path $env:GITHUB_WORKSPACE '.build/nte-runtime-plugins/out'
           $packages = @(
-            @{ Name = 'NteVehicle'; Source = (Join-Path $buildRoot 'NteVehicle/plugin.dll'); Manifest = (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/manifest.json') },
+            @{ Name = 'NteVehicle'; Source = (Join-Path $buildRoot 'NteVehicle/plugin.dll'); Manifest = (Join-Path $env:GITHUB_WORKSPACE 'plugins/NteVehicle/manifest.json') }
           )
           foreach ($package in $packages) {
             $destination = Join-Path $pluginsRoot $package.Name

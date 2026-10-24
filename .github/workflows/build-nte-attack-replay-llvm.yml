@@ -1,19 +1,7 @@
 name: Build NteAttackReplay MSVC
 
 on:
-  push:
-    branches:
-      - '**'
-    paths:
-      - 'plugins/NteAttackReplay/**'
-      - 'include/anomaly/sdk/services/nte.h'
-      - 'cmake/sdk/AnomalyPlugin.cmake'
-      - 'sdk/cpp/plugin_cxx_throw_bridge.cpp'
-      - '.github/workflows/build-nte-attack-replay-llvm.yml'
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
 
 jobs:
   build:
