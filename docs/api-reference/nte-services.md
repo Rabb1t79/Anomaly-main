@@ -729,6 +729,60 @@ FText 解码遵循 [UE5 名称服务](ue5-services.md) 的可选 `ue5.ftext` 校
 
 ---
 
+## `anomaly.nte.damage-echo`
+
+- **ID**：`"anomaly.nte.damage-echo"` · **版本** 1 · **capability** `nte-damage-echo`
+
+该服务把“对怪物的重复伤害”固化在宿主的 Game 域中，插件只传 `anomaly.nte.combat` 产生的
+opaque handle 与数值，不持有 UObject、UFunction、原生地址或 `FHTDamageEvent`。
+
+```c
+typedef struct AnomalyNteDamageEchoRequestV1 {
+    uint32_t struct_size; uint32_t flags;
+    AnomalyGenerationHandleV1 world;
+    AnomalyGenerationHandleV1 victim;
+    int64_t damage;
+    uint32_t damage_type; uint32_t display_type;
+    uint32_t reaction_type; uint32_t reaction_display_type;
+} AnomalyNteDamageEchoRequestV1;
+typedef struct AnomalyNteDamageEchoResultV1 {
+    uint32_t struct_size; uint32_t flags;
+    double hp_before; double hp_after;
+    int64_t applied_damage;
+    uint32_t dead; uint32_t reserved;
+} AnomalyNteDamageEchoResultV1;
+typedef struct AnomalyNteDamageEchoServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    AnomalyStatusV1 (ANOMALY_CALL *apply_manual)(
+        void*, const AnomalyNteDamageEchoRequestV1*, AnomalyNteDamageEchoResultV1*);
+    AnomalyStatusV1 (ANOMALY_CALL *apply_native_dot)(
+        void*, const AnomalyNteDamageEchoRequestV1*, AnomalyNteDamageEchoResultV1*);
+} AnomalyNteDamageEchoServiceV1;
+```
+
+`world`、`victim` 必须来自当前 `anomaly.nte.combat` 事件；stale handle 返回 `NOT_FOUND`，
+非怪物目标返回 `INVALID_ARGUMENT`。两个入口都只在 Game 回调域执行，其他线程返回
+`CONFLICT`。`flags` 只接受 `SHOW_DAMAGE`、`CRITICAL`、`HEAD_HIT`、`WEAK_UNBALANCE`；
+`damage` 必须大于 0。
+
+`apply_manual` 用已验证的 `AHTAbilityCharacter.GetHP/SetHP` 扣减真实 HP，并在
+`SHOW_DAMAGE` 置位时用 `AHTMonsterCharacter.MulticastShowMonsterDamageInfo` 显示一次
+伤害数字。结果中的 `applied_damage` 是实际 HP 差值；HP 未变化时返回 `FAILED`，不会把
+“调用过 ProcessEvent”当成已造成伤害。该入口不会再次广播 `CharacterOnDamaged`。
+
+`apply_native_dot` 对已验证的 AI 目标调用 `HTAICharacter.ApplyGameplayEffect`，使用当前
+活动 Profile 验证通过的原生 DoT `Buff_NormalFireDot_C`，并通过
+`K2_HaveGameplayEffectWithClass` 避免同一目标重复挂载；已有该 GE 时返回
+`NATIVE_DOT_ACTIVE`，新挂载时返回 `NATIVE_DOT_APPLIED`。B 模式的跳伤数值与周期由游戏
+GE 公式决定，`request.damage` 只用于状态报告，不是 GE 的伤害量。
+
+服务只在 `nte.damage-echo` Feature、`nte.combat` 依赖、`SetHP` /
+`ApplyGameplayEffect` / `K2_HaveGameplayEffectWithClass` /
+`MulticastShowMonsterDamageInfo` 反射绑定和 `nte-damage-echo-abi-v1` 布局校验全部通过后
+发布。任一绑定缺失时服务保持 `UNAVAILABLE`，调用方应按模式降级，而不是自行扫描偏移。
+
+---
+
 ## `anomaly.nte.skills`
 
 - **ID**：`"anomaly.nte.skills"` · **版本** 1 · **capability** `nte-skills-read`

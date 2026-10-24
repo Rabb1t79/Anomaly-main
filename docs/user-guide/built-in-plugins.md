@@ -21,6 +21,17 @@
 
 该插件只读取数据，不修改游戏状态。可以用它快速确认坐标和会话数据是否正常。
 
+## Damage Echo
+
+| | |
+| --- | --- |
+| **ID** | `anomaly.local.damage-echo` |
+| **作用** | 对玩家首次命中的每个怪物，按可调速率重复该次伤害，直到目标死亡。 |
+| **依赖服务** | `anomaly.ui`；`anomaly.nte.combat`、`anomaly.nte.damage-echo`（均为 V1，可选） |
+| **需要 Profile** | 是；需要 `nte.damage-echo` Feature、反射 ABI 与原生 DoT GE。 |
+
+插件只消费 Host 提供的伤害事件和不透明 handle。**A 精确回响**用真实 HP 差值并在每跳显示怪物伤害数字；**B 原生 DoT**把已验证的原生 DoT GameplayEffect 挂到目标上，跳伤由游戏公式决定，速率只控制维护/重挂频率。目标死亡、换 World、服务过期或插件停用时停止。服务不可用时插件仍可加载并显示原因。
+
 ## Teleport
 
 | | |

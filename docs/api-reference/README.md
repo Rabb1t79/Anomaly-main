@@ -143,6 +143,7 @@ void*    user;             // 调用每个函数时作为第一个参数回传
 | `anomaly.nte.entities` | 1 | `nte-entity-snapshot` | [nte.entities](nte-services.md#anomalynteentities) |
 | `anomaly.nte.actors` | 1 | `nte-actor-snapshot` | [nte.actors](nte-services.md#anomalynteactors) |
 | `anomaly.nte.combat` | 1 | `nte-combat-read` | [nte.combat](nte-services.md#anomalyntecombat) |
+| `anomaly.nte.damage-echo` | 1 | `nte-damage-echo` | [nte.damage-echo](nte-services.md#anomalyntedamage-echo) |
 | `anomaly.nte.skills` | 1 | `nte-skills-read` | [nte.skills](nte-services.md#anomalynteskills) |
 | `anomaly.nte.skill-invocation` | 1 | `nte-skill-invocation` | [nte.skill-invocation](nte-services.md#anomalynteskill-invocation) |
 | `anomaly.nte.metrics` | 1 | `nte-snapshot-metrics` | [nte.metrics](nte-services.md#anomalyntemetrics) |

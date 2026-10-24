@@ -359,6 +359,14 @@
       "nte.DamageChain.Apply",
       "nte.DamageChain.Gate"
     ],
+    "nte.damage-echo": [
+      "ue5.GWorld",
+      "ue5.GameTick",
+      "ue5.FNamePool",
+      "ue5.GObjects",
+      "ue5.ProcessEvent",
+      "ue5.StaticFindObject"
+    ],
     "ue5.ftext": [
       "ue5.FTextData.GetDisplayString",
       "ue5.FTextDataStringTableEntry.GetSharedDisplayString",
@@ -520,11 +528,15 @@
     "ue5.streaming-source",
     "nte.vehicle",
     "nte.attack-input",
-    "nte.damage-chain"
+    "nte.damage-chain",
+    "nte.damage-echo"
   ],
   "featureLayoutValidators": {
     "nte.damage-chain": [
       "nte-damage-chain-abi-v1"
+    ],
+    "nte.damage-echo": [
+      "nte-damage-echo-abi-v1"
     ],
     "ue5.ftext": [
       "ue5-ftext-layout-v1"
@@ -663,6 +675,11 @@
       "nte.player",
       "ue5.names",
       "ue5.objects",
+      "ue5.process-event"
+    ],
+    "nte.damage-echo": [
+      "nte.combat",
+      "ue5.object-find",
       "ue5.process-event"
     ],
     "nte.skills": [

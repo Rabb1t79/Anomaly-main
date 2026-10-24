@@ -52,6 +52,16 @@
     "ANOMALY_NTE_MAP_LANDMARK_V1_WORLD_MAX_UTF8_BYTES": 2048,
     "ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION": 2,
     "ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION": 1,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE": 1,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL": 2,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT": 4,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE": 8,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED": 256,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD": 512,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED": 1024,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED": 2048,
+    "ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE": 4096,
     "ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES": 128,
     "ANOMALY_NTE_VEHICLE_V1_VALID": 1,
     "ANOMALY_NTE_VEHICLE_V1_HAS_SPEED": 2,
@@ -1550,6 +1560,56 @@
         "release": 24
       }
     },
+    "AnomalyNteDamageChainServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "apply_address": 16,
+        "gate_address": 24
+      }
+    },
+    "AnomalyNteDamageEchoRequestV1": {
+      "size": 64,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "world": 8,
+        "victim": 24,
+        "damage": 40,
+        "damage_type": 48,
+        "display_type": 52,
+        "reaction_type": 56,
+        "reaction_display_type": 60
+      }
+    },
+    "AnomalyNteDamageEchoResultV1": {
+      "size": 40,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "flags": 4,
+        "hp_before": 8,
+        "hp_after": 16,
+        "applied_damage": 24,
+        "dead": 32,
+        "reserved": 36
+      }
+    },
+    "AnomalyNteDamageEchoServiceV1": {
+      "size": 32,
+      "alignment": 8,
+      "offsets": {
+        "struct_size": 0,
+        "service_version": 4,
+        "user": 8,
+        "apply_manual": 16,
+        "apply_native_dot": 24
+      }
+    },
     "AnomalyNtePickupRequestV1": {
       "size": 24,
       "alignment": 8,
@@ -2131,6 +2191,7 @@
     { "id": "anomaly.nte.metrics", "version": 1, "table": "AnomalyNteMetricsServiceV1" },
     { "id": "anomaly.nte.vehicle", "version": 2, "table": "AnomalyNteVehicleServiceV1" },
     { "id": "anomaly.nte.attack-input", "version": 1, "table": "AnomalyNteAttackInputServiceV1" },
+    { "id": "anomaly.nte.damage-echo", "version": 1, "table": "AnomalyNteDamageEchoServiceV1" },
     { "id": "anomaly.nte.esc-menu-button", "version": 1, "table": "AnomalyNteEscMenuButtonServiceV1" }
   ]
 }

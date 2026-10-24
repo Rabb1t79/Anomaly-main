@@ -700,6 +700,9 @@ struct Ue5NteAdapter::State {
         AddMonsterBufferControl,
         GetMonsterStaticData,
         CurrentDamageIsCrit,
+        SetHp,
+        ApplyGameplayEffect,
+        HaveGameplayEffectWithClass,
         Count,
     };
     static constexpr std::size_t kNteFunctionCount =
@@ -740,6 +743,12 @@ struct Ue5NteAdapter::State {
         bool cooldown_layout_valid{};
         bool combat_event_bindings_attempted{};
     } combat_skill_discovery;
+    struct NativeDotClassCache {
+        std::uintptr_t gameplay_effect_class{};
+        std::uint64_t object_generation{};
+        bool attempted{};
+    };
+    NativeDotClassCache native_dot_class_cache;
 
     struct VehicleFunctionBinding {
         std::uintptr_t function{};
@@ -1347,6 +1356,17 @@ struct Ue5NteAdapter::State {
             NteFunctionParameterSpec{"InDamageInfo", "StructProperty", 72, false}};
         static constexpr std::array monster_damage_text{
             NteFunctionParameterSpec{"InDamageTextInfo", "StructProperty", 72, false}};
+        static constexpr std::array set_hp{
+            NteFunctionParameterSpec{"HP", "FloatProperty", 4, false},
+            NteFunctionParameterSpec{"DamageReason", "ByteProperty", 1, false},
+            NteFunctionParameterSpec{"bRealDeadDamage", "BoolProperty", 1, false},
+            NteFunctionParameterSpec{"fRealDamage", "FloatProperty", 4, false}};
+        static constexpr std::array apply_gameplay_effect{
+            NteFunctionParameterSpec{"GETemplate", "ClassProperty", 8, false},
+            NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
+        static constexpr std::array have_gameplay_effect{
+            NteFunctionParameterSpec{"GameplayEffect", "ClassProperty", 8, false},
+            NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
         static constexpr std::array damage_text_queue{
             NteFunctionParameterSpec{
                 "InDamageTextInfoQueue", "StructProperty", 16, false}};
@@ -1451,6 +1471,14 @@ struct Ue5NteAdapter::State {
                 get_monster_static_data};
         case NteFunctionKind::CurrentDamageIsCrit:
             return {kind, "CurrentDamageIsCrit", "HTAttributeComponent", 1, get_bool};
+        case NteFunctionKind::SetHp:
+            return {kind, "SetHP", "HTAbilityCharacter", 12, set_hp};
+        case NteFunctionKind::ApplyGameplayEffect:
+            return {kind, "ApplyGameplayEffect", "HTAICharacter", 16,
+                apply_gameplay_effect};
+        case NteFunctionKind::HaveGameplayEffectWithClass:
+            return {kind, "K2_HaveGameplayEffectWithClass", "HTAbilityCharacter", 16,
+                have_gameplay_effect};
         case NteFunctionKind::Count: break;
         }
         return {};
@@ -1752,6 +1780,34 @@ struct Ue5NteAdapter::State {
                 profile, "nte.combat", kUe5ProcessEventFeature) &&
             FeatureDeclaresLayoutValidator(
                 profile, "nte.combat", "nte-combat-reflection-v1");
+    }
+
+    [[nodiscard]] bool NteDamageEchoProfileAvailable() const noexcept {
+        return NteCombatProfileAvailable() &&
+            resolution.FeatureAvailable("nte.damage-echo") &&
+            resolution.FeatureAvailable("ue5.object-find") &&
+            LayoutKeysAvailable(profile, {
+                "fclassProperty.metaClass", "fstructProperty.struct",
+                "damageTextInfo.displayDamage", "damageTextInfo.damageType",
+                "damageTextInfo.critical", "damageTextInfo.headHit",
+                "damageTextInfo.weakUnbalance", "damageTextInfo.attacker",
+                "damageTextInfo.victim", "damageTextInfo.reactionType",
+                "damageTextInfo.reactionDisplayType", "weakObject.index",
+                "weakObject.serial"}) &&
+            FeatureDeclaresDependency(profile, "nte.damage-echo", "nte.combat") &&
+            FeatureDeclaresDependency(profile, "nte.damage-echo", "ue5.object-find") &&
+            FeatureDeclaresDependency(
+                profile, "nte.damage-echo", kUe5ProcessEventFeature) &&
+            FeatureDeclaresLayoutValidator(
+                profile, "nte.damage-echo", "nte-damage-echo-abi-v1");
+    }
+
+    [[nodiscard]] bool NteDamageEchoReflectionReady() const noexcept {
+        return NteDamageEchoProfileAvailable() && NteCombatReflectionReady() &&
+            NteFunctionReady(NteFunctionKind::SetHp) &&
+            NteFunctionReady(NteFunctionKind::ApplyGameplayEffect) &&
+            NteFunctionReady(NteFunctionKind::HaveGameplayEffectWithClass) &&
+            NteFunctionReady(NteFunctionKind::MulticastShowMonsterDamageInfo);
     }
 
     [[nodiscard]] bool NteSkillsProfileAvailable() const noexcept {
@@ -2155,6 +2211,7 @@ struct Ue5NteAdapter::State {
         if (feature == "nte.vehicle") return NteVehicleProfileAvailable();
         if (feature == "nte.attack-input") return NteAttackInputProfileAvailable();
         if (feature == "nte.damage-chain") return resolution.FeatureAvailable("nte.damage-chain");
+        if (feature == "nte.damage-echo") return NteDamageEchoProfileAvailable();
         if (feature == "nte.pickup") return NtePickupAvailable();
         if (feature == "nte.ui-buttons") return NteUiButtonsAvailable();
         if (feature == "nte.entities") {
@@ -2307,6 +2364,9 @@ struct Ue5NteAdapter::State {
         if (id == ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID) {
             return framework_hook_ready && SemanticFeatureAvailable("nte.damage-chain");
         }
+        if (id == ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID) {
+            return framework_hook_ready && NteDamageEchoReflectionReady();
+        }
         if (id == ANOMALY_NTE_PICKUP_SERVICE_V1_ID) {
             return framework_hook_ready && SemanticFeatureAvailable("nte.pickup");
         }
@@ -2404,7 +2464,8 @@ struct Ue5NteAdapter::State {
             feature == "nte.vehicle" || feature == "nte.pickup" || feature == "nte.ui-buttons" ||
             feature == "nte.entities" ||
             feature == "nte.combat" || feature == "nte.skills" ||
-            feature == "nte.skill-invocation") {
+            feature == "nte.skill-invocation" ||
+            feature == "nte.damage-echo") {
             return SemanticFeatureAvailable(feature)
                 ? ANOMALY_FEATURE_V1_AVAILABLE
                 : ANOMALY_FEATURE_V1_UNAVAILABLE;
@@ -7870,6 +7931,323 @@ struct Ue5NteAdapter::State {
             ? "game input activation dispatched" : "game input release dispatched");
     }
 
+    [[nodiscard]] bool ValidateDamageEchoRequest(
+        const AnomalyNteDamageEchoRequestV1* request,
+        const AnomalyNteDamageEchoResultV1* result) const noexcept {
+        if (request == nullptr || result == nullptr ||
+            request->struct_size < sizeof(*request) ||
+            result->struct_size < sizeof(*result) || request->damage <= 0 ||
+            request->world.id == 0 || request->world.generation != world_generation ||
+            request->victim.id == 0 || request->victim.generation != object_generation) {
+            return false;
+        }
+        constexpr std::uint32_t kAllowedRequestFlags =
+            ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE |
+            ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL |
+            ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT |
+            ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE;
+        return (request->flags & ~kAllowedRequestFlags) == 0;
+    }
+
+    void FillDamageEchoTextLocked(
+        const AnomalyNteDamageEchoRequestV1& request,
+        const std::uintptr_t victim,
+        std::array<std::uint8_t, 72>& text) noexcept {
+        text = {};
+        const auto write = [&](const int64_t offset, const auto& value) noexcept {
+            if (offset < 0 ||
+                static_cast<std::uint64_t>(offset) > text.size() ||
+                sizeof(value) > text.size() - static_cast<std::size_t>(offset)) {
+                return;
+            }
+            std::memcpy(text.data() + offset, &value, sizeof(value));
+        };
+        const auto write_weak = [&](const int64_t offset,
+                                    const AnomalyGenerationHandleV1 handle) noexcept {
+            if (offset < 0 || handle.id == 0 ||
+                handle.generation != object_generation) {
+                return;
+            }
+            const auto index = static_cast<std::int32_t>(handle.id & 0xFFFFFFFFULL) - 1;
+            const auto serial = static_cast<std::int32_t>(handle.id >> 32U);
+            const auto index_offset = Layout(profile, "weakObject.index", -1);
+            const auto serial_offset = Layout(profile, "weakObject.serial", -1);
+            if (index >= 0 && serial > 0 && index_offset >= 0 && serial_offset >= 0) {
+                write(offset + index_offset, index);
+                write(offset + serial_offset, serial);
+            }
+        };
+        const auto int32_damage = static_cast<std::int32_t>((std::min)(
+            request.damage, static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)())));
+        std::uint8_t critical = (request.flags & ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL) != 0 ? 1 : 0;
+        std::uint8_t head_hit = (request.flags & ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT) != 0 ? 1 : 0;
+        std::uint8_t weak = (request.flags & ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE) != 0 ? 1 : 0;
+        const auto display_type = static_cast<std::uint8_t>(
+            (std::min)(request.display_type, 255U));
+        const auto damage_type = static_cast<std::uint8_t>(
+            (std::min)(request.damage_type, 255U));
+        const auto reaction_type = static_cast<std::uint8_t>(
+            (std::min)(request.reaction_type, 255U));
+        const auto reaction_display_type = static_cast<std::uint8_t>(
+            (std::min)(request.reaction_display_type, 255U));
+        write(Layout(profile, "damageTextInfo.displayDamage", -1), int32_damage);
+        write(Layout(profile, "damageTextInfo.displayType", -1), display_type);
+        write(Layout(profile, "damageTextInfo.damageType", -1), damage_type);
+        write(Layout(profile, "damageTextInfo.critical", -1), critical);
+        write(Layout(profile, "damageTextInfo.headHit", -1), head_hit);
+        write(Layout(profile, "damageTextInfo.weakUnbalance", -1), weak);
+        write(Layout(profile, "damageTextInfo.reactionType", -1), reaction_type);
+        write(Layout(profile, "damageTextInfo.reactionDisplayType", -1),
+            reaction_display_type);
+        write_weak(Layout(profile, "damageTextInfo.victim", -1), request.victim);
+        AnomalyGenerationHandleV1 attacker{};
+        static_cast<void>(ObjectHandleLocked(player_pawn, attacker));
+        write_weak(Layout(profile, "damageTextInfo.attacker", -1), attacker);
+        static_cast<void>(victim);
+    }
+
+    [[nodiscard]] bool FindNativeDotGameplayEffectLocked(std::uintptr_t& gameplay_effect) noexcept {
+        gameplay_effect = 0;
+        if (native_dot_class_cache.object_generation != object_generation) {
+            native_dot_class_cache = {};
+            native_dot_class_cache.object_generation = object_generation;
+        }
+        if (native_dot_class_cache.attempted) {
+            gameplay_effect = native_dot_class_cache.gameplay_effect_class;
+            return gameplay_effect != 0;
+        }
+        native_dot_class_cache.attempted = true;
+        const auto& apply_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ApplyGameplayEffect)];
+        if (!apply_binding || apply_binding->meta_class == 0 ||
+            object_registry.items == 0) {
+            return false;
+        }
+        try {
+            for (std::uint32_t index = 0; index < object_registry.count; ++index) {
+                std::uintptr_t candidate{};
+                std::uint32_t serial{};
+                if (!ReadObjectSlot(*memory, object_registry, index, candidate, serial) ||
+                    candidate == 0) {
+                    continue;
+                }
+                std::string name;
+                if (!ReadReflectedObjectNameLocked(candidate, name) ||
+                    name != "Buff_NormalFireDot_C") {
+                    continue;
+                }
+                std::uintptr_t meta_class{};
+                std::uintptr_t outer{};
+                std::string meta_name;
+                std::string outer_name;
+                if (!ReadPointerAt(*memory, candidate, Layout(profile, "object.class"), meta_class) ||
+                    !ReadPointerAt(*memory, candidate, Layout(profile, "object.outer"), outer) ||
+                    !ReadReflectedObjectNameLocked(meta_class, meta_name) ||
+                    (meta_name != "Class" && meta_name != "BlueprintGeneratedClass") ||
+                    !ReadReflectedObjectNameLocked(outer, outer_name) ||
+                    outer_name != "Buff_NormalFireDot" ||
+                    !IsClassDerivedFromLocked(candidate, apply_binding->meta_class)) {
+                    continue;
+                }
+                native_dot_class_cache.gameplay_effect_class = candidate;
+                gameplay_effect = candidate;
+                return true;
+            }
+        } catch (...) {
+        }
+        return false;
+    }
+
+    AnomalyStatusV1 ApplyManualDamage(
+        const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result) noexcept {
+        if (!ValidateDamageEchoRequest(request, result)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid damage-echo request");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "damage echo requires the Game thread");
+        }
+        std::scoped_lock lock(mutex);
+        if (!NteDamageEchoReflectionReady()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "damage-echo reflection is unavailable");
+        }
+        std::uintptr_t victim{};
+        if (!ResolveObjectHandleLocked(request->victim, victim)) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "stale damage-echo victim handle");
+        }
+        std::uintptr_t victim_class{};
+        const auto& monster_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::MulticastShowMonsterDamageInfo)];
+        if (!monster_binding ||
+            !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
+            !IsClassDerivedFromLocked(victim_class, monster_binding->outer_class)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "damage-echo victim is not a monster");
+        }
+        float hp_before{};
+        bool dead_before{};
+        if (!InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_before) ||
+            !InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead, victim, dead_before)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "victim HP could not be read");
+        }
+        *result = {};
+        result->struct_size = sizeof(*result);
+        result->hp_before = hp_before;
+        result->hp_after = hp_before;
+        if (dead_before || hp_before <= 0.0F) {
+            result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
+            result->dead = 1;
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "damage-echo victim is already dead");
+        }
+        const auto& set_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::SetHp)];
+        if (!set_binding || set_binding->parms_size < 12U) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "SetHP binding is unavailable");
+        }
+        const float requested = static_cast<float>(request->damage);
+        const float capped = (std::min)(hp_before, requested);
+        if (!std::isfinite(capped) || capped <= 0.0F) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "damage-echo amount is invalid");
+        }
+        const float next_hp = (std::max)(0.0F, hp_before - capped);
+        std::array<std::uint8_t, 16> parameters{};
+        std::memcpy(parameters.data() + set_binding->offsets[0], &next_hp, sizeof(next_hp));
+        parameters[set_binding->offsets[1]] = 0;
+        const auto& dead_parameter = set_binding->bool_parameters[2];
+        if (dead_parameter.byte_offset >= parameters.size()) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "SetHP bool parameter is invalid");
+        }
+        parameters[dead_parameter.byte_offset] =
+            static_cast<std::uint8_t>(
+                (parameters[dead_parameter.byte_offset] & ~dead_parameter.field_mask) |
+                (next_hp <= 0.0F ? dead_parameter.byte_mask : 0U));
+        std::memcpy(parameters.data() + set_binding->offsets[3], &capped, sizeof(capped));
+        if (!InvokeNteFunctionLocked(NteFunctionKind::SetHp, victim, parameters)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "SetHP ProcessEvent failed");
+        }
+        float hp_after{};
+        bool dead_after{};
+        if (!InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_after) ||
+            !InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead, victim, dead_after) ||
+            !std::isfinite(hp_after) || hp_after >= hp_before - 0.001F) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "SetHP did not commit to victim HP");
+        }
+        result->hp_after = hp_after;
+        result->applied_damage = static_cast<std::int64_t>(
+            (std::max)(0.0F, hp_before - hp_after));
+        result->dead = (dead_after || hp_after <= 0.0F) ? 1U : 0U;
+        if (result->dead != 0) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED;
+        if (dead_after || hp_after <= 0.0F) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
+        if ((request->flags & ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE) != 0) {
+            std::array<std::uint8_t, 72> text{};
+            FillDamageEchoTextLocked(*request, victim, text);
+            std::array<std::uint8_t, 80> text_parameters{};
+            if (monster_binding->parms_size <= text_parameters.size()) {
+                std::memcpy(text_parameters.data(), text.data(), text.size());
+                if (InvokeNteFunctionLocked(
+                        NteFunctionKind::MulticastShowMonsterDamageInfo, victim,
+                        std::span<std::uint8_t>(text_parameters))) {
+                    result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED;
+                }
+            }
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
+    AnomalyStatusV1 ApplyNativeDot(
+        const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result) noexcept {
+        if (!ValidateDamageEchoRequest(request, result)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "invalid native-DoT request");
+        }
+        if (GetCurrentThreadId() != game_thread_id.load(std::memory_order_acquire)) {
+            return Status(ANOMALY_STATUS_V1_CONFLICT, "native DoT requires the Game thread");
+        }
+        std::scoped_lock lock(mutex);
+        if (!NteDamageEchoReflectionReady()) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE, "damage-echo reflection is unavailable");
+        }
+        std::uintptr_t victim{};
+        if (!ResolveObjectHandleLocked(request->victim, victim)) {
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "stale native-DoT victim handle");
+        }
+        const auto& apply_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::ApplyGameplayEffect)];
+        std::uintptr_t victim_class{};
+        if (!apply_binding ||
+            !ReadPointerAt(*memory, victim, Layout(profile, "object.class"), victim_class) ||
+            !IsClassDerivedFromLocked(victim_class, apply_binding->outer_class)) {
+            return Status(ANOMALY_STATUS_V1_INVALID_ARGUMENT, "native DoT victim is not an AI character");
+        }
+        std::uintptr_t gameplay_effect{};
+        if (!FindNativeDotGameplayEffectLocked(gameplay_effect)) {
+            return Status(ANOMALY_STATUS_V1_UNAVAILABLE,
+                "native DoT GameplayEffect is not loaded or not validated");
+        }
+        float hp_before{};
+        bool dead_before{};
+        if (!InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_before) ||
+            !InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead, victim, dead_before)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "native-DoT victim HP could not be read");
+        }
+        *result = {};
+        result->struct_size = sizeof(*result);
+        result->hp_before = hp_before;
+        result->hp_after = hp_before;
+        if (dead_before || hp_before <= 0.0F) {
+            result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
+            result->dead = 1;
+            return Status(ANOMALY_STATUS_V1_NOT_FOUND, "native-DoT victim is already dead");
+        }
+        const auto& have_binding = combat_skill_discovery.functions[
+            NteIndex(NteFunctionKind::HaveGameplayEffectWithClass)];
+        const auto query_active = [&]() noexcept {
+            if (!have_binding) return false;
+            std::array<std::uint8_t, 16> parameters{};
+            std::memcpy(parameters.data() + have_binding->offsets[0], &gameplay_effect,
+                sizeof(gameplay_effect));
+            if (!InvokeNteFunctionLocked(
+                    NteFunctionKind::HaveGameplayEffectWithClass, victim, parameters)) {
+                return false;
+            }
+            const auto& reflected = have_binding->bool_parameters[1];
+            return reflected.byte_offset < parameters.size() &&
+                (parameters[reflected.byte_offset] & reflected.field_mask) != 0;
+        };
+        if (query_active()) {
+            result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE;
+            bool dead{};
+            static_cast<void>(InvokeNteBoolReturnLocked(
+                NteFunctionKind::GetIsDead, victim, dead));
+            result->dead = dead ? 1U : 0U;
+            if (dead) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
+            return Status(ANOMALY_STATUS_V1_OK, "native DoT is already active");
+        }
+        std::array<std::uint8_t, 16> parameters{};
+        std::memcpy(parameters.data() + apply_binding->offsets[0], &gameplay_effect,
+            sizeof(gameplay_effect));
+        if (!InvokeNteFunctionLocked(
+                NteFunctionKind::ApplyGameplayEffect, victim, parameters)) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "ApplyGameplayEffect ProcessEvent failed");
+        }
+        const auto& applied = apply_binding->bool_parameters[1];
+        if (applied.byte_offset >= parameters.size() ||
+            (parameters[applied.byte_offset] & applied.field_mask) == 0) {
+            return Status(ANOMALY_STATUS_V1_FAILED, "native DoT was rejected by the game");
+        }
+        (void)query_active();
+        result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED;
+        float hp_after{};
+        bool dead_after{};
+        if (InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_after)) {
+            result->hp_after = hp_after;
+        }
+        if (InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead, victim, dead_after)) {
+            result->dead = dead_after ? 1U : 0U;
+            if (dead_after) result->flags |= ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD;
+        }
+        return Status(ANOMALY_STATUS_V1_OK);
+    }
+
     [[nodiscard]] bool RefreshVehicleLocked() noexcept {
         try {
             if (!NteVehicleProfileAvailable() || player_controller == 0 || !process_event_invoker) {
@@ -8402,8 +8780,14 @@ struct Ue5NteAdapter::State {
                     return false;
                 }
                 const NteFunctionParameterSpec& expected = spec.parameters[parameter_index];
-                if (expected.type != info.type ||
-                    expected.element_size != info.element_size ||
+                const bool enum_byte_compatible =
+                    kind == NteFunctionKind::SetHp && parameter_index == 1U &&
+                    expected.type == "ByteProperty" &&
+                    (info.type == "ByteProperty" || info.type == "EnumProperty");
+                if (!enum_byte_compatible && expected.type != info.type) {
+                    return false;
+                }
+                if (expected.element_size != info.element_size ||
                     static_cast<std::uint64_t>(info.offset) >
                         (std::numeric_limits<std::uint16_t>::max)()) {
                     return false;
@@ -8421,7 +8805,9 @@ struct Ue5NteAdapter::State {
                     const std::string_view expected_meta_class =
                         kind == NteFunctionKind::ActivateAbilityByClass
                         ? std::string_view{"HTGameplayAbility"}
-                        : kind == NteFunctionKind::GetActiveEffectTimeRemainingAndDuration
+                        : kind == NteFunctionKind::GetActiveEffectTimeRemainingAndDuration ||
+                                kind == NteFunctionKind::ApplyGameplayEffect ||
+                                kind == NteFunctionKind::HaveGameplayEffectWithClass
                             ? std::string_view{"GameplayEffect"}
                             : std::string_view{};
                     if (!ReadPointerAt(
@@ -9146,6 +9532,9 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::RemoveHeadUpBattleMarkBuffControl);
                     lookup_optional(NteFunctionKind::AddMonsterBufferControl);
                     lookup_optional(NteFunctionKind::GetMonsterStaticData);
+                    lookup_optional(NteFunctionKind::SetHp);
+                    lookup_optional(NteFunctionKind::ApplyGameplayEffect);
+                    lookup_optional(NteFunctionKind::HaveGameplayEffectWithClass);
                     combat_skill_discovery.combat_event_bindings_attempted = true;
                 }
                 if (skills_profile) {
@@ -13493,6 +13882,9 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
         damage_chain_service = {
             sizeof(AnomalyNteDamageChainServiceV1), ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
             this, DamageChainApplyAddressThunk, DamageChainGateAddressThunk};
+        damage_echo_service = {
+            sizeof(AnomalyNteDamageEchoServiceV1), ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION,
+            this, DamageEchoManualThunk, DamageEchoNativeDotThunk};
         pickup_service = {
             sizeof(AnomalyNtePickupServiceV1),
             ANOMALY_NTE_PICKUP_SERVICE_V1_VERSION,
@@ -13566,6 +13958,7 @@ struct Ue5NteAdapter::State::SemanticServiceEndpoint final {
     AnomalyNteVehicleServiceV1 vehicle_service{};
     AnomalyNteAttackInputServiceV1 attack_input_service{};
     AnomalyNteDamageChainServiceV1 damage_chain_service{};
+    AnomalyNteDamageEchoServiceV1 damage_echo_service{};
     AnomalyNtePickupServiceV1 pickup_service{};
     AnomalyNteUiButtonsServiceV1 ui_buttons_service{};
     AnomalyNteEntitiesServiceV1 entities_service{};
@@ -13895,6 +14288,22 @@ private:
         void* user, std::uintptr_t* address) noexcept {
         auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
         return lease ? static_cast<State*>(lease.User())->DamageChainAddress(true, address)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageEchoManualThunk(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->ApplyManualDamage(request, result)
+                     : StoppedStatus();
+    }
+
+    static AnomalyStatusV1 ANOMALY_CALL DamageEchoNativeDotThunk(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result) noexcept {
+        auto lease = static_cast<SemanticServiceEndpoint*>(user)->Acquire();
+        return lease ? static_cast<State*>(lease.User())->ApplyNativeDot(request, result)
                      : StoppedStatus();
     }
 
@@ -15158,6 +15567,13 @@ bool Ue5NteAdapter::State::PublishAvailableServices(const std::weak_ptr<State>& 
             ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_ID,
             ANOMALY_NTE_DAMAGE_CHAIN_SERVICE_V1_VERSION,
             &endpoint->damage_chain_service, {}, semantic_lifetime)) {
+        return false;
+    }
+    if (framework_hook_ready && NteDamageEchoReflectionReady() &&
+        !PublishIfMissing(
+            ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID,
+            ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION,
+            &endpoint->damage_echo_service, {}, semantic_lifetime)) {
         return false;
     }
     if (framework_hook_ready && NteAttackInputProfileAvailable() &&

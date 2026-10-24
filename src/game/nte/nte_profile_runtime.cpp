@@ -64,6 +64,8 @@ inline constexpr std::string_view kDamageChainFeature = "nte.damage-chain";
 inline constexpr std::string_view kDamageChainApplySymbol = "nte.DamageChain.Apply";
 inline constexpr std::string_view kDamageChainGateSymbol = "nte.DamageChain.Gate";
 inline constexpr std::string_view kDamageChainAbiValidator = "nte-damage-chain-abi-v1";
+inline constexpr std::string_view kDamageEchoFeature = "nte.damage-echo";
+inline constexpr std::string_view kDamageEchoValidator = "nte-damage-echo-abi-v1";
 inline constexpr std::string_view kPickupFeature = "nte.pickup";
 inline constexpr std::string_view kPickupLayoutValidator = "nte-pickup-layout-v1";
 inline constexpr std::string_view kCombatFeature = "nte.combat";
@@ -292,6 +294,56 @@ FeatureValidationResult ValidateCombatReflectionLayout(
         value("dataTable.rowMapFlagsNum") + sizeof(std::int32_t) > 0x50U ||
         value("dataTable.rowMapFlagsMax") + sizeof(std::int32_t) > 0x50U) {
         return {false, "data table sparse-map layout is internally inconsistent"};
+    }
+    return {true, {}};
+}
+
+FeatureValidationResult ValidateDamageEchoLayout(
+    const BuildProfile& profile,
+    const std::string_view feature,
+    const ProfileResolutionSnapshot&,
+    const SymbolMemory&) {
+    if (feature != kDamageEchoFeature) {
+        return {false, "damage-echo validator attached to an unexpected feature"};
+    }
+    const auto required = ValidateBoundedLayoutKeys(profile, feature, {
+        "object.class", "object.outer", "ustruct.superStruct",
+        "ustruct.propertyLink", "ufunction.numParms", "ufunction.parmsSize",
+        "ufunction.returnValueOffset", "ffield.class", "ffield.name",
+        "ffieldClass.name", "fproperty.arrayDim", "fproperty.elementSize",
+        "fproperty.offsetInternal", "fproperty.propertyLinkNext",
+        "fclassProperty.metaClass", "fboolProperty.fieldSize",
+        "fboolProperty.byteOffset", "fboolProperty.byteMask",
+        "fboolProperty.fieldMask", "damageTextInfo.displayDamage",
+        "damageTextInfo.damageType", "damageTextInfo.critical",
+        "damageTextInfo.headHit", "damageTextInfo.weakUnbalance",
+        "damageTextInfo.attacker", "damageTextInfo.victim",
+        "damageTextInfo.reactionType", "damageTextInfo.reactionDisplayType",
+        "weakObject.index", "weakObject.serial"});
+    if (!required.valid) return required;
+    const auto value = [&profile](const std::string_view key) {
+        return static_cast<std::uint64_t>(profile.layout.at(std::string(key)));
+    };
+    constexpr std::uint64_t kDamageTextInfoSize = 72U;
+    if (value("weakObject.index") + sizeof(std::int32_t) > 8U ||
+        value("weakObject.serial") + sizeof(std::int32_t) > 8U ||
+        value("damageTextInfo.displayDamage") + sizeof(std::int32_t) >
+            kDamageTextInfoSize ||
+        value("damageTextInfo.damageType") + sizeof(std::uint8_t) >
+            kDamageTextInfoSize ||
+        value("damageTextInfo.critical") + sizeof(std::uint8_t) >
+            kDamageTextInfoSize ||
+        value("damageTextInfo.headHit") + sizeof(std::uint8_t) >
+            kDamageTextInfoSize ||
+        value("damageTextInfo.weakUnbalance") + sizeof(std::uint8_t) >
+            kDamageTextInfoSize ||
+        value("damageTextInfo.attacker") + 8U > kDamageTextInfoSize ||
+        value("damageTextInfo.victim") + 8U > kDamageTextInfoSize ||
+        value("damageTextInfo.reactionType") + sizeof(std::uint8_t) >
+            kDamageTextInfoSize ||
+        value("damageTextInfo.reactionDisplayType") + sizeof(std::uint8_t) >
+            kDamageTextInfoSize) {
+        return {false, "damage-echo damage-text layout is internally inconsistent"};
     }
     return {true, {}};
 }
@@ -915,6 +967,8 @@ FeatureLayoutValidatorRegistry NteFeatureLayoutValidators(
         std::string(kNavigationInputAbiValidator), ValidateNavigationInputAbi);
     validators.Register(
         std::string(kDamageChainAbiValidator), ValidateDamageChainAbi);
+    validators.Register(
+        std::string(kDamageEchoValidator), ValidateDamageEchoLayout);
     validators.Register(std::string(kPickupLayoutValidator), ValidatePickupLayout);
     validators.Register(
         std::string(kNteUiButtonsLayoutValidator), ValidateUiButtonsLayout);

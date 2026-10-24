@@ -1255,6 +1255,11 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         MANIFEST plugins/NtePosition/manifest.json
         PACKAGE_NAME NtePosition
         OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/NtePosition")
+    anomaly_add_plugin(anomaly_builtin_damage_echo
+        SOURCES plugins/AnomalyDamageEcho/plugin.cpp
+        MANIFEST plugins/AnomalyDamageEcho/manifest.json
+        PACKAGE_NAME AnomalyDamageEcho
+        OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/builtin-plugins/AnomalyDamageEcho")
     anomaly_add_plugin(anomaly_builtin_nte_teleport
         SOURCES plugins/NteTeleport/plugin.cpp
         MANIFEST plugins/NteTeleport/manifest.json
@@ -1515,7 +1520,8 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
     # Test packages exist only when ANOMALY_BUILD_TEST_PLUGINS is on, so every list that
     # reaches their targets is built from the targets that actually exist.
     set(ANOMALY_BUILTIN_PLUGIN_TARGETS
-        anomaly_builtin_nte_position anomaly_builtin_nte_teleport
+        anomaly_builtin_nte_position anomaly_builtin_damage_echo
+        anomaly_builtin_nte_teleport
         anomaly_builtin_entity_esp anomaly_builtin_pink_paw_heist_esp
         anomaly_builtin_fake_uid anomaly_builtin_camera_tools
         anomaly_builtin_camera_blur_fix anomaly_builtin_better_pose
@@ -1545,6 +1551,7 @@ if(ANOMALY_BUILD_BUILTIN_PLUGINS)
         target_compile_options(anomaly_builtin_skin_changer PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_ui_buttons PRIVATE /utf-8)
         target_compile_options(anomaly_builtin_hifi_vehicle_music PRIVATE /utf-8)
+        target_compile_options(anomaly_builtin_damage_echo PRIVATE /utf-8)
     endif()
     add_dependencies(anomaly_test_host ${ANOMALY_BUILTIN_PLUGIN_TARGETS})
     if(TARGET anomaly-platform-preview)
@@ -1576,6 +1583,7 @@ anomaly_stage_platform_preview_plugin(anomaly_example_reliable_config ReliableCo
 anomaly_stage_platform_preview_plugin(anomaly_example_nte_inspector NteInspector)
 anomaly_stage_platform_preview_plugin(anomaly_example_nte_combat_demo NteCombatDemo)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_position NtePosition)
+anomaly_stage_platform_preview_plugin(anomaly_builtin_damage_echo AnomalyDamageEcho)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_teleport NteTeleport)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_navigation NteNavmeshDemo)
 anomaly_stage_platform_preview_plugin(anomaly_builtin_nte_pickup_demo NtePickupDemo)

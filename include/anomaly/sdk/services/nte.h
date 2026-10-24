@@ -959,6 +959,59 @@ typedef struct AnomalyNteDamageChainServiceV1 {
     // Inner predicate: returns whether this call actually applies damage.
     AnomalyStatusV1 (ANOMALY_CALL *gate_address)(void* user, uintptr_t* address);
 } AnomalyNteDamageChainServiceV1;
+
+// Repeat a captured player hit on a monster without carrying native pointers or
+// offsets in the plugin. apply_manual lowers the victim's HP and can emit the
+// game's own monster damage text. apply_native_dot applies a validated native
+// DoT GameplayEffect and reports its active state; the game's own GE formula
+// remains authoritative for that mode.
+#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID "anomaly.nte.damage-echo"
+#define ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION 1u
+typedef uint32_t AnomalyNteDamageEchoFlagsV1;
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE (1u << 0u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL (1u << 1u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT (1u << 2u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE (1u << 3u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED (1u << 8u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD (1u << 9u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED (1u << 10u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED (1u << 11u)
+#define ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE (1u << 12u)
+
+typedef struct AnomalyNteDamageEchoRequestV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    AnomalyGenerationHandleV1 world;
+    AnomalyGenerationHandleV1 victim;
+    int64_t damage;
+    uint32_t damage_type;
+    uint32_t display_type;
+    uint32_t reaction_type;
+    uint32_t reaction_display_type;
+} AnomalyNteDamageEchoRequestV1;
+
+typedef struct AnomalyNteDamageEchoResultV1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    double hp_before;
+    double hp_after;
+    int64_t applied_damage;
+    uint32_t dead;
+    uint32_t reserved;
+} AnomalyNteDamageEchoResultV1;
+
+typedef struct AnomalyNteDamageEchoServiceV1 {
+    uint32_t struct_size; uint32_t service_version; void* user;
+    // Game callback domain only. lowers HP and optionally displays the hit.
+    AnomalyStatusV1 (ANOMALY_CALL *apply_manual)(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result);
+    // Game callback domain only. Applies/refreshes the validated native DoT GE.
+    // The request damage is retained for reporting, not used as the GE magnitude.
+    AnomalyStatusV1 (ANOMALY_CALL *apply_native_dot)(
+        void* user, const AnomalyNteDamageEchoRequestV1* request,
+        AnomalyNteDamageEchoResultV1* result);
+} AnomalyNteDamageEchoServiceV1;
 #ifdef __cplusplus
 }
 #endif

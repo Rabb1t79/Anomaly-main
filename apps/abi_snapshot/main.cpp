@@ -230,6 +230,26 @@ std::string BuildSnapshot() {
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION);
     output.append(",\n    \"ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION\": ");
     AppendUnsigned(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_SHOW_DAMAGE);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_CRITICAL);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_HEAD_HIT);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_WEAK_UNBALANCE);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_KILLED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_DEAD);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_DISPLAYED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_APPLIED);
+    output.append(",\n    \"ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE\": ");
+    AppendUnsigned(output, ANOMALY_NTE_DAMAGE_ECHO_V1_NATIVE_DOT_ACTIVE);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES\": ");
     AppendUnsigned(output, ANOMALY_NTE_VEHICLE_ID_MAX_UTF8_BYTES);
     output.append(",\n    \"ANOMALY_NTE_VEHICLE_V1_VALID\": ");
@@ -1853,6 +1873,47 @@ std::string BuildSnapshot() {
         false);
     AppendStruct(
         output,
+        "AnomalyNteDamageEchoRequestV1",
+        sizeof(AnomalyNteDamageEchoRequestV1),
+        alignof(AnomalyNteDamageEchoRequestV1),
+        {{"struct_size", offsetof(AnomalyNteDamageEchoRequestV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageEchoRequestV1, flags)},
+         {"world", offsetof(AnomalyNteDamageEchoRequestV1, world)},
+         {"victim", offsetof(AnomalyNteDamageEchoRequestV1, victim)},
+         {"damage", offsetof(AnomalyNteDamageEchoRequestV1, damage)},
+         {"damage_type", offsetof(AnomalyNteDamageEchoRequestV1, damage_type)},
+         {"display_type", offsetof(AnomalyNteDamageEchoRequestV1, display_type)},
+         {"reaction_type", offsetof(AnomalyNteDamageEchoRequestV1, reaction_type)},
+         {"reaction_display_type",
+             offsetof(AnomalyNteDamageEchoRequestV1, reaction_display_type)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageEchoResultV1",
+        sizeof(AnomalyNteDamageEchoResultV1),
+        alignof(AnomalyNteDamageEchoResultV1),
+        {{"struct_size", offsetof(AnomalyNteDamageEchoResultV1, struct_size)},
+         {"flags", offsetof(AnomalyNteDamageEchoResultV1, flags)},
+         {"hp_before", offsetof(AnomalyNteDamageEchoResultV1, hp_before)},
+         {"hp_after", offsetof(AnomalyNteDamageEchoResultV1, hp_after)},
+         {"applied_damage", offsetof(AnomalyNteDamageEchoResultV1, applied_damage)},
+         {"dead", offsetof(AnomalyNteDamageEchoResultV1, dead)},
+         {"reserved", offsetof(AnomalyNteDamageEchoResultV1, reserved)}},
+        false);
+    AppendStruct(
+        output,
+        "AnomalyNteDamageEchoServiceV1",
+        sizeof(AnomalyNteDamageEchoServiceV1),
+        alignof(AnomalyNteDamageEchoServiceV1),
+        {{"struct_size", offsetof(AnomalyNteDamageEchoServiceV1, struct_size)},
+         {"service_version", offsetof(AnomalyNteDamageEchoServiceV1, service_version)},
+         {"user", offsetof(AnomalyNteDamageEchoServiceV1, user)},
+         {"apply_manual", offsetof(AnomalyNteDamageEchoServiceV1, apply_manual)},
+         {"apply_native_dot",
+             offsetof(AnomalyNteDamageEchoServiceV1, apply_native_dot)}},
+        false);
+    AppendStruct(
+        output,
         "AnomalyNtePickupRequestV1",
         sizeof(AnomalyNtePickupRequestV1),
         alignof(AnomalyNtePickupRequestV1),
@@ -2482,6 +2543,8 @@ std::string BuildSnapshot() {
         ANOMALY_NTE_VEHICLE_SERVICE_V1_VERSION, "AnomalyNteVehicleServiceV1", false);
     AppendService(output, ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_ID,
         ANOMALY_NTE_ATTACK_INPUT_SERVICE_V1_VERSION, "AnomalyNteAttackInputServiceV1", false);
+    AppendService(output, ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_ID,
+        ANOMALY_NTE_DAMAGE_ECHO_SERVICE_V1_VERSION, "AnomalyNteDamageEchoServiceV1", false);
     AppendService(output, ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_ID,
         ANOMALY_NTE_ESC_MENU_BUTTON_SERVICE_V1_VERSION,
         "AnomalyNteEscMenuButtonServiceV1", true);

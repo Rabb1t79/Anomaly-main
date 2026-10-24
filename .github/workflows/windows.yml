@@ -42,6 +42,33 @@ jobs:
           cmake --build --preset windows-relwithdebinfo --target anomaly_core --parallel 2>&1 | Tee-Object -FilePath build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Build Damage Echo plugin
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-relwithdebinfo --target anomaly_builtin_damage_echo --parallel 2>&1 | Tee-Object -FilePath damage-echo-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prepare Damage Echo artifact
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:GITHUB_WORKSPACE '.build\windows-vs2022\bin\RelWithDebInfo\builtin-plugins\AnomalyDamageEcho'
+          foreach ($name in @('plugin.dll', 'manifest.json')) {
+            $file = Join-Path $package $name
+            if (!(Test-Path -LiteralPath $file)) { throw "Damage Echo artifact is missing: $file" }
+          }
+          $out = Join-Path $env:GITHUB_WORKSPACE '.build\damage-echo-artifact'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $package 'plugin.dll') -Destination $out -Force
+          Copy-Item -LiteralPath (Join-Path $package 'manifest.json') -Destination $out -Force
+          Compress-Archive -Path (Join-Path $out '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE '.build\damage-echo-windows-x64.zip') -Force
+
+      - name: Upload Damage Echo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anomaly-damage-echo-windows-x64
+          path: .build/damage-echo-windows-x64.zip
+          if-no-files-found: error
+
       - name: Report build errors
         if: failure()
         shell: pwsh
