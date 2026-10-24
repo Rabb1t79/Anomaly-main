@@ -701,6 +701,7 @@ struct Ue5NteAdapter::State {
         GetMonsterStaticData,
         CurrentDamageIsCrit,
         SetHp,
+        SetIsDead,
         ApplyGameplayEffect,
         HaveGameplayEffectWithClass,
         Count,
@@ -1361,6 +1362,8 @@ struct Ue5NteAdapter::State {
             NteFunctionParameterSpec{"DamageReason", "ByteProperty", 1, false},
             NteFunctionParameterSpec{"bRealDeadDamage", "BoolProperty", 1, false},
             NteFunctionParameterSpec{"fRealDamage", "FloatProperty", 4, false}};
+        static constexpr std::array set_is_dead{
+            NteFunctionParameterSpec{"Value", "BoolProperty", 1, false}};
         static constexpr std::array apply_gameplay_effect{
             NteFunctionParameterSpec{"GETemplate", "ClassProperty", 8, false},
             NteFunctionParameterSpec{"ReturnValue", "BoolProperty", 1, true}};
@@ -1473,6 +1476,8 @@ struct Ue5NteAdapter::State {
             return {kind, "CurrentDamageIsCrit", "HTAttributeComponent", 1, get_bool};
         case NteFunctionKind::SetHp:
             return {kind, "SetHP", "HTAbilityCharacter", 12, set_hp};
+        case NteFunctionKind::SetIsDead:
+            return {kind, "SetIsDead", "HTAbilityCharacter", 1, set_is_dead};
         case NteFunctionKind::ApplyGameplayEffect:
             return {kind, "ApplyGameplayEffect", "HTAICharacter", 16,
                 apply_gameplay_effect};
@@ -1793,7 +1798,8 @@ struct Ue5NteAdapter::State {
                 "damageTextInfo.weakUnbalance", "damageTextInfo.attacker",
                 "damageTextInfo.victim", "damageTextInfo.reactionType",
                 "damageTextInfo.reactionDisplayType", "weakObject.index",
-                "weakObject.serial"}) &&
+                "weakObject.serial", "abilityCharacter.abilitySystemComponent",
+                "attributeComponent.hpCurrent"}) &&
             FeatureDeclaresDependency(profile, "nte.damage-echo", "nte.combat") &&
             FeatureDeclaresDependency(profile, "nte.damage-echo", "ue5.object-find") &&
             FeatureDeclaresDependency(
@@ -8125,16 +8131,56 @@ struct Ue5NteAdapter::State {
                 (parameters[dead_parameter.byte_offset] & ~dead_parameter.field_mask) |
                 (next_hp <= 0.0F ? dead_parameter.byte_mask : 0U));
         std::memcpy(parameters.data() + set_binding->offsets[3], &capped, sizeof(capped));
-        if (!InvokeNteFunctionLocked(NteFunctionKind::SetHp, victim, parameters)) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "SetHP ProcessEvent failed");
-        }
         float hp_after{};
         bool dead_after{};
-        if (!InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_after) ||
-            !InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead, victim, dead_after) ||
-            !std::isfinite(hp_after) || hp_after >= hp_before - 0.001F) {
-            return Status(ANOMALY_STATUS_V1_FAILED, "SetHP did not commit to victim HP");
+        bool committed = false;
+        if (InvokeNteFunctionLocked(NteFunctionKind::SetHp, victim, parameters) &&
+            InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_after) &&
+            std::isfinite(hp_after) && hp_after < hp_before - 0.001F) {
+            committed = true;
         }
+        if (!committed) {
+            // Client-side characters are not authoritative, so the game's
+            // SetHP UFunction can complete without committing. The user
+            // explicitly authorized the Anomaly host's local memory fallback:
+            // write the replicated HPCurrent field and mirror the local death
+            // state so the hit remains observable and the next tick can stop.
+            std::uintptr_t ability_system{};
+            const auto hp_current_offset =
+                Layout(profile, "attributeComponent.hpCurrent", -1);
+            if (!ReadPointerAt(*memory, victim,
+                    Layout(profile, "abilityCharacter.abilitySystemComponent"),
+                    ability_system) ||
+                ability_system == 0 || hp_current_offset < 0 ||
+                !memory->Write(ability_system + static_cast<std::uintptr_t>(hp_current_offset),
+                    &next_hp, sizeof(next_hp))) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "SetHP did not commit and HPCurrent fallback failed");
+            }
+            if (!InvokeNteReturnLocked(NteFunctionKind::GetHp, victim, hp_after) ||
+                !std::isfinite(hp_after) || hp_after >= hp_before - 0.001F) {
+                return Status(ANOMALY_STATUS_V1_FAILED,
+                    "SetHP did not commit and HPCurrent fallback was not observed");
+            }
+            if (next_hp <= 0.0F) {
+                const auto& dead_binding = combat_skill_discovery.functions[
+                    NteIndex(NteFunctionKind::SetIsDead)];
+                if (dead_binding) {
+                    std::array<std::uint8_t, 8> dead_parameters{};
+                    const auto& value = dead_binding->bool_parameters[0];
+                    if (value.byte_offset < dead_parameters.size()) {
+                        dead_parameters[value.byte_offset] = static_cast<std::uint8_t>(
+                            (dead_parameters[value.byte_offset] & ~value.field_mask) |
+                            value.byte_mask);
+                        static_cast<void>(InvokeNteFunctionLocked(
+                            NteFunctionKind::SetIsDead, victim, dead_parameters));
+                    }
+                }
+            }
+            committed = true;
+        }
+        static_cast<void>(InvokeNteBoolReturnLocked(NteFunctionKind::GetIsDead,
+            victim, dead_after));
         result->hp_after = hp_after;
         result->applied_damage = static_cast<std::int64_t>(
             (std::max)(0.0F, hp_before - hp_after));
@@ -9540,6 +9586,7 @@ struct Ue5NteAdapter::State {
                     lookup_optional(NteFunctionKind::AddMonsterBufferControl);
                     lookup_optional(NteFunctionKind::GetMonsterStaticData);
                     lookup_optional(NteFunctionKind::SetHp);
+                    lookup_optional(NteFunctionKind::SetIsDead);
                     lookup_optional(NteFunctionKind::ApplyGameplayEffect);
                     lookup_optional(NteFunctionKind::HaveGameplayEffectWithClass);
                     combat_skill_discovery.combat_event_bindings_attempted = true;

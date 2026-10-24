@@ -319,7 +319,9 @@ FeatureValidationResult ValidateDamageEchoLayout(
         "damageTextInfo.headHit", "damageTextInfo.weakUnbalance",
         "damageTextInfo.attacker", "damageTextInfo.victim",
         "damageTextInfo.reactionType", "damageTextInfo.reactionDisplayType",
-        "weakObject.index", "weakObject.serial"});
+        "weakObject.index", "weakObject.serial",
+        "abilityCharacter.abilitySystemComponent",
+        "attributeComponent.hpCurrent"});
     if (!required.valid) return required;
     const auto value = [&profile](const std::string_view key) {
         return static_cast<std::uint64_t>(profile.layout.at(std::string(key)));

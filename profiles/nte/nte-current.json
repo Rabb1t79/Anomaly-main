@@ -801,6 +801,7 @@
     "gameplayEffect.uiData": 768,
     "gameplayEffectUIData.description": 40,
     "abilityCharacter.abilitySystemComponent": 2208,
+    "attributeComponent.hpCurrent": 6712,
     "abilityCharacter.characterConfigId": 7544,
     "playerCharacter.defaultCharacterId": 10040,
     "playerCharacter.currentDisplayCharacterId": 10084,
