@@ -8051,6 +8051,36 @@ struct Ue5NteAdapter::State {
         return true;
     }
 
+    [[nodiscard]] bool FindAbilitySystemFunctionLocked(
+        const char* name, std::uintptr_t& function) noexcept {
+        function = 0;
+        std::uintptr_t ability_class{};
+        if (!FindExactObjectLocked(
+                L"/Script/HTGame.HTAbilitySystemComponent", ability_class) ||
+            ability_class == 0) {
+            return false;
+        }
+        std::uintptr_t field{};
+        if (!ReadPointerAt(*memory, ability_class,
+                Layout(profile, "ustruct.children"), field)) {
+            return false;
+        }
+        for (std::uint32_t depth = 0; field != 0 && depth < 8192U; ++depth) {
+            std::string field_name;
+            if (!ReadReflectedObjectNameLocked(field, field_name)) return false;
+            if (field_name == name) {
+                function = field;
+                return true;
+            }
+            std::uintptr_t next{};
+            if (!ReadPointerAt(*memory, field, Layout(profile, "ufield.next"), next)) {
+                return false;
+            }
+            field = next;
+        }
+        return false;
+    }
+
     [[nodiscard]] bool ResolveRawTargetGeBindingLocked() noexcept {
         if (raw_target_ge_binding.attempted) {
             return raw_target_ge_binding.function != 0;
@@ -8061,6 +8091,10 @@ struct Ue5NteAdapter::State {
                 L"/Script/HTGame.HTAbilitySystemComponent.K2_ApplyGameplayEffectToTargetWithClass",
                 function) ||
             function == 0) {
+            static_cast<void>(FindAbilitySystemFunctionLocked(
+                "K2_ApplyGameplayEffectToTargetWithClass", function));
+        }
+        if (function == 0) {
             return false;
         }
         std::uint8_t num_parms{};
